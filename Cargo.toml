@@ -1,0 +1,16 @@
+[package]
+name = "aparté"
+version = "0.1.0"
+authors = ["Paul Fariello <paul@fariello.eu>"]
+edition = "2018"
+
+[dependencies]
+log = "0.4.6"
+env_logger = "0.6.1"
+futures = "0.1"
+tokio = "0.1"
+tokio-xmpp = "1.0.0"
+xmpp-parsers = { path = "../xmpp-parsers/" }
+rpassword = "3.0.2"
+uuid = { version = "0.7", features = ["v4"]  }
+minidom = "0.11"
