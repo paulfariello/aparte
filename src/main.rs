@@ -18,7 +18,9 @@ use xmpp_parsers::carbons;
 use xmpp_parsers::Element;
 use xmpp_parsers::Jid;
 
+mod core;
 mod plugins;
+mod ui;
 
 use plugins::{Plugin, PluginManager};
 
@@ -75,27 +77,25 @@ fn handle_stanza(stanza: Element) {
 }
 
 fn handle_message(message: Message) {
-    if let Some(from) = message.from {
-        if let Some(ref body) = message.bodies.get("") {
-            if message.type_ != MessageType::Error {
-                match from {
-                    Jid::Bare(jid) => println!("{}: {:?}", jid, body),
-                    Jid::Full(jid) => println!("{}: {:?}", jid, body),
-                }
-            }
-        } else {
-            for payload in message.payloads {
-                if let Some(received) = carbons::Received::try_from(payload).ok() {
-                    if let Some(ref original) = received.forwarded.stanza {
-                        if message.type_ != MessageType::Error {
-                            if let Some(body) = original.bodies.get("") {
-                                match from {
-                                    Jid::Bare(jid) => println!("{}: {:?}", jid, body),
-                                    Jid::Full(jid) => println!("{}: {:?}", jid, body),
-                                }
-                                break
-                            }
-                        }
+    let from = match message.from {
+        Some(from) => from,
+        None => return,
+    };
+
+    if let Some(ref body) = message.bodies.get("") {
+        if message.type_ != MessageType::Error {
+            let message = core::Message::new(from.clone(), body.0.clone());
+            ui::receive_message(message);
+        }
+    }
+
+    for payload in message.payloads {
+        if let Some(received) = carbons::Received::try_from(payload).ok() {
+            if let Some(ref original) = received.forwarded.stanza {
+                if message.type_ != MessageType::Error {
+                    if let Some(body) = original.bodies.get("") {
+                        let message = core::Message::new(from.clone(), body.0.clone());
+                        ui::receive_message(message);
                     }
                 }
             }
