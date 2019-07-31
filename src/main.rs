@@ -16,15 +16,13 @@ use xmpp_parsers::message::{Message, MessageType};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
 use xmpp_parsers::carbons;
 use xmpp_parsers::Element;
-use xmpp_parsers::Jid;
 
 mod core;
 mod plugins;
-mod ui;
 
 use plugins::{Plugin, PluginManager};
 
-fn main_loop(client: Client, mut plugin_manager: PluginManager) {
+fn main_loop(client: Client, mgr: &mut PluginManager) {
     let mut rt = Runtime::new().unwrap();
 
     let (sink, stream) = client.split();
@@ -45,7 +43,7 @@ fn main_loop(client: Client, mut plugin_manager: PluginManager) {
         if event.is_online() {
             info!("We are now online");
 
-            plugin_manager.on_connect(&mut tx);
+            mgr.on_connect(&mut tx);
 
             let mut presence = Presence::new(PresenceType::None);
             presence.show = Some(PresenceShow::Chat);
@@ -55,7 +53,7 @@ fn main_loop(client: Client, mut plugin_manager: PluginManager) {
         } else if let Some(stanza) = event.into_stanza() {
             debug!("RECV: {}", String::from(&stanza));
 
-            handle_stanza(stanza);
+            handle_stanza(mgr, stanza);
         }
 
         future::ok(())
@@ -70,13 +68,13 @@ fn main_loop(client: Client, mut plugin_manager: PluginManager) {
     }
 }
 
-fn handle_stanza(stanza: Element) {
+fn handle_stanza(mgr: &mut PluginManager, stanza: Element) {
     if let Some(message) = Message::try_from(stanza).ok() {
-        handle_message(message);
+        handle_message(mgr, message);
     }
 }
 
-fn handle_message(message: Message) {
+fn handle_message(mgr: &mut PluginManager, message: Message) {
     let from = match message.from {
         Some(from) => from,
         None => return,
@@ -84,8 +82,8 @@ fn handle_message(message: Message) {
 
     if let Some(ref body) = message.bodies.get("") {
         if message.type_ != MessageType::Error {
-            let message = core::Message::new(from.clone(), body.0.clone());
-            ui::receive_message(message);
+            let mut message = core::Message::new(from.clone(), body.0.clone());
+            mgr.on_message(&mut message);
         }
     }
 
@@ -94,8 +92,8 @@ fn handle_message(message: Message) {
             if let Some(ref original) = received.forwarded.stanza {
                 if message.type_ != MessageType::Error {
                     if let Some(body) = original.bodies.get("") {
-                        let message = core::Message::new(from.clone(), body.0.clone());
-                        ui::receive_message(message);
+                        let mut message = core::Message::new(from.clone(), body.0.clone());
+                        mgr.on_message(&mut message);
                     }
                 }
             }
@@ -112,8 +110,9 @@ fn main() {
     let mut plugin_manager = PluginManager::new();
     plugin_manager.add::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
     plugin_manager.add::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
+    plugin_manager.add::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
 
     plugin_manager.init().unwrap();
 
-    main_loop(client, plugin_manager)
+    main_loop(client, &mut plugin_manager)
 }

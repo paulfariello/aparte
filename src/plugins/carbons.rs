@@ -7,9 +7,9 @@ use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::iq::Iq;
 
+use crate::core::Message;
 use crate::plugins::disco;
 
-#[allow(non_camel_case_types)]
 pub struct CarbonsPlugin {
 }
 
@@ -41,6 +41,10 @@ impl super::Plugin for CarbonsPlugin {
     }
 
     fn on_disconnect(&self) -> Result<(), ()> {
+        Ok(())
+    }
+
+    fn on_message(&self, _message: &mut Message) -> Result<(), ()> {
         Ok(())
     }
 }

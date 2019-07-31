@@ -3,6 +3,8 @@ use futures::Sink;
 use futures::unsync::mpsc::SendError;
 use tokio_xmpp::Packet;
 
+use crate::core::Message;
+
 #[allow(non_camel_case_types)]
 pub struct Disco<'a> {
     features: Vec<&'a str>,
@@ -31,6 +33,10 @@ impl<'a> super::Plugin for Disco<'a> {
     }
 
     fn on_disconnect(&self) -> Result<(), ()> {
+        Ok(())
+    }
+
+    fn on_message(&self, _message: &mut Message) -> Result<(), ()> {
         Ok(())
     }
 }

@@ -1,19 +1,23 @@
-use std::collections::HashMap;
-use std::cell::{RefCell, RefMut};
-use std::any::{Any, TypeId};
-use std::fmt;
 use futures::Sink;
-use tokio_xmpp::Packet;
 use futures::unsync::mpsc::SendError;
+use std::any::{Any, TypeId};
+use std::cell::{RefCell, RefMut};
+use std::collections::HashMap;
+use std::fmt;
+use tokio_xmpp::Packet;
+
+use crate::core::Message;
 
 pub mod disco;
 pub mod carbons;
+pub mod ui;
 
 pub trait Plugin: fmt::Display {
     fn new() -> Self where Self: Sized;
     fn init(&self, mgr: &PluginManager) -> Result<(), ()>;
     fn on_connect(&self, sink: &mut dyn Sink<SinkItem=Packet, SinkError=SendError<Packet>>) -> Result<(), ()>;
     fn on_disconnect(&self) -> Result<(), ()>;
+    fn on_message(&self, message: &mut Message) -> Result<(), ()>;
 }
 
 pub trait AnyPlugin: Any + Plugin {
@@ -69,6 +73,14 @@ impl PluginManager {
     pub fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=Packet, SinkError=SendError<Packet>>) -> Result<(), ()> {
         for (_, plugin) in self.plugins.iter() {
             plugin.borrow_mut().as_plugin().on_connect(sink);
+        }
+
+        Ok(())
+    }
+
+    pub fn on_message(&mut self, message: &mut Message) -> Result<(), ()> {
+        for (_, plugin) in self.plugins.iter() {
+            plugin.borrow_mut().as_plugin().on_message(message);
         }
 
         Ok(())
