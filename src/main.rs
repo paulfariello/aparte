@@ -13,10 +13,8 @@ extern crate tokio_file_unix;
 
 use std::convert::TryFrom;
 use std::rc::Rc;
-use std::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
 use tokio::runtime::current_thread::Runtime;
-use tokio::io::{stdin};
 use tokio::codec::FramedRead;
 use tokio_xmpp::{Client, Packet};
 use xmpp_parsers::message::{Message, MessageType};
@@ -36,7 +34,7 @@ fn main_loop(mgr: Rc<PluginManager>) {
 
     let file = tokio_file_unix::raw_stdin().unwrap();
     let file = tokio_file_unix::File::new_nb(file).unwrap();
-    let file = file.into_reader(&tokio::reactor::Handle::current()).unwrap();
+    let file = file.into_io(&tokio::reactor::Handle::current()).unwrap();
 
     let ui = FramedRead::new(file, CommandCodec::new()).for_each(move |command| {
         let mgr = Rc::clone(&mgr);

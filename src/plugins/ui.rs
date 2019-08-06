@@ -4,6 +4,7 @@ use std::fmt;
 use std::io::Error as IoError;
 use std::io::{Write, stdout, Stdout};
 use std::string::FromUtf8Error;
+use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
 use tokio_codec::{Decoder};
 use tokio_xmpp;
@@ -13,7 +14,7 @@ use crate::core::Message;
 use crate::core::Command;
 
 pub struct UIPlugin {
-    screen: AlternateScreen<Stdout>,
+    screen: AlternateScreen<RawTerminal<Stdout>>,
 }
 
 impl UIPlugin {
@@ -21,7 +22,11 @@ impl UIPlugin {
 
 impl super::Plugin for UIPlugin {
     fn new() -> UIPlugin {
-        UIPlugin { screen: AlternateScreen::from(stdout()) }
+        let stdout = std::io::stdout().into_raw_mode().unwrap();
+
+        UIPlugin {
+            screen: AlternateScreen::from(stdout)
+        }
     }
 
     fn init(&mut self, _mgr: &super::PluginManager) -> Result<(), ()> {
