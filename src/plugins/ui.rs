@@ -1,23 +1,33 @@
-use bytes::BytesMut;
-use futures::Sink;
+use bytes::{BytesMut, BufMut};
+use futures::{Sink, Stream};
 use std::fmt;
-use std::io::Error as IoError;
+use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, stdout, Stdout};
 use std::string::FromUtf8Error;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
+use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use tokio_xmpp;
 use xmpp_parsers::Jid;
 
 use crate::core::Message;
-use crate::core::Command;
+use crate::core::{Command, CommandError};
 
 pub struct UIPlugin {
     screen: AlternateScreen<RawTerminal<Stdout>>,
 }
 
+pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
+
 impl UIPlugin {
+    pub fn command_stream(&self) -> CommandStream {
+        let file = tokio_file_unix::raw_stdin().unwrap();
+        let file = tokio_file_unix::File::new_nb(file).unwrap();
+        let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
+
+        FramedRead::new(file, KeyCodec::new())
+    }
 }
 
 impl super::Plugin for UIPlugin {
@@ -63,39 +73,50 @@ impl fmt::Display for UIPlugin {
     }
 }
 
-pub struct CommandCodec {
+pub struct KeyCodec {
+    buf: BytesMut,
+    queue: Vec<Command>,
 }
 
-impl CommandCodec {
+impl KeyCodec {
     pub fn new() -> Self {
-        Self { }
+        Self {
+            buf: BytesMut::new(),
+            queue: Vec::new(),
+        }
     }
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    Io(IoError),
-    Utf8(FromUtf8Error),
-}
-
-impl Decoder for CommandCodec {
+impl Decoder for KeyCodec {
     type Item = Command;
-    type Error = Error;
+    type Error = CommandError;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Command>, Error> {
-        if buf.is_empty() {
-            return Ok(None)
-        } else {
-            let vec = buf.take().to_vec();
-            let string = match String::from_utf8(vec) {
-                Ok(string) => string,
-                Err(err) => return Err(Error::Utf8(err)),
-            };
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let buf = buf.take();
 
-            let command = Command::new(string);
-            debug!("Received command {:?}", command);
+        for i in 0..buf.len() {
+            match buf[i] {
+                0x20..=0x7E => {
+                    self.buf.put(buf[i]);
+                },
+                0x0D => {
+                    let vec = self.buf.take().to_vec();
+                    let string = match String::from_utf8(vec) {
+                        Ok(string) => string,
+                        Err(err) => return Err(CommandError::Utf8(err)),
+                    };
 
-            Ok(Some(command))
+                    self.queue.push(Command::new(string));
+                    self.buf.clear()
+                },
+                0x03 => return Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c"))),
+                _ => { println!("{:?}", buf[i]); },
+            }
+        }
+
+        match self.queue.pop() {
+            Some(command) => Ok(Some(command)),
+            None => Ok(None),
         }
     }
 }

@@ -1,3 +1,5 @@
+use std::io::Error as IoError;
+use std::string::FromUtf8Error;
 use xmpp_parsers::Jid;
 
 pub struct Message {
@@ -20,4 +22,10 @@ impl Command {
     pub fn new(command: String) -> Self {
         Self { command: command }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum CommandError {
+    Io(IoError),
+    Utf8(FromUtf8Error),
 }

@@ -15,7 +15,6 @@ use std::convert::TryFrom;
 use std::rc::Rc;
 use futures::{future, Future, Sink, Stream};
 use tokio::runtime::current_thread::Runtime;
-use tokio::codec::FramedRead;
 use tokio_xmpp::{Client, Packet};
 use xmpp_parsers::message::{Message, MessageType};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
@@ -26,20 +25,17 @@ mod core;
 mod plugins;
 
 use plugins::{Plugin, PluginManager};
-use plugins::ui::CommandCodec;
+use plugins::ui::CommandStream;
+use crate::core::{Command, CommandError};
 
-fn main_loop(mgr: Rc<PluginManager>) {
+fn main_loop(command: CommandStream, mgr: Rc<PluginManager>) {
     let mut rt = Runtime::new().unwrap();
     let mgr = Rc::clone(&mgr);
 
-    let file = tokio_file_unix::raw_stdin().unwrap();
-    let file = tokio_file_unix::File::new_nb(file).unwrap();
-    let file = file.into_io(&tokio::reactor::Handle::current()).unwrap();
-
-    let ui = FramedRead::new(file, CommandCodec::new()).for_each(move |command| {
+    let ui = command.for_each(move |command| {
         let mgr = Rc::clone(&mgr);
         match command.command.as_ref() {
-            "/connect\n" => {
+            "/connect" => {
                 let account = "needle@trashserver.net";
                 info!("Connecting to {}", account);
                 let client = Client::new(account, "pass").unwrap();
@@ -122,9 +118,12 @@ fn main() {
     let mut plugin_manager = PluginManager::new();
     plugin_manager.add::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
     plugin_manager.add::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
-    plugin_manager.add::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
+
+    let ui = plugins::ui::UIPlugin::new();
+    let command_stream = ui.command_stream();
+    plugin_manager.add::<plugins::ui::UIPlugin>(Box::new(ui)).unwrap();
 
     plugin_manager.init().unwrap();
 
-    main_loop(Rc::new(plugin_manager))
+    main_loop(command_stream, Rc::new(plugin_manager))
 }
