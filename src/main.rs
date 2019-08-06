@@ -26,7 +26,6 @@ mod plugins;
 
 use plugins::{Plugin, PluginManager};
 use plugins::ui::CommandStream;
-use crate::core::{Command, CommandError};
 
 fn main_loop(command: CommandStream, mgr: Rc<PluginManager>) {
     let mut rt = Runtime::new().unwrap();

@@ -1,9 +1,8 @@
 use bytes::{BytesMut, BufMut};
-use futures::{Sink, Stream};
+use futures::Sink;
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
-use std::io::{Write, stdout, Stdout};
-use std::string::FromUtf8Error;
+use std::io::{Write, Stdout};
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
 use tokio::codec::FramedRead;
@@ -47,23 +46,20 @@ impl super::Plugin for UIPlugin {
         Ok(())
     }
 
-    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()> {
-        Ok(())
+    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
     }
 
-    fn on_disconnect(&mut self) -> Result<(), ()> {
-        Ok(())
+    fn on_disconnect(&mut self) {
     }
 
-    fn on_message(&mut self, message: &mut Message) -> Result<(), ()> {
-        match & message.from {
+    fn on_message(&mut self, message: &mut Message) {
+        let result = match & message.from {
             Jid::Bare(from) => write!(self.screen, "{}: {}\n", from, message.body),
             Jid::Full(from) => write!(self.screen, "{}: {}\n", from, message.body),
         };
 
-        self.screen.flush();
 
-        Ok(())
+        self.screen.flush();
     }
 }
 

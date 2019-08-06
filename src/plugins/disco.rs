@@ -27,16 +27,13 @@ impl<'a> super::Plugin for Disco<'a> {
         Ok(())
     }
 
-    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()> {
-        Ok(())
+    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
     }
 
-    fn on_disconnect(&mut self) -> Result<(), ()> {
-        Ok(())
+    fn on_disconnect(&mut self) {
     }
 
-    fn on_message(&mut self, _message: &mut Message) -> Result<(), ()> {
-        Ok(())
+    fn on_message(&mut self, _message: &mut Message) {
     }
 }
 

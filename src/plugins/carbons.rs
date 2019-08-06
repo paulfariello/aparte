@@ -30,21 +30,17 @@ impl super::Plugin for CarbonsPlugin {
         disco.add_feature("urn:xmpp:carbons:2")
     }
 
-    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()> {
+    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
         let iq = self.enable();
 
         trace!("SEND: {}", String::from(&iq));
         sink.start_send(tokio_xmpp::Packet::Stanza(iq)).unwrap();
-
-        Ok(())
     }
 
-    fn on_disconnect(&mut self) -> Result<(), ()> {
-        Ok(())
+    fn on_disconnect(&mut self) {
     }
 
-    fn on_message(&mut self, _message: &mut Message) -> Result<(), ()> {
-        Ok(())
+    fn on_message(&mut self, _message: &mut Message) {
     }
 }
 

@@ -14,9 +14,9 @@ pub mod ui;
 pub trait Plugin: fmt::Display {
     fn new() -> Self where Self: Sized;
     fn init(&mut self, mgr: &PluginManager) -> Result<(), ()>;
-    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()>;
-    fn on_disconnect(&mut self) -> Result<(), ()>;
-    fn on_message(&mut self, message: &mut Message) -> Result<(), ()>;
+    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>);
+    fn on_disconnect(&mut self);
+    fn on_message(&mut self, message: &mut Message);
 }
 
 pub trait AnyPlugin: Any + Plugin {
@@ -63,25 +63,23 @@ impl PluginManager {
 
     pub fn init(&mut self) -> Result<(), ()> {
         for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().init(&self);
+            if let Err(err) = plugin.borrow_mut().as_plugin().init(&self) {
+                return Err(err);
+            }
         }
 
         Ok(())
     }
 
-    pub fn on_connect(&self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()> {
+    pub fn on_connect(&self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
         for (_, plugin) in self.plugins.iter() {
             plugin.borrow_mut().as_plugin().on_connect(sink);
         }
-
-        Ok(())
     }
 
-    pub fn on_message(&self, message: &mut Message) -> Result<(), ()> {
+    pub fn on_message(&self, message: &mut Message) {
         for (_, plugin) in self.plugins.iter() {
             plugin.borrow_mut().as_plugin().on_message(message);
         }
-
-        Ok(())
     }
 }
