@@ -1,7 +1,6 @@
 use futures::Sink;
-use futures::unsync::mpsc::SendError;
 use std::fmt;
-use tokio_xmpp::Packet;
+use tokio_xmpp;
 use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
@@ -26,25 +25,25 @@ impl super::Plugin for CarbonsPlugin {
         CarbonsPlugin { }
     }
 
-    fn init(&self, mgr: &super::PluginManager) -> Result<(), ()> {
+    fn init(&mut self, mgr: &super::PluginManager) -> Result<(), ()> {
         let mut disco = mgr.get::<disco::Disco>().unwrap();
         disco.add_feature("urn:xmpp:carbons:2")
     }
 
-    fn on_connect(&self, sink: &mut dyn Sink<SinkItem=Packet, SinkError=SendError<Packet>>) -> Result<(), ()> {
+    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()> {
         let iq = self.enable();
 
-        debug!("SEND: {}", String::from(&iq));
-        sink.start_send(Packet::Stanza(iq)).unwrap();
+        trace!("SEND: {}", String::from(&iq));
+        sink.start_send(tokio_xmpp::Packet::Stanza(iq)).unwrap();
 
         Ok(())
     }
 
-    fn on_disconnect(&self) -> Result<(), ()> {
+    fn on_disconnect(&mut self) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_message(&self, _message: &mut Message) -> Result<(), ()> {
+    fn on_message(&mut self, _message: &mut Message) -> Result<(), ()> {
         Ok(())
     }
 }

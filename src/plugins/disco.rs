@@ -1,7 +1,6 @@
 use std::fmt;
 use futures::Sink;
-use futures::unsync::mpsc::SendError;
-use tokio_xmpp::Packet;
+use tokio_xmpp;
 
 use crate::core::Message;
 
@@ -24,19 +23,19 @@ impl<'a> super::Plugin for Disco<'a> {
         Disco { features: Vec::new() }
     }
 
-    fn init(&self, _mgr: &super::PluginManager) -> Result<(), ()> {
+    fn init(&mut self, _mgr: &super::PluginManager) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_connect(&self, _sink: &mut dyn Sink<SinkItem=Packet, SinkError=SendError<Packet>>) -> Result<(), ()> {
+    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_disconnect(&self) -> Result<(), ()> {
+    fn on_disconnect(&mut self) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_message(&self, _message: &mut Message) -> Result<(), ()> {
+    fn on_message(&mut self, _message: &mut Message) -> Result<(), ()> {
         Ok(())
     }
 }
