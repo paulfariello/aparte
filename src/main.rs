@@ -27,11 +27,12 @@ mod plugins;
 use plugins::{Plugin, PluginManager};
 use plugins::ui::CommandStream;
 
-fn main_loop(command: CommandStream, mgr: Rc<PluginManager>) {
+fn main_loop(mgr: Rc<PluginManager>) {
     let mut rt = Runtime::new().unwrap();
+    let mut ui = mgr.get::<plugins::ui::UIPlugin>().unwrap();
     let mgr = Rc::clone(&mgr);
 
-    let ui = command.for_each(move |command| {
+    let commands = ui.command_stream().for_each(move |command| {
         let mgr = Rc::clone(&mgr);
         match command.command.as_ref() {
             "/connect" => {
@@ -74,7 +75,7 @@ fn main_loop(command: CommandStream, mgr: Rc<PluginManager>) {
         Ok(())
     });
 
-    let res = rt.block_on(ui);
+    let res = rt.block_on(commands);
     println!("! {:?}", res);
 }
 
@@ -117,12 +118,9 @@ fn main() {
     let mut plugin_manager = PluginManager::new();
     plugin_manager.add::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
     plugin_manager.add::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
-
-    let ui = plugins::ui::UIPlugin::new();
-    let command_stream = ui.command_stream();
-    plugin_manager.add::<plugins::ui::UIPlugin>(Box::new(ui)).unwrap();
+    plugin_manager.add::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
 
     plugin_manager.init().unwrap();
 
-    main_loop(command_stream, Rc::new(plugin_manager))
+    main_loop(Rc::new(plugin_manager))
 }
