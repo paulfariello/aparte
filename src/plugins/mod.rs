@@ -1,6 +1,6 @@
 use futures::Sink;
 use std::any::{Any, TypeId};
-use std::cell::{RefCell, RefMut};
+use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
 use std::fmt;
 use tokio_xmpp;
@@ -20,12 +20,17 @@ pub trait Plugin: fmt::Display {
 }
 
 pub trait AnyPlugin: Any + Plugin {
-    fn as_any(&mut self) -> &mut dyn Any;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn as_plugin(&mut self) -> &mut dyn Plugin;
 }
 
 impl<T> AnyPlugin for T where T: Any + Plugin {
-    fn as_any(&mut self) -> &mut dyn Any {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
@@ -50,7 +55,18 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn get<T: 'static>(&self) -> Option<RefMut<T>> {
+    pub fn get<T: 'static>(&self) -> Option<Ref<T>> {
+        let rc = match self.plugins.get(&TypeId::of::<T>()) {
+            Some(rc) => rc,
+            None => return None,
+        };
+
+        let any_plugin = rc.borrow();
+        /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
+        Some(Ref::map(any_plugin, |p| p.as_any().downcast_ref::<T>().unwrap()))
+    }
+
+    pub fn get_mut<T: 'static>(&self) -> Option<RefMut<T>> {
         let rc = match self.plugins.get(&TypeId::of::<T>()) {
             Some(rc) => rc,
             None => return None,
@@ -58,7 +74,7 @@ impl PluginManager {
 
         let any_plugin = rc.borrow_mut();
         /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
-        Some(RefMut::map(any_plugin, |p| p.as_any().downcast_mut::<T>().unwrap()))
+        Some(RefMut::map(any_plugin, |p| p.as_any_mut().downcast_mut::<T>().unwrap()))
     }
 
     pub fn init(&mut self) -> Result<(), ()> {

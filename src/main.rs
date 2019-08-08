@@ -29,10 +29,13 @@ use plugins::ui::CommandStream;
 
 fn main_loop(mgr: Rc<PluginManager>) {
     let mut rt = Runtime::new().unwrap();
-    let mut ui = mgr.get::<plugins::ui::UIPlugin>().unwrap();
+    let command_stream = {
+        let ui = mgr.get::<plugins::ui::UIPlugin>().unwrap();
+        ui.command_stream(Rc::clone(&mgr))
+    };
     let mgr = Rc::clone(&mgr);
 
-    let commands = ui.command_stream().for_each(move |command| {
+    let commands = command_stream.for_each(move |command| {
         let mgr = Rc::clone(&mgr);
         match command.command.as_ref() {
             "/connect" => {
@@ -61,14 +64,14 @@ fn main_loop(mgr: Rc<PluginManager>) {
 
                     future::ok(())
                 }).map_err(|e| {
-                    println!("Err: {:?}", e);
+                    error!("Err: {:?}", e);
                 });
 
                 tokio::runtime::current_thread::spawn(client);
 
             },
             _ => {
-                println!("Unknown command {}", command.command);
+                info!("Unknown command {}", command.command);
             }
         }
 
@@ -76,7 +79,7 @@ fn main_loop(mgr: Rc<PluginManager>) {
     });
 
     let res = rt.block_on(commands);
-    println!("! {:?}", res);
+    info!("! {:?}", res);
 }
 
 fn handle_stanza(mgr: Rc<PluginManager>, stanza: Element) {

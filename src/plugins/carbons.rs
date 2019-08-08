@@ -26,7 +26,7 @@ impl super::Plugin for CarbonsPlugin {
     }
 
     fn init(&mut self, mgr: &super::PluginManager) -> Result<(), ()> {
-        let mut disco = mgr.get::<disco::Disco>().unwrap();
+        let mut disco = mgr.get_mut::<disco::Disco>().unwrap();
         disco.add_feature("urn:xmpp:carbons:2")
     }
 
