@@ -2,6 +2,7 @@ use std::io::Error as IoError;
 use std::string::FromUtf8Error;
 use xmpp_parsers::Jid;
 
+#[derive(Debug, Clone)]
 pub struct Message {
     pub from: Jid,
     pub body: String,

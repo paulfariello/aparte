@@ -1,13 +1,14 @@
 use bytes::{BytesMut, BufMut};
 use futures::Sink;
+use std::cell::RefCell;
+use std::clone::Clone;
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
-use std::cell::RefCell;
+use termion::cursor::DetectCursorPos;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
-use termion::cursor::DetectCursorPos;
 use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use tokio_xmpp;
@@ -153,12 +154,12 @@ impl Widget for Input {
         let (height, width) = termion::terminal_size().unwrap();
 
         self.x = match self.position.h {
-            HorizontalPosition::Left => 0 + self.position.voff,
+            HorizontalPosition::Left => 1 + self.position.voff,
             HorizontalPosition::Right => width - self.position.voff,
         };
 
         self.y = match self.position.v {
-            VerticalPosition::Top => 0 + self.position.voff,
+            VerticalPosition::Top => 1 + self.position.voff,
             VerticalPosition::Bottom => height - self.position.voff,
         };
 
@@ -176,9 +177,89 @@ impl Widget for Input {
     }
 }
 
+struct Chat {
+    position: Position,
+    width: Width,
+    x: u16,
+    y: u16,
+    w: u16,
+    next_line: u16,
+    buf: Vec<Message>,
+    screen: Rc<RefCell<Screen>>,
+}
+
+impl Chat {
+    fn new(screen: Rc<RefCell<Screen>>, position: Position, width: Width) -> Self {
+        Self {
+            position: position,
+            width: width,
+            x: 0,
+            y: 0,
+            w: 0,
+            next_line: 0,
+            screen: screen,
+            buf: Vec::new(),
+        }
+    }
+
+    fn message(&mut self, message: &mut Message) {
+        self.buf.push(message.clone());
+
+        if self.next_line > self.w {
+            self.scroll();
+        }
+
+        let mut screen = self.screen.borrow_mut();
+
+        let x = self.x;
+        let y = self.y + self.next_line;
+
+        write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y));
+
+        let _result = match & message.from {
+            Jid::Bare(from) => write!(screen, "{}: {}\n", from, message.body),
+            Jid::Full(from) => write!(screen, "{}: {}\n", from, message.body),
+        };
+
+        self.next_line += 1;
+
+        write!(screen, "{}", termion::cursor::Restore);
+
+        screen.flush();
+    }
+
+    fn scroll(&mut self) {
+    }
+}
+
+impl Widget for Chat {
+    fn redraw(&mut self) {
+        let mut screen = self.screen.borrow_mut();
+        let (height, width) = termion::terminal_size().unwrap();
+
+        self.x = match self.position.h {
+            HorizontalPosition::Left => 1 + self.position.voff,
+            HorizontalPosition::Right => width - self.position.voff,
+        };
+
+        self.y = match self.position.v {
+            VerticalPosition::Top => 1 + self.position.voff,
+            VerticalPosition::Bottom => height - self.position.voff,
+        };
+
+        self.w = match self.width {
+            Width::Relative(r) => (r * width as f32) as u16,
+            Width::Absolute(w) => w,
+        };
+
+        screen.flush();
+    }
+}
+
 pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     input: Input,
+    chat: Chat,
 }
 
 impl UIPlugin {
@@ -196,10 +277,12 @@ impl super::Plugin for UIPlugin {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let mut screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
         let input = Input::new(screen.clone(), Position::BottomLeft(0, 0), Width::Relative(1.));
+        let chat = Chat::new(screen.clone(), Position::TopLeft(0, 1), Width::Relative(1.));
 
         Self {
             screen: screen,
             input: input,
+            chat: chat,
         }
     }
 
@@ -214,6 +297,7 @@ impl super::Plugin for UIPlugin {
         }
 
         self.input.redraw();
+        self.chat.redraw();
 
         Ok(())
     }
@@ -225,14 +309,7 @@ impl super::Plugin for UIPlugin {
     }
 
     fn on_message(&mut self, message: &mut Message) {
-        let mut screen = self.screen.borrow_mut();
-
-        let _result = match & message.from {
-            Jid::Bare(from) => write!(screen, "{}: {}\n", from, message.body),
-            Jid::Full(from) => write!(screen, "{}: {}\n", from, message.body),
-        };
-
-        screen.flush();
+        self.chat.message(message);
     }
 }
 
