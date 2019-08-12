@@ -98,4 +98,9 @@ impl PluginManager {
             plugin.borrow_mut().as_plugin().on_message(message);
         }
     }
+
+    pub fn log(&self, message: String) {
+        let mut message = Message::log(message);
+        self.on_message(&mut message);
+    }
 }

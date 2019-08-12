@@ -1,5 +1,6 @@
 use bytes::{BytesMut, BufMut};
 use futures::Sink;
+use shell_words::split;
 use std::cell::RefCell;
 use std::clone::Clone;
 use std::collections::HashMap;
@@ -224,7 +225,7 @@ impl Chat {
         for y in self.y ..= self.y + self.h {
             write!(screen, "{}", termion::cursor::Goto(self.x, y));
 
-            for x in self.x  ..= self.x + self.w {
+            for _x in self.x  ..= self.x + self.w {
                 write!(screen, " ");
             }
 
@@ -330,10 +331,14 @@ impl UIPlugin {
         self.chats.get_mut(&self.current).unwrap()
     }
 
-    pub fn switch(&mut self, chat: &str) {
+    pub fn switch(&mut self, chat: &str) -> Result<(), ()> {
         self.current = chat.to_string();
-        let chat = self.chats.get_mut(chat).unwrap();
-        chat.show();
+        if let Some(chat) = self.chats.get_mut(chat) {
+            chat.show();
+            return Ok(())
+        } else {
+            return Err(())
+        }
     }
 }
 
@@ -398,7 +403,7 @@ impl super::Plugin for UIPlugin {
             chat.message(message, true);
         } else {
             chat.message(message, false);
-            self.switch(&from);
+            self.switch(&from).unwrap();
         }
     }
 }
@@ -410,7 +415,7 @@ impl fmt::Display for UIPlugin {
 }
 
 pub struct KeyCodec {
-    queue: Vec<Command>,
+    queue: Vec<Result<Command, CommandError>>,
     mgr: Rc<super::PluginManager>,
 }
 
@@ -449,13 +454,20 @@ impl Decoder for KeyCodec {
             } else {
                 match c {
                     '\r' => {
-                        self.queue.push(Command::new(ui.input.buf.clone()));
+                        let splitted = shell_words::split(&ui.input.buf);
+                        match splitted {
+                            Ok(splitted) => {
+                                let command = Command::new(splitted[0].clone(), splitted[1..].to_vec());
+                                self.queue.push(Ok(command));
+                            },
+                            Err(err) => self.queue.push(Err(CommandError::Parse(err))),
+                        }
                         ui.input.clear();
                     },
                     '\x7f' => {
                         ui.input.delete();
                     },
-                    '\x03' => return Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c"))),
+                    '\x03' => self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c")))),
                     '\x1b' => {
                         match chars.next() {
                             Some('[') => {
@@ -484,7 +496,8 @@ impl Decoder for KeyCodec {
         }
 
         match self.queue.pop() {
-            Some(command) => Ok(Some(command)),
+            Some(Ok(command)) => Ok(Some(command)),
+            Some(Err(err)) => Err(err),
             None => Ok(None),
         }
     }

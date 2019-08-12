@@ -1,6 +1,7 @@
 use std::io::Error as IoError;
 use std::string::FromUtf8Error;
 use xmpp_parsers::Jid;
+use shell_words::ParseError;
 
 #[derive(Debug, Clone)]
 pub enum MessageType {
@@ -30,14 +31,23 @@ impl Message {
     }
 }
 
+enum CommandOrMessage {
+    Command(Command),
+    Message(Message),
+}
+
 #[derive(Debug)]
 pub struct Command {
     pub command: String,
+    pub args: Vec<String>,
 }
 
 impl Command {
-    pub fn new(command: String) -> Self {
-        Self { command: command }
+    pub fn new(command: String, args: Vec<String>) -> Self {
+        Self {
+            command: command,
+            args: args,
+        }
     }
 }
 
@@ -45,4 +55,5 @@ impl Command {
 pub enum CommandError {
     Io(IoError),
     Utf8(FromUtf8Error),
+    Parse(ParseError),
 }
