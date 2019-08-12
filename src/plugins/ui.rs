@@ -217,8 +217,9 @@ impl Chat {
         write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y));
 
         let _result = match & message.from {
-            Jid::Bare(from) => write!(screen, "{}: {}\n", from, message.body),
-            Jid::Full(from) => write!(screen, "{}: {}\n", from, message.body),
+            Some(Jid::Bare(from)) => write!(screen, "{}: {}", from, message.body),
+            Some(Jid::Full(from)) => write!(screen, "{}: {}", from, message.body),
+            None => write!(screen, "{}", message.body),
         };
 
         self.next_line += 1;
@@ -238,8 +239,8 @@ impl Widget for Chat {
         let (height, width) = termion::terminal_size().unwrap();
 
         self.x = match self.position.h {
-            HorizontalPosition::Left => 1 + self.position.voff,
-            HorizontalPosition::Right => width - self.position.voff,
+            HorizontalPosition::Left => 1 + self.position.hoff,
+            HorizontalPosition::Right => width - self.position.hoff,
         };
 
         self.y = match self.position.v {
@@ -277,7 +278,7 @@ impl super::Plugin for UIPlugin {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let mut screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
         let input = Input::new(screen.clone(), Position::BottomLeft(0, 0), Width::Relative(1.));
-        let chat = Chat::new(screen.clone(), Position::TopLeft(0, 1), Width::Relative(1.));
+        let chat = Chat::new(screen.clone(), Position::TopLeft(1, 0), Width::Relative(1.));
 
         Self {
             screen: screen,

@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4"
-env_logger = "0.6"
+simple-logging = "2.0"
 futures = "0.1"
 tokio = "0.1"
 tokio-xmpp = "1.0"
@@ -19,3 +19,4 @@ derive-error = "0.0.4"
 bytes = "0.4"
 tokio-codec = "0.1"
 tokio-file-unix = "0.5"
+dirs = "2.0"
