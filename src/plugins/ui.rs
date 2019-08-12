@@ -487,9 +487,9 @@ impl Decoder for KeyCodec {
                         }
                     },
                     _ => {
-                        let mut screen = ui.screen.borrow_mut();
-                        write!(screen, "^{:x}", c as u8);
-                        screen.flush();
+                        for c in format!("[{:x}", c as u8).chars() {
+                            ui.input.key(c);
+                        }
                     },
                 }
             }
