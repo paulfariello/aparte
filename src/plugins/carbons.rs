@@ -6,7 +6,7 @@ use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::iq::Iq;
 
-use crate::core::Message;
+use crate::core::{Plugin, PluginManager, Message};
 use crate::plugins::disco;
 
 pub struct CarbonsPlugin {
@@ -20,12 +20,12 @@ impl CarbonsPlugin {
     }
 }
 
-impl super::Plugin for CarbonsPlugin {
+impl Plugin for CarbonsPlugin {
     fn new() -> CarbonsPlugin {
         CarbonsPlugin { }
     }
 
-    fn init(&mut self, mgr: &super::PluginManager) -> Result<(), ()> {
+    fn init(&mut self, mgr: &PluginManager) -> Result<(), ()> {
         let mut disco = mgr.get_mut::<disco::Disco>().unwrap();
         disco.add_feature("urn:xmpp:carbons:2")
     }

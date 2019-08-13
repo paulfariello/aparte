@@ -16,7 +16,7 @@ use tokio_codec::{Decoder};
 use tokio_xmpp;
 use xmpp_parsers::Jid;
 
-use crate::core::{Message, Command, CommandOrMessage, CommandError};
+use crate::core::{Plugin, PluginManager, Message, Command, CommandOrMessage, CommandError};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
@@ -318,7 +318,7 @@ pub struct UIPlugin {
 }
 
 impl UIPlugin {
-    pub fn command_stream(&self, mgr: Rc<super::PluginManager>) -> CommandStream {
+    pub fn command_stream(&self, mgr: Rc<PluginManager>) -> CommandStream {
         let file = tokio_file_unix::raw_stdin().unwrap();
         let file = tokio_file_unix::File::new_nb(file).unwrap();
         let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
@@ -341,7 +341,7 @@ impl UIPlugin {
     }
 }
 
-impl super::Plugin for UIPlugin {
+impl Plugin for UIPlugin {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
@@ -359,7 +359,7 @@ impl super::Plugin for UIPlugin {
         }
     }
 
-    fn init(&mut self, _mgr: &super::PluginManager) -> Result<(), ()> {
+    fn init(&mut self, _mgr: &PluginManager) -> Result<(), ()> {
         const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
         {
@@ -415,11 +415,11 @@ impl fmt::Display for UIPlugin {
 
 pub struct KeyCodec {
     queue: Vec<Result<CommandOrMessage, CommandError>>,
-    mgr: Rc<super::PluginManager>,
+    mgr: Rc<PluginManager>,
 }
 
 impl KeyCodec {
-    pub fn new(mgr: Rc<super::PluginManager>) -> Self {
+    pub fn new(mgr: Rc<PluginManager>) -> Self {
         Self {
             queue: Vec::new(),
             mgr: mgr,
@@ -457,7 +457,7 @@ impl Decoder for KeyCodec {
                             let splitted = shell_words::split(&ui.input.buf);
                             match splitted {
                                 Ok(splitted) => {
-                                    let command = Command::new(splitted[0].clone(), splitted[1..].to_vec());
+                                    let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
                                     self.queue.push(Ok(CommandOrMessage::Command(command)));
                                 },
                                 Err(err) => self.queue.push(Err(CommandError::Parse(err))),

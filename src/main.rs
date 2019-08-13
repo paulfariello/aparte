@@ -28,79 +28,32 @@ use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceTyp
 mod core;
 mod plugins;
 
-use plugins::{Plugin, PluginManager};
 use plugins::ui::CommandStream;
-use crate::core::CommandOrMessage;
+use crate::core::{ Plugin, PluginManager, Command, CommandManager, CommandParser, CommandOrMessage };
 
-fn main_loop(mgr: Rc<PluginManager>) {
+fn main_loop(commands: CommandManager, plugins: Rc<PluginManager>) {
     let mut rt = Runtime::new().unwrap();
     let command_stream = {
-        let ui = mgr.get::<plugins::ui::UIPlugin>().unwrap();
-        ui.command_stream(Rc::clone(&mgr))
+        let ui = plugins.get::<plugins::ui::UIPlugin>().unwrap();
+        ui.command_stream(Rc::clone(&plugins))
     };
-    let mgr = Rc::clone(&mgr);
+    let plugins = Rc::clone(&plugins);
 
-    let commands = command_stream.for_each(move |command_or_message| {
-        let mgr = Rc::clone(&mgr);
+    let commands_fut = command_stream.for_each(move |command_or_message| {
         match command_or_message {
             CommandOrMessage::Message(mut message) => {
-                mgr.on_message(&mut message);
+                let plugins = Rc::clone(&plugins);
+                plugins.on_message(&mut message);
             }
             CommandOrMessage::Command(command) => {
-                match command.command.as_ref() {
-                    "/connect" => {
-                        if command.args.len() != 1 {
-                            mgr.log(format!("Missing jid"));
-                        } else {
-                            let account = command.args[0].clone();
-                            mgr.log(format!("Connecting to {}", account));
-                            let client = Client::new(&account, "pass").unwrap();
+                let result = {
+                    let plugins = Rc::clone(&plugins);
+                    commands.parse(plugins, &command)
+                };
 
-                            let (mut sink, stream) = client.split();
-
-                            let client = stream.for_each(move |event| {
-                                let mgr = Rc::clone(&mgr);
-                                if event.is_online() {
-                                    mgr.log(format!("Connected as {}", account));
-
-                                    mgr.on_connect(&mut sink);
-
-                                    let mut presence = Presence::new(PresenceType::None);
-                                    presence.show = Some(PresenceShow::Chat);
-
-                                    sink.start_send(Packet::Stanza(presence.into())).unwrap();
-                                } else if let Some(stanza) = event.into_stanza() {
-                                    trace!("RECV: {}", String::from(&stanza));
-
-                                    handle_stanza(mgr, stanza);
-                                }
-
-                                future::ok(())
-                            }).map_err(|e| {
-                                error!("Err: {:?}", e);
-                            });
-
-                            tokio::runtime::current_thread::spawn(client);
-                        }
-
-                    },
-                    "/win" => {
-                        if command.args.len() != 1 {
-                            mgr.log(format!("Missing windows name"));
-                        } else {
-                            let result = {
-                                let mut ui = mgr.get_mut::<plugins::ui::UIPlugin>().unwrap();
-                                ui.switch(&command.args[0])
-                            };
-
-                            if result.is_err() {
-                                mgr.log(format!("Unknown window {}", &command.args[0]));
-                            };
-                        }
-                    },
-                    _ => {
-                        mgr.log(format!("Unknown command {}", command.command));
-                    }
+                if result.is_err() {
+                    let plugins = Rc::clone(&plugins);
+                    plugins.log(format!("Unknown command {}", command.name));
                 }
             }
         };
@@ -108,17 +61,17 @@ fn main_loop(mgr: Rc<PluginManager>) {
         Ok(())
     });
 
-    let res = rt.block_on(commands);
+    let res = rt.block_on(commands_fut);
     info!("! {:?}", res);
 }
 
-fn handle_stanza(mgr: Rc<PluginManager>, stanza: Element) {
+fn handle_stanza(plugins: Rc<PluginManager>, stanza: Element) {
     if let Some(message) = Message::try_from(stanza).ok() {
-        handle_message(mgr, message);
+        handle_message(plugins, message);
     }
 }
 
-fn handle_message(mgr: Rc<PluginManager>, message: Message) {
+fn handle_message(plugins: Rc<PluginManager>, message: Message) {
     let from = match message.from {
         Some(from) => from,
         None => return,
@@ -127,7 +80,7 @@ fn handle_message(mgr: Rc<PluginManager>, message: Message) {
     if let Some(ref body) = message.bodies.get("") {
         if message.type_ != MessageType::Error {
             let mut message = core::Message::incoming(from.clone(), body.0.clone());
-            mgr.on_message(&mut message);
+            plugins.on_message(&mut message);
         }
     }
 
@@ -137,7 +90,7 @@ fn handle_message(mgr: Rc<PluginManager>, message: Message) {
                 if message.type_ != MessageType::Error {
                     if let Some(body) = original.bodies.get("") {
                         let mut message = core::Message::incoming(from.clone(), body.0.clone());
-                        mgr.on_message(&mut message);
+                        plugins.on_message(&mut message);
                     }
                 }
             }
@@ -166,5 +119,64 @@ fn main() {
 
     plugin_manager.init().unwrap();
 
-    main_loop(Rc::new(plugin_manager))
+    let connect = |plugins: Rc<PluginManager>, command: &Command| {
+        if command.args.len() != 1 {
+            plugins.log(format!("Missing jid"));
+            Err(())
+        } else {
+            let account = command.args[0].clone();
+            plugins.log(format!("Connecting to {}", account));
+            let client = Client::new(&account, "pass").unwrap();
+
+            let (mut sink, stream) = client.split();
+
+            let client = stream.for_each(move |event| {
+                let plugins = Rc::clone(&plugins);
+                if event.is_online() {
+                    plugins.log(format!("Connected as {}", account));
+
+                    plugins.on_connect(&mut sink);
+
+                    let mut presence = Presence::new(PresenceType::None);
+                    presence.show = Some(PresenceShow::Chat);
+
+                    sink.start_send(Packet::Stanza(presence.into())).unwrap();
+                } else if let Some(stanza) = event.into_stanza() {
+                    trace!("RECV: {}", String::from(&stanza));
+
+                    handle_stanza(plugins, stanza);
+                }
+
+                future::ok(())
+            }).map_err(|e| {
+                error!("Err: {:?}", e);
+            });
+
+            tokio::runtime::current_thread::spawn(client);
+            Ok(())
+        }
+    };
+
+    let win = |plugins: Rc<PluginManager>, command: &Command| {
+        if command.args.len() != 1 {
+            plugins.log(format!("Missing windows name"));
+            Err(())
+        } else {
+            let result = {
+                let mut ui = plugins.get_mut::<plugins::ui::UIPlugin>().unwrap();
+                ui.switch(&command.args[0])
+            };
+
+            if result.is_err() {
+                plugins.log(format!("Unknown window {}", &command.args[0]));
+            };
+            Ok(())
+        }
+    };
+
+    let mut command_manager = CommandManager::new();
+    command_manager.add_command("connect", &connect);
+    command_manager.add_command("win", &win);
+
+    main_loop(command_manager, Rc::new(plugin_manager))
 }

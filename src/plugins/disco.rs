@@ -2,7 +2,7 @@ use std::fmt;
 use futures::Sink;
 use tokio_xmpp;
 
-use crate::core::Message;
+use crate::core::{Plugin, PluginManager, Message};
 
 #[allow(non_camel_case_types)]
 pub struct Disco<'a> {
@@ -18,12 +18,12 @@ impl<'a> Disco<'a> {
     }
 }
 
-impl<'a> super::Plugin for Disco<'a> {
+impl<'a> Plugin for Disco<'a> {
     fn new() -> Disco<'a> {
         Disco { features: Vec::new() }
     }
 
-    fn init(&mut self, _mgr: &super::PluginManager) -> Result<(), ()> {
+    fn init(&mut self, _mgr: &PluginManager) -> Result<(), ()> {
         Ok(())
     }
 
