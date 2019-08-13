@@ -8,33 +8,80 @@ use std::io::Error as IoError;
 use std::rc::Rc;
 use std::string::FromUtf8Error;
 use tokio_xmpp;
-use xmpp_parsers::Jid;
+use xmpp_parsers::{BareJid, Jid};
 
 #[derive(Debug, Clone)]
-pub enum MessageType {
-    IN,
-    OUT,
-    LOG
-}
-
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub kind: MessageType,
-    pub from: Option<Jid>,
+pub struct XmppMessage {
+    pub from: BareJid,
+    pub from_full: Jid,
+    pub to: BareJid,
+    pub to_full: Jid,
     pub body: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct LogMessage {
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    Incoming(XmppMessage),
+    Outgoing(XmppMessage),
+    Log(LogMessage),
+}
+
 impl Message {
-    pub fn incoming(from: Jid, body: String) -> Self {
-        Message { kind: MessageType::IN, from: Some(from), body: body }
+    pub fn incoming(from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+        let from = match from_full {
+            Jid::Bare(from_full) => from_full.clone(),
+            Jid::Full(from_full) => from_full.clone().into(),
+        };
+
+        let to = match to_full {
+            Jid::Bare(to_full) => to_full.clone(),
+            Jid::Full(to_full) => to_full.clone().into(),
+        };
+
+        Message::Incoming(XmppMessage {
+            from: from,
+            from_full: from_full.clone(),
+            to: to.clone(),
+            to_full: to_full.clone(),
+            body: body.to_string(),
+        })
     }
 
-    pub fn outgoing(body: String) -> Self {
-        Message { kind: MessageType::OUT, from: None, body: body }
+    pub fn outgoing(from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+        let from = match from_full {
+            Jid::Bare(from_full) => from_full.clone(),
+            Jid::Full(from_full) => from_full.clone().into(),
+        };
+
+        let to = match to_full {
+            Jid::Bare(to_full) => to_full.clone(),
+            Jid::Full(to_full) => to_full.clone().into(),
+        };
+
+        Message::Outgoing(XmppMessage {
+            from: from,
+            from_full: from_full.clone(),
+            to: to.clone(),
+            to_full: to_full.clone(),
+            body: body.to_string(),
+        })
     }
 
     pub fn log(msg: String) -> Self {
-        Message { kind: MessageType::LOG, from: None, body: msg }
+        Message::Log(LogMessage { body: msg })
+    }
+
+    pub fn body(&self) -> &str {
+        match self {
+            Message::Outgoing(XmppMessage { body, .. })
+                | Message::Incoming(XmppMessage { body, .. })
+                | Message::Log(LogMessage { body, .. }) => &body,
+        }
     }
 }
 

@@ -72,25 +72,22 @@ fn handle_stanza(plugins: Rc<PluginManager>, stanza: Element) {
 }
 
 fn handle_message(plugins: Rc<PluginManager>, message: Message) {
-    let from = match message.from {
-        Some(from) => from,
-        None => return,
-    };
-
-    if let Some(ref body) = message.bodies.get("") {
-        if message.type_ != MessageType::Error {
-            let mut message = core::Message::incoming(from.clone(), body.0.clone());
-            plugins.on_message(&mut message);
+    if let (Some(from), Some(to)) = (message.from, message.to) {
+        if let Some(ref body) = message.bodies.get("") {
+            if message.type_ != MessageType::Error {
+                let mut message = core::Message::incoming(&from, &to, &body.0);
+                plugins.on_message(&mut message);
+            }
         }
-    }
 
-    for payload in message.payloads {
-        if let Some(received) = carbons::Received::try_from(payload).ok() {
-            if let Some(ref original) = received.forwarded.stanza {
-                if message.type_ != MessageType::Error {
-                    if let Some(body) = original.bodies.get("") {
-                        let mut message = core::Message::incoming(from.clone(), body.0.clone());
-                        plugins.on_message(&mut message);
+        for payload in message.payloads {
+            if let Some(received) = carbons::Received::try_from(payload).ok() {
+                if let Some(ref original) = received.forwarded.stanza {
+                    if message.type_ != MessageType::Error {
+                        if let Some(body) = original.bodies.get("") {
+                            let mut message = core::Message::incoming(&from, &to, &body.0);
+                            plugins.on_message(&mut message);
+                        }
                     }
                 }
             }

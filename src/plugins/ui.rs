@@ -21,102 +21,105 @@ use crate::core::{Plugin, PluginManager, Message, Command, CommandOrMessage, Com
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
-trait Widget {
-    fn redraw(&mut self);
-}
-
+#[derive(Clone)]
 enum VerticalPosition {
     Top,
     Bottom,
 }
 
+#[derive(Clone)]
 enum HorizontalPosition {
     Left,
     Right,
 }
 
-struct Position {
-    v: VerticalPosition,
-    h: HorizontalPosition,
-    voff: u16,
-    hoff: u16,
-}
-
-impl Position {
-    fn TopLeft(voff: u16, hoff: u16) -> Self {
-        Self {
-            v: VerticalPosition::Top,
-            h: HorizontalPosition::Left,
-            voff: voff,
-            hoff: hoff,
-        }
-    }
-
-    fn TopRight(voff: u16, hoff: u16) -> Self {
-        Self {
-            v: VerticalPosition::Top,
-            h: HorizontalPosition::Right,
-            voff: voff,
-            hoff: hoff,
-        }
-    }
-
-    fn BottomLeft(voff: u16, hoff: u16) -> Self {
-        Self {
-            v: VerticalPosition::Bottom,
-            h: HorizontalPosition::Left,
-            voff: voff,
-            hoff: hoff,
-        }
-    }
-
-    fn BottomRight(voff: u16, hoff: u16) -> Self {
-        Self {
-            v: VerticalPosition::Bottom,
-            h: HorizontalPosition::Right,
-            voff: voff,
-            hoff: hoff,
-        }
-    }
-}
-
+#[derive(Clone)]
 enum Width {
     Relative(f32),
     Absolute(u16),
 }
 
+#[derive(Clone)]
 enum Height {
     Relative(f32),
     Absolute(u16),
 }
 
-struct Input {
-    position: Position,
+#[derive(Clone)]
+struct Widget {
+    screen: Rc<RefCell<Screen>>,
+    vpos: VerticalPosition,
+    hpos: HorizontalPosition,
+    voff: u16,
+    hoff: u16,
     width: Width,
+    height: Height,
     x: u16,
     y: u16,
     w: u16,
+    h: u16,
+}
+
+impl Widget {
+    fn redraw(&mut self) {
+        let (height, width) = termion::terminal_size().unwrap();
+
+        self.x = match self.hpos {
+            HorizontalPosition::Left => 1 + self.hoff,
+            HorizontalPosition::Right => width - self.hoff,
+        };
+
+        self.y = match self.vpos {
+            VerticalPosition::Top => 1 + self.voff,
+            VerticalPosition::Bottom => height - self.voff,
+        };
+
+        self.w = match self.width {
+            Width::Relative(r) => (r * width as f32) as u16,
+            Width::Absolute(w) => w,
+        };
+
+        self.h = match self.height {
+            Height::Relative(r) => (r * height as f32) as u16,
+            Height::Absolute(w) => w,
+        };
+
+    }
+}
+
+struct Input {
+    widget: Widget,
     buf: String,
-    screen: Rc<RefCell<Screen>>,
     password: bool,
 }
 
 impl Input {
-    fn new(screen: Rc<RefCell<Screen>>, position: Position, width: Width) -> Self {
-        Self {
-            position: position,
-            width: width,
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        let mut widget = Widget {
+            screen: screen,
+            vpos: VerticalPosition::Bottom,
+            hpos: HorizontalPosition::Left,
+            voff: 0,
+            hoff: 0,
+            width: Width::Relative(1.),
+            height: Height::Absolute(1),
             x: 0,
             y: 0,
             w: 0,
-            screen: screen,
+            h: 0,
+        };
+
+        widget.redraw();
+
+        Self {
+            widget: widget,
             buf: String::new(),
             password: false,
         }
     }
 
     fn key(&mut self, c: char) {
-        let mut screen = self.screen.borrow_mut();
+        let mut screen = self.widget.screen.borrow_mut();
         self.buf.push(c);
         if !self.password {
             write!(screen, "{}", c);
@@ -125,7 +128,7 @@ impl Input {
     }
 
     fn delete(&mut self) {
-        let mut screen = self.screen.borrow_mut();
+        let mut screen = self.widget.screen.borrow_mut();
         self.buf.pop();
         if !self.password {
             write!(screen, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1));
@@ -134,20 +137,20 @@ impl Input {
     }
 
     fn clear(&mut self) {
-        let mut screen = self.screen.borrow_mut();
+        let mut screen = self.widget.screen.borrow_mut();
         self.buf.clear();
         self.password = false;
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y));
-        for _i in 1..=self.w {
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
+        for _i in 1..=self.widget.w {
             write!(screen, " ");
         }
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y));
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
         screen.flush();
     }
 
     fn left(&mut self) {
         if !self.password {
-            let mut screen = self.screen.borrow_mut();
+            let mut screen = self.widget.screen.borrow_mut();
             write!(screen, "{}", termion::cursor::Left(1));
             screen.flush();
         }
@@ -155,7 +158,7 @@ impl Input {
 
     fn right(&mut self) {
         if !self.password {
-            let mut screen = self.screen.borrow_mut();
+            let mut screen = self.widget.screen.borrow_mut();
             let (x, _y) = screen.cursor_pos().unwrap();
             if x as usize <= self.buf.len() {
                 write!(screen, "{}", termion::cursor::Right(1));
@@ -167,97 +170,52 @@ impl Input {
     fn password(&mut self) {
         self.clear();
         self.password = true;
-        let mut screen = self.screen.borrow_mut();
+        let mut screen = self.widget.screen.borrow_mut();
         write!(screen, "password: ");
         screen.flush();
     }
-}
 
-impl Widget for Input {
     fn redraw(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        let (height, width) = termion::terminal_size().unwrap();
+        self.widget.redraw();
+        let mut screen = self.widget.screen.borrow_mut();
 
-        self.x = match self.position.h {
-            HorizontalPosition::Left => 1 + self.position.voff,
-            HorizontalPosition::Right => width - self.position.voff,
-        };
-
-        self.y = match self.position.v {
-            VerticalPosition::Top => 1 + self.position.voff,
-            VerticalPosition::Bottom => height - self.position.voff,
-        };
-
-        self.w = match self.width {
-            Width::Relative(r) => (r * width as f32) as u16,
-            Width::Absolute(w) => w,
-        };
-
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y));
-        for _i in 1..=self.w {
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
+        for _i in 1..=self.widget.w {
             write!(screen, " ");
         }
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y));
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
         screen.flush();
     }
 }
 
-struct Chat {
-    name: String,
-    position: Position,
-    width: Width,
-    height: Height,
-    x: u16,
-    y: u16,
-    w: u16,
-    h: u16,
+struct BufferedWin {
+    widget: Widget,
     next_line: u16,
     buf: Vec<Message>,
-    screen: Rc<RefCell<Screen>>,
 }
 
-impl Chat {
-    fn new(screen: Rc<RefCell<Screen>>, name: String, position: Position, width: Width, height: Height) -> Self {
-        Self {
-            name: name,
-            position: position,
-            width: width,
-            height: height,
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-            next_line: 0,
-            screen: screen,
-            buf: Vec::new(),
-        }
-    }
-
+impl BufferedWin {
     fn show(&mut self) {
-        let mut screen = self.screen.borrow_mut();
+        let mut screen = self.widget.screen.borrow_mut();
 
         write!(screen, "{}", termion::cursor::Save);
 
         self.next_line = 0;
         let mut messages = self.buf.iter();
 
-        for y in self.y ..= self.y + self.h {
-            write!(screen, "{}", termion::cursor::Goto(self.x, y));
+        for y in self.widget.y ..= self.widget.y + self.widget.h {
+            write!(screen, "{}", termion::cursor::Goto(self.widget.x, y));
 
-            for _x in self.x  ..= self.x + self.w {
+            for _x in self.widget.x  ..= self.widget.x + self.widget.w {
                 write!(screen, " ");
             }
 
-            write!(screen, "{}", termion::cursor::Goto(self.x, y));
+            write!(screen, "{}", termion::cursor::Goto(self.widget.x, y));
 
             if let Some(message) = messages.next() {
-                let _result = match & message.from {
-                    Some(Jid::Bare(from)) => write!(screen, "{}: {}", from, message.body),
-                    Some(Jid::Full(from)) => {
-                        let bare: BareJid = from.clone().into();
-                        write!(screen, "{}: {}", bare, message.body)
-                    }
-                    None => write!(screen, "{}", message.body),
+                let _result = match message {
+                    Message::Incoming(message) | Message::Outgoing(message) => write!(screen, "{}: {}", message.from, message.body),
+                    Message::Log(message) => write!(screen, "{}", message.body),
                 };
                 self.next_line += 1;
             }
@@ -269,24 +227,20 @@ impl Chat {
     }
 
     fn print_message(&mut self, message: &Message) {
-        if self.next_line > self.h {
+        if self.next_line > self.widget.h {
             self.scroll();
         }
 
-        let mut screen = self.screen.borrow_mut();
+        let mut screen = self.widget.screen.borrow_mut();
 
-        let x = self.x;
-        let y = self.y + self.next_line;
+        let x = self.widget.x;
+        let y = self.widget.y + self.next_line;
 
         write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y));
 
-        let _result = match & message.from {
-            Some(Jid::Bare(from)) => write!(screen, "{}: {}", from, message.body),
-            Some(Jid::Full(from)) => {
-                let bare: BareJid = from.clone().into();
-                write!(screen, "{}: {}", bare, message.body)
-            },
-            None => write!(screen, "{}", message.body),
+        let _result = match message {
+            Message::Incoming(message) | Message::Outgoing(message) => write!(screen, "{}: {}", message.from, message.body),
+            Message::Log(message) => write!(screen, "{}", message.body),
         };
 
         self.next_line += 1;
@@ -305,41 +259,128 @@ impl Chat {
 
     fn scroll(&mut self) {
     }
+
+    fn redraw(&mut self) {
+        self.widget.redraw();
+        let mut screen = self.widget.screen.borrow_mut();
+        screen.flush();
+    }
 }
 
-impl Widget for Chat {
+struct ConsoleWin {
+    bufwin: BufferedWin,
+}
+
+struct ChatWin {
+    bufwin: BufferedWin,
+    us: BareJid,
+    them: BareJid,
+}
+
+enum Window {
+    Console(ConsoleWin),
+    Chat(ChatWin),
+}
+
+impl Window {
+    fn chat(screen: Rc<RefCell<Screen>>, us: &BareJid, them: &BareJid) -> Self {
+        let widget = Widget {
+            screen: screen,
+            vpos: VerticalPosition::Top,
+            hpos: HorizontalPosition::Left,
+            voff: 1,
+            hoff: 0,
+            width: Width::Relative(1.),
+            height: Height::Relative(1.),
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        };
+
+        let mut bufwin = BufferedWin {
+            widget: widget,
+            next_line: 0,
+            buf: Vec::new(),
+        };
+
+        bufwin.redraw();
+
+        Window::Chat(ChatWin {
+            bufwin: bufwin,
+            us: us.clone(),
+            them: them.clone(),
+        })
+    }
+
+    fn console(screen: Rc<RefCell<Screen>>) -> Self {
+        let widget = Widget {
+            screen: screen,
+            vpos: VerticalPosition::Top,
+            hpos: HorizontalPosition::Left,
+            voff: 1,
+            hoff: 0,
+            width: Width::Relative(1.),
+            height: Height::Relative(1.),
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        };
+
+        let mut bufwin = BufferedWin {
+            widget: widget,
+            next_line: 0,
+            buf: Vec::new(),
+        };
+
+        bufwin.redraw();
+
+        Window::Console(ConsoleWin {
+            bufwin: bufwin,
+        })
+    }
+
     fn redraw(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        let (height, width) = termion::terminal_size().unwrap();
+        match self {
+            Window::Chat(chat) => chat.bufwin.redraw(),
+            Window::Console(console) => console.bufwin.redraw(),
+        }
+    }
 
-        self.x = match self.position.h {
-            HorizontalPosition::Left => 1 + self.position.hoff,
-            HorizontalPosition::Right => width - self.position.hoff,
-        };
+    fn show(&mut self) {
+        match self {
+            Window::Chat(chat) => chat.bufwin.show(),
+            Window::Console(console) => console.bufwin.show(),
+        }
+    }
 
-        self.y = match self.position.v {
-            VerticalPosition::Top => 1 + self.position.voff,
-            VerticalPosition::Bottom => height - self.position.voff,
-        };
+    fn print_message(&mut self, message: &Message) {
+        match self {
+            Window::Chat(chat) => chat.bufwin.print_message(message),
+            Window::Console(console) => console.bufwin.print_message(message),
+        }
+    }
 
-        self.w = match self.width {
-            Width::Relative(r) => (r * width as f32) as u16,
-            Width::Absolute(w) => w,
-        };
+    fn message(&mut self, message: &mut Message, print: bool) {
+        match self {
+            Window::Chat(chat) => chat.bufwin.message(message, print),
+            Window::Console(console) => console.bufwin.message(message, print),
+        }
+    }
 
-        self.h = match self.height {
-            Height::Relative(r) => (r * height as f32) as u16,
-            Height::Absolute(w) => w,
-        };
-
-        screen.flush();
+    fn scroll(&mut self) {
+        match self {
+            Window::Chat(chat) => chat.bufwin.scroll(),
+            Window::Console(console) => console.bufwin.scroll(),
+        }
     }
 }
 
 pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     input: Input,
-    chats: HashMap<String, Chat>,
+    windows: HashMap<String, Window>,
     current: String,
     password_command: Option<Command>,
 }
@@ -353,13 +394,13 @@ impl UIPlugin {
         FramedRead::new(file, KeyCodec::new(mgr))
     }
 
-    pub fn current_chat(&mut self) -> &mut Chat {
-        self.chats.get_mut(&self.current).unwrap()
+    pub fn current_window(&mut self) -> &mut Window {
+        self.windows.get_mut(&self.current).unwrap()
     }
 
     pub fn switch(&mut self, chat: &str) -> Result<(), ()> {
         self.current = chat.to_string();
-        if let Some(chat) = self.chats.get_mut(chat) {
+        if let Some(chat) = self.windows.get_mut(chat) {
             chat.show();
             return Ok(())
         } else {
@@ -377,16 +418,16 @@ impl Plugin for UIPlugin {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
-        let input = Input::new(screen.clone(), Position::BottomLeft(0, 0), Width::Relative(1.));
-        let mut chats = HashMap::new();
-        let console = Chat::new(screen.clone(), "console".to_string(), Position::TopLeft(1, 0), Width::Relative(1.), Height::Relative(1.));
+        let input = Input::new(screen.clone());
+        let mut windows = HashMap::new();
+        let console = Window::console(screen.clone());
 
-        chats.insert("console".to_string(), console);
+        windows.insert("console".to_string(), console);
 
         Self {
             screen: screen,
             input: input,
-            chats: chats,
+            windows: windows,
             current: "console".to_string(),
             password_command: None,
         }
@@ -403,7 +444,7 @@ impl Plugin for UIPlugin {
         }
 
         self.input.redraw();
-        self.current_chat().redraw();
+        self.current_window().redraw();
 
         Ok(())
     }
@@ -415,30 +456,31 @@ impl Plugin for UIPlugin {
     }
 
     fn on_message(&mut self, message: &mut Message) {
-        let from = match & message.from {
-            Some(Jid::Bare(from)) => from.to_string(),
-            Some(Jid::Full(from)) => {
-                let bare: BareJid = from.clone().into();
-                bare.to_string()
-            },
-            None => "console".to_string(),
+        let chat_name = match message {
+            Message::Incoming(message) => message.from.to_string(),
+            Message::Outgoing(message) => message.to.to_string(),
+            Message::Log(message) => "console".to_string(),
         };
 
-        let chat = match self.chats.get_mut(&from) {
+        let chat = match self.windows.get_mut(&chat_name) {
             Some(chat) => chat,
             None => {
-                let mut chat = Chat::new(self.screen.clone(), from.clone(), Position::TopLeft(1, 0), Width::Relative(1.), Height::Relative(1.));
+                let mut chat = match message {
+                    Message::Incoming(message) => Window::chat(self.screen.clone(), &message.to, &message.from),
+                    Message::Outgoing(message) => Window::chat(self.screen.clone(), &message.from, &message.to),
+                    Message::Log(_) => unreachable!(),
+                };
                 chat.redraw();
-                self.chats.insert(from.clone(), chat);
-                self.chats.get_mut(&from).unwrap()
+                self.windows.insert(chat_name.clone(), chat);
+                self.windows.get_mut(&chat_name).unwrap()
             }
         };
 
-        if self.current == chat.name {
+        if self.current == chat_name {
             chat.message(message, true);
         } else {
             chat.message(message, false);
-            self.switch(&from).unwrap();
+            self.switch(&chat_name).unwrap();
         }
     }
 }
@@ -503,8 +545,15 @@ impl Decoder for KeyCodec {
                                 Err(err) => self.queue.push(Err(CommandError::Parse(err))),
                             }
                         } else {
-                            let message = Message::outgoing(ui.input.buf.clone());
-                            self.queue.push(Ok(CommandOrMessage::Message(message)));
+                            match ui.current_window() {
+                                Window::Chat(chat) => {
+                                    let from: Jid = chat.us.clone().into();
+                                    let to: Jid = chat.them.clone().into();
+                                    let message = Message::outgoing(&from, &to, &ui.input.buf);
+                                    self.queue.push(Ok(CommandOrMessage::Message(message)));
+                                },
+                                Window::Console(_) => { },
+                            }
                         }
                         ui.input.clear();
                     },
