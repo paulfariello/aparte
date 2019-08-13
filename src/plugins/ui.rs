@@ -16,8 +16,7 @@ use tokio_codec::{Decoder};
 use tokio_xmpp;
 use xmpp_parsers::Jid;
 
-use crate::core::Message;
-use crate::core::{Command, CommandError};
+use crate::core::{Message, Command, CommandOrMessage, CommandError};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
@@ -415,7 +414,7 @@ impl fmt::Display for UIPlugin {
 }
 
 pub struct KeyCodec {
-    queue: Vec<Result<Command, CommandError>>,
+    queue: Vec<Result<CommandOrMessage, CommandError>>,
     mgr: Rc<super::PluginManager>,
 }
 
@@ -429,7 +428,7 @@ impl KeyCodec {
 }
 
 impl Decoder for KeyCodec {
-    type Item = Command;
+    type Item = CommandOrMessage;
     type Error = CommandError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -454,13 +453,18 @@ impl Decoder for KeyCodec {
             } else {
                 match c {
                     '\r' => {
-                        let splitted = shell_words::split(&ui.input.buf);
-                        match splitted {
-                            Ok(splitted) => {
-                                let command = Command::new(splitted[0].clone(), splitted[1..].to_vec());
-                                self.queue.push(Ok(command));
-                            },
-                            Err(err) => self.queue.push(Err(CommandError::Parse(err))),
+                        if ui.input.buf.starts_with("/") {
+                            let splitted = shell_words::split(&ui.input.buf);
+                            match splitted {
+                                Ok(splitted) => {
+                                    let command = Command::new(splitted[0].clone(), splitted[1..].to_vec());
+                                    self.queue.push(Ok(CommandOrMessage::Command(command)));
+                                },
+                                Err(err) => self.queue.push(Err(CommandError::Parse(err))),
+                            }
+                        } else {
+                            let message = Message::outgoing(ui.input.buf.clone());
+                            self.queue.push(Ok(CommandOrMessage::Message(message)));
                         }
                         ui.input.clear();
                     },

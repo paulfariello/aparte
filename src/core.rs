@@ -31,7 +31,7 @@ impl Message {
     }
 }
 
-enum CommandOrMessage {
+pub enum CommandOrMessage {
     Command(Command),
     Message(Message),
 }
