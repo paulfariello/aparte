@@ -120,40 +120,49 @@ fn main() {
     plugin_manager.init().unwrap();
 
     let connect = |plugins: Rc<PluginManager>, command: &Command| {
-        if command.args.len() != 1 {
-            plugins.log(format!("Missing jid"));
-            Err(())
-        } else {
-            let account = command.args[0].clone();
-            plugins.log(format!("Connecting to {}", account));
-            let client = Client::new(&account, "pass").unwrap();
+        match command.args.len() {
+            1 => {
+                let mut ui = plugins.get_mut::<plugins::ui::UIPlugin>().unwrap();
+                ui.read_password(command.clone());
+                Ok(())
+            },
+            2 => {
+                let account = command.args[0].clone();
+                let password = command.args[1].clone();
+                plugins.log(format!("Connecting to {}", account));
+                let client = Client::new(&account, "pass").unwrap();
 
-            let (mut sink, stream) = client.split();
+                let (mut sink, stream) = client.split();
 
-            let client = stream.for_each(move |event| {
-                let plugins = Rc::clone(&plugins);
-                if event.is_online() {
-                    plugins.log(format!("Connected as {}", account));
+                let client = stream.for_each(move |event| {
+                    let plugins = Rc::clone(&plugins);
+                    if event.is_online() {
+                        plugins.log(format!("Connected as {}", account));
 
-                    plugins.on_connect(&mut sink);
+                        plugins.on_connect(&mut sink);
 
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence.show = Some(PresenceShow::Chat);
+                        let mut presence = Presence::new(PresenceType::None);
+                        presence.show = Some(PresenceShow::Chat);
 
-                    sink.start_send(Packet::Stanza(presence.into())).unwrap();
-                } else if let Some(stanza) = event.into_stanza() {
-                    trace!("RECV: {}", String::from(&stanza));
+                        sink.start_send(Packet::Stanza(presence.into())).unwrap();
+                    } else if let Some(stanza) = event.into_stanza() {
+                        trace!("RECV: {}", String::from(&stanza));
 
-                    handle_stanza(plugins, stanza);
-                }
+                        handle_stanza(plugins, stanza);
+                    }
 
-                future::ok(())
-            }).map_err(|e| {
-                error!("Err: {:?}", e);
-            });
+                    future::ok(())
+                }).map_err(|e| {
+                    error!("Err: {:?}", e);
+                });
 
-            tokio::runtime::current_thread::spawn(client);
-            Ok(())
+                tokio::runtime::current_thread::spawn(client);
+                Ok(())
+            }
+            _ => {
+                plugins.log(format!("Missing jid"));
+                Err(())
+            }
         }
     };
 

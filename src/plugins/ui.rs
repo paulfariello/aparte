@@ -98,6 +98,7 @@ struct Input {
     w: u16,
     buf: String,
     screen: Rc<RefCell<Screen>>,
+    password: bool,
 }
 
 impl Input {
@@ -110,26 +111,32 @@ impl Input {
             w: 0,
             screen: screen,
             buf: String::new(),
+            password: false,
         }
     }
 
     fn key(&mut self, c: char) {
         let mut screen = self.screen.borrow_mut();
         self.buf.push(c);
-        write!(screen, "{}", c);
-        screen.flush();
+        if !self.password {
+            write!(screen, "{}", c);
+            screen.flush();
+        }
     }
 
     fn delete(&mut self) {
         let mut screen = self.screen.borrow_mut();
-        write!(screen, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1));
         self.buf.pop();
-        screen.flush();
+        if !self.password {
+            write!(screen, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1));
+            screen.flush();
+        }
     }
 
     fn clear(&mut self) {
         let mut screen = self.screen.borrow_mut();
         self.buf.clear();
+        self.password = false;
         write!(screen, "{}", termion::cursor::Goto(self.x, self.y));
         for _i in 1..=self.w {
             write!(screen, " ");
@@ -139,18 +146,30 @@ impl Input {
     }
 
     fn left(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        write!(screen, "{}", termion::cursor::Left(1));
-        screen.flush();
+        if !self.password {
+            let mut screen = self.screen.borrow_mut();
+            write!(screen, "{}", termion::cursor::Left(1));
+            screen.flush();
+        }
     }
 
     fn right(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        let (x, _y) = screen.cursor_pos().unwrap();
-        if x as usize <= self.buf.len() {
-            write!(screen, "{}", termion::cursor::Right(1));
-            screen.flush();
+        if !self.password {
+            let mut screen = self.screen.borrow_mut();
+            let (x, _y) = screen.cursor_pos().unwrap();
+            if x as usize <= self.buf.len() {
+                write!(screen, "{}", termion::cursor::Right(1));
+                screen.flush();
+            }
         }
+    }
+
+    fn password(&mut self) {
+        self.clear();
+        self.password = true;
+        let mut screen = self.screen.borrow_mut();
+        write!(screen, "password: ");
+        screen.flush();
     }
 }
 
@@ -322,6 +341,7 @@ pub struct UIPlugin {
     input: Input,
     chats: HashMap<String, Chat>,
     current: String,
+    password_command: Option<Command>,
 }
 
 impl UIPlugin {
@@ -346,6 +366,11 @@ impl UIPlugin {
             return Err(())
         }
     }
+
+    pub fn read_password(&mut self, command: Command) {
+        self.password_command = Some(command);
+        self.input.password();
+    }
 }
 
 impl Plugin for UIPlugin {
@@ -363,6 +388,7 @@ impl Plugin for UIPlugin {
             input: input,
             chats: chats,
             current: "console".to_string(),
+            password_command: None,
         }
     }
 
@@ -463,7 +489,11 @@ impl Decoder for KeyCodec {
             } else {
                 match c {
                     '\r' => {
-                        if ui.input.buf.starts_with("/") {
+                        if ui.input.password {
+                            let mut command = ui.password_command.take().unwrap();
+                            command.args.push(ui.input.buf.clone());
+                            self.queue.push(Ok(CommandOrMessage::Command(command)));
+                        } else if ui.input.buf.starts_with("/") {
                             let splitted = shell_words::split(&ui.input.buf);
                             match splitted {
                                 Ok(splitted) => {
