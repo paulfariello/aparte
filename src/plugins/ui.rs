@@ -14,7 +14,7 @@ use termion::screen::AlternateScreen;
 use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use tokio_xmpp;
-use xmpp_parsers::Jid;
+use xmpp_parsers::{BareJid, Jid};
 
 use crate::core::{Plugin, PluginManager, Message, Command, CommandOrMessage, CommandError};
 
@@ -219,6 +219,7 @@ impl Chat {
 
         write!(screen, "{}", termion::cursor::Save);
 
+        self.next_line = 0;
         let mut messages = self.buf.iter();
 
         for y in self.y ..= self.y + self.h {
@@ -233,11 +234,14 @@ impl Chat {
             if let Some(message) = messages.next() {
                 let _result = match & message.from {
                     Some(Jid::Bare(from)) => write!(screen, "{}: {}", from, message.body),
-                    Some(Jid::Full(from)) => write!(screen, "{}: {}", from, message.body),
+                    Some(Jid::Full(from)) => {
+                        let bare: BareJid = from.clone().into();
+                        write!(screen, "{}: {}", bare, message.body)
+                    }
                     None => write!(screen, "{}", message.body),
                 };
+                self.next_line += 1;
             }
-            screen.flush();
         }
 
         write!(screen, "{}", termion::cursor::Restore);
@@ -259,7 +263,10 @@ impl Chat {
 
         let _result = match & message.from {
             Some(Jid::Bare(from)) => write!(screen, "{}: {}", from, message.body),
-            Some(Jid::Full(from)) => write!(screen, "{}: {}", from, message.body),
+            Some(Jid::Full(from)) => {
+                let bare: BareJid = from.clone().into();
+                write!(screen, "{}: {}", bare, message.body)
+            },
             None => write!(screen, "{}", message.body),
         };
 
@@ -384,7 +391,10 @@ impl Plugin for UIPlugin {
     fn on_message(&mut self, message: &mut Message) {
         let from = match & message.from {
             Some(Jid::Bare(from)) => from.to_string(),
-            Some(Jid::Full(from)) => from.to_string(),
+            Some(Jid::Full(from)) => {
+                let bare: BareJid = from.clone().into();
+                bare.to_string()
+            },
             None => "console".to_string(),
         };
 
