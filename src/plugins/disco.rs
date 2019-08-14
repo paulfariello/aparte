@@ -1,8 +1,9 @@
-use std::fmt;
 use futures::Sink;
+use std::fmt;
+use std::rc::Rc;
 use tokio_xmpp;
 
-use crate::core::{Plugin, PluginManager, Message};
+use crate::core::{Plugin, Aparte, Message};
 
 #[allow(non_camel_case_types)]
 pub struct Disco<'a> {
@@ -23,17 +24,17 @@ impl<'a> Plugin for Disco<'a> {
         Disco { features: Vec::new() }
     }
 
-    fn init(&mut self, _mgr: &PluginManager) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
+    fn on_connect(&mut self, _aparte: Rc<Aparte>) {
     }
 
-    fn on_disconnect(&mut self) {
+    fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
     }
 
-    fn on_message(&mut self, _message: &mut Message) {
+    fn on_message(&mut self, _aparte: Rc<Aparte>, _message: &mut Message) {
     }
 }
 

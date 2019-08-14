@@ -15,86 +15,134 @@ extern crate dirs;
 use futures::{future, Future, Sink, Stream};
 use log::LevelFilter;
 use std::convert::TryFrom;
-use std::env;
-use std::path::Path;
 use std::rc::Rc;
 use tokio::runtime::current_thread::Runtime;
 use tokio_xmpp::{Client, Packet};
 use uuid::Uuid;
-use xmpp_parsers::Element;
-use xmpp_parsers::carbons;
-use xmpp_parsers::message::{Message, MessageType};
+use xmpp_parsers::{Element, Jid, FullJid};
+use xmpp_parsers::message::{Message as XmppMessage, MessageType, Body};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
+use std::str::FromStr;
 
 mod core;
 mod plugins;
 
 use plugins::ui::CommandStream;
-use crate::core::{ Plugin, PluginManager, Command, CommandManager, CommandParser, CommandOrMessage };
+use crate::core::{Aparte, Plugin, Command, CommandOrMessage, Message};
 
-fn main_loop(commands: CommandManager, plugins: Rc<PluginManager>) {
-    let mut rt = Runtime::new().unwrap();
-    let command_stream = {
-        let ui = plugins.get::<plugins::ui::UIPlugin>().unwrap();
-        ui.command_stream(Rc::clone(&plugins))
-    };
-    let plugins = Rc::clone(&plugins);
-
-    let commands_fut = command_stream.for_each(move |command_or_message| {
-        match command_or_message {
-            CommandOrMessage::Message(mut message) => {
-                let plugins = Rc::clone(&plugins);
-                plugins.on_message(&mut message);
-            }
-            CommandOrMessage::Command(command) => {
-                let result = {
-                    let plugins = Rc::clone(&plugins);
-                    commands.parse(plugins, &command)
-                };
-
-                if result.is_err() {
-                    let plugins = Rc::clone(&plugins);
-                    plugins.log(format!("Unknown command {}", command.name));
-                }
-            }
-        };
-
-        Ok(())
-    });
-
-    let res = rt.block_on(commands_fut);
-    info!("! {:?}", res);
-}
-
-fn handle_stanza(plugins: Rc<PluginManager>, stanza: Element) {
-    if let Some(message) = Message::try_from(stanza).ok() {
-        handle_message(plugins, message);
+fn handle_stanza(aparte: Rc<Aparte>, stanza: xmpp_parsers::Element) {
+    if let Some(message) = xmpp_parsers::message::Message::try_from(stanza).ok() {
+        handle_message(aparte, message);
     }
 }
 
-fn handle_message(plugins: Rc<PluginManager>, message: Message) {
+fn handle_message(aparte: Rc<Aparte>, message: xmpp_parsers::message::Message) {
     if let (Some(from), Some(to)) = (message.from, message.to) {
         if let Some(ref body) = message.bodies.get("") {
-            if message.type_ != MessageType::Error {
+            if message.type_ != xmpp_parsers::message::MessageType::Error {
                 let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                let mut message = core::Message::incoming(id, &from, &to, &body.0);
-                plugins.on_message(&mut message);
+                let mut message = Message::incoming(id, &from, &to, &body.0);
+                Rc::clone(&aparte).on_message(&mut message);
             }
         }
 
         for payload in message.payloads {
-            if let Some(received) = carbons::Received::try_from(payload).ok() {
+            if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
                 if let Some(ref original) = received.forwarded.stanza {
-                    if message.type_ != MessageType::Error {
+                    if message.type_ != xmpp_parsers::message::MessageType::Error {
                         if let Some(body) = original.bodies.get("") {
                             let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-                            let mut message = core::Message::incoming(id, &from, &to, &body.0);
-                            plugins.on_message(&mut message);
+                            let mut message = Message::incoming(id, &from, &to, &body.0);
+                            Rc::clone(&aparte).on_message(&mut message);
                         }
                     }
                 }
             }
         }
+    }
+}
+
+fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+    match command.args.len() {
+        1 => {
+            let mut ui = aparte.get_plugin_mut::<plugins::ui::UIPlugin>().unwrap();
+            ui.read_password(command.clone());
+            Ok(())
+        },
+        2 => {
+            let account = command.args[0].clone();
+            let password = command.args[1].clone();
+
+            if let Ok(jid) = FullJid::from_str(&command.args[0]) {
+                Rc::clone(&aparte).log(format!("Connecting to {}", account));
+                let client = Client::new(&account, &password).unwrap();
+
+                let (mut sink, stream) = client.split();
+                let (mut tx, rx) = futures::unsync::mpsc::unbounded();
+
+                Rc::clone(&aparte).add_connection(jid, tx);
+
+                tokio::runtime::current_thread::spawn(
+                    rx.forward(
+                        sink.sink_map_err(|_| panic!("Pipe"))
+                    ).map(|(rx, mut sink)| {
+                        drop(rx);
+                        let _ = sink.close();
+                    }).map_err(|e| {
+                        panic!("Send error: {:?}", e);
+                    })
+                );
+
+                let client = stream.for_each(move |event| {
+                    if event.is_online() {
+                        Rc::clone(&aparte).log(format!("Connected as {}", account));
+
+                        Rc::clone(&aparte).on_connect();
+
+                        let mut presence = Presence::new(PresenceType::None);
+                        presence.show = Some(PresenceShow::Chat);
+
+                        aparte.send(presence.into());
+                    } else if let Some(stanza) = event.into_stanza() {
+                        trace!("RECV: {}", String::from(&stanza));
+
+                        handle_stanza(Rc::clone(&aparte), stanza);
+                    }
+
+                    future::ok(())
+                }).map_err(|e| {
+                    error!("Err: {:?}", e);
+                });
+
+                tokio::runtime::current_thread::spawn(client);
+
+                Ok(())
+            } else {
+                Rc::clone(&aparte).log(format!("Invalid JID {}", command.args[0]));
+                Err(())
+            }
+        }
+        _ => {
+            Rc::clone(&aparte).log(format!("Missing jid"));
+            Err(())
+        }
+    }
+}
+
+fn win(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+    if command.args.len() != 1 {
+        Rc::clone(&aparte).log(format!("Missing windows name"));
+        Err(())
+    } else {
+        let result = {
+            let mut ui = aparte.get_plugin_mut::<plugins::ui::UIPlugin>().unwrap();
+            ui.switch(&command.args[0])
+        };
+
+        if result.is_err() {
+            Rc::clone(&aparte).log(format!("Unknown window {}", &command.args[0]));
+        };
+        Ok(())
     }
 }
 
@@ -108,84 +156,55 @@ fn main() {
     }
 
     let aparte_log = aparte_data.join("aparte.log");
-    simple_logging::log_to_file(aparte_log, LevelFilter::Info);
+    simple_logging::log_to_file(aparte_log, LevelFilter::Trace);
 
     info!("Starting aparté");
 
-    let mut plugin_manager = PluginManager::new();
-    plugin_manager.add::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
-    plugin_manager.add::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
-    plugin_manager.add::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
+    let mut aparte = Aparte::new();
+    aparte.add_plugin::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
+    aparte.add_plugin::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
+    aparte.add_plugin::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
 
-    plugin_manager.init().unwrap();
+    aparte.add_command("connect", connect);
+    aparte.add_command("win", win);
 
-    let connect = |plugins: Rc<PluginManager>, command: &Command| {
-        match command.args.len() {
-            1 => {
-                let mut ui = plugins.get_mut::<plugins::ui::UIPlugin>().unwrap();
-                ui.read_password(command.clone());
-                Ok(())
-            },
-            2 => {
-                let account = command.args[0].clone();
-                let password = command.args[1].clone();
-                plugins.log(format!("Connecting to {}", account));
-                let client = Client::new(&account, "pass").unwrap();
+    aparte.init().unwrap();
 
-                let (mut sink, stream) = client.split();
+    let aparte = Rc::new(aparte);
 
-                let client = stream.for_each(move |event| {
-                    let plugins = Rc::clone(&plugins);
-                    if event.is_online() {
-                        plugins.log(format!("Connected as {}", account));
-
-                        plugins.on_connect(&mut sink);
-
-                        let mut presence = Presence::new(PresenceType::None);
-                        presence.show = Some(PresenceShow::Chat);
-
-                        sink.start_send(Packet::Stanza(presence.into())).unwrap();
-                    } else if let Some(stanza) = event.into_stanza() {
-                        trace!("RECV: {}", String::from(&stanza));
-
-                        handle_stanza(plugins, stanza);
-                    }
-
-                    future::ok(())
-                }).map_err(|e| {
-                    error!("Err: {:?}", e);
-                });
-
-                tokio::runtime::current_thread::spawn(client);
-                Ok(())
-            }
-            _ => {
-                plugins.log(format!("Missing jid"));
-                Err(())
-            }
-        }
+    let mut rt = Runtime::new().unwrap();
+    let command_stream = {
+        let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
+        ui.command_stream(Rc::clone(&aparte))
     };
 
-    let win = |plugins: Rc<PluginManager>, command: &Command| {
-        if command.args.len() != 1 {
-            plugins.log(format!("Missing windows name"));
-            Err(())
-        } else {
-            let result = {
-                let mut ui = plugins.get_mut::<plugins::ui::UIPlugin>().unwrap();
-                ui.switch(&command.args[0])
-            };
+    let res = rt.block_on(command_stream.for_each(move |command_or_message| {
+        match command_or_message {
+            CommandOrMessage::Message(mut message) => {
+                Rc::clone(&aparte).on_message(&mut message);
+                match message {
+                    Message::Incoming(message) => {},
+                    Message::Outgoing(message) => {
+                        let mut xmpp_message = XmppMessage::new(Some(Jid::Bare(message.to)));
+                        xmpp_message.bodies.insert(String::new(), Body(message.body));
+                        aparte.send(xmpp_message.into());
+                    },
+                    Message::Log(log) => {},
+                }
+            }
+            CommandOrMessage::Command(command) => {
+                let result = {
+                    Rc::clone(&aparte).parse_command(&command)
+                };
 
-            if result.is_err() {
-                plugins.log(format!("Unknown window {}", &command.args[0]));
-            };
-            Ok(())
-        }
-    };
+                if result.is_err() {
+                    Rc::clone(&aparte).log(format!("Unknown command {}", command.name));
+                }
+            }
+        };
 
-    let mut command_manager = CommandManager::new();
-    command_manager.add_command("connect", &connect);
-    command_manager.add_command("win", &win);
+        Ok(())
+    }));
 
-    main_loop(command_manager, Rc::new(plugin_manager))
+    info!("! {:?}", res);
 }

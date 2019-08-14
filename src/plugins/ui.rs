@@ -18,7 +18,7 @@ use tokio_xmpp;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::core::{Plugin, PluginManager, Message, Command, CommandOrMessage, CommandError};
+use crate::core::{Plugin, Aparte, Message, Command, CommandOrMessage, CommandError};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
@@ -371,12 +371,12 @@ pub struct UIPlugin {
 }
 
 impl UIPlugin {
-    pub fn command_stream(&self, mgr: Rc<PluginManager>) -> CommandStream {
+    pub fn command_stream(&self, aparte: Rc<Aparte>) -> CommandStream {
         let file = tokio_file_unix::raw_stdin().unwrap();
         let file = tokio_file_unix::File::new_nb(file).unwrap();
         let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
 
-        FramedRead::new(file, KeyCodec::new(mgr))
+        FramedRead::new(file, KeyCodec::new(aparte))
     }
 
     pub fn current_window(&mut self) -> &mut Window {
@@ -418,7 +418,7 @@ impl Plugin for UIPlugin {
         }
     }
 
-    fn init(&mut self, _mgr: &PluginManager) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
         const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
         {
@@ -434,13 +434,13 @@ impl Plugin for UIPlugin {
         Ok(())
     }
 
-    fn on_connect(&mut self, _sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
+    fn on_connect(&mut self, _aparte: Rc<Aparte>) {
     }
 
-    fn on_disconnect(&mut self) {
+    fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
     }
 
-    fn on_message(&mut self, message: &mut Message) {
+    fn on_message(&mut self, _aparte: Rc<Aparte>, message: &mut Message) {
         let chat_name = match message {
             Message::Incoming(message) => message.from.to_string(),
             Message::Outgoing(message) => message.to.to_string(),
@@ -478,14 +478,14 @@ impl fmt::Display for UIPlugin {
 
 pub struct KeyCodec {
     queue: Vec<Result<CommandOrMessage, CommandError>>,
-    mgr: Rc<PluginManager>,
+    aparte: Rc<Aparte>,
 }
 
 impl KeyCodec {
-    pub fn new(mgr: Rc<PluginManager>) -> Self {
+    pub fn new(aparte: Rc<Aparte>) -> Self {
         Self {
             queue: Vec::new(),
-            mgr: mgr,
+            aparte: aparte,
         }
     }
 }
@@ -495,7 +495,7 @@ impl Decoder for KeyCodec {
     type Error = CommandError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let mut ui = self.mgr.get_mut::<UIPlugin>().unwrap();
+        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
         let copy = buf.clone();
         let string = match std::str::from_utf8(&copy) {
             Ok(string) => {

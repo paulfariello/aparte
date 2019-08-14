@@ -1,12 +1,13 @@
 use futures::Sink;
 use std::fmt;
+use std::rc::Rc;
 use tokio_xmpp;
 use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::iq::Iq;
 
-use crate::core::{Plugin, PluginManager, Message};
+use crate::core::{Plugin, Aparte, Message};
 use crate::plugins::disco;
 
 pub struct CarbonsPlugin {
@@ -25,22 +26,19 @@ impl Plugin for CarbonsPlugin {
         CarbonsPlugin { }
     }
 
-    fn init(&mut self, mgr: &PluginManager) -> Result<(), ()> {
-        let mut disco = mgr.get_mut::<disco::Disco>().unwrap();
+    fn init(&mut self, aparte: &Aparte) -> Result<(), ()> {
+        let mut disco = aparte.get_plugin_mut::<disco::Disco>().unwrap();
         disco.add_feature("urn:xmpp:carbons:2")
     }
 
-    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
-        let iq = self.enable();
-
-        trace!("SEND: {}", String::from(&iq));
-        sink.start_send(tokio_xmpp::Packet::Stanza(iq)).unwrap();
+    fn on_connect(&mut self, aparte: Rc<Aparte>) {
+        aparte.send(self.enable());
     }
 
-    fn on_disconnect(&mut self) {
+    fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
     }
 
-    fn on_message(&mut self, _message: &mut Message) {
+    fn on_message(&mut self, _aparte: Rc<Aparte>, _message: &mut Message) {
     }
 }
 

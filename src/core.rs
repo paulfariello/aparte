@@ -1,16 +1,20 @@
-use futures::Sink;
+use crate::futures::{Stream, Future};
+use futures::unsync::mpsc::UnboundedSender;
+use futures::{future, Sink};
 use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::hash;
 use std::io::Error as IoError;
 use std::rc::Rc;
 use std::string::FromUtf8Error;
-use tokio_xmpp;
-use xmpp_parsers::{BareJid, Jid};
+use tokio_xmpp::{Client, Packet};
 use uuid::Uuid;
+use xmpp_parsers::{Element, FullJid, BareJid, Jid};
+use xmpp_parsers;
 
 #[derive(Debug, Clone)]
 pub struct XmppMessage {
@@ -139,39 +143,12 @@ pub enum CommandError {
     Parse(ParseError),
 }
 
-pub trait CommandParser {
-    fn parse(&self, plugins: Rc<PluginManager>, command: &Command) -> Result<(), ()>;
-}
-
-pub struct CommandManager<'a> {
-    pub commands: HashMap<String, &'a Fn(Rc<PluginManager>, &Command) -> Result<(), ()>>,
-}
-
-impl<'a> CommandManager<'a> {
-    pub fn new() -> Self {
-        Self {
-            commands: HashMap::new()
-        }
-    }
-
-    pub fn add_command(&mut self, name: &str, command: &'a Fn(Rc<PluginManager>, &Command) -> Result<(), ()>) {
-        self.commands.insert(name.to_string(), command);
-    }
-
-    pub fn parse(&self, plugins: Rc<PluginManager>, command: &Command) -> Result<(), ()> {
-        match self.commands.get(&command.name) {
-            Some(parser) => parser(plugins, command),
-            None => Err(()),
-        }
-    }
-}
-
 pub trait Plugin: fmt::Display {
     fn new() -> Self where Self: Sized;
-    fn init(&mut self, mgr: &PluginManager) -> Result<(), ()>;
-    fn on_connect(&mut self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>);
-    fn on_disconnect(&mut self);
-    fn on_message(&mut self, message: &mut Message);
+    fn init(&mut self, mgr: &Aparte) -> Result<(), ()>;
+    fn on_connect(&mut self, aparte: Rc<Aparte>);
+    fn on_disconnect(&mut self, aparte: Rc<Aparte>);
+    fn on_message(&mut self, aparte: Rc<Aparte>, message: &mut Message);
 }
 
 pub trait AnyPlugin: Any + Plugin {
@@ -194,23 +171,44 @@ impl<T> AnyPlugin for T where T: Any + Plugin {
     }
 }
 
-
-pub struct PluginManager {
-    plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
+pub struct Connection {
+    sink: UnboundedSender<Packet>,
+    account: FullJid,
 }
 
-impl PluginManager {
-    pub fn new() -> PluginManager {
-        PluginManager { plugins: HashMap::new() }
+pub struct Aparte {
+    commands: HashMap<String, fn(Rc<Aparte>, &Command) -> Result<(), ()>>,
+    plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
+    connections: RefCell<HashMap<String, Connection>>,
+}
+
+impl Aparte {
+    pub fn new() -> Self {
+        Self {
+            commands: HashMap::new(),
+            plugins: HashMap::new(),
+            connections: RefCell::new(HashMap::new()),
+        }
     }
 
-    pub fn add<T: 'static>(&mut self, plugin: Box<dyn AnyPlugin>) -> Result<(), ()> {
+    pub fn add_command(&mut self, name: &str, command: fn(Rc<Aparte>, &Command) -> Result<(), ()>) {
+        self.commands.insert(name.to_string(), command);
+    }
+
+    pub fn parse_command(self: Rc<Self>, command: &Command) -> Result<(), ()> {
+        match self.commands.get(&command.name) {
+            Some(parser) => parser(self, command),
+            None => Err(()),
+        }
+    }
+
+    pub fn add_plugin<T: 'static>(&mut self, plugin: Box<dyn AnyPlugin>) -> Result<(), ()> {
         info!("Add plugin `{}`", plugin);
         self.plugins.insert(TypeId::of::<T>(), RefCell::new(plugin));
         Ok(())
     }
 
-    pub fn get<T: 'static>(&self) -> Option<Ref<T>> {
+    pub fn get_plugin<T: 'static>(&self) -> Option<Ref<T>> {
         let rc = match self.plugins.get(&TypeId::of::<T>()) {
             Some(rc) => rc,
             None => return None,
@@ -221,7 +219,7 @@ impl PluginManager {
         Some(Ref::map(any_plugin, |p| p.as_any().downcast_ref::<T>().unwrap()))
     }
 
-    pub fn get_mut<T: 'static>(&self) -> Option<RefMut<T>> {
+    pub fn get_plugin_mut<T: 'static>(&self) -> Option<RefMut<T>> {
         let rc = match self.plugins.get(&TypeId::of::<T>()) {
             Some(rc) => rc,
             None => return None,
@@ -230,6 +228,15 @@ impl PluginManager {
         let any_plugin = rc.borrow_mut();
         /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
         Some(RefMut::map(any_plugin, |p| p.as_any_mut().downcast_mut::<T>().unwrap()))
+    }
+
+    pub fn add_connection(&self, account: FullJid, sink: UnboundedSender<Packet>) {
+        let connection = Connection {
+            account: account,
+            sink: sink,
+        };
+
+        self.connections.borrow_mut().insert(connection.account.to_string(), connection);
     }
 
     pub fn init(&mut self) -> Result<(), ()> {
@@ -242,19 +249,25 @@ impl PluginManager {
         Ok(())
     }
 
-    pub fn on_connect(&self, sink: &mut dyn Sink<SinkItem=tokio_xmpp::Packet, SinkError=tokio_xmpp::Error>) {
+    pub fn send(&self, element: Element) {
+        trace!("SEND: {:?}", element);
+        let packet = Packet::Stanza(element);
+        self.connections.borrow_mut().iter_mut().next().unwrap().1.sink.start_send(packet);
+    }
+
+    pub fn on_connect(self: Rc<Self>) {
         for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().on_connect(sink);
+            plugin.borrow_mut().as_plugin().on_connect(Rc::clone(&self));
         }
     }
 
-    pub fn on_message(&self, message: &mut Message) {
+    pub fn on_message(self: Rc<Self>, message: &mut Message) {
         for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().on_message(message);
+            plugin.borrow_mut().as_plugin().on_message(Rc::clone(&self), message);
         }
     }
 
-    pub fn log(&self, message: String) {
+    pub fn log(self: Rc<Self>, message: String) {
         let mut message = Message::log(message);
         self.on_message(&mut message);
     }
