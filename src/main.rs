@@ -20,6 +20,7 @@ use std::path::Path;
 use std::rc::Rc;
 use tokio::runtime::current_thread::Runtime;
 use tokio_xmpp::{Client, Packet};
+use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::message::{Message, MessageType};
@@ -75,7 +76,8 @@ fn handle_message(plugins: Rc<PluginManager>, message: Message) {
     if let (Some(from), Some(to)) = (message.from, message.to) {
         if let Some(ref body) = message.bodies.get("") {
             if message.type_ != MessageType::Error {
-                let mut message = core::Message::incoming(&from, &to, &body.0);
+                let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+                let mut message = core::Message::incoming(id, &from, &to, &body.0);
                 plugins.on_message(&mut message);
             }
         }
@@ -85,7 +87,8 @@ fn handle_message(plugins: Rc<PluginManager>, message: Message) {
                 if let Some(ref original) = received.forwarded.stanza {
                     if message.type_ != MessageType::Error {
                         if let Some(body) = original.bodies.get("") {
-                            let mut message = core::Message::incoming(&from, &to, &body.0);
+                            let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                            let mut message = core::Message::incoming(id, &from, &to, &body.0);
                             plugins.on_message(&mut message);
                         }
                     }

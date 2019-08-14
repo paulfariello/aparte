@@ -4,14 +4,17 @@ use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
 use std::fmt;
+use std::hash;
 use std::io::Error as IoError;
 use std::rc::Rc;
 use std::string::FromUtf8Error;
 use tokio_xmpp;
 use xmpp_parsers::{BareJid, Jid};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct XmppMessage {
+    pub id: String,
     pub from: BareJid,
     pub from_full: Jid,
     pub to: BareJid,
@@ -21,6 +24,7 @@ pub struct XmppMessage {
 
 #[derive(Debug, Clone)]
 pub struct LogMessage {
+    pub id: String,
     pub body: String,
 }
 
@@ -32,7 +36,7 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn incoming(from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming<I: Into<String>>(id: I, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -44,6 +48,7 @@ impl Message {
         };
 
         Message::Incoming(XmppMessage {
+            id: id.into(),
             from: from,
             from_full: from_full.clone(),
             to: to.clone(),
@@ -52,7 +57,7 @@ impl Message {
         })
     }
 
-    pub fn outgoing(from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing<I: Into<String>>(id: I, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -64,6 +69,7 @@ impl Message {
         };
 
         Message::Outgoing(XmppMessage {
+            id: id.into(),
             from: from,
             from_full: from_full.clone(),
             to: to.clone(),
@@ -73,7 +79,10 @@ impl Message {
     }
 
     pub fn log(msg: String) -> Self {
-        Message::Log(LogMessage { body: msg })
+        Message::Log(LogMessage {
+            id: Uuid::new_v4().to_string(),
+            body: msg
+        })
     }
 
     pub fn body(&self) -> &str {
@@ -81,6 +90,24 @@ impl Message {
             Message::Outgoing(XmppMessage { body, .. })
                 | Message::Incoming(XmppMessage { body, .. })
                 | Message::Log(LogMessage { body, .. }) => &body,
+        }
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Message::Log(message) => write!(f, "{}", message.body),
+            Message::Incoming(message) | Message::Outgoing(message) => write!(f, "{}: {}", message.from, message.body),
+        }
+    }
+}
+
+impl hash::Hash for Message {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Message::Log(message) => message.id.hash(state),
+            Message::Incoming(message) | Message::Outgoing(message) => message.id.hash(state),
         }
     }
 }

@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::clone::Clone;
 use std::collections::HashMap;
 use std::fmt;
+use std::hash;
 use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
@@ -14,6 +15,7 @@ use termion::screen::AlternateScreen;
 use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use tokio_xmpp;
+use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
 use crate::core::{Plugin, PluginManager, Message, Command, CommandOrMessage, CommandError};
@@ -188,13 +190,13 @@ impl Input {
     }
 }
 
-struct BufferedWin {
+struct BufferedWin<T: fmt::Display + hash::Hash> {
     widget: Widget,
     next_line: u16,
-    buf: Vec<Message>,
+    buf: Vec<T>,
 }
 
-impl BufferedWin {
+impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
     fn show(&mut self) {
         let mut screen = self.widget.screen.borrow_mut();
 
@@ -213,10 +215,7 @@ impl BufferedWin {
             write!(screen, "{}", termion::cursor::Goto(self.widget.x, y));
 
             if let Some(message) = messages.next() {
-                let _result = match message {
-                    Message::Incoming(message) | Message::Outgoing(message) => write!(screen, "{}: {}", message.from, message.body),
-                    Message::Log(message) => write!(screen, "{}", message.body),
-                };
+                write!(screen, "{}", message);
                 self.next_line += 1;
             }
         }
@@ -226,35 +225,28 @@ impl BufferedWin {
         screen.flush();
     }
 
-    fn print_message(&mut self, message: &Message) {
-        if self.next_line > self.widget.h {
-            self.scroll();
-        }
-
-        let mut screen = self.widget.screen.borrow_mut();
-
-        let x = self.widget.x;
-        let y = self.widget.y + self.next_line;
-
-        write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y));
-
-        let _result = match message {
-            Message::Incoming(message) | Message::Outgoing(message) => write!(screen, "{}: {}", message.from, message.body),
-            Message::Log(message) => write!(screen, "{}", message.body),
-        };
-
-        self.next_line += 1;
-
-        write!(screen, "{}", termion::cursor::Restore);
-
-        screen.flush();
-    }
-
-    fn message(&mut self, message: &mut Message, print: bool) {
-        self.buf.push(message.clone());
+    fn message(&mut self, message: T, print: bool) {
         if print {
-            self.print_message(message);
+            if self.next_line > self.widget.h {
+                self.scroll();
+            }
+
+            let mut screen = self.widget.screen.borrow_mut();
+
+            let x = self.widget.x;
+            let y = self.widget.y + self.next_line;
+
+            write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y));
+
+            write!(screen, "{}", message);
+
+            self.next_line += 1;
+
+            write!(screen, "{}", termion::cursor::Restore);
+
+            screen.flush();
         }
+        self.buf.push(message);
     }
 
     fn scroll(&mut self) {
@@ -268,11 +260,11 @@ impl BufferedWin {
 }
 
 struct ConsoleWin {
-    bufwin: BufferedWin,
+    bufwin: BufferedWin<Message>,
 }
 
 struct ChatWin {
-    bufwin: BufferedWin,
+    bufwin: BufferedWin<Message>,
     us: BareJid,
     them: BareJid,
 }
@@ -355,17 +347,10 @@ impl Window {
         }
     }
 
-    fn print_message(&mut self, message: &Message) {
-        match self {
-            Window::Chat(chat) => chat.bufwin.print_message(message),
-            Window::Console(console) => console.bufwin.print_message(message),
-        }
-    }
-
     fn message(&mut self, message: &mut Message, print: bool) {
         match self {
-            Window::Chat(chat) => chat.bufwin.message(message, print),
-            Window::Console(console) => console.bufwin.message(message, print),
+            Window::Chat(chat) => chat.bufwin.message(message.clone(), print),
+            Window::Console(console) => console.bufwin.message(message.clone(), print),
         }
     }
 
@@ -473,7 +458,7 @@ impl Plugin for UIPlugin {
                 chat.redraw();
                 self.windows.insert(chat_name.clone(), chat);
                 self.windows.get_mut(&chat_name).unwrap()
-            }
+            },
         };
 
         if self.current == chat_name {
@@ -549,7 +534,8 @@ impl Decoder for KeyCodec {
                                 Window::Chat(chat) => {
                                     let from: Jid = chat.us.clone().into();
                                     let to: Jid = chat.them.clone().into();
-                                    let message = Message::outgoing(&from, &to, &ui.input.buf);
+                                    let id = Uuid::new_v4();
+                                    let message = Message::outgoing(id.to_string(), &from, &to, &ui.input.buf);
                                     self.queue.push(Ok(CommandOrMessage::Message(message)));
                                 },
                                 Window::Console(_) => { },
