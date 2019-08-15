@@ -1,7 +1,5 @@
-use futures::Sink;
 use std::fmt;
 use std::rc::Rc;
-use tokio_xmpp;
 
 use crate::core::{Plugin, Aparte, Message};
 

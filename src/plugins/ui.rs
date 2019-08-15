@@ -1,6 +1,4 @@
-use bytes::{BytesMut, BufMut};
-use futures::Sink;
-use shell_words::split;
+use bytes::BytesMut;
 use std::cell::RefCell;
 use std::clone::Clone;
 use std::collections::HashMap;
@@ -14,7 +12,6 @@ use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
 use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
-use tokio_xmpp;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -32,12 +29,14 @@ enum VerticalPosition {
 #[derive(Clone)]
 enum HorizontalPosition {
     Left,
+    #[allow(dead_code)]
     Right,
 }
 
 #[derive(Clone)]
 enum Width {
     Relative(f32),
+    #[allow(dead_code)]
     Absolute(u16),
 }
 
@@ -124,8 +123,8 @@ impl Input {
         let mut screen = self.widget.screen.borrow_mut();
         self.buf.push(c);
         if !self.password {
-            write!(screen, "{}", c);
-            screen.flush();
+            write!(screen, "{}", c).unwrap();
+            screen.flush().unwrap();
         }
     }
 
@@ -133,8 +132,8 @@ impl Input {
         let mut screen = self.widget.screen.borrow_mut();
         self.buf.pop();
         if !self.password {
-            write!(screen, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1));
-            screen.flush();
+            write!(screen, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1)).unwrap();
+            screen.flush().unwrap();
         }
     }
 
@@ -142,19 +141,19 @@ impl Input {
         let mut screen = self.widget.screen.borrow_mut();
         self.buf.clear();
         self.password = false;
-        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         for _i in 1..=self.widget.w {
-            write!(screen, " ");
+            write!(screen, " ").unwrap();
         }
-        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
-        screen.flush();
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        screen.flush().unwrap();
     }
 
     fn left(&mut self) {
         if !self.password {
             let mut screen = self.widget.screen.borrow_mut();
-            write!(screen, "{}", termion::cursor::Left(1));
-            screen.flush();
+            write!(screen, "{}", termion::cursor::Left(1)).unwrap();
+            screen.flush().unwrap();
         }
     }
 
@@ -163,8 +162,8 @@ impl Input {
             let mut screen = self.widget.screen.borrow_mut();
             let (x, _y) = screen.cursor_pos().unwrap();
             if x as usize <= self.buf.len() {
-                write!(screen, "{}", termion::cursor::Right(1));
-                screen.flush();
+                write!(screen, "{}", termion::cursor::Right(1)).unwrap();
+                screen.flush().unwrap();
             }
         }
     }
@@ -173,20 +172,20 @@ impl Input {
         self.clear();
         self.password = true;
         let mut screen = self.widget.screen.borrow_mut();
-        write!(screen, "password: ");
-        screen.flush();
+        write!(screen, "password: ").unwrap();
+        screen.flush().unwrap();
     }
 
     fn redraw(&mut self) {
         self.widget.redraw();
         let mut screen = self.widget.screen.borrow_mut();
 
-        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         for _i in 1..=self.widget.w {
-            write!(screen, " ");
+            write!(screen, " ").unwrap();
         }
-        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y));
-        screen.flush();
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        screen.flush().unwrap();
     }
 }
 
@@ -200,29 +199,29 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
     fn show(&mut self) {
         let mut screen = self.widget.screen.borrow_mut();
 
-        write!(screen, "{}", termion::cursor::Save);
+        write!(screen, "{}", termion::cursor::Save).unwrap();
 
         self.next_line = 0;
         let mut messages = self.buf.iter();
 
         for y in self.widget.y ..= self.widget.y + self.widget.h {
-            write!(screen, "{}", termion::cursor::Goto(self.widget.x, y));
+            write!(screen, "{}", termion::cursor::Goto(self.widget.x, y)).unwrap();
 
             for _x in self.widget.x  ..= self.widget.x + self.widget.w {
-                write!(screen, " ");
+                write!(screen, " ").unwrap();
             }
 
-            write!(screen, "{}", termion::cursor::Goto(self.widget.x, y));
+            write!(screen, "{}", termion::cursor::Goto(self.widget.x, y)).unwrap();
 
             if let Some(message) = messages.next() {
-                write!(screen, "{}", message);
+                write!(screen, "{}", message).unwrap();
                 self.next_line += 1;
             }
         }
 
-        write!(screen, "{}", termion::cursor::Restore);
+        write!(screen, "{}", termion::cursor::Restore).unwrap();
 
-        screen.flush();
+        screen.flush().unwrap();
     }
 
     fn message(&mut self, message: T, print: bool) {
@@ -236,15 +235,15 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
             let x = self.widget.x;
             let y = self.widget.y + self.next_line;
 
-            write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y));
+            write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y)).unwrap();
 
-            write!(screen, "{}", message);
+            write!(screen, "{}", message).unwrap();
 
             self.next_line += 1;
 
-            write!(screen, "{}", termion::cursor::Restore);
+            write!(screen, "{}", termion::cursor::Restore).unwrap();
 
-            screen.flush();
+            screen.flush().unwrap();
         }
         self.buf.push(message);
     }
@@ -255,21 +254,21 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
     fn redraw(&mut self) {
         self.widget.redraw();
         let mut screen = self.widget.screen.borrow_mut();
-        screen.flush();
+        screen.flush().unwrap();
     }
 }
 
-struct ConsoleWin {
+pub struct ConsoleWin {
     bufwin: BufferedWin<Message>,
 }
 
-struct ChatWin {
+pub struct ChatWin {
     bufwin: BufferedWin<Message>,
     us: BareJid,
     them: BareJid,
 }
 
-enum Window {
+pub enum Window {
     Console(ConsoleWin),
     Chat(ChatWin),
 }
@@ -354,6 +353,7 @@ impl Window {
         }
     }
 
+    #[allow(dead_code)]
     fn scroll(&mut self) {
         match self {
             Window::Chat(chat) => chat.bufwin.scroll(),
@@ -423,9 +423,9 @@ impl Plugin for UIPlugin {
 
         {
             let mut screen = self.screen.borrow_mut();
-            write!(screen, "{}", termion::clear::All);
-            write!(screen, "{}", termion::cursor::Goto(1,1));
-            write!(screen, "Welcome to Aparté {}\n", VERSION);
+            write!(screen, "{}", termion::clear::All).unwrap();
+            write!(screen, "{}", termion::cursor::Goto(1,1)).unwrap();
+            write!(screen, "Welcome to Aparté {}\n", VERSION).unwrap();
         }
 
         self.input.redraw();
@@ -444,7 +444,7 @@ impl Plugin for UIPlugin {
         let chat_name = match message {
             Message::Incoming(message) => message.from.to_string(),
             Message::Outgoing(message) => message.to.to_string(),
-            Message::Log(message) => "console".to_string(),
+            Message::Log(_message) => "console".to_string(),
         };
 
         let chat = match self.windows.get_mut(&chat_name) {

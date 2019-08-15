@@ -1,17 +1,15 @@
-use crate::futures::{Stream, Future};
 use futures::unsync::mpsc::UnboundedSender;
-use futures::{future, Sink};
+use futures::Sink;
 use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt;
 use std::hash;
 use std::io::Error as IoError;
 use std::rc::Rc;
 use std::string::FromUtf8Error;
-use tokio_xmpp::{Client, Packet};
+use tokio_xmpp::Packet;
 use uuid::Uuid;
 use xmpp_parsers::{Element, FullJid, BareJid, Jid};
 use xmpp_parsers;
@@ -89,6 +87,7 @@ impl Message {
         })
     }
 
+    #[allow(dead_code)]
     pub fn body(&self) -> &str {
         match self {
             Message::Outgoing(XmppMessage { body, .. })
@@ -252,7 +251,13 @@ impl Aparte {
     pub fn send(&self, element: Element) {
         trace!("SEND: {:?}", element);
         let packet = Packet::Stanza(element);
-        self.connections.borrow_mut().iter_mut().next().unwrap().1.sink.start_send(packet);
+        // TODO use correct connection
+        let mut connections = self.connections.borrow_mut();
+        let current_connection = connections.iter_mut().next().unwrap().1;
+        let mut sink = &current_connection.sink;
+        if let Err(e) = sink.start_send(packet) {
+            warn!("Cannot send packet: {}", e);
+        }
     }
 
     pub fn on_connect(self: Rc<Self>) {

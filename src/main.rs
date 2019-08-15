@@ -17,20 +17,18 @@ use log::LevelFilter;
 use std::convert::TryFrom;
 use std::rc::Rc;
 use tokio::runtime::current_thread::Runtime;
-use tokio_xmpp::{Client, Packet};
+use tokio_xmpp::Client;
 use uuid::Uuid;
 use xmpp_parsers::{Element, Jid, FullJid};
-use xmpp_parsers::message::{Message as XmppMessage, MessageType, Body};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
 use std::str::FromStr;
 
 mod core;
 mod plugins;
 
-use plugins::ui::CommandStream;
 use crate::core::{Aparte, Plugin, Command, CommandOrMessage, Message};
 
-fn handle_stanza(aparte: Rc<Aparte>, stanza: xmpp_parsers::Element) {
+fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
     if let Some(message) = xmpp_parsers::message::Message::try_from(stanza).ok() {
         handle_message(aparte, message);
     }
@@ -77,8 +75,8 @@ fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
                 Rc::clone(&aparte).log(format!("Connecting to {}", account));
                 let client = Client::new(&account, &password).unwrap();
 
-                let (mut sink, stream) = client.split();
-                let (mut tx, rx) = futures::unsync::mpsc::unbounded();
+                let (sink, stream) = client.split();
+                let (tx, rx) = futures::unsync::mpsc::unbounded();
 
                 Rc::clone(&aparte).add_connection(jid, tx);
 
@@ -156,7 +154,9 @@ fn main() {
     }
 
     let aparte_log = aparte_data.join("aparte.log");
-    simple_logging::log_to_file(aparte_log, LevelFilter::Trace);
+    if let Err(e) = simple_logging::log_to_file(aparte_log, LevelFilter::Trace) {
+        panic!("Cannot setup log to file: {}", e);
+    }
 
     info!("Starting aparté");
 
@@ -183,13 +183,13 @@ fn main() {
             CommandOrMessage::Message(mut message) => {
                 Rc::clone(&aparte).on_message(&mut message);
                 match message {
-                    Message::Incoming(message) => {},
+                    Message::Incoming(_message) => {},
                     Message::Outgoing(message) => {
-                        let mut xmpp_message = XmppMessage::new(Some(Jid::Bare(message.to)));
-                        xmpp_message.bodies.insert(String::new(), Body(message.body));
+                        let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
+                        xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
                         aparte.send(xmpp_message.into());
                     },
-                    Message::Log(log) => {},
+                    Message::Log(_log) => {},
                 }
             }
             CommandOrMessage::Command(command) => {
