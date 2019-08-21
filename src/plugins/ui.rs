@@ -36,14 +36,14 @@ enum HorizontalPosition {
 
 #[derive(Clone)]
 enum Width {
-    Relative(f32),
+    Relative(f32, i32),
     #[allow(dead_code)]
     Absolute(u16),
 }
 
 #[derive(Clone)]
 enum Height {
-    Relative(f32),
+    Relative(f32, i32),
     Absolute(u16),
 }
 
@@ -52,8 +52,8 @@ struct Widget {
     screen: Rc<RefCell<Screen>>,
     vpos: VerticalPosition,
     hpos: HorizontalPosition,
-    voff: u16,
-    hoff: u16,
+    voff: i32,
+    hoff: i32,
     width: Width,
     height: Height,
     x: u16,
@@ -67,22 +67,22 @@ impl Widget {
         let (width, height) = termion::terminal_size().unwrap();
 
         self.x = match self.hpos {
-            HorizontalPosition::Left => 1 + self.hoff,
-            HorizontalPosition::Right => width - self.hoff,
+            HorizontalPosition::Left => (1 + self.hoff) as u16,
+            HorizontalPosition::Right => (width as i32 - self.hoff) as u16,
         };
 
         self.y = match self.vpos {
-            VerticalPosition::Top => 1 + self.voff,
-            VerticalPosition::Bottom => height - self.voff,
+            VerticalPosition::Top => (1 + self.voff) as u16,
+            VerticalPosition::Bottom => (height as i32 - self.voff) as u16,
         };
 
         self.w = match self.width {
-            Width::Relative(r) => (r * width as f32) as u16 - self.hoff,
+            Width::Relative(r, offset) => ((r * width as f32) as i32 - self.hoff + offset) as u16,
             Width::Absolute(w) => w,
         };
 
         self.h = match self.height {
-            Height::Relative(r) => (r * height as f32) as u16 - self.voff,
+            Height::Relative(r, offset) => ((r * height as f32) as i32 - self.voff + offset) as u16,
             Height::Absolute(h) => h,
         };
 
@@ -103,7 +103,7 @@ impl Input {
             hpos: HorizontalPosition::Left,
             voff: 0,
             hoff: 0,
-            width: Width::Relative(1.),
+            width: Width::Relative(1., 0),
             height: Height::Absolute(1),
             x: 0,
             y: 0,
@@ -143,7 +143,7 @@ impl Input {
         self.buf.clear();
         self.password = false;
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
-        for _i in 1..=self.widget.w {
+        for _ in 0 .. self.widget.w {
             write!(screen, " ").unwrap();
         }
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
@@ -183,7 +183,7 @@ impl Input {
 
         write!(screen, "{}", termion::cursor::Save).unwrap();
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
-        for _i in 1..=self.widget.w {
+        for _ in 0 .. self.widget.w {
             write!(screen, " ").unwrap();
         }
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
@@ -206,7 +206,7 @@ impl TitleBar {
             hpos: HorizontalPosition::Left,
             voff: 0,
             hoff: 0,
-            width: Width::Relative(1.),
+            width: Width::Relative(1., 0),
             height: Height::Absolute(1),
             x: 0,
             y: 0,
@@ -228,7 +228,7 @@ impl TitleBar {
 
         write!(screen, "{}", termion::cursor::Save).unwrap();
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
-        for _i in 1..=self.widget.w {
+        for _ in 0 .. self.widget.w {
             write!(screen, "{} ", color::Bg(color::Blue)).unwrap();
         }
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
@@ -262,10 +262,10 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
         self.next_line = 0;
         let mut messages = self.buf.iter();
 
-        for y in self.widget.y ..= self.widget.y + self.widget.h {
+        for y in self.widget.y .. self.widget.y + self.widget.h {
             write!(screen, "{}", termion::cursor::Goto(self.widget.x, y)).unwrap();
 
-            for _x in self.widget.x  ..= self.widget.x + self.widget.w {
+            for _ in self.widget.x  .. self.widget.x + self.widget.w {
                 write!(screen, " ").unwrap();
             }
 
@@ -340,8 +340,8 @@ impl Window {
             hpos: HorizontalPosition::Left,
             voff: 1,
             hoff: 0,
-            width: Width::Relative(1.),
-            height: Height::Relative(1.),
+            width: Width::Relative(1., 0),
+            height: Height::Relative(1., -1),
             x: 0,
             y: 0,
             w: 0,
@@ -370,8 +370,8 @@ impl Window {
             hpos: HorizontalPosition::Left,
             voff: 1,
             hoff: 0,
-            width: Width::Relative(1.),
-            height: Height::Relative(1.),
+            width: Width::Relative(1., 0),
+            height: Height::Relative(1., -1),
             x: 0,
             y: 0,
             w: 0,
