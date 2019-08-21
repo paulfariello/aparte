@@ -222,12 +222,13 @@ impl TitleBar {
 
         write!(screen, "{}", termion::cursor::Save).unwrap();
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
         for _ in 0 .. self.widget.w {
-            write!(screen, "{} ", color::Bg(color::Blue)).unwrap();
+            write!(screen, " ").unwrap();
         }
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         if let Some(window_name) = &self.window_name {
-            write!(screen, "{}{}{}", color::Bg(color::Blue), color::Fg(color::White), window_name).unwrap();
+            write!(screen, " {}", window_name).unwrap();
         }
         write!(screen, "{}", color::Bg(color::Reset)).unwrap();
         screen.flush().unwrap();
