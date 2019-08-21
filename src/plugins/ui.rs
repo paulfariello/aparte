@@ -7,6 +7,7 @@ use std::hash;
 use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
+use termion::color;
 use termion::cursor::DetectCursorPos;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
@@ -63,7 +64,7 @@ struct Widget {
 
 impl Widget {
     fn redraw(&mut self) {
-        let (height, width) = termion::terminal_size().unwrap();
+        let (width, height) = termion::terminal_size().unwrap();
 
         self.x = match self.hpos {
             HorizontalPosition::Left => 1 + self.hoff,
@@ -76,13 +77,13 @@ impl Widget {
         };
 
         self.w = match self.width {
-            Width::Relative(r) => (r * width as f32) as u16,
+            Width::Relative(r) => (r * width as f32) as u16 - self.hoff,
             Width::Absolute(w) => w,
         };
 
         self.h = match self.height {
-            Height::Relative(r) => (r * height as f32) as u16,
-            Height::Absolute(w) => w,
+            Height::Relative(r) => (r * height as f32) as u16 - self.voff,
+            Height::Absolute(h) => h,
         };
 
     }
@@ -180,12 +181,69 @@ impl Input {
         self.widget.redraw();
         let mut screen = self.widget.screen.borrow_mut();
 
+        write!(screen, "{}", termion::cursor::Save).unwrap();
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         for _i in 1..=self.widget.w {
             write!(screen, " ").unwrap();
         }
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         screen.flush().unwrap();
+
+        write!(screen, "{}", termion::cursor::Restore).unwrap();
+    }
+}
+
+struct TitleBar {
+    widget: Widget,
+    window_name: Option<String>,
+}
+
+impl TitleBar {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        let mut widget = Widget {
+            screen: screen,
+            vpos: VerticalPosition::Top,
+            hpos: HorizontalPosition::Left,
+            voff: 0,
+            hoff: 0,
+            width: Width::Relative(1.),
+            height: Height::Absolute(1),
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        };
+
+        widget.redraw();
+
+        Self {
+            widget: widget,
+            window_name: None,
+        }
+    }
+
+    fn redraw(&mut self) {
+        self.widget.redraw();
+        let mut screen = self.widget.screen.borrow_mut();
+
+        write!(screen, "{}", termion::cursor::Save).unwrap();
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        for _i in 1..=self.widget.w {
+            write!(screen, "{} ", color::Bg(color::Blue)).unwrap();
+        }
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        if let Some(window_name) = &self.window_name {
+            write!(screen, "{}{}{}", color::Bg(color::Blue), color::Fg(color::White), window_name).unwrap();
+        }
+        write!(screen, "{}", color::Bg(color::Reset)).unwrap();
+        screen.flush().unwrap();
+
+        write!(screen, "{}", termion::cursor::Restore).unwrap();
+    }
+
+    fn set_name(&mut self, name: &str) {
+        self.window_name = Some(name.to_string());
+        self.redraw();
     }
 }
 
@@ -217,6 +275,7 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
                 write!(screen, "{}", message).unwrap();
                 self.next_line += 1;
             }
+            screen.flush().unwrap();
         }
 
         write!(screen, "{}", termion::cursor::Restore).unwrap();
@@ -365,6 +424,7 @@ impl Window {
 pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     input: Input,
+    title_bar: TitleBar,
     windows: HashMap<String, Window>,
     windows_index: Vec<String>,
     current: String,
@@ -387,6 +447,7 @@ impl UIPlugin {
     pub fn switch(&mut self, chat: &str) -> Result<(), ()> {
         self.current = chat.to_string();
         if let Some(chat) = self.windows.get_mut(chat) {
+            self.title_bar.set_name(&self.current);
             chat.show();
             return Ok(())
         } else {
@@ -430,10 +491,12 @@ impl Plugin for UIPlugin {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
         let input = Input::new(screen.clone());
+        let title_bar = TitleBar::new(screen.clone());
 
         Self {
             screen: screen,
             input: input,
+            title_bar: title_bar,
             windows: HashMap::new(),
             windows_index: Vec::new(),
             current: "console".to_string(),
@@ -447,11 +510,12 @@ impl Plugin for UIPlugin {
             write!(screen, "{}", termion::clear::All).unwrap();
         }
 
-        self.input.redraw();
-
         let console = Window::console(self.screen.clone());
         self.add_window("console".to_string(), console);
+        self.title_bar.set_name("console");
 
+        self.input.redraw();
+        self.title_bar.redraw();
         self.current_window().redraw();
 
         Ok(())
