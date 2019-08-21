@@ -1,9 +1,10 @@
-use futures::unsync::mpsc::UnboundedSender;
 use futures::Sink;
+use futures::unsync::mpsc::UnboundedSender;
 use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::hash;
 use std::io::Error as IoError;
@@ -115,6 +116,29 @@ impl hash::Hash for Message {
     }
 }
 
+//impl TryFrom<xmpp_parsers::Message> for Message {
+//}
+
+impl TryFrom<Message> for xmpp_parsers::Element {
+    type Error = ();
+
+    fn try_from(message: Message) -> Result<Self, Self::Error> {
+        match message {
+            Message::Log(_) => {
+                Err(())
+            },
+            Message::Incoming(_) => {
+                Err(())
+            },
+            Message::Outgoing(message) => {
+                let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
+                xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
+                Ok(xmpp_message.into())
+            }
+        }
+    }
+}
+
 pub enum CommandOrMessage {
     Command(Command),
     Message(Message),
@@ -171,14 +195,15 @@ impl<T> AnyPlugin for T where T: Any + Plugin {
 }
 
 pub struct Connection {
-    sink: UnboundedSender<Packet>,
-    account: FullJid,
+    pub sink: UnboundedSender<Packet>,
+    pub account: FullJid,
 }
 
 pub struct Aparte {
     commands: HashMap<String, fn(Rc<Aparte>, &Command) -> Result<(), ()>>,
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
+    current_connection: RefCell<Option<String>>,
 }
 
 impl Aparte {
@@ -187,6 +212,7 @@ impl Aparte {
             commands: HashMap::new(),
             plugins: HashMap::new(),
             connections: RefCell::new(HashMap::new()),
+            current_connection: RefCell::new(None),
         }
     }
 
@@ -235,7 +261,22 @@ impl Aparte {
             sink: sink,
         };
 
-        self.connections.borrow_mut().insert(connection.account.to_string(), connection);
+        let account = connection.account.to_string();
+
+        self.connections.borrow_mut().insert(account.clone(), connection);
+        self.current_connection.replace(Some(account.clone()));
+    }
+
+    pub fn current_connection(&self) -> Option<FullJid> {
+        let current_connection = self.current_connection.borrow();
+        match &*current_connection {
+            Some(current_connection) => {
+                let connections = self.connections.borrow_mut();
+                let connection = connections.get(&current_connection.clone()).unwrap();
+                Some(connection.account.clone())
+            },
+            None => None,
+        }
     }
 
     pub fn init(&mut self) -> Result<(), ()> {

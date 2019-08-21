@@ -21,6 +21,7 @@ use tokio_xmpp::Client;
 use uuid::Uuid;
 use xmpp_parsers::{Element, Jid, FullJid};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
+use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use std::str::FromStr;
 
 mod core;
@@ -29,15 +30,15 @@ mod plugins;
 use crate::core::{Aparte, Plugin, Command, CommandOrMessage, Message};
 
 fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
-    if let Some(message) = xmpp_parsers::message::Message::try_from(stanza).ok() {
+    if let Some(message) = XmppParsersMessage::try_from(stanza).ok() {
         handle_message(aparte, message);
     }
 }
 
-fn handle_message(aparte: Rc<Aparte>, message: xmpp_parsers::message::Message) {
+fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
     if let (Some(from), Some(to)) = (message.from, message.to) {
         if let Some(ref body) = message.bodies.get("") {
-            if message.type_ != xmpp_parsers::message::MessageType::Error {
+            if message.type_ != XmppParsersMessageType::Error {
                 let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
                 let mut message = Message::incoming(id, &from, &to, &body.0);
                 Rc::clone(&aparte).on_message(&mut message);
@@ -47,7 +48,7 @@ fn handle_message(aparte: Rc<Aparte>, message: xmpp_parsers::message::Message) {
         for payload in message.payloads {
             if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
                 if let Some(ref original) = received.forwarded.stanza {
-                    if message.type_ != xmpp_parsers::message::MessageType::Error {
+                    if message.type_ != XmppParsersMessageType::Error {
                         if let Some(body) = original.bodies.get("") {
                             let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
                             let mut message = Message::incoming(id, &from, &to, &body.0);
@@ -144,6 +145,49 @@ fn win(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
     }
 }
 
+fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+    match command.args.len() {
+        0 => {
+            Rc::clone(&aparte).log(format!("Missing contact and message"));
+            Err(())
+        },
+        1 => {
+            Rc::clone(&aparte).log(format!("Missing message"));
+            Err(())
+        },
+        2 => {
+            match aparte.current_connection() {
+                Some(connection) => {
+                    match Jid::from_str(&command.args[0]) {
+                        Ok(to) => {
+                            let id = Uuid::new_v4().to_string();
+                            let from: Jid = connection.into();
+                            let mut message = Message::outgoing(id, &from, &to, &command.args[1]);
+                            Rc::clone(&aparte).on_message(&mut message);
+
+                            aparte.send(Element::try_from(message).unwrap());
+
+                            Ok(())
+                        },
+                        Err(err) => {
+                            Rc::clone(&aparte).log(format!("Invalid JID {}: {}", command.args[0], err));
+                            Err(())
+                        }
+                    }
+                },
+                None => {
+                    Rc::clone(&aparte).log(format!("No connection found"));
+                    Ok(())
+                }
+            }
+        },
+        _ => {
+            Rc::clone(&aparte).log(format!("Too many arguments"));
+            Err(())
+        }
+    }
+}
+
 fn main() {
     let data_dir = dirs::data_dir().unwrap();
 
@@ -167,6 +211,7 @@ fn main() {
 
     aparte.add_command("connect", connect);
     aparte.add_command("win", win);
+    aparte.add_command("msg", msg);
 
     aparte.init().unwrap();
 
@@ -182,14 +227,8 @@ fn main() {
         match command_or_message {
             CommandOrMessage::Message(mut message) => {
                 Rc::clone(&aparte).on_message(&mut message);
-                match message {
-                    Message::Incoming(_message) => {},
-                    Message::Outgoing(message) => {
-                        let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
-                        xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
-                        aparte.send(xmpp_message.into());
-                    },
-                    Message::Log(_log) => {},
+                if let Ok(xmpp_message) = Element::try_from(message) {
+                    aparte.send(xmpp_message);
                 }
             }
             CommandOrMessage::Command(command) => {
