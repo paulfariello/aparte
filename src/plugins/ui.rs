@@ -366,6 +366,7 @@ pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     input: Input,
     windows: HashMap<String, Window>,
+    windows_index: Vec<String>,
     current: String,
     password_command: Option<Command>,
 }
@@ -393,6 +394,31 @@ impl UIPlugin {
         }
     }
 
+    fn add_window(&mut self, name: String, window: Window) {
+        self.windows.insert(name.clone(), window);
+        self.windows_index.push(name.clone());
+    }
+
+    pub fn next_window(&mut self) -> Result<(), ()> {
+        let index = self.windows_index.iter().position(|name| name == &self.current).unwrap();
+        if index + 1 < self.windows_index.len() {
+            let name = self.windows_index[index + 1].clone();
+            self.switch(&name)
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn prev_window(&mut self) -> Result<(), ()> {
+        let index = self.windows_index.iter().position(|name| name == &self.current).unwrap();
+        if index > 0 {
+            let name = self.windows_index[index - 1].clone();
+            self.switch(&name)
+        } else {
+            Err(())
+        }
+    }
+
     pub fn read_password(&mut self, command: Command) {
         self.password_command = Some(command);
         self.input.password();
@@ -404,31 +430,28 @@ impl Plugin for UIPlugin {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
         let input = Input::new(screen.clone());
-        let mut windows = HashMap::new();
-        let console = Window::console(screen.clone());
-
-        windows.insert("console".to_string(), console);
 
         Self {
             screen: screen,
             input: input,
-            windows: windows,
+            windows: HashMap::new(),
+            windows_index: Vec::new(),
             current: "console".to_string(),
             password_command: None,
         }
     }
 
     fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
-        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
         {
             let mut screen = self.screen.borrow_mut();
             write!(screen, "{}", termion::clear::All).unwrap();
-            write!(screen, "{}", termion::cursor::Goto(1,1)).unwrap();
-            write!(screen, "Welcome to Aparté {}\n", VERSION).unwrap();
         }
 
         self.input.redraw();
+
+        let console = Window::console(self.screen.clone());
+        self.add_window("console".to_string(), console);
+
         self.current_window().redraw();
 
         Ok(())
@@ -456,7 +479,7 @@ impl Plugin for UIPlugin {
                     Message::Log(_) => unreachable!(),
                 };
                 chat.redraw();
-                self.windows.insert(chat_name.clone(), chat);
+                self.add_window(chat_name.clone(), chat);
                 self.windows.get_mut(&chat_name).unwrap()
             },
         };
@@ -497,6 +520,7 @@ impl Decoder for KeyCodec {
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
         let copy = buf.clone();
+        trace!("< {:?}", copy);
         let string = match std::str::from_utf8(&copy) {
             Ok(string) => {
                 buf.clear();
@@ -561,12 +585,31 @@ impl Decoder for KeyCodec {
                                     None => {},
                                 }
                             },
+                            Some('\x1b') => {
+                                match chars.next() {
+                                    Some('[') => {
+                                        match chars.next() {
+                                            Some('C') => {
+                                                ui.next_window();
+                                            }
+                                            Some('D') => {
+                                                ui.prev_window();
+                                            }
+                                            Some(_) => {}
+                                            None => {},
+                                        }
+                                    },
+                                    Some(_) => {}
+                                    None => {},
+                                }
+                            }
                             Some(_) => {},
                             None => {},
                         }
                     },
                     _ => {
-                        for c in format!("[{:x}", c as u8).chars() {
+                        info!("Unknown control code {}", c);
+                        for c in format!("^[{:x}", c as u8).chars() {
                             ui.input.key(c);
                         }
                     },

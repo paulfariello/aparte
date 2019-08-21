@@ -189,6 +189,7 @@ fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
 }
 
 fn main() {
+    const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     let data_dir = dirs::data_dir().unwrap();
 
     let aparte_data = data_dir.join("aparté");
@@ -216,6 +217,8 @@ fn main() {
     aparte.init().unwrap();
 
     let aparte = Rc::new(aparte);
+
+    Rc::clone(&aparte).log(format!("Welcome to Aparté {}", VERSION));
 
     let mut rt = Runtime::new().unwrap();
     let command_stream = {
