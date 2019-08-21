@@ -35,15 +35,9 @@ enum HorizontalPosition {
 }
 
 #[derive(Clone)]
-enum Width {
+enum Dimension {
     Relative(f32, i32),
     #[allow(dead_code)]
-    Absolute(u16),
-}
-
-#[derive(Clone)]
-enum Height {
-    Relative(f32, i32),
     Absolute(u16),
 }
 
@@ -54,8 +48,8 @@ struct Widget {
     hpos: HorizontalPosition,
     voff: i32,
     hoff: i32,
-    width: Width,
-    height: Height,
+    width: Dimension,
+    height: Dimension,
     x: u16,
     y: u16,
     w: u16,
@@ -77,13 +71,13 @@ impl Widget {
         };
 
         self.w = match self.width {
-            Width::Relative(r, offset) => ((r * width as f32) as i32 - self.hoff + offset) as u16,
-            Width::Absolute(w) => w,
+            Dimension::Relative(r, offset) => ((r * width as f32) as i32 - self.hoff + offset) as u16,
+            Dimension::Absolute(w) => w,
         };
 
         self.h = match self.height {
-            Height::Relative(r, offset) => ((r * height as f32) as i32 - self.voff + offset) as u16,
-            Height::Absolute(h) => h,
+            Dimension::Relative(r, offset) => ((r * height as f32) as i32 - self.voff + offset) as u16,
+            Dimension::Absolute(h) => h,
         };
 
     }
@@ -103,8 +97,8 @@ impl Input {
             hpos: HorizontalPosition::Left,
             voff: 0,
             hoff: 0,
-            width: Width::Relative(1., 0),
-            height: Height::Absolute(1),
+            width: Dimension::Relative(1., 0),
+            height: Dimension::Absolute(1),
             x: 0,
             y: 0,
             w: 0,
@@ -206,8 +200,8 @@ impl TitleBar {
             hpos: HorizontalPosition::Left,
             voff: 0,
             hoff: 0,
-            width: Width::Relative(1., 0),
-            height: Height::Absolute(1),
+            width: Dimension::Relative(1., 0),
+            height: Dimension::Absolute(1),
             x: 0,
             y: 0,
             w: 0,
@@ -340,8 +334,8 @@ impl Window {
             hpos: HorizontalPosition::Left,
             voff: 1,
             hoff: 0,
-            width: Width::Relative(1., 0),
-            height: Height::Relative(1., -1),
+            width: Dimension::Relative(1., 0),
+            height: Dimension::Relative(1., -1),
             x: 0,
             y: 0,
             w: 0,
@@ -370,8 +364,8 @@ impl Window {
             hpos: HorizontalPosition::Left,
             voff: 1,
             hoff: 0,
-            width: Width::Relative(1., 0),
-            height: Height::Relative(1., -1),
+            width: Dimension::Relative(1., 0),
+            height: Dimension::Relative(1., -1),
             x: 0,
             y: 0,
             w: 0,
@@ -654,10 +648,10 @@ impl Decoder for KeyCodec {
                                     Some('[') => {
                                         match chars.next() {
                                             Some('C') => {
-                                                ui.next_window();
+                                                let _ = ui.next_window();
                                             }
                                             Some('D') => {
-                                                ui.prev_window();
+                                                let _ = ui.prev_window();
                                             }
                                             Some(_) => {}
                                             None => {},
