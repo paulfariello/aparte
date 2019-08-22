@@ -287,6 +287,7 @@ struct WinBar {
     connection: Option<String>,
     windows: Vec<String>,
     current_window: Option<String>,
+    highlighted: Vec<String>,
 }
 
 impl WinBar {
@@ -310,6 +311,7 @@ impl WinBar {
             connection: None,
             windows: Vec::new(),
             current_window: None,
+            highlighted: Vec::new(),
         }
     }
 
@@ -320,7 +322,15 @@ impl WinBar {
 
     fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
+        self.highlighted.drain_filter(|w| w == &window);
         self.redraw();
+    }
+
+    fn highlight_window(&mut self, window: &str) {
+        if self.highlighted.iter().find(|w| w == &window).is_none() {
+            self.highlighted.push(window.to_string());
+            self.redraw();
+        }
     }
 
     fn redraw(&mut self) {
@@ -341,22 +351,29 @@ impl WinBar {
         }
 
         let mut windows = String::new();
+        let mut windows_len = 0;
 
         let mut index = 1;
         for window in &self.windows {
             if let Some(current) = &self.current_window {
                 if window == current {
-                    windows.push_str(&format!("-{}: {}- ", index, window));
+                    let win = format!("-{}: {}- ", index, window);
+                    windows_len += win.len();
+                    windows.push_str(&win);
                 } else {
-                    windows.push_str(&format!("[{}: {}] ", index, window));
+                    if self.highlighted.iter().find(|w| w == &window).is_some() {
+                        windows.push_str(&format!("{}", termion::style::Bold));
+                    }
+                    let win = format!("[{}: {}] ", index, window);
+                    windows_len += win.len();
+                    windows.push_str(&win);
+                    windows.push_str(&format!("{}", termion::style::NoBold));
                 }
-            } else {
-                windows.push_str(&format!("[{}: {}] ", index, window));
             }
             index += 1;
         }
 
-        let start = self.widget.x + self.widget.w - windows.len() as u16;
+        let start = self.widget.x + self.widget.w - windows_len as u16;
         write!(screen, "{}{}", termion::cursor::Goto(start, self.widget.y), windows).unwrap();
 
         write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
@@ -714,11 +731,9 @@ impl Plugin for UIPlugin {
             },
         };
 
-        if self.current == chat_name {
-            chat.message(message, true);
-        } else {
-            chat.message(message, false);
-            self.switch(&chat_name).unwrap();
+        chat.message(message, self.current == chat_name);
+        if self.current != chat_name {
+            self.win_bar.highlight_window(&chat_name);
         }
     }
 }
