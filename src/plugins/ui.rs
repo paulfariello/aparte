@@ -88,7 +88,10 @@ impl Widget {
 struct Input {
     widget: Widget,
     buf: String,
+    tmp_buf: Option<String>,
     password: bool,
+    history: Vec<String>,
+    history_index: usize,
 }
 
 impl Input {
@@ -112,7 +115,10 @@ impl Input {
         Self {
             widget: widget,
             buf: String::new(),
+            tmp_buf: None,
             password: false,
+            history: Vec::new(),
+            history_index: 0,
         }
     }
 
@@ -137,6 +143,7 @@ impl Input {
     fn clear(&mut self) {
         let mut screen = self.widget.screen.borrow_mut();
         self.buf.clear();
+        let _ = self.tmp_buf.take();
         self.password = false;
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         for _ in 0 .. self.widget.w {
@@ -173,19 +180,55 @@ impl Input {
         screen.flush().unwrap();
     }
 
+    fn validate(&mut self) {
+        if !self.password {
+            self.history.push(self.buf.clone());
+            self.history_index = self.history.len();
+        }
+        self.clear();
+    }
+
+    fn previous(&mut self) {
+        if self.history_index == 0 {
+            return;
+        }
+
+        if self.tmp_buf.is_none() {
+            self.tmp_buf = Some(self.buf.clone());
+        }
+
+        self.history_index -= 1;
+        self.buf = self.history[self.history_index].clone();
+        self.redraw();
+    }
+
+    fn next(&mut self) {
+        if self.history_index == self.history.len() {
+            return;
+        }
+
+        self.history_index += 1;
+        if self.history_index == self.history.len() {
+            self.buf = self.tmp_buf.take().unwrap();
+        } else {
+            self.buf = self.history[self.history_index].clone();
+        }
+
+        self.redraw();
+    }
+
     fn redraw(&mut self) {
         self.widget.redraw();
         let mut screen = self.widget.screen.borrow_mut();
 
-        write!(screen, "{}", termion::cursor::Save).unwrap();
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         for _ in 0 .. self.widget.w {
             write!(screen, " ").unwrap();
         }
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
-        screen.flush().unwrap();
+        write!(screen, "{}", self.buf).unwrap();
 
-        write!(screen, "{}", termion::cursor::Restore).unwrap();
+        screen.flush().unwrap();
     }
 }
 
@@ -668,7 +711,7 @@ impl Decoder for KeyCodec {
                                 Window::Console(_) => { },
                             }
                         }
-                        ui.input.clear();
+                        ui.input.validate();
                     },
                     '\x7f' => {
                         ui.input.delete();
@@ -683,6 +726,12 @@ impl Decoder for KeyCodec {
                                     },
                                     Some('D') => {
                                         ui.input.left();
+                                    },
+                                    Some('A') => {
+                                        ui.input.previous();
+                                    },
+                                    Some('B') => {
+                                        ui.input.next();
                                     },
                                     Some(_) => {}
                                     None => {},
