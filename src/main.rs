@@ -19,7 +19,7 @@ use std::rc::Rc;
 use tokio::runtime::current_thread::Runtime;
 use tokio_xmpp::Client;
 use uuid::Uuid;
-use xmpp_parsers::{Element, Jid, FullJid};
+use xmpp_parsers::{Element, Jid};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use std::str::FromStr;
@@ -75,14 +75,18 @@ fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
             let account = command.args[0].clone();
             let password = command.args[1].clone();
 
-            if let Ok(jid) = FullJid::from_str(&command.args[0]) {
+            if let Ok(jid) = Jid::from_str(&command.args[0]) {
+                let full_jid = match jid {
+                    Jid::Full(jid) => jid,
+                    Jid::Bare(jid) => jid.with_resource("aparte"),
+                };
                 Rc::clone(&aparte).log(format!("Connecting to {}", account));
-                let client = Client::new(&account, &password).unwrap();
+                let client = Client::new(&full_jid.to_string(), &password).unwrap();
 
                 let (sink, stream) = client.split();
                 let (tx, rx) = futures::unsync::mpsc::unbounded();
 
-                Rc::clone(&aparte).add_connection(jid, tx);
+                Rc::clone(&aparte).add_connection(full_jid, tx);
 
                 tokio::runtime::current_thread::spawn(
                     rx.forward(
