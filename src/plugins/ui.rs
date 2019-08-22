@@ -25,15 +25,15 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 #[derive(Clone)]
 enum VerticalPosition {
-    Top,
-    Bottom,
+    Top(u16),
+    Bottom(u16),
 }
 
 #[derive(Clone)]
 enum HorizontalPosition {
-    Left,
+    Left(u16),
     #[allow(dead_code)]
-    Right,
+    Right(u16),
 }
 
 #[derive(Clone)]
@@ -48,8 +48,6 @@ struct Widget {
     screen: Rc<RefCell<Screen>>,
     vpos: VerticalPosition,
     hpos: HorizontalPosition,
-    voff: i32,
-    hoff: i32,
     width: Dimension,
     height: Dimension,
     x: u16,
@@ -63,22 +61,22 @@ impl Widget {
         let (width, height) = termion::terminal_size().unwrap();
 
         self.x = match self.hpos {
-            HorizontalPosition::Left => (1 + self.hoff) as u16,
-            HorizontalPosition::Right => (width as i32 - self.hoff) as u16,
+            HorizontalPosition::Left(offset) => 1 + offset,
+            HorizontalPosition::Right(offset) => width - offset,
         };
 
         self.y = match self.vpos {
-            VerticalPosition::Top => (1 + self.voff) as u16,
-            VerticalPosition::Bottom => (height as i32 - self.voff) as u16,
+            VerticalPosition::Top(offset) => 1 + offset,
+            VerticalPosition::Bottom(offset) => height - offset,
         };
 
         self.w = match self.width {
-            Dimension::Relative(r, offset) => ((r * width as f32) as i32 - self.hoff + offset) as u16,
+            Dimension::Relative(r, offset) => ((r * width as f32) as i32 + offset) as u16,
             Dimension::Absolute(w) => w,
         };
 
         self.h = match self.height {
-            Dimension::Relative(r, offset) => ((r * height as f32) as i32 - self.voff + offset) as u16,
+            Dimension::Relative(r, offset) => ((r * height as f32) as i32 + offset) as u16,
             Dimension::Absolute(h) => h,
         };
 
@@ -98,10 +96,8 @@ impl Input {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         let mut widget = Widget {
             screen: screen,
-            vpos: VerticalPosition::Bottom,
-            hpos: HorizontalPosition::Left,
-            voff: 0,
-            hoff: 0,
+            vpos: VerticalPosition::Bottom(0),
+            hpos: HorizontalPosition::Left(0),
             width: Dimension::Relative(1., 0),
             height: Dimension::Absolute(1),
             x: 0,
@@ -241,10 +237,8 @@ impl TitleBar {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         let mut widget = Widget {
             screen: screen,
-            vpos: VerticalPosition::Top,
-            hpos: HorizontalPosition::Left,
-            voff: 0,
-            hoff: 0,
+            vpos: VerticalPosition::Top(0),
+            hpos: HorizontalPosition::Left(0),
             width: Dimension::Relative(1., 0),
             height: Dimension::Absolute(1),
             x: 0,
@@ -268,6 +262,7 @@ impl TitleBar {
         write!(screen, "{}", termion::cursor::Save).unwrap();
         write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
         write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+
         for _ in 0 .. self.widget.w {
             write!(screen, " ").unwrap();
         }
@@ -275,15 +270,98 @@ impl TitleBar {
         if let Some(window_name) = &self.window_name {
             write!(screen, " {}", window_name).unwrap();
         }
-        write!(screen, "{}", color::Bg(color::Reset)).unwrap();
-        screen.flush().unwrap();
 
+        write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
         write!(screen, "{}", termion::cursor::Restore).unwrap();
+        screen.flush().unwrap();
     }
 
     fn set_name(&mut self, name: &str) {
         self.window_name = Some(name.to_string());
         self.redraw();
+    }
+}
+
+struct WinBar {
+    widget: Widget,
+    connection: Option<String>,
+    windows: Vec<String>,
+    current_window: Option<String>,
+}
+
+impl WinBar {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        let mut widget = Widget {
+            screen: screen,
+            vpos: VerticalPosition::Bottom(1),
+            hpos: HorizontalPosition::Left(0),
+            width: Dimension::Relative(1., 0),
+            height: Dimension::Absolute(1),
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        };
+
+        widget.redraw();
+
+        Self {
+            widget: widget,
+            connection: None,
+            windows: Vec::new(),
+            current_window: None,
+        }
+    }
+
+    fn add_window(&mut self, window: &str) {
+        self.windows.push(window.to_string());
+        self.redraw();
+    }
+
+    fn set_current_window(&mut self, window: &str) {
+        self.current_window = Some(window.to_string());
+        self.redraw();
+    }
+
+    fn redraw(&mut self) {
+        self.widget.redraw();
+        let mut screen = self.widget.screen.borrow_mut();
+
+        write!(screen, "{}", termion::cursor::Save).unwrap();
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+
+        for _ in 0 .. self.widget.w {
+            write!(screen, " ").unwrap();
+        }
+
+        write!(screen, "{}", termion::cursor::Goto(self.widget.x, self.widget.y)).unwrap();
+        if let Some(connection) = &self.connection {
+            write!(screen, " {}", connection).unwrap();
+        }
+
+        let mut windows = String::new();
+
+        let mut index = 1;
+        for window in &self.windows {
+            if let Some(current) = &self.current_window {
+                if window == current {
+                    windows.push_str(&format!("-{}: {}- ", index, window));
+                } else {
+                    windows.push_str(&format!("[{}: {}] ", index, window));
+                }
+            } else {
+                windows.push_str(&format!("[{}: {}] ", index, window));
+            }
+            index += 1;
+        }
+
+        let start = self.widget.x + self.widget.w - windows.len() as u16;
+        write!(screen, "{}{}", termion::cursor::Goto(start, self.widget.y), windows).unwrap();
+
+        write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
+        write!(screen, "{}", termion::cursor::Restore).unwrap();
+        screen.flush().unwrap();
     }
 }
 
@@ -417,12 +495,10 @@ impl Window {
     fn chat(screen: Rc<RefCell<Screen>>, us: &BareJid, them: &BareJid) -> Self {
         let widget = Widget {
             screen: screen,
-            vpos: VerticalPosition::Top,
-            hpos: HorizontalPosition::Left,
-            voff: 1,
-            hoff: 0,
+            vpos: VerticalPosition::Top(1),
+            hpos: HorizontalPosition::Left(0),
             width: Dimension::Relative(1., 0),
-            height: Dimension::Relative(1., -1),
+            height: Dimension::Relative(1., -3),
             x: 0,
             y: 0,
             w: 0,
@@ -447,12 +523,10 @@ impl Window {
     fn console(screen: Rc<RefCell<Screen>>) -> Self {
         let widget = Widget {
             screen: screen,
-            vpos: VerticalPosition::Top,
-            hpos: HorizontalPosition::Left,
-            voff: 1,
-            hoff: 0,
+            vpos: VerticalPosition::Top(1),
+            hpos: HorizontalPosition::Left(0),
             width: Dimension::Relative(1., 0),
-            height: Dimension::Relative(1., -1),
+            height: Dimension::Relative(1., -3),
             x: 0,
             y: 0,
             w: 0,
@@ -506,6 +580,7 @@ pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     input: Input,
     title_bar: TitleBar,
+    win_bar: WinBar,
     windows: HashMap<String, Window>,
     windows_index: Vec<String>,
     current: String,
@@ -529,6 +604,7 @@ impl UIPlugin {
         self.current = chat.to_string();
         if let Some(chat) = self.windows.get_mut(chat) {
             self.title_bar.set_name(&self.current);
+            self.win_bar.set_current_window(&self.current);
             chat.show();
             return Ok(())
         } else {
@@ -539,6 +615,7 @@ impl UIPlugin {
     fn add_window(&mut self, name: String, window: Window) {
         self.windows.insert(name.clone(), window);
         self.windows_index.push(name.clone());
+        self.win_bar.add_window(&name);
     }
 
     pub fn next_window(&mut self) -> Result<(), ()> {
@@ -573,11 +650,13 @@ impl Plugin for UIPlugin {
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
         let input = Input::new(screen.clone());
         let title_bar = TitleBar::new(screen.clone());
+        let win_bar = WinBar::new(screen.clone());
 
         Self {
             screen: screen,
             input: input,
             title_bar: title_bar,
+            win_bar: win_bar,
             windows: HashMap::new(),
             windows_index: Vec::new(),
             current: "console".to_string(),
@@ -597,12 +676,18 @@ impl Plugin for UIPlugin {
 
         self.input.redraw();
         self.title_bar.redraw();
-        self.current_window().redraw();
+        self.win_bar.redraw();
+        self.switch("console").unwrap();
 
         Ok(())
     }
 
-    fn on_connect(&mut self, _aparte: Rc<Aparte>) {
+    fn on_connect(&mut self, aparte: Rc<Aparte>) {
+        self.win_bar.connection = match aparte.current_connection() {
+            Some(jid) => Some(jid.to_string()),
+            None => None,
+        };
+        self.win_bar.redraw();
     }
 
     fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
