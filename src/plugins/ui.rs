@@ -15,6 +15,7 @@ use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
+use chrono::offset::{TimeZone, Local};
 
 use crate::core::{Plugin, Aparte, Message, Command, CommandOrMessage, CommandError};
 
@@ -239,6 +240,18 @@ impl TitleBar {
     fn set_name(&mut self, name: &str) {
         self.window_name = Some(name.to_string());
         self.redraw();
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Message::Log(message) => {
+                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+                write!(f, "{} - {}", timestamp.format("%T"), message.body)
+            },
+            Message::Incoming(message) | Message::Outgoing(message) => write!(f, "{}: {}", message.from, message.body),
+        }
     }
 }
 

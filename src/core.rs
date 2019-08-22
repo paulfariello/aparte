@@ -14,6 +14,7 @@ use tokio_xmpp::Packet;
 use uuid::Uuid;
 use xmpp_parsers::{Element, FullJid, BareJid, Jid};
 use xmpp_parsers;
+use chrono::{Utc, DateTime};
 
 #[derive(Debug, Clone)]
 pub struct XmppMessage {
@@ -28,6 +29,7 @@ pub struct XmppMessage {
 #[derive(Debug, Clone)]
 pub struct LogMessage {
     pub id: String,
+    pub timestamp: DateTime<Utc>,
     pub body: String,
 }
 
@@ -84,6 +86,7 @@ impl Message {
     pub fn log(msg: String) -> Self {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now(),
             body: msg
         })
     }
@@ -94,15 +97,6 @@ impl Message {
             Message::Outgoing(XmppMessage { body, .. })
                 | Message::Incoming(XmppMessage { body, .. })
                 | Message::Log(LogMessage { body, .. }) => &body,
-        }
-    }
-}
-
-impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Message::Log(message) => write!(f, "{}", message.body),
-            Message::Incoming(message) | Message::Outgoing(message) => write!(f, "{}: {}", message.from, message.body),
         }
     }
 }
