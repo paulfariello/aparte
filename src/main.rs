@@ -23,6 +23,7 @@ use xmpp_parsers::{Element, Jid, FullJid};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use std::str::FromStr;
+use chrono::Utc;
 
 mod core;
 mod plugins;
@@ -40,7 +41,8 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
         if let Some(ref body) = message.bodies.get("") {
             if message.type_ != XmppParsersMessageType::Error {
                 let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                let mut message = Message::incoming(id, &from, &to, &body.0);
+                let timestamp = Utc::now();
+                let mut message = Message::incoming(id, timestamp, &from, &to, &body.0);
                 Rc::clone(&aparte).on_message(&mut message);
             }
         }
@@ -51,7 +53,8 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
                     if message.type_ != XmppParsersMessageType::Error {
                         if let Some(body) = original.bodies.get("") {
                             let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-                            let mut message = Message::incoming(id, &from, &to, &body.0);
+                            let timestamp = Utc::now();
+                            let mut message = Message::incoming(id, timestamp, &from, &to, &body.0);
                             Rc::clone(&aparte).on_message(&mut message);
                         }
                     }
@@ -162,7 +165,8 @@ fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
                         Ok(to) => {
                             let id = Uuid::new_v4().to_string();
                             let from: Jid = connection.into();
-                            let mut message = Message::outgoing(id, &from, &to, &command.args[1]);
+                            let timestamp = Utc::now();
+                            let mut message = Message::outgoing(id, timestamp, &from, &to, &command.args[1]);
                             Rc::clone(&aparte).on_message(&mut message);
 
                             aparte.send(Element::try_from(message).unwrap());

@@ -19,6 +19,7 @@ use chrono::{Utc, DateTime};
 #[derive(Debug, Clone)]
 pub struct XmppMessage {
     pub id: String,
+    pub timestamp: DateTime<Utc>,
     pub from: BareJid,
     pub from_full: Jid,
     pub to: BareJid,
@@ -41,7 +42,7 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn incoming<I: Into<String>>(id: I, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -54,6 +55,7 @@ impl Message {
 
         Message::Incoming(XmppMessage {
             id: id.into(),
+            timestamp: timestamp,
             from: from,
             from_full: from_full.clone(),
             to: to.clone(),
@@ -62,7 +64,7 @@ impl Message {
         })
     }
 
-    pub fn outgoing<I: Into<String>>(id: I, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -75,6 +77,7 @@ impl Message {
 
         Message::Outgoing(XmppMessage {
             id: id.into(),
+            timestamp: timestamp,
             from: from,
             from_full: from_full.clone(),
             to: to.clone(),

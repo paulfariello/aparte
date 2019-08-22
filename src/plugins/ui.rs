@@ -16,6 +16,7 @@ use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 use chrono::offset::{TimeZone, Local};
+use chrono::Utc;
 
 use crate::core::{Plugin, Aparte, Message, Command, CommandOrMessage, CommandError};
 
@@ -250,7 +251,27 @@ impl fmt::Display for Message {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 write!(f, "{} - {}", timestamp.format("%T"), message.body)
             },
-            Message::Incoming(message) | Message::Outgoing(message) => write!(f, "{}: {}", message.from, message.body),
+            Message::Incoming(message) => {
+                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+                let padding_len = format!("{} - {}: ", timestamp.format("%T"), message.from).len();
+                let padding = " ".repeat(padding_len);
+
+                write!(f, "{} - {}{}:{} ", timestamp.format("%T"), color::Fg(color::Green), message.from, color::Fg(color::White))?;
+
+                let mut iter = message.body.lines();
+                if let Some(line) = iter.next() {
+                    write!(f, "{}", line)?;
+                }
+                while let Some(line) = iter.next() {
+                    write!(f, "\n{}{}", padding, line)?;
+                }
+
+                Ok(())
+            },
+            Message::Outgoing(message) => {
+                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+                write!(f, "{} - {}me:{} {}", timestamp.format("%T"), color::Fg(color::Yellow), color::Fg(color::White), message.body)
+            }
         }
     }
 }
@@ -268,7 +289,7 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
         write!(screen, "{}", termion::cursor::Save).unwrap();
 
         self.next_line = 0;
-        let mut messages = self.buf.iter();
+        let mut buffers = self.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
 
         for y in self.widget.y .. self.widget.y + self.widget.h {
             write!(screen, "{}", termion::cursor::Goto(self.widget.x, y)).unwrap();
@@ -279,8 +300,8 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
 
             write!(screen, "{}", termion::cursor::Goto(self.widget.x, y)).unwrap();
 
-            if let Some(message) = messages.next() {
-                write!(screen, "{}", message).unwrap();
+            if let Some(buf) = buffers.next() {
+                write!(screen, "{}", buf).unwrap();
                 self.next_line += 1;
             }
             screen.flush().unwrap();
@@ -293,21 +314,30 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
 
     fn message(&mut self, message: T, print: bool) {
         if print {
-            if self.next_line > self.widget.h {
-                self.scroll();
+            {
+                let mut screen = self.widget.screen.borrow_mut();
+                write!(screen, "{}", termion::cursor::Save).unwrap();
+            }
+
+            let buf = format!("{}", message);
+            for line in buf.lines() {
+                if self.next_line > self.widget.h {
+                    self.scroll();
+                }
+
+                let mut screen = self.widget.screen.borrow_mut();
+
+                let x = self.widget.x;
+                let y = self.widget.y + self.next_line;
+
+                write!(screen, "{}", termion::cursor::Goto(x, y)).unwrap();
+
+                write!(screen, "{}", line).unwrap();
+
+                self.next_line += 1;
             }
 
             let mut screen = self.widget.screen.borrow_mut();
-
-            let x = self.widget.x;
-            let y = self.widget.y + self.next_line;
-
-            write!(screen, "{}{}", termion::cursor::Save, termion::cursor::Goto(x, y)).unwrap();
-
-            write!(screen, "{}", message).unwrap();
-
-            self.next_line += 1;
-
             write!(screen, "{}", termion::cursor::Restore).unwrap();
 
             screen.flush().unwrap();
@@ -631,7 +661,8 @@ impl Decoder for KeyCodec {
                                     let from: Jid = chat.us.clone().into();
                                     let to: Jid = chat.them.clone().into();
                                     let id = Uuid::new_v4();
-                                    let message = Message::outgoing(id.to_string(), &from, &to, &ui.input.buf);
+                                    let timestamp = Utc::now();
+                                    let message = Message::outgoing(id.to_string(), timestamp, &from, &to, &ui.input.buf);
                                     self.queue.push(Ok(CommandOrMessage::Message(message)));
                                 },
                                 Window::Console(_) => { },
