@@ -5,7 +5,7 @@ use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::iq::Iq;
 
-use crate::core::{Plugin, Aparte, Message};
+use crate::core::{Plugin, Aparte, Event};
 use crate::plugins::disco;
 
 pub struct CarbonsPlugin {
@@ -29,14 +29,11 @@ impl Plugin for CarbonsPlugin {
         disco.add_feature("urn:xmpp:carbons:2")
     }
 
-    fn on_connect(&mut self, aparte: Rc<Aparte>) {
-        aparte.send(self.enable());
-    }
-
-    fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
-    }
-
-    fn on_message(&mut self, _aparte: Rc<Aparte>, _message: &mut Message) {
+    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
+        match event {
+            Event::Connected(_jid) => aparte.send(self.enable()),
+            _ => {},
+        }
     }
 }
 

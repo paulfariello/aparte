@@ -1,7 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use crate::core::{Plugin, Aparte, Message};
+use crate::core::{Plugin, Aparte, Event};
 
 #[allow(non_camel_case_types)]
 pub struct Disco<'a> {
@@ -26,13 +26,7 @@ impl<'a> Plugin for Disco<'a> {
         Ok(())
     }
 
-    fn on_connect(&mut self, _aparte: Rc<Aparte>) {
-    }
-
-    fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
-    }
-
-    fn on_message(&mut self, _aparte: Rc<Aparte>, _message: &mut Message) {
+    fn on_event(&mut self, _aparte: Rc<Aparte>, _event: &Event) {
     }
 }
 

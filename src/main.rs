@@ -1,4 +1,5 @@
 #![feature(drain_filter)]
+#![feature(trait_alias)]
 #[macro_use]
 extern crate log;
 extern crate simple_logging;
@@ -23,6 +24,7 @@ use tokio_xmpp::Client;
 use uuid::Uuid;
 use xmpp_parsers::{Element, Jid};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
+use xmpp_parsers::muc::Muc;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use std::str::FromStr;
 use chrono::Utc;
@@ -30,7 +32,7 @@ use chrono::Utc;
 mod core;
 mod plugins;
 
-use crate::core::{Aparte, Plugin, Command, CommandOrMessage, Message};
+use crate::core::{Aparte, Plugin, Event, Command, CommandOrMessage, Message};
 
 fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
     if let Some(message) = XmppParsersMessage::try_from(stanza).ok() {
@@ -41,11 +43,21 @@ fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
 fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
     if let (Some(from), Some(to)) = (message.from, message.to) {
         if let Some(ref body) = message.bodies.get("") {
-            if message.type_ != XmppParsersMessageType::Error {
-                let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                let timestamp = Utc::now();
-                let mut message = Message::incoming(id, timestamp, &from, &to, &body.0);
-                Rc::clone(&aparte).on_message(&mut message);
+            match message.type_ {
+                XmppParsersMessageType::Error => {},
+                XmppParsersMessageType::Chat => {
+                    let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+                    let timestamp = Utc::now();
+                    let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
+                    Rc::clone(&aparte).event(Event::Message(message));
+                },
+                XmppParsersMessageType::Groupchat => {
+                    let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+                    let timestamp = Utc::now();
+                    let message = Message::incoming_groupchat(id, timestamp, &from, &to, &body.0);
+                    Rc::clone(&aparte).event(Event::Message(message));
+                },
+                _ => {},
             }
         }
 
@@ -56,8 +68,8 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
                         if let Some(body) = original.bodies.get("") {
                             let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
                             let timestamp = Utc::now();
-                            let mut message = Message::incoming(id, timestamp, &from, &to, &body.0);
-                            Rc::clone(&aparte).on_message(&mut message);
+                            let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
+                            Rc::clone(&aparte).event(Event::Message(message));
                         }
                     }
                 }
@@ -88,7 +100,7 @@ fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
                 let (sink, stream) = client.split();
                 let (tx, rx) = futures::unsync::mpsc::unbounded();
 
-                Rc::clone(&aparte).add_connection(full_jid, tx);
+                Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
 
                 tokio::runtime::current_thread::spawn(
                     rx.forward(
@@ -105,14 +117,14 @@ fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
                     if event.is_online() {
                         Rc::clone(&aparte).log(format!("Connected as {}", account));
 
-                        Rc::clone(&aparte).on_connect();
+                        Rc::clone(&aparte).event(Event::Connected(full_jid.clone()));
 
                         let mut presence = Presence::new(PresenceType::None);
                         presence.show = Some(PresenceShow::Chat);
 
                         aparte.send(presence.into());
                     } else if let Some(stanza) = event.into_stanza() {
-                        trace!("RECV: {}", String::from(&stanza));
+                        debug!("RECV: {}", String::from(&stanza));
 
                         handle_stanza(Rc::clone(&aparte), stanza);
                     }
@@ -172,10 +184,58 @@ fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
                             let id = Uuid::new_v4().to_string();
                             let from: Jid = connection.into();
                             let timestamp = Utc::now();
-                            let mut message = Message::outgoing(id, timestamp, &from, &to, &command.args[1]);
-                            Rc::clone(&aparte).on_message(&mut message);
+                            let message = Message::outgoing_chat(id, timestamp, &from, &to, &command.args[1]);
+                            Rc::clone(&aparte).event(Event::Message(message.clone()));
 
                             aparte.send(Element::try_from(message).unwrap());
+
+                            Ok(())
+                        },
+                        Err(err) => {
+                            Rc::clone(&aparte).log(format!("Invalid JID {}: {}", command.args[0], err));
+                            Err(())
+                        }
+                    }
+                },
+                None => {
+                    Rc::clone(&aparte).log(format!("No connection found"));
+                    Ok(())
+                }
+            }
+        },
+        _ => {
+            Rc::clone(&aparte).log(format!("Too many arguments"));
+            Err(())
+        }
+    }
+}
+
+fn join(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+    match command.args.len() {
+        0 => {
+            Rc::clone(&aparte).log(format!("Missing Muc"));
+            Err(())
+        },
+        1 => {
+            match aparte.current_connection() {
+                Some(connection) => {
+                    match Jid::from_str(&command.args[0]) {
+                        Ok(jid) => {
+                            let to = match jid {
+                                Jid::Full(jid) => jid,
+                                Jid::Bare(jid) => {
+                                    let node = connection.node.clone().unwrap();
+                                    jid.with_resource(node)
+                                }
+                            };
+                            let from: Jid = connection.into();
+
+                            let mut presence = Presence::new(PresenceType::None);
+                            presence = presence.with_to(Some(Jid::Full(to.clone())));
+                            presence = presence.with_from(Some(from));
+                            presence.add_payload(Muc::new());
+                            aparte.send(presence.into());
+                            aparte.event(Event::Join(to.clone()));
 
                             Ok(())
                         },
@@ -209,7 +269,7 @@ fn main() {
     }
 
     let aparte_log = aparte_data.join("aparte.log");
-    if let Err(e) = simple_logging::log_to_file(aparte_log, LevelFilter::Trace) {
+    if let Err(e) = simple_logging::log_to_file(aparte_log, LevelFilter::Debug) {
         panic!("Cannot setup log to file: {}", e);
     }
 
@@ -223,6 +283,7 @@ fn main() {
     aparte.add_command("connect", connect);
     aparte.add_command("win", win);
     aparte.add_command("msg", msg);
+    aparte.add_command("join", join);
 
     aparte.init().unwrap();
 
@@ -238,8 +299,8 @@ fn main() {
 
     let res = rt.block_on(command_stream.for_each(move |command_or_message| {
         match command_or_message {
-            CommandOrMessage::Message(mut message) => {
-                Rc::clone(&aparte).on_message(&mut message);
+            CommandOrMessage::Message(message) => {
+                Rc::clone(&aparte).event(Event::Message(message.clone()));
                 if let Ok(xmpp_message) = Element::try_from(message) {
                     aparte.send(xmpp_message);
                 }

@@ -1,6 +1,5 @@
 use bytes::BytesMut;
 use std::cell::RefCell;
-use std::clone::Clone;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash;
@@ -18,7 +17,7 @@ use xmpp_parsers::{BareJid, Jid};
 use chrono::offset::{TimeZone, Local};
 use chrono::Utc;
 
-use crate::core::{Plugin, Aparte, Message, Command, CommandOrMessage, CommandError};
+use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
@@ -389,7 +388,7 @@ impl fmt::Display for Message {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 write!(f, "{} - {}", timestamp.format("%T"), message.body)
             },
-            Message::Incoming(message) => {
+            Message::Incoming(XmppMessage::Chat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 let padding_len = format!("{} - {}: ", timestamp.format("%T"), message.from).len();
                 let padding = " ".repeat(padding_len);
@@ -406,7 +405,29 @@ impl fmt::Display for Message {
 
                 Ok(())
             },
-            Message::Outgoing(message) => {
+            Message::Outgoing(XmppMessage::Chat(message)) => {
+                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+                write!(f, "{} - {}me:{} {}", timestamp.format("%T"), color::Fg(color::Yellow), color::Fg(color::White), message.body)
+            }
+            Message::Incoming(XmppMessage::Groupchat(message)) => {
+                if let Jid::Full(from) = &message.from_full {
+                    let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+                    let padding_len = format!("{} - {}: ", timestamp.format("%T"), from.resource).len();
+                    let padding = " ".repeat(padding_len);
+
+                    write!(f, "{} - {}{}:{} ", timestamp.format("%T"), color::Fg(color::Green), from.resource, color::Fg(color::White))?;
+
+                    let mut iter = message.body.lines();
+                    if let Some(line) = iter.next() {
+                        write!(f, "{}", line)?;
+                    }
+                    while let Some(line) = iter.next() {
+                        write!(f, "\n{}{}", padding, line)?;
+                    }
+                }
+                Ok(())
+            },
+            Message::Outgoing(XmppMessage::Groupchat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 write!(f, "{} - {}me:{} {}", timestamp.format("%T"), color::Fg(color::Yellow), color::Fg(color::White), message.body)
             }
@@ -414,13 +435,16 @@ impl fmt::Display for Message {
     }
 }
 
-struct BufferedWin<T: fmt::Display + hash::Hash> {
+trait BufferedMessage = fmt::Display + hash::Hash + std::cmp::Eq + std::clone::Clone;
+
+struct BufferedWin<T: BufferedMessage> {
     widget: Widget,
     next_line: u16,
     buf: Vec<T>,
+    history: HashMap<T, usize>,
 }
 
-impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
+impl<T: BufferedMessage> BufferedWin<T> {
     fn show(&mut self) {
         let mut screen = self.widget.screen.borrow_mut();
 
@@ -451,6 +475,13 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
     }
 
     fn message(&mut self, message: T, print: bool) {
+        if self.history.contains_key(&message) {
+            return;
+        }
+
+        self.history.insert(message.clone(), self.buf.len());
+        self.buf.push(message.clone());
+
         if print {
             {
                 let mut screen = self.widget.screen.borrow_mut();
@@ -480,7 +511,6 @@ impl<T: fmt::Display + hash::Hash> BufferedWin<T> {
 
             screen.flush().unwrap();
         }
-        self.buf.push(message);
     }
 
     fn scroll(&mut self) {
@@ -503,13 +533,20 @@ pub struct ChatWin {
     them: BareJid,
 }
 
+pub struct GroupchatWin {
+    bufwin: BufferedWin<Message>,
+    us: BareJid,
+    groupchat: BareJid,
+}
+
 pub enum Window {
     Console(ConsoleWin),
     Chat(ChatWin),
+    Groupchat(GroupchatWin),
 }
 
 impl Window {
-    fn chat(screen: Rc<RefCell<Screen>>, us: &BareJid, them: &BareJid) -> Self {
+    fn bufwin<T: BufferedMessage>(screen: Rc<RefCell<Screen>>) -> BufferedWin<T> {
         let widget = Widget {
             screen: screen,
             vpos: VerticalPosition::Top(1),
@@ -526,9 +563,15 @@ impl Window {
             widget: widget,
             next_line: 0,
             buf: Vec::new(),
+            history: HashMap::new(),
         };
 
         bufwin.redraw();
+
+        bufwin
+    }
+    fn chat(screen: Rc<RefCell<Screen>>, us: &BareJid, them: &BareJid) -> Self {
+        let bufwin = Self::bufwin::<Message>(screen);
 
         Window::Chat(ChatWin {
             bufwin: bufwin,
@@ -538,28 +581,20 @@ impl Window {
     }
 
     fn console(screen: Rc<RefCell<Screen>>) -> Self {
-        let widget = Widget {
-            screen: screen,
-            vpos: VerticalPosition::Top(1),
-            hpos: HorizontalPosition::Left(0),
-            width: Dimension::Relative(1., 0),
-            height: Dimension::Relative(1., -3),
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-        };
-
-        let mut bufwin = BufferedWin {
-            widget: widget,
-            next_line: 0,
-            buf: Vec::new(),
-        };
-
-        bufwin.redraw();
+        let bufwin = Self::bufwin::<Message>(screen);
 
         Window::Console(ConsoleWin {
             bufwin: bufwin,
+        })
+    }
+
+    fn groupchat(screen: Rc<RefCell<Screen>>, us: &BareJid, groupchat: &BareJid) -> Self {
+        let bufwin = Self::bufwin::<Message>(screen);
+
+        Window::Groupchat(GroupchatWin {
+            bufwin: bufwin,
+            us: us.clone(),
+            groupchat: groupchat.clone(),
         })
     }
 
@@ -567,6 +602,7 @@ impl Window {
         match self {
             Window::Chat(chat) => chat.bufwin.redraw(),
             Window::Console(console) => console.bufwin.redraw(),
+            Window::Groupchat(groupchat) => groupchat.bufwin.redraw(),
         }
     }
 
@@ -574,13 +610,15 @@ impl Window {
         match self {
             Window::Chat(chat) => chat.bufwin.show(),
             Window::Console(console) => console.bufwin.show(),
+            Window::Groupchat(groupchat) => groupchat.bufwin.show(),
         }
     }
 
-    fn message(&mut self, message: &mut Message, print: bool) {
+    fn message(&mut self, message: &Message, print: bool) {
         match self {
             Window::Chat(chat) => chat.bufwin.message(message.clone(), print),
             Window::Console(console) => console.bufwin.message(message.clone(), print),
+            Window::Groupchat(groupchat) => groupchat.bufwin.message(message.clone(), print),
         }
     }
 
@@ -589,6 +627,7 @@ impl Window {
         match self {
             Window::Chat(chat) => chat.bufwin.scroll(),
             Window::Console(console) => console.bufwin.scroll(),
+            Window::Groupchat(groupchat) => groupchat.bufwin.scroll(),
         }
     }
 }
@@ -629,10 +668,10 @@ impl UIPlugin {
         }
     }
 
-    fn add_window(&mut self, name: String, window: Window) {
-        self.windows.insert(name.clone(), window);
-        self.windows_index.push(name.clone());
-        self.win_bar.add_window(&name);
+    fn add_window(&mut self, name: &str, window: Window) {
+        self.windows.insert(name.to_string(), window);
+        self.windows_index.push(name.to_string());
+        self.win_bar.add_window(name);
     }
 
     pub fn next_window(&mut self) -> Result<(), ()> {
@@ -688,7 +727,7 @@ impl Plugin for UIPlugin {
         }
 
         let console = Window::console(self.screen.clone());
-        self.add_window("console".to_string(), console);
+        self.add_window("console", console);
         self.title_bar.set_name("console");
 
         self.input.redraw();
@@ -699,41 +738,57 @@ impl Plugin for UIPlugin {
         Ok(())
     }
 
-    fn on_connect(&mut self, aparte: Rc<Aparte>) {
-        self.win_bar.connection = match aparte.current_connection() {
-            Some(jid) => Some(jid.to_string()),
-            None => None,
-        };
-        self.win_bar.redraw();
-    }
-
-    fn on_disconnect(&mut self, _aparte: Rc<Aparte>) {
-    }
-
-    fn on_message(&mut self, _aparte: Rc<Aparte>, message: &mut Message) {
-        let chat_name = match message {
-            Message::Incoming(message) => message.from.to_string(),
-            Message::Outgoing(message) => message.to.to_string(),
-            Message::Log(_message) => "console".to_string(),
-        };
-
-        let chat = match self.windows.get_mut(&chat_name) {
-            Some(chat) => chat,
-            None => {
-                let mut chat = match message {
-                    Message::Incoming(message) => Window::chat(self.screen.clone(), &message.to, &message.from),
-                    Message::Outgoing(message) => Window::chat(self.screen.clone(), &message.from, &message.to),
-                    Message::Log(_) => unreachable!(),
+    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
+        match event {
+            Event::Connected(_jid) => {
+                self.win_bar.connection = match aparte.current_connection() {
+                    Some(jid) => Some(jid.to_string()),
+                    None => None,
                 };
-                chat.redraw();
-                self.add_window(chat_name.clone(), chat);
-                self.windows.get_mut(&chat_name).unwrap()
+                self.win_bar.redraw();
             },
-        };
+            Event::Message(message) => {
+                let chat_name = match message {
+                    Message::Incoming(XmppMessage::Chat(message)) => message.from.to_string(),
+                    Message::Outgoing(XmppMessage::Chat(message)) => message.to.to_string(),
+                    Message::Incoming(XmppMessage::Groupchat(message)) => message.from.to_string(),
+                    Message::Outgoing(XmppMessage::Groupchat(message)) => message.to.to_string(),
+                    Message::Log(_message) => "console".to_string(),
+                };
 
-        chat.message(message, self.current == chat_name);
-        if self.current != chat_name {
-            self.win_bar.highlight_window(&chat_name);
+                let chat = match self.windows.get_mut(&chat_name) {
+                    Some(chat) => chat,
+                    None => {
+                        let mut chat = match message {
+                            Message::Incoming(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.to, &message.from),
+                            Message::Outgoing(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.from, &message.to),
+                            Message::Incoming(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.to, &message.from),
+                            Message::Outgoing(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.from, &message.to),
+                            Message::Log(_) => unreachable!(),
+                        };
+                        chat.redraw();
+                        self.add_window(&chat_name, chat);
+                        self.windows.get_mut(&chat_name).unwrap()
+                    },
+                };
+
+                chat.message(message, self.current == chat_name);
+                if self.current != chat_name {
+                    self.win_bar.highlight_window(&chat_name);
+                }
+            },
+            Event::Join(jid) => {
+                let groupchat: BareJid = jid.clone().into();
+                let win_name = groupchat.to_string();
+                if self.switch(&win_name).is_err() {
+                    let us = aparte.current_connection().unwrap().clone().into();
+                    let groupchat = jid.clone().into();
+                    let chat = Window::groupchat(self.screen.clone(), &us, &groupchat);
+                    self.add_window(&win_name, chat);
+                    self.switch(&win_name).unwrap();
+                }
+            }
+            _ => {},
         }
     }
 }
@@ -805,7 +860,15 @@ impl Decoder for KeyCodec {
                                     let to: Jid = chat.them.clone().into();
                                     let id = Uuid::new_v4();
                                     let timestamp = Utc::now();
-                                    let message = Message::outgoing(id.to_string(), timestamp, &from, &to, &ui.input.buf);
+                                    let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &ui.input.buf);
+                                    self.queue.push(Ok(CommandOrMessage::Message(message)));
+                                },
+                                Window::Groupchat(groupchat) => {
+                                    let from: Jid = groupchat.us.clone().into();
+                                    let to: Jid = groupchat.groupchat.clone().into();
+                                    let id = Uuid::new_v4();
+                                    let timestamp = Utc::now();
+                                    let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &ui.input.buf);
                                     self.queue.push(Ok(CommandOrMessage::Message(message)));
                                 },
                                 Window::Console(_) => { },

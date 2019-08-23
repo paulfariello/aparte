@@ -17,7 +17,7 @@ use xmpp_parsers;
 use chrono::{Utc, DateTime};
 
 #[derive(Debug, Clone)]
-pub struct XmppMessage {
+pub struct ChatMessage {
     pub id: String,
     pub timestamp: DateTime<Utc>,
     pub from: BareJid,
@@ -25,6 +25,23 @@ pub struct XmppMessage {
     pub to: BareJid,
     pub to_full: Jid,
     pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GroupchatMessage {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub from: BareJid,
+    pub from_full: Jid,
+    pub to: BareJid,
+    pub to_full: Jid,
+    pub body: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum XmppMessage {
+    Chat(ChatMessage),
+    Groupchat(GroupchatMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -42,7 +59,7 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn incoming<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming_chat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -53,7 +70,7 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Incoming(XmppMessage {
+        Message::Incoming(XmppMessage::Chat(ChatMessage {
             id: id.into(),
             timestamp: timestamp,
             from: from,
@@ -61,10 +78,10 @@ impl Message {
             to: to.clone(),
             to_full: to_full.clone(),
             body: body.to_string(),
-        })
+        }))
     }
 
-    pub fn outgoing<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing_chat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -75,7 +92,7 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Outgoing(XmppMessage {
+        Message::Outgoing(XmppMessage::Chat(ChatMessage {
             id: id.into(),
             timestamp: timestamp,
             from: from,
@@ -83,7 +100,51 @@ impl Message {
             to: to.clone(),
             to_full: to_full.clone(),
             body: body.to_string(),
-        })
+        }))
+    }
+
+    pub fn incoming_groupchat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+        let from = match from_full {
+            Jid::Bare(from_full) => from_full.clone(),
+            Jid::Full(from_full) => from_full.clone().into(),
+        };
+
+        let to = match to_full {
+            Jid::Bare(to_full) => to_full.clone(),
+            Jid::Full(to_full) => to_full.clone().into(),
+        };
+
+        Message::Incoming(XmppMessage::Groupchat(GroupchatMessage {
+            id: id.into(),
+            timestamp: timestamp,
+            from: from,
+            from_full: from_full.clone(),
+            to: to.clone(),
+            to_full: to_full.clone(),
+            body: body.to_string(),
+        }))
+    }
+
+    pub fn outgoing_groupchat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+        let from = match from_full {
+            Jid::Bare(from_full) => from_full.clone(),
+            Jid::Full(from_full) => from_full.clone().into(),
+        };
+
+        let to = match to_full {
+            Jid::Bare(to_full) => to_full.clone(),
+            Jid::Full(to_full) => to_full.clone().into(),
+        };
+
+        Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage {
+            id: id.into(),
+            timestamp: timestamp,
+            from: from,
+            from_full: from_full.clone(),
+            to: to.clone(),
+            to_full: to_full.clone(),
+            body: body.to_string(),
+        }))
     }
 
     pub fn log(msg: String) -> Self {
@@ -97,8 +158,10 @@ impl Message {
     #[allow(dead_code)]
     pub fn body(&self) -> &str {
         match self {
-            Message::Outgoing(XmppMessage { body, .. })
-                | Message::Incoming(XmppMessage { body, .. })
+            Message::Outgoing(XmppMessage::Chat(ChatMessage { body, .. }))
+                | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
+                | Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
+                | Message::Incoming(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
                 | Message::Log(LogMessage { body, .. }) => &body,
         }
     }
@@ -108,9 +171,37 @@ impl hash::Hash for Message {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         match self {
             Message::Log(message) => message.id.hash(state),
-            Message::Incoming(message) | Message::Outgoing(message) => message.id.hash(state),
+            Message::Incoming(XmppMessage::Chat(message))
+                | Message::Outgoing(XmppMessage::Chat(message)) => message.id.hash(state),
+            Message::Incoming(XmppMessage::Groupchat(message))
+                | Message::Outgoing(XmppMessage::Groupchat(message)) => message.id.hash(state),
         }
     }
+}
+
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        let my_id = match self {
+            Message::Log(message) => &message.id,
+            Message::Incoming(XmppMessage::Chat(message))
+                | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
+            Message::Incoming(XmppMessage::Groupchat(message))
+                | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
+        };
+
+        let other_id = match other {
+            Message::Log(message) => &message.id,
+            Message::Incoming(XmppMessage::Chat(message))
+                | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
+            Message::Incoming(XmppMessage::Groupchat(message))
+                | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
+        };
+
+        my_id == other_id
+    }
+}
+
+impl std::cmp::Eq for Message {
 }
 
 //impl TryFrom<xmpp_parsers::Message> for Message {
@@ -127,8 +218,17 @@ impl TryFrom<Message> for xmpp_parsers::Element {
             Message::Incoming(_) => {
                 Err(())
             },
-            Message::Outgoing(message) => {
+            Message::Outgoing(XmppMessage::Chat(message)) => {
                 let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
+                xmpp_message.id = Some(message.id);
+                xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
+                xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
+                Ok(xmpp_message.into())
+            },
+            Message::Outgoing(XmppMessage::Groupchat(message)) => {
+                let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
+                xmpp_message.id = Some(message.id);
+                xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
                 xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
                 Ok(xmpp_message.into())
             }
@@ -163,12 +263,18 @@ pub enum CommandError {
     Parse(ParseError),
 }
 
+pub enum Event {
+    Connected(FullJid),
+    #[allow(dead_code)]
+    Disconnected(FullJid),
+    Message(Message),
+    Join(FullJid),
+}
+
 pub trait Plugin: fmt::Display {
     fn new() -> Self where Self: Sized;
     fn init(&mut self, mgr: &Aparte) -> Result<(), ()>;
-    fn on_connect(&mut self, aparte: Rc<Aparte>);
-    fn on_disconnect(&mut self, aparte: Rc<Aparte>);
-    fn on_message(&mut self, aparte: Rc<Aparte>, message: &mut Message);
+    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event);
 }
 
 pub trait AnyPlugin: Any + Plugin {
@@ -287,7 +393,7 @@ impl Aparte {
     }
 
     pub fn send(&self, element: Element) {
-        trace!("SEND: {:?}", element);
+        debug!("SEND: {:?}", element);
         let packet = Packet::Stanza(element);
         // TODO use correct connection
         let mut connections = self.connections.borrow_mut();
@@ -298,20 +404,14 @@ impl Aparte {
         }
     }
 
-    pub fn on_connect(self: Rc<Self>) {
+    pub fn event(self: Rc<Self>, event: Event) {
         for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().on_connect(Rc::clone(&self));
-        }
-    }
-
-    pub fn on_message(self: Rc<Self>, message: &mut Message) {
-        for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().on_message(Rc::clone(&self), message);
+            plugin.borrow_mut().as_plugin().on_event(Rc::clone(&self), &event);
         }
     }
 
     pub fn log(self: Rc<Self>, message: String) {
-        let mut message = Message::log(message);
-        self.on_message(&mut message);
+        let message = Message::log(message);
+        self.event(Event::Message(message));
     }
 }
