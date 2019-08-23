@@ -64,12 +64,14 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
         for payload in message.payloads {
             if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
                 if let Some(ref original) = received.forwarded.stanza {
-                    if message.type_ != XmppParsersMessageType::Error {
-                        if let Some(body) = original.bodies.get("") {
-                            let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-                            let timestamp = Utc::now();
-                            let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
-                            Rc::clone(&aparte).event(Event::Message(message));
+                    if original.type_ != XmppParsersMessageType::Error {
+                        if let (Some(from), Some(to)) = (original.from.as_ref(), original.to.as_ref()) {
+                            if let Some(body) = original.bodies.get("") {
+                                let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+                                let timestamp = Utc::now();
+                                let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
+                                Rc::clone(&aparte).event(Event::Message(message));
+                            }
                         }
                     }
                 }
