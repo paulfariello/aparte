@@ -451,7 +451,18 @@ impl<T: BufferedMessage> BufferedWin<T> {
         write!(screen, "{}", termion::cursor::Save).unwrap();
 
         self.next_line = 0;
+        let buffers = self.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+        let count = buffers.collect::<Vec<_>>().len();
+
         let mut buffers = self.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+
+        if count > self.widget.h as usize {
+            for _ in 0 .. count - self.widget.h as usize {
+                if buffers.next().is_none() {
+                    break;
+                }
+            }
+        }
 
         for y in self.widget.y .. self.widget.y + self.widget.h {
             write!(screen, "{}", termion::cursor::Goto(self.widget.x, y)).unwrap();
@@ -483,37 +494,8 @@ impl<T: BufferedMessage> BufferedWin<T> {
         self.buf.push(message.clone());
 
         if print {
-            {
-                let mut screen = self.widget.screen.borrow_mut();
-                write!(screen, "{}", termion::cursor::Save).unwrap();
-            }
-
-            let buf = format!("{}", message);
-            for line in buf.lines() {
-                if self.next_line > self.widget.h {
-                    self.scroll();
-                }
-
-                let mut screen = self.widget.screen.borrow_mut();
-
-                let x = self.widget.x;
-                let y = self.widget.y + self.next_line;
-
-                write!(screen, "{}", termion::cursor::Goto(x, y)).unwrap();
-
-                write!(screen, "{}", line).unwrap();
-
-                self.next_line += 1;
-            }
-
-            let mut screen = self.widget.screen.borrow_mut();
-            write!(screen, "{}", termion::cursor::Restore).unwrap();
-
-            screen.flush().unwrap();
+            self.show();
         }
-    }
-
-    fn scroll(&mut self) {
     }
 
     fn redraw(&mut self) {
@@ -619,15 +601,6 @@ impl Window {
             Window::Chat(chat) => chat.bufwin.message(message.clone(), print),
             Window::Console(console) => console.bufwin.message(message.clone(), print),
             Window::Groupchat(groupchat) => groupchat.bufwin.message(message.clone(), print),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn scroll(&mut self) {
-        match self {
-            Window::Chat(chat) => chat.bufwin.scroll(),
-            Window::Console(console) => console.bufwin.scroll(),
-            Window::Groupchat(groupchat) => groupchat.bufwin.scroll(),
         }
     }
 }
