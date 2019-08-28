@@ -826,7 +826,7 @@ impl Decoder for KeyCodec {
                                 },
                                 Err(err) => self.queue.push(Err(CommandError::Parse(err))),
                             }
-                        } else {
+                        } else if ui.input.buf.len() > 0 {
                             match ui.current_window() {
                                 Window::Chat(chat) => {
                                     let from: Jid = chat.us.clone().into();
@@ -847,7 +847,9 @@ impl Decoder for KeyCodec {
                                 Window::Console(_) => { },
                             }
                         }
-                        ui.input.validate();
+                        if ui.input.buf.len() > 0 {
+                            ui.input.validate();
+                        }
                     },
                     '\x7f' => {
                         ui.input.delete();
