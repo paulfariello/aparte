@@ -442,6 +442,7 @@ struct BufferedWin<T: BufferedMessage> {
     next_line: u16,
     buf: Vec<T>,
     history: HashMap<T, usize>,
+    view: usize,
 }
 
 impl<T: BufferedMessage> BufferedWin<T> {
@@ -457,7 +458,7 @@ impl<T: BufferedMessage> BufferedWin<T> {
         let mut buffers = self.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
 
         if count > self.widget.h as usize {
-            for _ in 0 .. count - self.widget.h as usize {
+            for _ in 0 .. count - self.widget.h as usize - self.view {
                 if buffers.next().is_none() {
                     break;
                 }
@@ -503,6 +504,33 @@ impl<T: BufferedMessage> BufferedWin<T> {
         let mut screen = self.widget.screen.borrow_mut();
         screen.flush().unwrap();
     }
+
+    fn page_up(&mut self) {
+        let buffers = self.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+        let count = buffers.collect::<Vec<_>>().len();
+
+        if count < self.widget.h as usize {
+            return;
+        }
+
+        let max = count - self.widget.h as usize;
+
+        if self.view + (self.widget.h as usize) < max {
+            self.view += self.widget.h as usize;
+        } else {
+            self.view = max;
+        }
+        self.show();
+    }
+
+    fn page_down(&mut self) {
+        if self.view > self.widget.h as usize {
+            self.view -= self.widget.h as usize;
+        } else {
+            self.view = 0;
+        }
+        self.show();
+    }
 }
 
 pub struct ConsoleWin {
@@ -546,6 +574,7 @@ impl Window {
             next_line: 0,
             buf: Vec::new(),
             history: HashMap::new(),
+            view: 0,
         };
 
         bufwin.redraw();
@@ -601,6 +630,22 @@ impl Window {
             Window::Chat(chat) => chat.bufwin.message(message.clone(), print),
             Window::Console(console) => console.bufwin.message(message.clone(), print),
             Window::Groupchat(groupchat) => groupchat.bufwin.message(message.clone(), print),
+        }
+    }
+
+    fn page_up(&mut self) {
+        match self {
+            Window::Chat(chat) => chat.bufwin.page_up(),
+            Window::Console(console) => console.bufwin.page_up(),
+            Window::Groupchat(groupchat) => groupchat.bufwin.page_up(),
+        }
+    }
+
+    fn page_down(&mut self) {
+        match self {
+            Window::Chat(chat) => chat.bufwin.page_down(),
+            Window::Console(console) => console.bufwin.page_down(),
+            Window::Groupchat(groupchat) => groupchat.bufwin.page_down(),
         }
     }
 }
@@ -870,6 +915,24 @@ impl Decoder for KeyCodec {
                                     },
                                     Some('B') => {
                                         ui.input.next();
+                                    },
+                                    Some('5') => {
+                                        match chars.next() {
+                                            Some('~') => {
+                                                ui.current_window().page_up();
+                                            },
+                                            Some(_) => {}
+                                            None => {},
+                                        }
+                                    },
+                                    Some('6') => {
+                                        match chars.next() {
+                                            Some('~') => {
+                                                ui.current_window().page_down();
+                                            },
+                                            Some(_) => {}
+                                            None => {},
+                                        }
                                     },
                                     Some(_) => {}
                                     None => {},
