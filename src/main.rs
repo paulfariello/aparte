@@ -175,8 +175,28 @@ fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
             Err(())
         },
         1 => {
-            Rc::clone(&aparte).log(format!("Missing message"));
-            Err(())
+            match aparte.current_connection() {
+                Some(_connection) => {
+                    match Jid::from_str(&command.args[0]) {
+                        Ok(jid) => {
+                            let to = match jid {
+                                Jid::Bare(jid) => jid,
+                                Jid::Full(jid) => jid.into(),
+                            };
+                            Rc::clone(&aparte).event(Event::Chat(to));
+                            Ok(())
+                        },
+                        Err(err) => {
+                            Rc::clone(&aparte).log(format!("Invalid JID {}: {}", command.args[0], err));
+                            Err(())
+                        }
+                    }
+                },
+                None => {
+                    Rc::clone(&aparte).log(format!("No connection found"));
+                    Ok(())
+                }
+            }
         },
         2 => {
             match aparte.current_connection() {
@@ -190,6 +210,12 @@ fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
                             Rc::clone(&aparte).event(Event::Message(message.clone()));
 
                             aparte.send(Element::try_from(message).unwrap());
+
+                            let to = match to {
+                                Jid::Bare(jid) => jid,
+                                Jid::Full(jid) => jid.into(),
+                            };
+                            Rc::clone(&aparte).event(Event::Chat(to));
 
                             Ok(())
                         },

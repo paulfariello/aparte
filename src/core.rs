@@ -268,6 +268,7 @@ pub enum Event {
     #[allow(dead_code)]
     Disconnected(FullJid),
     Message(Message),
+    Chat(BareJid),
     Join(FullJid),
 }
 

@@ -797,6 +797,16 @@ impl Plugin for UIPlugin {
                     self.win_bar.highlight_window(&chat_name);
                 }
             },
+            Event::Chat(jid) => {
+                let chat_name = jid.to_string();
+                if self.switch(&chat_name).is_err() {
+                    let us = aparte.current_connection().unwrap().clone().into();
+                    let mut chat = Window::chat(self.screen.clone(), &us, jid);
+                    chat.redraw();
+                    self.add_window(&chat_name, chat);
+                    self.switch(&chat_name).unwrap();
+                }
+            },
             Event::Join(jid) => {
                 let groupchat: BareJid = jid.clone().into();
                 let win_name = groupchat.to_string();
