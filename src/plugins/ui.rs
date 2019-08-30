@@ -7,6 +7,8 @@ use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
 use termion::color;
+use termion::event::Key;
+use termion::input::TermRead;
 use termion::cursor::DetectCursorPos;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
@@ -837,138 +839,102 @@ impl Decoder for KeyCodec {
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-        let copy = buf.clone();
-        trace!("< {:?}", copy);
-        let string = match std::str::from_utf8(&copy) {
-            Ok(string) => {
-                buf.clear();
-                string
-            },
-            Err(err) => {
-                let index = err.valid_up_to();
-                buf.advance(index);
-                std::str::from_utf8(&copy[..index]).unwrap()
-            }
-        };
 
-        let mut chars = string.chars();
-        while let Some(c) = chars.next() {
-            if !c.is_control() {
-                ui.input.key(c);
-            } else {
-                match c {
-                    '\r' => {
-                        if ui.input.password {
-                            let mut command = ui.password_command.take().unwrap();
-                            command.args.push(ui.input.buf.clone());
-                            self.queue.push(Ok(CommandOrMessage::Command(command)));
-                        } else if ui.input.buf.starts_with("/") {
-                            let splitted = shell_words::split(&ui.input.buf);
-                            match splitted {
-                                Ok(splitted) => {
-                                    let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
-                                    self.queue.push(Ok(CommandOrMessage::Command(command)));
-                                },
-                                Err(err) => self.queue.push(Err(CommandError::Parse(err))),
-                            }
-                        } else if ui.input.buf.len() > 0 {
-                            match ui.current_window() {
-                                Window::Chat(chat) => {
-                                    let from: Jid = chat.us.clone().into();
-                                    let to: Jid = chat.them.clone().into();
-                                    let id = Uuid::new_v4();
-                                    let timestamp = Utc::now();
-                                    let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &ui.input.buf);
-                                    self.queue.push(Ok(CommandOrMessage::Message(message)));
-                                },
-                                Window::Groupchat(groupchat) => {
-                                    let from: Jid = groupchat.us.clone().into();
-                                    let to: Jid = groupchat.groupchat.clone().into();
-                                    let id = Uuid::new_v4();
-                                    let timestamp = Utc::now();
-                                    let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &ui.input.buf);
-                                    self.queue.push(Ok(CommandOrMessage::Message(message)));
-                                },
-                                Window::Console(_) => { },
-                            }
-                        }
-                        if ui.input.buf.len() > 0 {
-                            ui.input.validate();
-                        }
-                    },
-                    '\x7f' => {
-                        ui.input.delete();
-                    },
-                    '\x03' => self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c")))),
-                    '\x1b' => {
-                        match chars.next() {
-                            Some('[') => {
-                                match chars.next() {
-                                    Some('C') => {
-                                        ui.input.right();
-                                    },
-                                    Some('D') => {
-                                        ui.input.left();
-                                    },
-                                    Some('A') => {
-                                        ui.input.previous();
-                                    },
-                                    Some('B') => {
-                                        ui.input.next();
-                                    },
-                                    Some('5') => {
-                                        match chars.next() {
-                                            Some('~') => {
-                                                ui.current_window().page_up();
-                                            },
-                                            Some(_) => {}
-                                            None => {},
-                                        }
-                                    },
-                                    Some('6') => {
-                                        match chars.next() {
-                                            Some('~') => {
-                                                ui.current_window().page_down();
-                                            },
-                                            Some(_) => {}
-                                            None => {},
-                                        }
-                                    },
-                                    Some(_) => {}
-                                    None => {},
-                                }
+        let mut keys = buf.keys();
+        while let Some(key) = keys.next() {
+            match key {
+                Ok(Key::Backspace) => {
+                    ui.input.delete();
+                },
+                Ok(Key::Left) => {
+                    ui.input.left();
+                },
+                Ok(Key::Right) => {
+                    ui.input.right();
+                },
+                Ok(Key::Up) => {
+                    ui.input.previous();
+                },
+                Ok(Key::Down) => {
+                    ui.input.next();
+                },
+                Ok(Key::PageUp) => {
+                    ui.current_window().page_up();
+                },
+                Ok(Key::PageDown) => {
+                    ui.current_window().page_down();
+                },
+                Ok(Key::Char('\n')) => {
+                    if ui.input.password {
+                        let mut command = ui.password_command.take().unwrap();
+                        command.args.push(ui.input.buf.clone());
+                        self.queue.push(Ok(CommandOrMessage::Command(command)));
+                    } else if ui.input.buf.starts_with("/") {
+                        let splitted = shell_words::split(&ui.input.buf);
+                        match splitted {
+                            Ok(splitted) => {
+                                let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
+                                self.queue.push(Ok(CommandOrMessage::Command(command)));
                             },
-                            Some('\x1b') => {
-                                match chars.next() {
-                                    Some('[') => {
-                                        match chars.next() {
-                                            Some('C') => {
-                                                let _ = ui.next_window();
-                                            }
-                                            Some('D') => {
-                                                let _ = ui.prev_window();
-                                            }
-                                            Some(_) => {}
-                                            None => {},
-                                        }
-                                    },
-                                    Some(_) => {}
-                                    None => {},
-                                }
-                            }
-                            Some(_) => {},
-                            None => {},
+                            Err(err) => self.queue.push(Err(CommandError::Parse(err))),
                         }
-                    },
-                    _ => {
-                        info!("Unknown control code {}", c);
-                        for c in format!("^[{:x}", c as u8).chars() {
-                            ui.input.key(c);
+                    } else if ui.input.buf.len() > 0 {
+                        match ui.current_window() {
+                            Window::Chat(chat) => {
+                                let from: Jid = chat.us.clone().into();
+                                let to: Jid = chat.them.clone().into();
+                                let id = Uuid::new_v4();
+                                let timestamp = Utc::now();
+                                let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &ui.input.buf);
+                                self.queue.push(Ok(CommandOrMessage::Message(message)));
+                            },
+                            Window::Groupchat(groupchat) => {
+                                let from: Jid = groupchat.us.clone().into();
+                                let to: Jid = groupchat.groupchat.clone().into();
+                                let id = Uuid::new_v4();
+                                let timestamp = Utc::now();
+                                let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &ui.input.buf);
+                                self.queue.push(Ok(CommandOrMessage::Message(message)));
+                            },
+                            Window::Console(_) => { },
                         }
-                    },
-                }
-            }
+                    }
+                    if ui.input.buf.len() > 0 {
+                        ui.input.validate();
+                    }
+                },
+                Ok(Key::Alt('\x1b')) => {
+                    match keys.next() {
+                        Some(Ok(Key::Char('['))) => {
+                            match keys.next() {
+                                Some(Ok(Key::Char('C'))) => {
+                                    let _ = ui.next_window();
+                                },
+                                Some(Ok(Key::Char('D'))) => {
+                                    let _ = ui.prev_window();
+                                },
+                                Some(Ok(_)) => {},
+                                Some(Err(_)) => {},
+                                None => {},
+                            };
+                        },
+                        Some(Ok(_)) => {},
+                        Some(Err(_)) => {},
+                        None => {},
+                    };
+                },
+                Ok(Key::Char(c)) => {
+                    ui.input.key(c);
+                },
+                Ok(Key::Ctrl('c')) => {
+                    self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c"))));
+                },
+                Ok(_) => {},
+                Err(_) => {},
+            };
         }
+
+        buf.clear();
 
         match self.queue.pop() {
             Some(Ok(command)) => Ok(Some(command)),
