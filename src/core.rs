@@ -13,6 +13,7 @@ use std::string::FromUtf8Error;
 use tokio_xmpp::Packet;
 use uuid::Uuid;
 use xmpp_parsers::{Element, FullJid, BareJid, Jid};
+use xmpp_parsers::iq;
 use xmpp_parsers;
 use chrono::{Utc, DateTime};
 
@@ -270,6 +271,7 @@ pub enum Event {
     Message(Message),
     Chat(BareJid),
     Join(FullJid),
+    Iq(iq::Iq),
 }
 
 pub trait Plugin: fmt::Display {
@@ -308,6 +310,8 @@ pub struct Aparte {
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
+    event_lock: RefCell<()>,
+    event_queue: RefCell<Vec<Event>>,
 }
 
 impl Aparte {
@@ -317,6 +321,8 @@ impl Aparte {
             plugins: HashMap::new(),
             connections: RefCell::new(HashMap::new()),
             current_connection: RefCell::new(None),
+            event_lock: RefCell::new(()),
+            event_queue: RefCell::new(Vec::new()),
         }
     }
 
@@ -406,8 +412,14 @@ impl Aparte {
     }
 
     pub fn event(self: Rc<Self>, event: Event) {
-        for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().on_event(Rc::clone(&self), &event);
+        self.event_queue.borrow_mut().push(event);
+        if let Ok(_lock) = self.event_lock.try_borrow_mut() {
+            while self.event_queue.borrow().len() > 0 {
+                let event = self.event_queue.borrow_mut().remove(0);
+                for (_, plugin) in self.plugins.iter() {
+                    plugin.borrow_mut().as_plugin().on_event(Rc::clone(&self), &event);
+                }
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 #![feature(drain_filter)]
 #![feature(trait_alias)]
+#![feature(specialization)]
 #[macro_use]
 extern crate log;
 extern crate simple_logging;
@@ -26,6 +27,7 @@ use xmpp_parsers::{Element, Jid};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
+use xmpp_parsers::iq::Iq;
 use std::str::FromStr;
 use chrono::Utc;
 
@@ -35,8 +37,10 @@ mod plugins;
 use crate::core::{Aparte, Plugin, Event, Command, CommandOrMessage, Message};
 
 fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
-    if let Some(message) = XmppParsersMessage::try_from(stanza).ok() {
+    if let Some(message) = XmppParsersMessage::try_from(stanza.clone()).ok() {
         handle_message(aparte, message);
+    } else if let Some(iq) = Iq::try_from(stanza.clone()).ok() {
+        Rc::clone(&aparte).event(Event::Iq(iq));
     }
 }
 
@@ -306,6 +310,7 @@ fn main() {
     let mut aparte = Aparte::new();
     aparte.add_plugin::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
     aparte.add_plugin::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
+    aparte.add_plugin::<plugins::roster::RosterPlugin>(Box::new(plugins::roster::RosterPlugin::new())).unwrap();
     aparte.add_plugin::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
 
     aparte.add_command("connect", connect);
