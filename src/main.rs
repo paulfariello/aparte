@@ -87,8 +87,7 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
 fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
     match command.args.len() {
         1 => {
-            let mut ui = aparte.get_plugin_mut::<plugins::ui::UIPlugin>().unwrap();
-            ui.read_password(command.clone());
+            // TODO event read password
             Ok(())
         },
         2 => {
@@ -160,14 +159,8 @@ fn win(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
         Rc::clone(&aparte).log(format!("Missing windows name"));
         Err(())
     } else {
-        let result = {
-            let mut ui = aparte.get_plugin_mut::<plugins::ui::UIPlugin>().unwrap();
-            ui.switch(&command.args[0])
-        };
+        // TODO event for opening win
 
-        if result.is_err() {
-            Rc::clone(&aparte).log(format!("Unknown window {}", &command.args[0]));
-        };
         Ok(())
     }
 }

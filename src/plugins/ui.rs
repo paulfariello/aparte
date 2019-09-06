@@ -25,6 +25,10 @@ use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandO
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
+enum UIEvent {
+    Key(Key),
+}
+
 #[derive(Clone)]
 enum Dimension {
     MatchParent,
@@ -33,12 +37,12 @@ enum Dimension {
 }
 
 trait ViewTrait {
-    fn as_view(self: Rc<RefCell<dyn ViewTrait>>) -> Rc<RefCell<dyn ViewTrait>>;
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>);
     fn layout(&mut self, top: u16, left: u16);
     fn get_measured_width(&self) -> Option<u16>;
     fn get_measured_height(&self) -> Option<u16>;
     fn redraw(&mut self);
+    fn event(&mut self, event: &UIEvent);
 }
 
 #[derive(Clone)]
@@ -54,10 +58,6 @@ struct View<T> {
 }
 
 default impl<T> ViewTrait for View<T> {
-    fn as_view(self: Rc<RefCell<Self>>) -> Rc<RefCell<dyn ViewTrait>> {
-        self
-    }
-
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = match self.width {
             Dimension::MatchParent => {
@@ -112,15 +112,19 @@ default impl<T> ViewTrait for View<T> {
             None
         }
     }
+
+    fn event(&mut self, event: &UIEvent) {
+        // pass
+    }
 }
 
 struct FrameLayout {
-    child: Option<Rc<RefCell<dyn ViewTrait>>>,
+    child: Option<Box<dyn ViewTrait>>,
 }
 
 impl View<FrameLayout> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        Self {
             screen: screen,
             width: Dimension::MatchParent,
             height: Dimension::MatchParent,
@@ -131,12 +135,12 @@ impl View<FrameLayout> {
             content: FrameLayout {
                 child: None,
             }
-        }))
+        }
     }
 
-    fn set_child(&mut self, child: Rc<RefCell<dyn ViewTrait>>) {
-        child.borrow_mut().measure(Some(self.w), Some(self.h));
-        child.borrow_mut().layout(self.y, self.x);
+    fn set_child(&mut self, mut child: Box<dyn ViewTrait>) {
+        child.measure(Some(self.w), Some(self.h));
+        child.layout(self.y, self.x);
 
         self.content.child = Some(child);
     }
@@ -147,8 +151,8 @@ impl ViewTrait for View<FrameLayout> {
         self.w = width_spec.unwrap_or(0);
         self.h = height_spec.unwrap_or(0);
 
-        if let Some(child) = &self.content.child {
-            child.borrow_mut().measure(Some(self.w), Some(self.h));
+        if let Some(child) = &mut self.content.child {
+            child.measure(Some(self.w), Some(self.h));
         }
     }
 
@@ -156,14 +160,20 @@ impl ViewTrait for View<FrameLayout> {
         self.x = left;
         self.y = top;
 
-        if let Some(child) = &self.content.child {
-            child.borrow_mut().layout(top, left);
+        if let Some(child) = &mut self.content.child {
+            child.layout(top, left);
         }
     }
 
     fn redraw(&mut self) {
-        if let Some(child) = &self.content.child {
-            child.borrow_mut().redraw();
+        if let Some(child) = &mut self.content.child {
+            child.redraw();
+        }
+    }
+
+    fn event(&mut self, event: &UIEvent) {
+        if let Some(child) = &mut self.content.child {
+            child.event(event);
         }
     }
 }
@@ -174,15 +184,14 @@ enum Orientation {
     Horizontal,
 }
 
-#[derive(Clone)]
 struct LinearLayout {
     orientation: Orientation,
-    children: Vec<Rc<RefCell<dyn ViewTrait>>>,
+    children: Vec<Box<dyn ViewTrait>>,
 }
 
 impl View<LinearLayout> {
-    fn new(screen: Rc<RefCell<Screen>>, orientation: Orientation, width: Dimension, height: Dimension) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    fn new(screen: Rc<RefCell<Screen>>, orientation: Orientation, width: Dimension, height: Dimension) -> Self {
+        Self {
             screen: screen,
             width: width,
             height: height,
@@ -194,11 +203,11 @@ impl View<LinearLayout> {
                 orientation: orientation,
                 children: Vec::new(),
             }
-        }))
+        }
     }
 
-    fn push(&mut self, widget: Rc<RefCell<dyn ViewTrait>>) {
-        self.content.children.push(widget);
+    fn push<T: 'static + ViewTrait>(&mut self, widget: T) {
+        self.content.children.push(Box::new(widget));
     }
 }
 
@@ -229,15 +238,15 @@ impl ViewTrait for View<LinearLayout> {
         let mut min_width = 0;
         let mut min_height = 0;
         for child in self.content.children.iter_mut() {
-            child.borrow_mut().measure(None, None);
+            child.measure(None, None);
             match self.content.orientation {
                 Orientation::Vertical => {
-                    min_width = cmp::max(min_width, child.borrow().get_measured_width().unwrap_or(0));
-                    min_height += child.borrow().get_measured_height().unwrap_or(0);
+                    min_width = cmp::max(min_width, child.get_measured_width().unwrap_or(0));
+                    min_height += child.get_measured_height().unwrap_or(0);
                 },
                 Orientation::Horizontal => {
-                    min_width += child.borrow().get_measured_height().unwrap_or(0);
-                    min_height = cmp::max(min_height, child.borrow().get_measured_height().unwrap_or(0));
+                    min_width += child.get_measured_height().unwrap_or(0);
+                    min_height = cmp::max(min_height, child.get_measured_height().unwrap_or(0));
                 },
             }
         }
@@ -256,7 +265,7 @@ impl ViewTrait for View<LinearLayout> {
         let splitted_width = match self.content.orientation {
             Orientation::Vertical => max_width,
             Orientation::Horizontal => {
-                let unsized_children = self.content.children.iter().filter(|child| child.borrow().get_measured_width().is_none());
+                let unsized_children = self.content.children.iter().filter(|child| child.get_measured_width().is_none());
                 Some(match unsized_children.collect::<Vec<_>>().len() {
                     0 => 0,
                     count => remaining_width / count as u16,
@@ -265,7 +274,7 @@ impl ViewTrait for View<LinearLayout> {
         };
         let splitted_height = match self.content.orientation {
             Orientation::Vertical => {
-                let unsized_children = self.content.children.iter().filter(|child| child.borrow().get_measured_height().is_none());
+                let unsized_children = self.content.children.iter().filter(|child| child.get_measured_height().is_none());
                 Some(match unsized_children.collect::<Vec<_>>().len() {
                     0 => 0,
                     count => remaining_height / count as u16,
@@ -278,12 +287,12 @@ impl ViewTrait for View<LinearLayout> {
         self.h = 0;
 
         for child in self.content.children.iter_mut() {
-            let mut width_spec = match child.borrow().get_measured_width() {
+            let mut width_spec = match child.get_measured_width() {
                 Some(w) => Some(w),
                 None => splitted_width,
             };
 
-            let mut height_spec = match child.borrow().get_measured_height() {
+            let mut height_spec = match child.get_measured_height() {
                 Some(h) => Some(h),
                 None => splitted_height,
             };
@@ -296,16 +305,16 @@ impl ViewTrait for View<LinearLayout> {
                 height_spec = Some(cmp::min(height_spec.unwrap(), max_height.unwrap() - self.h));
             }
 
-            child.borrow_mut().measure(width_spec, height_spec);
+            child.measure(width_spec, height_spec);
 
             match self.content.orientation {
                 Orientation::Vertical => {
-                    self.w = cmp::max(self.w, child.borrow().get_measured_width().unwrap());
-                    self.h += child.borrow().get_measured_height().unwrap();
+                    self.w = cmp::max(self.w, child.get_measured_width().unwrap());
+                    self.h += child.get_measured_height().unwrap();
                 },
                 Orientation::Horizontal => {
-                    self.w += child.borrow().get_measured_width().unwrap();
-                    self.h = cmp::max(self.w, child.borrow().get_measured_height().unwrap());
+                    self.w += child.get_measured_width().unwrap();
+                    self.h = cmp::max(self.w, child.get_measured_height().unwrap());
                 },
             }
         }
@@ -319,17 +328,23 @@ impl ViewTrait for View<LinearLayout> {
         let mut y = self.y;
 
         for child in self.content.children.iter_mut() {
-            child.borrow_mut().layout(y, x);
+            child.layout(y, x);
             match self.content.orientation {
-                Orientation::Vertical => y += child.borrow_mut().get_measured_height().unwrap(),
-                Orientation::Horizontal => x += child.borrow_mut().get_measured_width().unwrap(),
+                Orientation::Vertical => y += child.get_measured_height().unwrap(),
+                Orientation::Horizontal => x += child.get_measured_width().unwrap(),
             }
         }
     }
 
     fn redraw(&mut self) {
         for child in self.content.children.iter_mut() {
-            child.borrow_mut().redraw();
+            child.redraw();
+        }
+    }
+
+    fn event(&mut self, event: &UIEvent) {
+        for child in self.content.children.iter_mut() {
+            child.event(event);
         }
     }
 }
@@ -343,8 +358,8 @@ struct Input {
 }
 
 impl View<Input> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        Self {
             screen: screen,
             width: Dimension::MatchParent,
             height: Dimension::Absolute(1),
@@ -359,7 +374,7 @@ impl View<Input> {
                 history: Vec::new(),
                 history_index: 0,
             }
-        }))
+        }
     }
 
     fn key(&mut self, c: char) {
@@ -478,8 +493,8 @@ struct TitleBar {
 }
 
 impl View<TitleBar> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        Self {
             screen: screen,
             width: Dimension::MatchParent,
             height: Dimension::Absolute(1),
@@ -490,7 +505,7 @@ impl View<TitleBar> {
             content: TitleBar {
                 window_name: None,
             },
-        }))
+        }
     }
 
     fn set_name(&mut self, name: &str) {
@@ -529,8 +544,8 @@ struct WinBar {
 }
 
 impl View<WinBar> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        Self {
             screen: screen,
             width: Dimension::MatchParent,
             height: Dimension::Absolute(1),
@@ -544,7 +559,7 @@ impl View<WinBar> {
                 current_window: None,
                 highlighted: Vec::new(),
             }
-        }))
+        }
 
     }
 
@@ -687,8 +702,8 @@ struct BufferedWin<T: BufferedMessage> {
 }
 
 impl<T: BufferedMessage> View<BufferedWin<T>> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self {
+    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        Self {
             screen: screen,
             width: Dimension::MatchParent,
             height: Dimension::MatchParent,
@@ -702,7 +717,7 @@ impl<T: BufferedMessage> View<BufferedWin<T>> {
                 history: HashMap::new(),
                 view: 0,
             }
-        }))
+        }
     }
 }
 
@@ -826,14 +841,7 @@ pub struct GroupchatWin {
 
 pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
-    root: Rc<RefCell<dyn ViewTrait>>,
-    frame: Rc<RefCell<View<FrameLayout>>>,
-    input: Rc<RefCell<View<Input>>>,
-    title_bar: Rc<RefCell<View<TitleBar>>>,
-    win_bar: Rc<RefCell<View<WinBar>>>,
-    windows: HashMap<String, Rc<RefCell<dyn Window<Message>>>>,
-    windows_index: Vec<String>,
-    current: String,
+    root: Box<dyn ViewTrait>,
     password_command: Option<Command>,
 }
 
@@ -846,55 +854,8 @@ impl UIPlugin {
         FramedRead::new(file, KeyCodec::new(aparte))
     }
 
-    pub fn current_window(&mut self) -> Rc<RefCell<dyn Window<Message>>> {
-        self.windows.get(&self.current).unwrap().clone()
-    }
-
-    pub fn switch(&mut self, chat: &str) -> Result<(), ()> {
-        let mut title_bar = self.title_bar.borrow_mut();
-        let mut win_bar = self.win_bar.borrow_mut();
-        let mut frame = self.frame.borrow_mut();
-        self.current = chat.to_string();
-        if let Some(chat) = self.windows.get(chat) {
-            frame.set_child(chat.clone().as_view());
-            title_bar.set_name(&self.current);
-            win_bar.set_current_window(&self.current);
-            frame.redraw();
-            return Ok(())
-        } else {
-            return Err(())
-        }
-    }
-
-    fn add_window(&mut self, name: &str, window: Rc<RefCell<dyn Window<Message>>>) {
-        self.windows.insert(name.to_string(), window);
-        self.windows_index.push(name.to_string());
-        self.win_bar.borrow_mut().add_window(name);
-    }
-
-    pub fn next_window(&mut self) -> Result<(), ()> {
-        let index = self.windows_index.iter().position(|name| name == &self.current).unwrap();
-        if index + 1 < self.windows_index.len() {
-            let name = self.windows_index[index + 1].clone();
-            self.switch(&name)
-        } else {
-            Err(())
-        }
-    }
-
-    pub fn prev_window(&mut self) -> Result<(), ()> {
-        let index = self.windows_index.iter().position(|name| name == &self.current).unwrap();
-        if index > 0 {
-            let name = self.windows_index[index - 1].clone();
-            self.switch(&name)
-        } else {
-            Err(())
-        }
-    }
-
-    pub fn read_password(&mut self, command: Command) {
-        self.password_command = Some(command);
-        self.input.borrow_mut().password();
+    pub fn event(&mut self, event: UIEvent) {
+        self.root.event(&event);
     }
 }
 
@@ -902,27 +863,21 @@ impl Plugin for UIPlugin {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
-        let root = View::<LinearLayout>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent);
+        let mut layout = View::<LinearLayout>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent);
 
         let title_bar = View::<TitleBar>::new(screen.clone());
-        root.borrow_mut().push(title_bar.clone() as Rc<RefCell<dyn ViewTrait>>);
         let frame = View::<FrameLayout>::new(screen.clone());
-        root.borrow_mut().push(frame.clone() as Rc<RefCell<dyn ViewTrait>>);
         let win_bar = View::<WinBar>::new(screen.clone());
-        root.borrow_mut().push(win_bar.clone() as Rc<RefCell<dyn ViewTrait>>);
         let input = View::<Input>::new(screen.clone());
-        root.borrow_mut().push(input.clone() as Rc<RefCell<dyn ViewTrait>>);
+
+        layout.push(title_bar);
+        layout.push(frame);
+        layout.push(win_bar);
+        layout.push(input);
 
         Self {
             screen: screen,
-            root: root as Rc<RefCell<dyn ViewTrait>>,
-            frame: frame,
-            input: input,
-            title_bar: title_bar,
-            win_bar: win_bar,
-            windows: HashMap::new(),
-            windows_index: Vec::new(),
-            current: "console".to_string(),
+            root: Box::new(layout),
             password_command: None,
         }
     }
@@ -934,17 +889,15 @@ impl Plugin for UIPlugin {
         }
 
         let (width, height) = termion::terminal_size().unwrap();
-        self.root.borrow_mut().measure(Some(width), Some(height));
-        self.root.borrow_mut().layout(1, 1);
+        self.root.measure(Some(width), Some(height));
+        self.root.layout(1, 1);
+        self.root.redraw();
 
-        let console = View::<BufferedWin<Message>>::new(self.screen.clone());
-        self.add_window("console", console as Rc<RefCell<dyn Window<Message>>>);
-        self.title_bar.borrow_mut().set_name("console");
+        // let console = View::<BufferedWin<Message>>::new(self.screen.clone());
+        // self.add_window("console", console as Rc<RefCell<dyn Window<Message>>>);
+        // self.title_bar.borrow_mut().set_name("console");
 
-        self.input.borrow_mut().redraw();
-        self.title_bar.borrow_mut().redraw();
-        self.win_bar.borrow_mut().redraw();
-        self.switch("console").unwrap();
+        // self.switch("console").unwrap();
 
         Ok(())
     }
@@ -952,63 +905,63 @@ impl Plugin for UIPlugin {
     fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
         match event {
             Event::Connected(_jid) => {
-                self.win_bar.borrow_mut().content.connection = match aparte.current_connection() {
-                    Some(jid) => Some(jid.to_string()),
-                    None => None,
-                };
-                self.win_bar.borrow_mut().redraw();
+                //self.win_bar.borrow_mut().content.connection = match aparte.current_connection() {
+                //    Some(jid) => Some(jid.to_string()),
+                //    None => None,
+                //};
+                //self.win_bar.borrow_mut().redraw();
             },
             Event::Message(message) => {
-                let chat_name = match message {
-                    Message::Incoming(XmppMessage::Chat(message)) => message.from.to_string(),
-                    Message::Outgoing(XmppMessage::Chat(message)) => message.to.to_string(),
-                    Message::Incoming(XmppMessage::Groupchat(message)) => message.from.to_string(),
-                    Message::Outgoing(XmppMessage::Groupchat(message)) => message.to.to_string(),
-                    Message::Log(_message) => "console".to_string(),
-                };
+                //let chat_name = match message {
+                //    Message::Incoming(XmppMessage::Chat(message)) => message.from.to_string(),
+                //    Message::Outgoing(XmppMessage::Chat(message)) => message.to.to_string(),
+                //    Message::Incoming(XmppMessage::Groupchat(message)) => message.from.to_string(),
+                //    Message::Outgoing(XmppMessage::Groupchat(message)) => message.to.to_string(),
+                //    Message::Log(_message) => "console".to_string(),
+                //};
 
-                let chat = match self.windows.get_mut(&chat_name) {
-                    Some(chat) => chat,
-                    None => {
-                        let mut chat: Rc<RefCell<dyn Window<Message>>> = match message {
-                            //Message::Incoming(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.to, &message.from),
-                            //Message::Outgoing(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.from, &message.to),
-                            //Message::Incoming(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.to, &message.from),
-                            //Message::Outgoing(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.from, &message.to),
-                            Message::Log(_) => unreachable!(),
-                            _ => unreachable!(),
-                        };
-                        chat.borrow_mut().redraw();
-                        self.add_window(&chat_name, chat);
-                        self.windows.get_mut(&chat_name).unwrap()
-                    },
-                };
+                //let chat = match self.windows.get_mut(&chat_name) {
+                //    Some(chat) => chat,
+                //    None => {
+                //        let mut chat: Rc<RefCell<dyn Window<Message>>> = match message {
+                //            //Message::Incoming(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.to, &message.from),
+                //            //Message::Outgoing(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.from, &message.to),
+                //            //Message::Incoming(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.to, &message.from),
+                //            //Message::Outgoing(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.from, &message.to),
+                //            Message::Log(_) => unreachable!(),
+                //            _ => unreachable!(),
+                //        };
+                //        chat.borrow_mut().redraw();
+                //        self.add_window(&chat_name, chat);
+                //        self.windows.get_mut(&chat_name).unwrap()
+                //    },
+                //};
 
-                chat.borrow_mut().recv_message(message, self.current == chat_name);
-                if self.current != chat_name {
-                    self.win_bar.borrow_mut().highlight_window(&chat_name);
-                }
+                //chat.borrow_mut().recv_message(message, self.current == chat_name);
+                //if self.current != chat_name {
+                //    self.win_bar.borrow_mut().highlight_window(&chat_name);
+                //}
             },
             Event::Chat(jid) => {
-                let chat_name = jid.to_string();
-                if self.switch(&chat_name).is_err() {
-                    //let us = aparte.current_connection().unwrap().clone().into();
-                    //let mut chat = Window::chat(self.screen.clone(), &us, jid);
-                    //chat.redraw();
-                    //self.add_window(&chat_name, chat);
-                    //self.switch(&chat_name).unwrap();
-                }
+                //let chat_name = jid.to_string();
+                //if self.switch(&chat_name).is_err() {
+                //    //let us = aparte.current_connection().unwrap().clone().into();
+                //    //let mut chat = Window::chat(self.screen.clone(), &us, jid);
+                //    //chat.redraw();
+                //    //self.add_window(&chat_name, chat);
+                //    //self.switch(&chat_name).unwrap();
+                //}
             },
             Event::Join(jid) => {
-                let groupchat: BareJid = jid.clone().into();
-                let win_name = groupchat.to_string();
-                if self.switch(&win_name).is_err() {
-                    //let us = aparte.current_connection().unwrap().clone().into();
-                    //let groupchat = jid.clone().into();
-                    //let chat = Window::groupchat(self.screen.clone(), &us, &groupchat);
-                    //self.add_window(&win_name, chat);
-                    //self.switch(&win_name).unwrap();
-                }
+                //let groupchat: BareJid = jid.clone().into();
+                //let win_name = groupchat.to_string();
+                //if self.switch(&win_name).is_err() {
+                //    //let us = aparte.current_connection().unwrap().clone().into();
+                //    //let groupchat = jid.clone().into();
+                //    //let chat = Window::groupchat(self.screen.clone(), &us, &groupchat);
+                //    //self.add_window(&win_name, chat);
+                //    //self.switch(&win_name).unwrap();
+                //}
             }
             _ => {},
         }
@@ -1046,73 +999,73 @@ impl Decoder for KeyCodec {
         while let Some(key) = keys.next() {
             match key {
                 Ok(Key::Backspace) => {
-                    ui.input.borrow_mut().delete();
+                    ui.event(UIEvent::Key(Key::Backspace));
                 },
                 Ok(Key::Left) => {
-                    ui.input.borrow_mut().left();
+                    ui.event(UIEvent::Key(Key::Left));
                 },
                 Ok(Key::Right) => {
-                    ui.input.borrow_mut().right();
+                    ui.event(UIEvent::Key(Key::Right));
                 },
                 Ok(Key::Up) => {
-                    ui.input.borrow_mut().previous();
+                    ui.event(UIEvent::Key(Key::Up));
                 },
                 Ok(Key::Down) => {
-                    ui.input.borrow_mut().next();
+                    ui.event(UIEvent::Key(Key::Down));
                 },
                 Ok(Key::PageUp) => {
-                    ui.current_window().borrow_mut().page_up();
+                    ui.event(UIEvent::Key(Key::PageUp));
                 },
                 Ok(Key::PageDown) => {
-                    ui.current_window().borrow_mut().page_down();
+                    ui.event(UIEvent::Key(Key::PageDown));
                 },
                 Ok(Key::Char('\n')) => {
-                    if ui.input.borrow_mut().content.password {
-                        let mut command = ui.password_command.take().unwrap();
-                        command.args.push(ui.input.borrow_mut().content.buf.clone());
-                        self.queue.push(Ok(CommandOrMessage::Command(command)));
-                    } else if ui.input.borrow_mut().content.buf.starts_with("/") {
-                        let splitted = shell_words::split(&ui.input.borrow_mut().content.buf);
-                        match splitted {
-                            Ok(splitted) => {
-                                let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
-                                self.queue.push(Ok(CommandOrMessage::Command(command)));
-                            },
-                            Err(err) => self.queue.push(Err(CommandError::Parse(err))),
-                        }
-                    } else if ui.input.borrow_mut().content.buf.len() > 0 {
-                        //match ui.current_window() {
-                        //    Window::Chat(chat) => {
-                        //        let from: Jid = chat.us.clone().into();
-                        //        let to: Jid = chat.them.clone().into();
-                        //        let id = Uuid::new_v4();
-                        //        let timestamp = Utc::now();
-                        //        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &ui.input.borrow_mut().content.buf);
-                        //        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                        //    },
-                        //    Window::Groupchat(groupchat) => {
-                        //        let from: Jid = groupchat.us.clone().into();
-                        //        let to: Jid = groupchat.groupchat.clone().into();
-                        //        let id = Uuid::new_v4();
-                        //        let timestamp = Utc::now();
-                        //        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &ui.input.borrow_mut().content.buf);
-                        //        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                        //    },
-                        //}
-                    }
-                    if ui.input.borrow_mut().content.buf.len() > 0 {
-                        ui.input.borrow_mut().validate();
-                    }
+                    //if ui.input.borrow_mut().content.password {
+                    //    let mut command = ui.password_command.take().unwrap();
+                    //    command.args.push(ui.input.borrow_mut().content.buf.clone());
+                    //    self.queue.push(Ok(CommandOrMessage::Command(command)));
+                    //} else if ui.input.borrow_mut().content.buf.starts_with("/") {
+                    //    let splitted = shell_words::split(&ui.input.borrow_mut().content.buf);
+                    //    match splitted {
+                    //        Ok(splitted) => {
+                    //            let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
+                    //            self.queue.push(Ok(CommandOrMessage::Command(command)));
+                    //        },
+                    //        Err(err) => self.queue.push(Err(CommandError::Parse(err))),
+                    //    }
+                    //} else if ui.input.borrow_mut().content.buf.len() > 0 {
+                    //    //match ui.current_window() {
+                    //    //    Window::Chat(chat) => {
+                    //    //        let from: Jid = chat.us.clone().into();
+                    //    //        let to: Jid = chat.them.clone().into();
+                    //    //        let id = Uuid::new_v4();
+                    //    //        let timestamp = Utc::now();
+                    //    //        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &ui.input.borrow_mut().content.buf);
+                    //    //        self.queue.push(Ok(CommandOrMessage::Message(message)));
+                    //    //    },
+                    //    //    Window::Groupchat(groupchat) => {
+                    //    //        let from: Jid = groupchat.us.clone().into();
+                    //    //        let to: Jid = groupchat.groupchat.clone().into();
+                    //    //        let id = Uuid::new_v4();
+                    //    //        let timestamp = Utc::now();
+                    //    //        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &ui.input.borrow_mut().content.buf);
+                    //    //        self.queue.push(Ok(CommandOrMessage::Message(message)));
+                    //    //    },
+                    //    //}
+                    //}
+                    //if ui.input.borrow_mut().content.buf.len() > 0 {
+                    //    ui.input.borrow_mut().validate();
+                    //}
                 },
                 Ok(Key::Alt('\x1b')) => {
                     match keys.next() {
                         Some(Ok(Key::Char('['))) => {
                             match keys.next() {
                                 Some(Ok(Key::Char('C'))) => {
-                                    let _ = ui.next_window();
+                                    //let _ = ui.next_window();
                                 },
                                 Some(Ok(Key::Char('D'))) => {
-                                    let _ = ui.prev_window();
+                                    //let _ = ui.prev_window();
                                 },
                                 Some(Ok(_)) => {},
                                 Some(Err(_)) => {},
@@ -1125,7 +1078,7 @@ impl Decoder for KeyCodec {
                     };
                 },
                 Ok(Key::Char(c)) => {
-                    ui.input.borrow_mut().key(c);
+                    ui.event(UIEvent::Key(Key::Char(c)));
                 },
                 Ok(Key::Ctrl('c')) => {
                     self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c"))));
