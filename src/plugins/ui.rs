@@ -27,6 +27,7 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 enum UIEvent {
     Key(Key),
+    Message(Message),
 }
 
 #[derive(Clone)]
@@ -45,8 +46,7 @@ trait ViewTrait {
     fn event(&mut self, event: &UIEvent);
 }
 
-#[derive(Clone)]
-struct View<T> {
+struct View<'a, T> {
     screen: Rc<RefCell<Screen>>,
     width: Dimension,
     height: Dimension,
@@ -54,10 +54,11 @@ struct View<T> {
     y: u16,
     w: u16,
     h: u16,
-    content: T
+    content: T,
+    event_handler: Option<Box<dyn FnMut(&mut Self, UIEvent) + 'a>>,
 }
 
-default impl<T> ViewTrait for View<T> {
+default impl<'a, T> ViewTrait for View<'a, T> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = match self.width {
             Dimension::MatchParent => {
@@ -122,7 +123,7 @@ struct FrameLayout {
     child: Option<Box<dyn ViewTrait>>,
 }
 
-impl View<FrameLayout> {
+impl<'a> View<'a, FrameLayout> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -134,8 +135,16 @@ impl View<FrameLayout> {
             h: 0,
             content: FrameLayout {
                 child: None,
-            }
+            },
+            event_handler: None,
         }
+    }
+
+    fn with_event<F>(&mut self, event: F) -> &mut Self
+        where F: FnMut(&mut Self, UIEvent), F: 'a
+    {
+        self.event_handler = Some(Box::new(event));
+        self
     }
 
     fn set_child(&mut self, mut child: Box<dyn ViewTrait>) {
@@ -146,7 +155,7 @@ impl View<FrameLayout> {
     }
 }
 
-impl ViewTrait for View<FrameLayout> {
+impl ViewTrait for View<'_, FrameLayout> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = width_spec.unwrap_or(0);
         self.h = height_spec.unwrap_or(0);
@@ -189,7 +198,7 @@ struct LinearLayout {
     children: Vec<Box<dyn ViewTrait>>,
 }
 
-impl View<LinearLayout> {
+impl View<'_, LinearLayout> {
     fn new(screen: Rc<RefCell<Screen>>, orientation: Orientation, width: Dimension, height: Dimension) -> Self {
         Self {
             screen: screen,
@@ -202,7 +211,8 @@ impl View<LinearLayout> {
             content: LinearLayout {
                 orientation: orientation,
                 children: Vec::new(),
-            }
+            },
+            event_handler: None,
         }
     }
 
@@ -211,7 +221,7 @@ impl View<LinearLayout> {
     }
 }
 
-impl ViewTrait for View<LinearLayout> {
+impl ViewTrait for View<'_, LinearLayout> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         let max_width = match self.width {
             Dimension::MatchParent => width_spec,
@@ -357,7 +367,7 @@ struct Input {
     history_index: usize,
 }
 
-impl View<Input> {
+impl View<'_, Input> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -373,7 +383,8 @@ impl View<Input> {
                 password: false,
                 history: Vec::new(),
                 history_index: 0,
-            }
+            },
+            event_handler: None,
         }
     }
 
@@ -473,7 +484,7 @@ impl View<Input> {
     }
 }
 
-impl ViewTrait for View<Input> {
+impl ViewTrait for View<'_, Input> {
     fn redraw(&mut self) {
         let mut screen = self.screen.borrow_mut();
 
@@ -486,13 +497,25 @@ impl ViewTrait for View<Input> {
 
         screen.flush().unwrap();
     }
+
+    fn event(&mut self, event: &UIEvent) {
+        match event {
+            UIEvent::Key(Key::Char(c)) => self.key(*c),
+            UIEvent::Key(Key::Backspace) => self.delete(),
+            UIEvent::Key(Key::Up) => self.previous(),
+            UIEvent::Key(Key::Down) => self.next(),
+            UIEvent::Key(Key::Left) => self.left(),
+            UIEvent::Key(Key::Right) => self.right(),
+            _ => {}
+        }
+    }
 }
 
 struct TitleBar {
     window_name: Option<String>,
 }
 
-impl View<TitleBar> {
+impl View<'_, TitleBar> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -505,6 +528,7 @@ impl View<TitleBar> {
             content: TitleBar {
                 window_name: None,
             },
+            event_handler: None,
         }
     }
 
@@ -514,7 +538,7 @@ impl View<TitleBar> {
     }
 }
 
-impl ViewTrait for View<TitleBar> {
+impl ViewTrait for View<'_, TitleBar> {
     fn redraw(&mut self) {
         let mut screen = self.screen.borrow_mut();
 
@@ -543,7 +567,7 @@ struct WinBar {
     highlighted: Vec<String>,
 }
 
-impl View<WinBar> {
+impl View<'_, WinBar> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -558,7 +582,8 @@ impl View<WinBar> {
                 windows: Vec::new(),
                 current_window: None,
                 highlighted: Vec::new(),
-            }
+            },
+            event_handler: None,
         }
 
     }
@@ -582,7 +607,7 @@ impl View<WinBar> {
     }
 }
 
-impl ViewTrait for View<WinBar> {
+impl ViewTrait for View<'_, WinBar> {
     fn redraw(&mut self) {
         let mut screen = self.screen.borrow_mut();
 
@@ -701,7 +726,7 @@ struct BufferedWin<T: BufferedMessage> {
     view: usize,
 }
 
-impl<T: BufferedMessage> View<BufferedWin<T>> {
+impl<'a, T: BufferedMessage> View<'a, BufferedWin<T>> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -716,12 +741,20 @@ impl<T: BufferedMessage> View<BufferedWin<T>> {
                 buf: Vec::new(),
                 history: HashMap::new(),
                 view: 0,
-            }
+            },
+            event_handler: None,
         }
+    }
+
+    fn with_event<F>(&mut self, event: F) -> &mut Self
+        where F: FnMut(&mut Self, UIEvent), F: 'a
+    {
+        self.event_handler = Some(Box::new(event));
+        self
     }
 }
 
-impl<T: BufferedMessage> Window<T> for View<BufferedWin<T>> {
+impl<T: BufferedMessage> Window<T> for View<'_, BufferedWin<T>> {
     fn recv_message(&mut self, message: &T, print: bool) {
         if self.content.history.contains_key(message) {
             return;
@@ -767,7 +800,7 @@ impl<T: BufferedMessage> Window<T> for View<BufferedWin<T>> {
     }
 }
 
-impl<T: BufferedMessage> ViewTrait for View<BufferedWin<T>> {
+impl<T: BufferedMessage> ViewTrait for View<'_, BufferedWin<T>> {
     fn redraw(&mut self) {
         let mut screen = self.screen.borrow_mut();
 
@@ -806,6 +839,14 @@ impl<T: BufferedMessage> ViewTrait for View<BufferedWin<T>> {
         write!(screen, "{}", termion::cursor::Restore).unwrap();
 
         screen.flush().unwrap();
+    }
+
+    fn event(&mut self, event: &UIEvent) {
+        match event {
+            UIEvent::Key(Key::PageUp) => self.page_up(),
+            UIEvent::Key(Key::PageDown) => self.page_down(),
+            _ => {},
+        }
     }
 }
 
@@ -893,8 +934,14 @@ impl Plugin for UIPlugin {
         self.root.layout(1, 1);
         self.root.redraw();
 
-        // let console = View::<BufferedWin<Message>>::new(self.screen.clone());
-        // self.add_window("console", console as Rc<RefCell<dyn Window<Message>>>);
+        let console = View::<BufferedWin<Message>>::new(self.screen.clone()).with_event(|view, event| {
+            match event {
+                UIEvent::Message(Message::Log(message)) => {
+                    view.recv_message(&Message::Log(message), true);
+                },
+                _ => {},
+            }
+        });
         // self.title_bar.borrow_mut().set_name("console");
 
         // self.switch("console").unwrap();
@@ -912,6 +959,7 @@ impl Plugin for UIPlugin {
                 //self.win_bar.borrow_mut().redraw();
             },
             Event::Message(message) => {
+                self.root.event(&UIEvent::Message(message.clone()));
                 //let chat_name = match message {
                 //    Message::Incoming(XmppMessage::Chat(message)) => message.from.to_string(),
                 //    Message::Outgoing(XmppMessage::Chat(message)) => message.to.to_string(),
