@@ -119,11 +119,12 @@ default impl<'a, T> ViewTrait for View<'a, T> {
     }
 }
 
-struct FrameLayout {
-    child: Option<Box<dyn ViewTrait>>,
+struct FrameLayout<'a> {
+    children: Vec<Box<dyn ViewTrait + 'a>>,
+    current: Option<usize>,
 }
 
-impl<'a> View<'a, FrameLayout> {
+impl<'a> View<'a, FrameLayout<'a>> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -134,7 +135,8 @@ impl<'a> View<'a, FrameLayout> {
             w: 0,
             h: 0,
             content: FrameLayout {
-                child: None,
+                children: Vec::new(),
+                current: None,
             },
             event_handler: None,
         }
@@ -147,20 +149,20 @@ impl<'a> View<'a, FrameLayout> {
         self
     }
 
-    fn set_child(&mut self, mut child: Box<dyn ViewTrait>) {
-        child.measure(Some(self.w), Some(self.h));
-        child.layout(self.y, self.x);
-
-        self.content.child = Some(child);
+    fn push<T>(&mut self, widget: T)
+        where T: ViewTrait, T: 'a
+    {
+        self.content.children.push(Box::new(widget));
     }
 }
 
-impl ViewTrait for View<'_, FrameLayout> {
+impl ViewTrait for View<'_, FrameLayout<'_>> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = width_spec.unwrap_or(0);
         self.h = height_spec.unwrap_or(0);
 
-        if let Some(child) = &mut self.content.child {
+        if let Some(current) = self.content.current {
+            let child = self.content.children.get_mut(current).unwrap();
             child.measure(Some(self.w), Some(self.h));
         }
     }
@@ -169,19 +171,21 @@ impl ViewTrait for View<'_, FrameLayout> {
         self.x = left;
         self.y = top;
 
-        if let Some(child) = &mut self.content.child {
+        if let Some(current) = self.content.current {
+            let child = self.content.children.get_mut(current).unwrap();
             child.layout(top, left);
         }
     }
 
     fn redraw(&mut self) {
-        if let Some(child) = &mut self.content.child {
+        if let Some(current) = self.content.current {
+            let child = self.content.children.get_mut(current).unwrap();
             child.redraw();
         }
     }
 
     fn event(&mut self, event: &UIEvent) {
-        if let Some(child) = &mut self.content.child {
+        for child in self.content.children.iter_mut() {
             child.event(event);
         }
     }
@@ -193,12 +197,12 @@ enum Orientation {
     Horizontal,
 }
 
-struct LinearLayout {
+struct LinearLayout<'a> {
     orientation: Orientation,
-    children: Vec<Box<dyn ViewTrait>>,
+    children: Vec<Box<dyn ViewTrait + 'a>>,
 }
 
-impl View<'_, LinearLayout> {
+impl<'a> View<'a, LinearLayout<'a>> {
     fn new(screen: Rc<RefCell<Screen>>, orientation: Orientation, width: Dimension, height: Dimension) -> Self {
         Self {
             screen: screen,
@@ -216,12 +220,14 @@ impl View<'_, LinearLayout> {
         }
     }
 
-    fn push<T: 'static + ViewTrait>(&mut self, widget: T) {
+    fn push<T>(&mut self, widget: T)
+        where T: ViewTrait, T: 'a
+    {
         self.content.children.push(Box::new(widget));
     }
 }
 
-impl ViewTrait for View<'_, LinearLayout> {
+impl ViewTrait for View<'_, LinearLayout<'_>> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         let max_width = match self.width {
             Dimension::MatchParent => width_spec,
@@ -746,7 +752,7 @@ impl<'a, T: BufferedMessage> View<'a, BufferedWin<T>> {
         }
     }
 
-    fn with_event<F>(&mut self, event: F) -> &mut Self
+    fn with_event<F>(mut self, event: F) -> Self
         where F: FnMut(&mut Self, UIEvent), F: 'a
     {
         self.event_handler = Some(Box::new(event));
@@ -907,9 +913,20 @@ impl Plugin for UIPlugin {
         let mut layout = View::<LinearLayout>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent);
 
         let title_bar = View::<TitleBar>::new(screen.clone());
-        let frame = View::<FrameLayout>::new(screen.clone());
+        let mut frame = View::<FrameLayout>::new(screen.clone());
         let win_bar = View::<WinBar>::new(screen.clone());
         let input = View::<Input>::new(screen.clone());
+
+        let console = View::<BufferedWin<Message>>::new(screen.clone()).with_event(|view, event| {
+            match event {
+                UIEvent::Message(Message::Log(message)) => {
+                    view.recv_message(&Message::Log(message), true);
+                },
+                _ => {},
+            }
+        });
+
+        frame.push(console);
 
         layout.push(title_bar);
         layout.push(frame);
@@ -934,14 +951,6 @@ impl Plugin for UIPlugin {
         self.root.layout(1, 1);
         self.root.redraw();
 
-        let console = View::<BufferedWin<Message>>::new(self.screen.clone()).with_event(|view, event| {
-            match event {
-                UIEvent::Message(Message::Log(message)) => {
-                    view.recv_message(&Message::Log(message), true);
-                },
-                _ => {},
-            }
-        });
         // self.title_bar.borrow_mut().set_name("console");
 
         // self.switch("console").unwrap();
