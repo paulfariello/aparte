@@ -55,7 +55,7 @@ struct View<'a, T> {
     w: u16,
     h: u16,
     content: T,
-    event_handler: Option<Box<dyn FnMut(&mut Self, UIEvent) + 'a>>,
+    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &UIEvent) + 'a>>>>,
 }
 
 default impl<'a, T> ViewTrait for View<'a, T> {
@@ -142,10 +142,10 @@ impl<'a> View<'a, FrameLayout<'a>> {
         }
     }
 
-    fn with_event<F>(&mut self, event: F) -> &mut Self
-        where F: FnMut(&mut Self, UIEvent), F: 'a
+    fn with_event<F>(&mut self, event_handler: F) -> &mut Self
+        where F: FnMut(&mut Self, &UIEvent), F: 'a
     {
-        self.event_handler = Some(Box::new(event));
+        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
 
@@ -752,10 +752,10 @@ impl<'a, T: BufferedMessage> View<'a, BufferedWin<T>> {
         }
     }
 
-    fn with_event<F>(mut self, event: F) -> Self
-        where F: FnMut(&mut Self, UIEvent), F: 'a
+    fn with_event<F>(mut self, event_handler: F) -> Self
+        where F: FnMut(&mut Self, &UIEvent), F: 'a
     {
-        self.event_handler = Some(Box::new(event));
+        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
 }
@@ -848,10 +848,10 @@ impl<T: BufferedMessage> ViewTrait for View<'_, BufferedWin<T>> {
     }
 
     fn event(&mut self, event: &UIEvent) {
-        match event {
-            UIEvent::Key(Key::PageUp) => self.page_up(),
-            UIEvent::Key(Key::PageDown) => self.page_down(),
-            _ => {},
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
         }
     }
 }
@@ -920,8 +920,10 @@ impl Plugin for UIPlugin {
         let console = View::<BufferedWin<Message>>::new(screen.clone()).with_event(|view, event| {
             match event {
                 UIEvent::Message(Message::Log(message)) => {
-                    view.recv_message(&Message::Log(message), true);
+                    view.recv_message(&Message::Log(message.clone()), true);
                 },
+                UIEvent::Key(Key::PageUp) => view.page_up(),
+                UIEvent::Key(Key::PageDown) => view.page_down(),
                 _ => {},
             }
         });
