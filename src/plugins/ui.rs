@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::cmp;
 use std::fmt;
 use std::hash;
@@ -25,9 +26,10 @@ use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandO
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
-enum UIEvent {
+enum UIEvent<'a> {
     Key(Key),
     Message(Message),
+    ChangeWindow(&'a str),
 }
 
 #[derive(Clone)]
@@ -119,12 +121,16 @@ default impl<'a, T> ViewTrait for View<'a, T> {
     }
 }
 
-struct FrameLayout<'a> {
-    children: Vec<Box<dyn ViewTrait + 'a>>,
-    current: Option<usize>,
+struct FrameLayout<'a, K>
+    where K: Hash + Eq
+{
+    children: HashMap<K, Box<dyn ViewTrait + 'a>>,
+    current: Option<K>,
 }
 
-impl<'a> View<'a, FrameLayout<'a>> {
+impl<'a, K> View<'a, FrameLayout<'a, K>>
+    where K: Hash + Eq
+{
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -135,34 +141,35 @@ impl<'a> View<'a, FrameLayout<'a>> {
             w: 0,
             h: 0,
             content: FrameLayout {
-                children: Vec::new(),
+                children: HashMap::new(),
                 current: None,
             },
             event_handler: None,
         }
     }
 
-    fn with_event<F>(&mut self, event_handler: F) -> &mut Self
+    fn with_event<F>(mut self, event_handler: F) -> Self
         where F: FnMut(&mut Self, &UIEvent), F: 'a
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
 
-    fn push<T>(&mut self, widget: T)
+    fn insert<T>(&mut self, key: K, widget: T)
         where T: ViewTrait, T: 'a
     {
-        self.content.children.push(Box::new(widget));
+        self.content.children.insert(key, Box::new(widget));
     }
 }
 
-impl ViewTrait for View<'_, FrameLayout<'_>> {
+impl<K> ViewTrait for View<'_, FrameLayout<'_, K>>
+    where K: Hash + Eq
+{
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = width_spec.unwrap_or(0);
         self.h = height_spec.unwrap_or(0);
 
-        if let Some(current) = self.content.current {
-            let child = self.content.children.get_mut(current).unwrap();
+        for (_, child) in self.content.children.iter_mut() {
             child.measure(Some(self.w), Some(self.h));
         }
     }
@@ -171,22 +178,23 @@ impl ViewTrait for View<'_, FrameLayout<'_>> {
         self.x = left;
         self.y = top;
 
-        if let Some(current) = self.content.current {
-            let child = self.content.children.get_mut(current).unwrap();
+        for (_, child) in self.content.children.iter_mut() {
             child.layout(top, left);
         }
     }
 
     fn redraw(&mut self) {
-        if let Some(current) = self.content.current {
+        if let Some(current) = &self.content.current {
             let child = self.content.children.get_mut(current).unwrap();
             child.redraw();
         }
     }
 
     fn event(&mut self, event: &UIEvent) {
-        for child in self.content.children.iter_mut() {
-            child.event(event);
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
         }
     }
 }
@@ -564,6 +572,15 @@ impl ViewTrait for View<'_, TitleBar> {
         write!(screen, "{}", termion::cursor::Restore).unwrap();
         screen.flush().unwrap();
     }
+
+    fn event(&mut self, event: &UIEvent) {
+        match event {
+            UIEvent::ChangeWindow(name) => {
+                self.set_name(name);
+            },
+            _ => {},
+        }
+    }
 }
 
 struct WinBar {
@@ -913,7 +930,19 @@ impl Plugin for UIPlugin {
         let mut layout = View::<LinearLayout>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent);
 
         let title_bar = View::<TitleBar>::new(screen.clone());
-        let mut frame = View::<FrameLayout>::new(screen.clone());
+        let mut frame = View::<FrameLayout::<String>>::new(screen.clone()).with_event(|frame, event| {
+            match event {
+                UIEvent::ChangeWindow(name) => {
+                    frame.content.current = Some(name.to_string());
+                    frame.redraw();
+                },
+                event => {
+                    for (_, child) in frame.content.children.iter_mut() {
+                        child.event(event);
+                    }
+                },
+            }
+        });
         let win_bar = View::<WinBar>::new(screen.clone());
         let input = View::<Input>::new(screen.clone());
 
@@ -928,7 +957,7 @@ impl Plugin for UIPlugin {
             }
         });
 
-        frame.push(console);
+        frame.insert("console".to_string(), console);
 
         layout.push(title_bar);
         layout.push(frame);
@@ -952,6 +981,7 @@ impl Plugin for UIPlugin {
         self.root.measure(Some(width), Some(height));
         self.root.layout(1, 1);
         self.root.redraw();
+        self.root.event(&UIEvent::ChangeWindow("console"));
 
         // self.title_bar.borrow_mut().set_name("console");
 
