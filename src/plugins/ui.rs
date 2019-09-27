@@ -29,6 +29,7 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 enum UIEvent<'a> {
     Key(Key),
     Message(Message),
+    AddWindow(&'a str, Option<View<'a, BufferedWin<Message>>>),
     ChangeWindow(&'a str),
 }
 
@@ -45,7 +46,7 @@ trait ViewTrait {
     fn get_measured_width(&self) -> Option<u16>;
     fn get_measured_height(&self) -> Option<u16>;
     fn redraw(&mut self);
-    fn event(&mut self, event: &UIEvent);
+    fn event(&mut self, event: &mut UIEvent);
 }
 
 struct View<'a, T> {
@@ -57,7 +58,7 @@ struct View<'a, T> {
     w: u16,
     h: u16,
     content: T,
-    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &UIEvent) + 'a>>>>,
+    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut UIEvent) + 'a>>>>,
 }
 
 default impl<'a, T> ViewTrait for View<'a, T> {
@@ -116,7 +117,7 @@ default impl<'a, T> ViewTrait for View<'a, T> {
         }
     }
 
-    fn event(&mut self, event: &UIEvent) {
+    fn event(&mut self, event: &mut UIEvent) {
         // pass
     }
 }
@@ -149,10 +150,15 @@ impl<'a, K> View<'a, FrameLayout<'a, K>>
     }
 
     fn with_event<F>(mut self, event_handler: F) -> Self
-        where F: FnMut(&mut Self, &UIEvent), F: 'a
+        where F: FnMut(&mut Self, &mut UIEvent), F: 'a
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
+    }
+
+    fn current(&mut self, key: K) {
+        self.content.current = Some(key);
+        self.redraw();
     }
 
     fn insert<T>(&mut self, key: K, widget: T)
@@ -190,7 +196,7 @@ impl<K> ViewTrait for View<'_, FrameLayout<'_, K>>
         }
     }
 
-    fn event(&mut self, event: &UIEvent) {
+    fn event(&mut self, event: &mut UIEvent) {
         if let Some(handler) = &self.event_handler {
             let handler = Rc::clone(handler);
             let handler = &mut *handler.borrow_mut();
@@ -366,7 +372,7 @@ impl ViewTrait for View<'_, LinearLayout<'_>> {
         }
     }
 
-    fn event(&mut self, event: &UIEvent) {
+    fn event(&mut self, event: &mut UIEvent) {
         for child in self.content.children.iter_mut() {
             child.event(event);
         }
@@ -512,7 +518,7 @@ impl ViewTrait for View<'_, Input> {
         screen.flush().unwrap();
     }
 
-    fn event(&mut self, event: &UIEvent) {
+    fn event(&mut self, event: &mut UIEvent) {
         match event {
             UIEvent::Key(Key::Char(c)) => self.key(*c),
             UIEvent::Key(Key::Backspace) => self.delete(),
@@ -573,7 +579,7 @@ impl ViewTrait for View<'_, TitleBar> {
         screen.flush().unwrap();
     }
 
-    fn event(&mut self, event: &UIEvent) {
+    fn event(&mut self, event: &mut UIEvent) {
         match event {
             UIEvent::ChangeWindow(name) => {
                 self.set_name(name);
@@ -770,7 +776,7 @@ impl<'a, T: BufferedMessage> View<'a, BufferedWin<T>> {
     }
 
     fn with_event<F>(mut self, event_handler: F) -> Self
-        where F: FnMut(&mut Self, &UIEvent), F: 'a
+        where F: FnMut(&mut Self, &mut UIEvent), F: 'a
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
@@ -864,7 +870,7 @@ impl<T: BufferedMessage> ViewTrait for View<'_, BufferedWin<T>> {
         screen.flush().unwrap();
     }
 
-    fn event(&mut self, event: &UIEvent) {
+    fn event(&mut self, event: &mut UIEvent) {
         if let Some(handler) = &self.event_handler {
             let handler = Rc::clone(handler);
             let handler = &mut *handler.borrow_mut();
@@ -918,8 +924,8 @@ impl UIPlugin {
         FramedRead::new(file, KeyCodec::new(aparte))
     }
 
-    pub fn event(&mut self, event: UIEvent) {
-        self.root.event(&event);
+    pub fn event(&mut self, mut event: UIEvent) {
+        self.root.event(&mut event);
     }
 }
 
@@ -933,8 +939,11 @@ impl Plugin for UIPlugin {
         let mut frame = View::<FrameLayout::<String>>::new(screen.clone()).with_event(|frame, event| {
             match event {
                 UIEvent::ChangeWindow(name) => {
-                    frame.content.current = Some(name.to_string());
-                    frame.redraw();
+                    frame.current(name.to_string());
+                },
+                UIEvent::AddWindow(name, view) => {
+                    let view = view.take().unwrap();
+                    //frame.insert(name.to_string(), view);
                 },
                 event => {
                     for (_, child) in frame.content.children.iter_mut() {
@@ -981,7 +990,7 @@ impl Plugin for UIPlugin {
         self.root.measure(Some(width), Some(height));
         self.root.layout(1, 1);
         self.root.redraw();
-        self.root.event(&UIEvent::ChangeWindow("console"));
+        self.root.event(&mut UIEvent::ChangeWindow("console"));
 
         // self.title_bar.borrow_mut().set_name("console");
 
@@ -1000,7 +1009,7 @@ impl Plugin for UIPlugin {
                 //self.win_bar.borrow_mut().redraw();
             },
             Event::Message(message) => {
-                self.root.event(&UIEvent::Message(message.clone()));
+                self.root.event(&mut UIEvent::Message(message.clone()));
                 //let chat_name = match message {
                 //    Message::Incoming(XmppMessage::Chat(message)) => message.from.to_string(),
                 //    Message::Outgoing(XmppMessage::Chat(message)) => message.to.to_string(),
