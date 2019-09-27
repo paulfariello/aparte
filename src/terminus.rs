@@ -143,9 +143,11 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
         self.redraw();
     }
 
-    pub fn insert<T>(&mut self, key: K, widget: T)
+    pub fn insert<T>(&mut self, key: K, mut widget: T)
         where T: ViewTrait<E>, T: 'a
     {
+        widget.measure(Some(self.w), Some(self.h));
+        widget.layout(self.y, self.x);
         self.content.children.insert(key, Box::new(widget));
     }
 }

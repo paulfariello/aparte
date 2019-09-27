@@ -30,7 +30,7 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 enum UIEvent<'a> {
     Key(Key),
     Message(Message),
-    //AddWindow(&'a str, Option<View<'a, BufferedWin<Message>, UIEvent<'b>>>),
+    AddWindow(&'a str, Option<View<'a, BufferedWin<Message>, UIEvent<'a>>>),
     ChangeWindow(&'a str),
 }
 
@@ -304,10 +304,10 @@ impl<'a> Plugin for UIPlugin<'a> {
                 UIEvent::ChangeWindow(name) => {
                     frame.current(name.to_string());
                 },
-                //UIEvent::AddWindow(name, view) => {
-                //    let view = view.take().unwrap();
-                //    //frame.insert(name.to_string(), view);
-                //},
+                UIEvent::AddWindow(name, view) => {
+                    let view = view.take().unwrap();
+                    frame.insert(name.to_string(), view);
+                },
                 event => {
                     for (_, child) in frame.content.children.iter_mut() {
                         child.event(event);
@@ -327,19 +327,6 @@ impl<'a> Plugin for UIPlugin<'a> {
                 _ => {}
             }
         });
-
-        let console = View::<BufferedWin<Message>, UIEvent<'a>>::new(screen.clone()).with_event(|view, event| {
-            match event {
-                UIEvent::Message(Message::Log(message)) => {
-                    view.recv_message(&Message::Log(message.clone()), true);
-                },
-                UIEvent::Key(Key::PageUp) => view.page_up(),
-                UIEvent::Key(Key::PageDown) => view.page_down(),
-                _ => {},
-            }
-        });
-
-        frame.insert("console".to_string(), console);
 
         layout.push(title_bar);
         layout.push(frame);
@@ -363,11 +350,20 @@ impl<'a> Plugin for UIPlugin<'a> {
         self.root.measure(Some(width), Some(height));
         self.root.layout(1, 1);
         self.root.redraw();
+
+        let console = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+            match event {
+                UIEvent::Message(Message::Log(message)) => {
+                    view.recv_message(&Message::Log(message.clone()), true);
+                },
+                UIEvent::Key(Key::PageUp) => view.page_up(),
+                UIEvent::Key(Key::PageDown) => view.page_down(),
+                _ => {},
+            }
+        });
+
+        self.root.event(&mut UIEvent::AddWindow("console", Some(console)));
         self.root.event(&mut UIEvent::ChangeWindow("console"));
-
-        // self.title_bar.borrow_mut().set_name("console");
-
-        // self.switch("console").unwrap();
 
         Ok(())
     }
