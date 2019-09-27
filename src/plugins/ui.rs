@@ -186,6 +186,18 @@ impl ViewTrait<UIEvent<'_>> for View<'_, WinBar, UIEvent<'_>> {
         write!(screen, "{}", termion::cursor::Restore).unwrap();
         screen.flush().unwrap();
     }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        match event {
+            UIEvent::ChangeWindow(name) => {
+                self.set_current_window(name);
+            },
+            UIEvent::AddWindow(name, _) => {
+                self.add_window(name);
+            }
+            _ => {},
+        }
+    }
 }
 
 impl fmt::Display for Message {
