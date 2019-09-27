@@ -32,6 +32,7 @@ use std::str::FromStr;
 use chrono::Utc;
 
 mod core;
+mod terminus;
 mod plugins;
 
 use crate::core::{Aparte, Plugin, Event, Command, CommandOrMessage, Message};
