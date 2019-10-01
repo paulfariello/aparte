@@ -29,6 +29,8 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 enum UIEvent<'a> {
     Key(Key),
+    Validate(Rc<RefCell<Option<(String, bool)>>>),
+    ReadPassword,
     Message(Message),
     AddWindow(&'a str, Option<View<'a, BufferedWin<Message>, UIEvent<'a>>>),
     ChangeWindow(&'a str),
@@ -311,7 +313,7 @@ impl<'a> Plugin for UIPlugin<'a> {
         let mut layout = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent);
 
         let title_bar = View::<TitleBar, UIEvent>::new(screen.clone());
-        let mut frame = View::<FrameLayout::<String, UIEvent<'a>>, UIEvent<'a>>::new(screen.clone()).with_event(|frame, event| {
+        let frame = View::<FrameLayout::<String, UIEvent<'a>>, UIEvent<'a>>::new(screen.clone()).with_event(|frame, event| {
             match event {
                 UIEvent::ChangeWindow(name) => {
                     frame.current(name.to_string());
@@ -336,6 +338,11 @@ impl<'a> Plugin for UIPlugin<'a> {
                 UIEvent::Key(Key::Down) => input.next(),
                 UIEvent::Key(Key::Left) => input.left(),
                 UIEvent::Key(Key::Right) => input.right(),
+                UIEvent::Validate(result) => {
+                    let mut result = result.borrow_mut();
+                    result.replace(input.validate());
+                },
+                UIEvent::ReadPassword => input.password(),
                 _ => {}
             }
         });
@@ -382,6 +389,10 @@ impl<'a> Plugin for UIPlugin<'a> {
 
     fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
         match event {
+            Event::ReadPassword(command) => {
+                self.password_command = Some(command.clone());
+                self.root.event(&mut UIEvent::ReadPassword);
+            },
             Event::Connected(_jid) => {
                 //self.win_bar.borrow_mut().content.connection = match aparte.current_connection() {
                 //    Some(jid) => Some(jid.to_string()),
@@ -499,42 +510,47 @@ impl Decoder for KeyCodec {
                     ui.event(UIEvent::Key(Key::PageDown));
                 },
                 Ok(Key::Char('\n')) => {
-                    //if ui.input.borrow_mut().content.password {
-                    //    let mut command = ui.password_command.take().unwrap();
-                    //    command.args.push(ui.input.borrow_mut().content.buf.clone());
-                    //    self.queue.push(Ok(CommandOrMessage::Command(command)));
-                    //} else if ui.input.borrow_mut().content.buf.starts_with("/") {
-                    //    let splitted = shell_words::split(&ui.input.borrow_mut().content.buf);
-                    //    match splitted {
-                    //        Ok(splitted) => {
-                    //            let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
-                    //            self.queue.push(Ok(CommandOrMessage::Command(command)));
-                    //        },
-                    //        Err(err) => self.queue.push(Err(CommandError::Parse(err))),
-                    //    }
-                    //} else if ui.input.borrow_mut().content.buf.len() > 0 {
-                    //    //match ui.current_window() {
-                    //    //    Window::Chat(chat) => {
-                    //    //        let from: Jid = chat.us.clone().into();
-                    //    //        let to: Jid = chat.them.clone().into();
-                    //    //        let id = Uuid::new_v4();
-                    //    //        let timestamp = Utc::now();
-                    //    //        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &ui.input.borrow_mut().content.buf);
-                    //    //        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                    //    //    },
-                    //    //    Window::Groupchat(groupchat) => {
-                    //    //        let from: Jid = groupchat.us.clone().into();
-                    //    //        let to: Jid = groupchat.groupchat.clone().into();
-                    //    //        let id = Uuid::new_v4();
-                    //    //        let timestamp = Utc::now();
-                    //    //        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &ui.input.borrow_mut().content.buf);
-                    //    //        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                    //    //    },
-                    //    //}
-                    //}
-                    //if ui.input.borrow_mut().content.buf.len() > 0 {
-                    //    ui.input.borrow_mut().validate();
-                    //}
+                    let result = Rc::new(RefCell::new(None));
+                    let event = UIEvent::Validate(Rc::clone(&result));
+
+                    ui.event(event);
+
+                    let result = result.borrow_mut();
+                    let (raw_buf, password) = result.as_ref().unwrap();
+                    let raw_buf = raw_buf.clone();
+                    if *password {
+                        let mut command = ui.password_command.take().unwrap();
+                        command.args.push(raw_buf.clone());
+                        self.queue.push(Ok(CommandOrMessage::Command(command)));
+                    } else if raw_buf.starts_with("/") {
+                        let splitted = shell_words::split(&raw_buf);
+                        match splitted {
+                            Ok(splitted) => {
+                                let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
+                                self.queue.push(Ok(CommandOrMessage::Command(command)));
+                            },
+                            Err(err) => self.queue.push(Err(CommandError::Parse(err))),
+                        }
+                    } else if raw_buf.len() > 0 {
+                        //match ui.current_window() {
+                        //    Window::Chat(chat) => {
+                        //        let from: Jid = chat.us.clone().into();
+                        //        let to: Jid = chat.them.clone().into();
+                        //        let id = Uuid::new_v4();
+                        //        let timestamp = Utc::now();
+                        //        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                        //        self.queue.push(Ok(CommandOrMessage::Message(message)));
+                        //    },
+                        //    Window::Groupchat(groupchat) => {
+                        //        let from: Jid = groupchat.us.clone().into();
+                        //        let to: Jid = groupchat.groupchat.clone().into();
+                        //        let id = Uuid::new_v4();
+                        //        let timestamp = Utc::now();
+                        //        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                        //        self.queue.push(Ok(CommandOrMessage::Message(message)));
+                        //    },
+                        //}
+                    }
                 },
                 Ok(Key::Alt('\x1b')) => {
                     match keys.next() {

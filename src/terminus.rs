@@ -6,7 +6,7 @@ use std::hash::Hash;
 use std::io::{Write, Stdout};
 use std::rc::Rc;
 use termion::cursor::DetectCursorPos;
-use termion::raw::{IntoRawMode, RawTerminal};
+use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
@@ -449,12 +449,15 @@ impl<'a, E> View<'a, Input, E> {
         screen.flush().unwrap();
     }
 
-    pub fn validate(&mut self) {
+    pub fn validate(&mut self) -> (String, bool) {
         if !self.content.password {
             self.content.history.push(self.content.buf.clone());
             self.content.history_index = self.content.history.len();
         }
+        let buf = self.content.buf.clone();
+        let password = self.content.password;
         self.clear();
+        (buf, password)
     }
 
     pub fn previous(&mut self) {

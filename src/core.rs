@@ -237,6 +237,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum CommandOrMessage {
     Command(Command),
     Message(Message),
@@ -272,6 +273,7 @@ pub enum Event {
     Chat(BareJid),
     Join(FullJid),
     Iq(iq::Iq),
+    ReadPassword(Command),
 }
 
 pub trait Plugin: fmt::Display {
@@ -306,7 +308,7 @@ pub struct Connection {
 }
 
 pub struct Aparte {
-    commands: HashMap<String, fn(Rc<Aparte>, &Command) -> Result<(), ()>>,
+    commands: HashMap<String, fn(Rc<Aparte>, Command) -> Result<(), ()>>,
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
@@ -326,11 +328,11 @@ impl Aparte {
         }
     }
 
-    pub fn add_command(&mut self, name: &str, command: fn(Rc<Aparte>, &Command) -> Result<(), ()>) {
+    pub fn add_command(&mut self, name: &str, command: fn(Rc<Aparte>, Command) -> Result<(), ()>) {
         self.commands.insert(name.to_string(), command);
     }
 
-    pub fn parse_command(self: Rc<Self>, command: &Command) -> Result<(), ()> {
+    pub fn parse_command(self: Rc<Self>, command: Command) -> Result<(), ()> {
         match self.commands.get(&command.name) {
             Some(parser) => parser(self, command),
             None => Err(()),

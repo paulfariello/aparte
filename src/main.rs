@@ -85,10 +85,10 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
     }
 }
 
-fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+fn connect(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     match command.args.len() {
         1 => {
-            // TODO event read password
+            Rc::clone(&aparte).event(Event::ReadPassword(command.clone()));
             Ok(())
         },
         2 => {
@@ -155,7 +155,7 @@ fn connect(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
     }
 }
 
-fn win(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+fn win(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     if command.args.len() != 1 {
         Rc::clone(&aparte).log(format!("Missing windows name"));
         Err(())
@@ -166,7 +166,7 @@ fn win(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
     }
 }
 
-fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+fn msg(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     match command.args.len() {
         0 => {
             Rc::clone(&aparte).log(format!("Missing contact and message"));
@@ -236,7 +236,7 @@ fn msg(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
     }
 }
 
-fn join(aparte: Rc<Aparte>, command: &Command) -> Result<(), ()> {
+fn join(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     match command.args.len() {
         0 => {
             Rc::clone(&aparte).log(format!("Missing Muc"));
@@ -334,7 +334,7 @@ fn main() {
             }
             CommandOrMessage::Command(command) => {
                 let result = {
-                    Rc::clone(&aparte).parse_command(&command)
+                    Rc::clone(&aparte).parse_command(command.clone())
                 };
 
                 if result.is_err() {
