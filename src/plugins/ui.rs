@@ -3,7 +3,7 @@ use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::hash;
@@ -32,8 +32,8 @@ enum UIEvent<'a> {
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     ReadPassword,
     Message(Message),
-    AddWindow(&'a str, Option<View<'a, BufferedWin<Message>, UIEvent<'a>>>),
-    ChangeWindow(&'a str),
+    AddWindow(String, Option<View<'a, BufferedWin<Message>, UIEvent<'a>>>),
+    ChangeWindow(String),
 }
 
 struct TitleBar {
@@ -288,6 +288,7 @@ pub struct GroupchatWin {
 
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
+    windows: HashSet<String>,
     root: Box<dyn ViewTrait<UIEvent<'a>> + 'a>,
     password_command: Option<Command>,
 }
@@ -355,6 +356,7 @@ impl<'a> Plugin for UIPlugin<'a> {
         Self {
             screen: screen,
             root: Box::new(layout),
+            windows: HashSet::new(),
             password_command: None,
         }
     }
@@ -381,8 +383,9 @@ impl<'a> Plugin for UIPlugin<'a> {
             }
         });
 
-        self.root.event(&mut UIEvent::AddWindow("console", Some(console)));
-        self.root.event(&mut UIEvent::ChangeWindow("console"));
+        self.windows.insert("console".to_string());
+        self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(console)));
+        self.root.event(&mut UIEvent::ChangeWindow("console".to_string()));
 
         Ok(())
     }
@@ -433,14 +436,31 @@ impl<'a> Plugin for UIPlugin<'a> {
                 //}
             },
             Event::Chat(jid) => {
-                //let chat_name = jid.to_string();
-                //if self.switch(&chat_name).is_err() {
-                //    //let us = aparte.current_connection().unwrap().clone().into();
-                //    //let mut chat = Window::chat(self.screen.clone(), &us, jid);
-                //    //chat.redraw();
-                //    //self.add_window(&chat_name, chat);
-                //    //self.switch(&chat_name).unwrap();
-                //}
+                let chat_name = jid.to_string();
+                if self.windows.contains(&chat_name) {
+                    self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
+                } else {
+                    // let us = aparte.current_connection().unwrap().clone().into();
+                    let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+                        match event {
+                            UIEvent::Message(Message::Incoming(XmppMessage::Chat(message))) => {
+                                // TODO check to == us
+                                view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())), true);
+                            },
+                            UIEvent::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
+                                // TODO check from == us
+                                view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
+                            },
+                            UIEvent::Key(Key::PageUp) => view.page_up(),
+                            UIEvent::Key(Key::PageDown) => view.page_down(),
+                            _ => {},
+                        }
+                    });
+
+                    self.windows.insert(chat_name.clone());
+                    self.root.event(&mut UIEvent::AddWindow(chat_name.clone(), Some(chat)));
+                    self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
+                }
             },
             Event::Join(jid) => {
                 //let groupchat: BareJid = jid.clone().into();
