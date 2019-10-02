@@ -21,7 +21,7 @@ use log::LevelFilter;
 use std::convert::TryFrom;
 use std::rc::Rc;
 use tokio::runtime::current_thread::Runtime;
-use tokio_xmpp::Client;
+use tokio_xmpp::{Client, Error as XmppError};
 use uuid::Uuid;
 use xmpp_parsers::{Element, Jid};
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
@@ -119,25 +119,36 @@ fn connect(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
                     })
                 );
 
+                let event_aparte = Rc::clone(&aparte);
                 let client = stream.for_each(move |event| {
                     if event.is_online() {
-                        Rc::clone(&aparte).log(format!("Connected as {}", account));
+                        Rc::clone(&event_aparte).log(format!("Connected as {}", account));
 
-                        Rc::clone(&aparte).event(Event::Connected(full_jid.clone()));
+                        Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
 
                         let mut presence = Presence::new(PresenceType::None);
                         presence.show = Some(PresenceShow::Chat);
 
-                        aparte.send(presence.into());
+                        event_aparte.send(presence.into());
                     } else if let Some(stanza) = event.into_stanza() {
                         debug!("RECV: {}", String::from(&stanza));
 
-                        handle_stanza(Rc::clone(&aparte), stanza);
+                        handle_stanza(Rc::clone(&event_aparte), stanza);
                     }
 
                     future::ok(())
-                }).map_err(|e| {
-                    error!("Err: {:?}", e);
+                });
+
+                let error_aparte = Rc::clone(&aparte);
+                let client = client.map_err(move |error| {
+                    match error {
+                        XmppError::Auth(auth) => {
+                            Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
+                        },
+                        error => {
+                            Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
+                        },
+                    }
                 });
 
                 tokio::runtime::current_thread::spawn(client);
