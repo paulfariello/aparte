@@ -171,8 +171,7 @@ fn win(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
         Rc::clone(&aparte).log(format!("Missing windows name"));
         Err(())
     } else {
-        // TODO event for opening win
-
+        aparte.event(Event::Win(command.args[0].clone()));
         Ok(())
     }
 }

@@ -501,7 +501,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                     });
                 }
                 self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
-                self.current_window.replace(chat_name.to_string());
+                self.current_window.replace(chat_name.clone());
             },
             Event::Join(jid) => {
                 //let groupchat: BareJid = jid.clone().into();
@@ -513,7 +513,15 @@ impl<'a> Plugin for UIPlugin<'a> {
                 //    //self.add_window(&win_name, chat);
                 //    //self.switch(&win_name).unwrap();
                 //}
-            }
+            },
+            Event::Win(window) => {
+                if self.windows.contains(window) {
+                    self.root.event(&mut UIEvent::ChangeWindow(window.clone()));
+                    self.current_window.replace(window.clone());
+                } else {
+                    aparte.log(format!("Unknown window {}", window));
+                }
+            },
             _ => {},
         }
     }

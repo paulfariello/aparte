@@ -274,6 +274,7 @@ pub enum Event {
     Join(FullJid),
     Iq(iq::Iq),
     ReadPassword(Command),
+    Win(String),
 }
 
 pub trait Plugin: fmt::Display {
