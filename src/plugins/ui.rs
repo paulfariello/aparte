@@ -274,36 +274,6 @@ impl fmt::Display for Message {
     }
 }
 
-pub struct ChatWin {
-    us: BareJid,
-    them: BareJid,
-}
-
-pub struct GroupchatWin {
-    us: BareJid,
-    groupchat: BareJid,
-}
-
-    //fn chat(screen: Rc<RefCell<Screen>>, us: &BareJid, them: &BareJid) -> Self {
-    //    let bufwin = Self::bufwin::<Message>(screen);
-
-    //    Window::Chat(ChatWin {
-    //        bufwin: bufwin,
-    //        us: us.clone(),
-    //        them: them.clone(),
-    //    })
-    //}
-
-    //fn groupchat(screen: Rc<RefCell<Screen>>, us: &BareJid, groupchat: &BareJid) -> Self {
-    //    let bufwin = Self::bufwin::<Message>(screen);
-
-    //    Window::Groupchat(GroupchatWin {
-    //        bufwin: bufwin,
-    //        us: us.clone(),
-    //        groupchat: groupchat.clone(),
-    //    })
-    //}
-
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
@@ -349,7 +319,27 @@ impl<'a> UIPlugin<'a> {
                 self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(chat)));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             },
-            ConversationKind::Group => {}
+            ConversationKind::Group => {
+                let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+                    match event {
+                        UIEvent::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
+                            // TODO check to == us
+                            view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())), true);
+                        },
+                        UIEvent::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
+                            // TODO check from == us
+                            view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())), true);
+                        },
+                        UIEvent::Key(Key::PageUp) => view.page_up(),
+                        UIEvent::Key(Key::PageDown) => view.page_down(),
+                        _ => {},
+                    }
+                });
+
+                self.windows.push(conversation.jid.to_string());
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(chat)));
+                self.conversations.insert(conversation.jid.to_string(), conversation);
+            }
         }
     }
 
@@ -519,25 +509,25 @@ impl<'a> Plugin for UIPlugin<'a> {
                 self.root.event(&mut UIEvent::Message(message.clone()));
             },
             Event::Chat(jid) => {
-                let chat_name = jid.to_string();
-                if !self.conversations.contains_key(&chat_name) {
+                let win_name = jid.to_string();
+                if !self.conversations.contains_key(&win_name) {
                     self.add_conversation(Conversation {
-                        jid: BareJid::from_str(&chat_name).unwrap(),
+                        jid: BareJid::from_str(&win_name).unwrap(),
                         kind: ConversationKind::Chat,
                     });
                 }
-                self.change_window(&chat_name);
+                self.change_window(&win_name);
             },
             Event::Join(jid) => {
-                //let groupchat: BareJid = jid.clone().into();
-                //let win_name = groupchat.to_string();
-                //if self.switch(&win_name).is_err() {
-                //    //let us = aparte.current_connection().unwrap().clone().into();
-                //    //let groupchat = jid.clone().into();
-                //    //let chat = Window::groupchat(self.screen.clone(), &us, &groupchat);
-                //    //self.add_window(&win_name, chat);
-                //    //self.switch(&win_name).unwrap();
-                //}
+                let bare: BareJid = jid.clone().into();
+                let win_name = bare.to_string();
+                if !self.conversations.contains_key(&win_name) {
+                    self.add_conversation(Conversation {
+                        jid: BareJid::from_str(&win_name).unwrap(),
+                        kind: ConversationKind::Group,
+                    });
+                }
+                self.change_window(&win_name);
             },
             Event::Win(window) => {
                 if self.windows.contains(window) {
