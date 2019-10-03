@@ -2,16 +2,12 @@ use bytes::BytesMut;
 use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
 use std::cell::RefCell;
-use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::Hash;
-use std::hash;
 use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
 use termion::color;
-use termion::cursor::DetectCursorPos;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
@@ -292,11 +288,11 @@ impl<'a> UIPlugin<'a> {
         FramedRead::new(file, KeyCodec::new(aparte))
     }
 
-    pub fn event(&mut self, mut event: UIEvent<'a>) {
+    fn event(&mut self, mut event: UIEvent<'a>) {
         self.root.event(&mut event);
     }
 
-    pub fn add_conversation(&mut self, conversation: Conversation) {
+    fn add_conversation(&mut self, conversation: Conversation) {
         match conversation.kind {
             ConversationKind::Chat => {
                 let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {

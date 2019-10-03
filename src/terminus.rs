@@ -14,6 +14,7 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 #[derive(Clone)]
 pub enum Dimension {
     MatchParent,
+    #[allow(dead_code)]
     WrapContent,
     Absolute(u16),
 }
