@@ -20,6 +20,7 @@ use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
+use std::str::FromStr;
 
 use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window};
@@ -31,9 +32,22 @@ enum UIEvent<'a> {
     Key(Key),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     ReadPassword,
+    Connected(String),
     Message(Message),
     AddWindow(String, Option<View<'a, BufferedWin<Message>, UIEvent<'a>>>),
     ChangeWindow(String),
+}
+
+#[derive(Debug, Clone)]
+enum ConversationKind {
+    Chat,
+    Group,
+}
+
+#[derive(Debug, Clone)]
+struct Conversation {
+    jid: BareJid,
+    kind: ConversationKind,
 }
 
 struct TitleBar {
@@ -197,6 +211,10 @@ impl ViewTrait<UIEvent<'_>> for View<'_, WinBar, UIEvent<'_>> {
             UIEvent::AddWindow(name, _) => {
                 self.add_window(name);
             }
+            UIEvent::Connected(jid) => {
+                self.content.connection = Some(jid.clone());
+                self.redraw();
+            }
             _ => {},
         }
     }
@@ -289,6 +307,8 @@ pub struct GroupchatWin {
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
     windows: HashSet<String>,
+    current_window: Option<String>,
+    conversations: HashMap<String, Conversation>,
     root: Box<dyn ViewTrait<UIEvent<'a>> + 'a>,
     password_command: Option<Command>,
 }
@@ -304,6 +324,33 @@ impl<'a> UIPlugin<'a> {
 
     pub fn event(&mut self, mut event: UIEvent<'a>) {
         self.root.event(&mut event);
+    }
+
+    pub fn add_conversation(&mut self, conversation: Conversation) {
+        match conversation.kind {
+            ConversationKind::Chat => {
+                let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+                    match event {
+                        UIEvent::Message(Message::Incoming(XmppMessage::Chat(message))) => {
+                            // TODO check to == us
+                            view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())), true);
+                        },
+                        UIEvent::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
+                            // TODO check from == us
+                            view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
+                        },
+                        UIEvent::Key(Key::PageUp) => view.page_up(),
+                        UIEvent::Key(Key::PageDown) => view.page_down(),
+                        _ => {},
+                    }
+                });
+
+                self.windows.insert(conversation.jid.to_string());
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(chat)));
+                self.conversations.insert(conversation.jid.to_string(), conversation);
+            },
+            ConversationKind::Group => {}
+        }
     }
 }
 
@@ -357,6 +404,8 @@ impl<'a> Plugin for UIPlugin<'a> {
             screen: screen,
             root: Box::new(layout),
             windows: HashSet::new(),
+            current_window: None,
+            conversations: HashMap::new(),
             password_command: None,
         }
     }
@@ -386,6 +435,7 @@ impl<'a> Plugin for UIPlugin<'a> {
         self.windows.insert("console".to_string());
         self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(console)));
         self.root.event(&mut UIEvent::ChangeWindow("console".to_string()));
+        self.current_window = Some("console".to_string());
 
         Ok(())
     }
@@ -396,71 +446,62 @@ impl<'a> Plugin for UIPlugin<'a> {
                 self.password_command = Some(command.clone());
                 self.root.event(&mut UIEvent::ReadPassword);
             },
-            Event::Connected(_jid) => {
-                //self.win_bar.borrow_mut().content.connection = match aparte.current_connection() {
-                //    Some(jid) => Some(jid.to_string()),
-                //    None => None,
-                //};
-                //self.win_bar.borrow_mut().redraw();
+            Event::Connected(jid) => {
+                self.root.event(&mut UIEvent::Connected(jid.to_string()));
             },
             Event::Message(message) => {
+                match message {
+                    Message::Incoming(XmppMessage::Chat(message)) => {
+                        let window_name = message.from.to_string();
+                        if !self.conversations.contains_key(&window_name) {
+                            self.add_conversation(Conversation {
+                                jid: BareJid::from_str(&window_name).unwrap(),
+                                kind: ConversationKind::Chat,
+                            });
+                        }
+                    },
+                    Message::Outgoing(XmppMessage::Chat(message)) => {
+                        let window_name = message.to.to_string();
+                        if !self.conversations.contains_key(&window_name) {
+                            self.add_conversation(Conversation {
+                                jid: BareJid::from_str(&window_name).unwrap(),
+                                kind: ConversationKind::Chat,
+                            });
+                        }
+                    },
+                    Message::Incoming(XmppMessage::Groupchat(message)) => {
+                        let window_name = message.from.to_string();
+                        if !self.conversations.contains_key(&window_name) {
+                            self.add_conversation(Conversation {
+                                jid: BareJid::from_str(&window_name).unwrap(),
+                                kind: ConversationKind::Group,
+                            });
+                        }
+                    },
+                    Message::Outgoing(XmppMessage::Groupchat(message)) => {
+                        let window_name = message.to.to_string();
+                        if !self.conversations.contains_key(&window_name) {
+                            self.add_conversation(Conversation {
+                                jid: BareJid::from_str(&window_name).unwrap(),
+                                kind: ConversationKind::Group,
+                            });
+                        }
+                    }
+                    Message::Log(_message) => {}
+                };
+
                 self.root.event(&mut UIEvent::Message(message.clone()));
-                //let chat_name = match message {
-                //    Message::Incoming(XmppMessage::Chat(message)) => message.from.to_string(),
-                //    Message::Outgoing(XmppMessage::Chat(message)) => message.to.to_string(),
-                //    Message::Incoming(XmppMessage::Groupchat(message)) => message.from.to_string(),
-                //    Message::Outgoing(XmppMessage::Groupchat(message)) => message.to.to_string(),
-                //    Message::Log(_message) => "console".to_string(),
-                //};
-
-                //let chat = match self.windows.get_mut(&chat_name) {
-                //    Some(chat) => chat,
-                //    None => {
-                //        let mut chat: Rc<RefCell<dyn Window<Message>>> = match message {
-                //            //Message::Incoming(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.to, &message.from),
-                //            //Message::Outgoing(XmppMessage::Chat(message)) => Window::chat(self.screen.clone(), &message.from, &message.to),
-                //            //Message::Incoming(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.to, &message.from),
-                //            //Message::Outgoing(XmppMessage::Groupchat(message)) => Window::groupchat(self.screen.clone(), &message.from, &message.to),
-                //            Message::Log(_) => unreachable!(),
-                //            _ => unreachable!(),
-                //        };
-                //        chat.borrow_mut().redraw();
-                //        self.add_window(&chat_name, chat);
-                //        self.windows.get_mut(&chat_name).unwrap()
-                //    },
-                //};
-
-                //chat.borrow_mut().recv_message(message, self.current == chat_name);
-                //if self.current != chat_name {
-                //    self.win_bar.borrow_mut().highlight_window(&chat_name);
-                //}
             },
             Event::Chat(jid) => {
                 let chat_name = jid.to_string();
-                if self.windows.contains(&chat_name) {
-                    self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
-                } else {
-                    // let us = aparte.current_connection().unwrap().clone().into();
-                    let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
-                        match event {
-                            UIEvent::Message(Message::Incoming(XmppMessage::Chat(message))) => {
-                                // TODO check to == us
-                                view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())), true);
-                            },
-                            UIEvent::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
-                                // TODO check from == us
-                                view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
-                            },
-                            UIEvent::Key(Key::PageUp) => view.page_up(),
-                            UIEvent::Key(Key::PageDown) => view.page_down(),
-                            _ => {},
-                        }
+                if !self.conversations.contains_key(&chat_name) {
+                    self.add_conversation(Conversation {
+                        jid: BareJid::from_str(&chat_name).unwrap(),
+                        kind: ConversationKind::Chat,
                     });
-
-                    self.windows.insert(chat_name.clone());
-                    self.root.event(&mut UIEvent::AddWindow(chat_name.clone(), Some(chat)));
-                    self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
                 }
+                self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
+                self.current_window.replace(chat_name.to_string());
             },
             Event::Join(jid) => {
                 //let groupchat: BareJid = jid.clone().into();
@@ -552,24 +593,29 @@ impl Decoder for KeyCodec {
                             Err(err) => self.queue.push(Err(CommandError::Parse(err))),
                         }
                     } else if raw_buf.len() > 0 {
-                        //match ui.current_window() {
-                        //    Window::Chat(chat) => {
-                        //        let from: Jid = chat.us.clone().into();
-                        //        let to: Jid = chat.them.clone().into();
-                        //        let id = Uuid::new_v4();
-                        //        let timestamp = Utc::now();
-                        //        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
-                        //        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                        //    },
-                        //    Window::Groupchat(groupchat) => {
-                        //        let from: Jid = groupchat.us.clone().into();
-                        //        let to: Jid = groupchat.groupchat.clone().into();
-                        //        let id = Uuid::new_v4();
-                        //        let timestamp = Utc::now();
-                        //        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
-                        //        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                        //    },
-                        //}
+                        if let Some(current_window) = ui.current_window.clone() {
+                            if let Some(conversation) = ui.conversations.get(&current_window) {
+                                let us = self.aparte.current_connection().unwrap().clone().into();
+                                match conversation.kind {
+                                    ConversationKind::Chat => {
+                                        let from: Jid = us;
+                                        let to: Jid = conversation.jid.clone().into();
+                                        let id = Uuid::new_v4();
+                                        let timestamp = Utc::now();
+                                        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                        self.queue.push(Ok(CommandOrMessage::Message(message)));
+                                    },
+                                    ConversationKind::Group => {
+                                        let from: Jid = us;
+                                        let to: Jid = conversation.jid.clone().into();
+                                        let id = Uuid::new_v4();
+                                        let timestamp = Utc::now();
+                                        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                        self.queue.push(Ok(CommandOrMessage::Message(message)));
+                                    },
+                                }
+                            }
+                        }
                     }
                 },
                 Ok(Key::Alt('\x1b')) => {
