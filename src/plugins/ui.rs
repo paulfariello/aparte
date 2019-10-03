@@ -3,7 +3,7 @@ use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::hash;
@@ -306,7 +306,7 @@ pub struct GroupchatWin {
 
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
-    windows: HashSet<String>,
+    windows: Vec<String>,
     current_window: Option<String>,
     conversations: HashMap<String, Conversation>,
     root: Box<dyn ViewTrait<UIEvent<'a>> + 'a>,
@@ -345,11 +345,38 @@ impl<'a> UIPlugin<'a> {
                     }
                 });
 
-                self.windows.insert(conversation.jid.to_string());
+                self.windows.push(conversation.jid.to_string());
                 self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(chat)));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             },
             ConversationKind::Group => {}
+        }
+    }
+
+    pub fn change_window(&mut self, window: &str) {
+        self.root.event(&mut UIEvent::ChangeWindow(window.to_string()));
+        self.current_window = Some(window.to_string());
+    }
+
+    pub fn next_window(&mut self) {
+        if let Some(current) = &self.current_window {
+            let index = self.windows.iter().position(|e| e == current).unwrap();
+            if index < self.windows.len() - 1 {
+                self.change_window(&self.windows[index + 1].clone());
+            }
+        } else if self.windows.len() > 0 {
+            self.change_window(&self.windows[0].clone());
+        }
+    }
+
+    pub fn prev_window(&mut self) {
+        if let Some(current) = &self.current_window {
+            let index = self.windows.iter().position(|e| e == current).unwrap();
+            if index > 0 {
+                self.change_window(&self.windows[index - 1].clone());
+            }
+        } else if self.windows.len() > 0 {
+            self.change_window(&self.windows[0].clone());
         }
     }
 }
@@ -403,7 +430,7 @@ impl<'a> Plugin for UIPlugin<'a> {
         Self {
             screen: screen,
             root: Box::new(layout),
-            windows: HashSet::new(),
+            windows: Vec::new(),
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
@@ -432,10 +459,9 @@ impl<'a> Plugin for UIPlugin<'a> {
             }
         });
 
-        self.windows.insert("console".to_string());
+        self.windows.push("console".to_string());
         self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(console)));
-        self.root.event(&mut UIEvent::ChangeWindow("console".to_string()));
-        self.current_window = Some("console".to_string());
+        self.change_window("console");
 
         Ok(())
     }
@@ -500,8 +526,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                         kind: ConversationKind::Chat,
                     });
                 }
-                self.root.event(&mut UIEvent::ChangeWindow(chat_name.clone()));
-                self.current_window.replace(chat_name.clone());
+                self.change_window(&chat_name);
             },
             Event::Join(jid) => {
                 //let groupchat: BareJid = jid.clone().into();
@@ -516,8 +541,7 @@ impl<'a> Plugin for UIPlugin<'a> {
             },
             Event::Win(window) => {
                 if self.windows.contains(window) {
-                    self.root.event(&mut UIEvent::ChangeWindow(window.clone()));
-                    self.current_window.replace(window.clone());
+                    self.change_window(&window);
                 } else {
                     aparte.log(format!("Unknown window {}", window));
                 }
@@ -632,10 +656,10 @@ impl Decoder for KeyCodec {
                         Some(Ok(Key::Char('['))) => {
                             match keys.next() {
                                 Some(Ok(Key::Char('C'))) => {
-                                    //let _ = ui.next_window();
+                                    ui.next_window();
                                 },
                                 Some(Ok(Key::Char('D'))) => {
-                                    //let _ = ui.prev_window();
+                                    ui.prev_window();
                                 },
                                 Some(Ok(_)) => {},
                                 Some(Err(_)) => {},
