@@ -578,6 +578,7 @@ impl Decoder for KeyCodec {
                 Ok(Key::PageDown) => {
                     ui.event(UIEvent::Key(Key::PageDown));
                 },
+                Ok(Key::Char('\t')) => {},
                 Ok(Key::Char('\n')) => {
                     let result = Rc::new(RefCell::new(None));
                     let event = UIEvent::Validate(Rc::clone(&result));
