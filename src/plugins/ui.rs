@@ -75,23 +75,27 @@ impl View<'_, TitleBar, UIEvent<'_>> {
 
 impl ViewTrait<UIEvent<'_>> for View<'_, TitleBar, UIEvent<'_>> {
     fn redraw(&mut self) {
-        let mut screen = self.screen.borrow_mut();
+        self.save_cursor();
 
-        write!(screen, "{}", termion::cursor::Save).unwrap();
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-        write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+        {
+            let mut screen = self.screen.borrow_mut();
 
-        for _ in 0 .. self.w {
-            write!(screen, " ").unwrap();
+            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
+            write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+
+            for _ in 0 .. self.w {
+                write!(screen, " ").unwrap();
+            }
+            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
+            if let Some(window_name) = &self.content.window_name {
+                write!(screen, " {}", window_name).unwrap();
+            }
+
+            write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
         }
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-        if let Some(window_name) = &self.content.window_name {
-            write!(screen, " {}", window_name).unwrap();
-        }
 
-        write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
-        write!(screen, "{}", termion::cursor::Restore).unwrap();
-        screen.flush().unwrap();
+        self.restore_cursor();
+        self.screen.borrow_mut().flush().unwrap();
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -153,50 +157,54 @@ impl View<'_, WinBar, UIEvent<'_>> {
 
 impl ViewTrait<UIEvent<'_>> for View<'_, WinBar, UIEvent<'_>> {
     fn redraw(&mut self) {
-        let mut screen = self.screen.borrow_mut();
+        self.save_cursor();
 
-        write!(screen, "{}", termion::cursor::Save).unwrap();
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-        write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+        {
+            let mut screen = self.screen.borrow_mut();
 
-        for _ in 0 .. self.w {
-            write!(screen, " ").unwrap();
-        }
+            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
+            write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
 
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-        if let Some(connection) = &self.content.connection {
-            write!(screen, " {}", connection).unwrap();
-        }
-
-        let mut windows = String::new();
-        let mut windows_len = 0;
-
-        let mut index = 1;
-        for window in &self.content.windows {
-            if let Some(current) = &self.content.current_window {
-                if window == current {
-                    let win = format!("-{}: {}- ", index, window);
-                    windows_len += win.len();
-                    windows.push_str(&win);
-                } else {
-                    if self.content.highlighted.iter().find(|w| w == &window).is_some() {
-                        windows.push_str(&format!("{}", termion::style::Bold));
-                    }
-                    let win = format!("[{}: {}] ", index, window);
-                    windows_len += win.len();
-                    windows.push_str(&win);
-                    windows.push_str(&format!("{}", termion::style::NoBold));
-                }
+            for _ in 0 .. self.w {
+                write!(screen, " ").unwrap();
             }
-            index += 1;
+
+            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
+            if let Some(connection) = &self.content.connection {
+                write!(screen, " {}", connection).unwrap();
+            }
+
+            let mut windows = String::new();
+            let mut windows_len = 0;
+
+            let mut index = 1;
+            for window in &self.content.windows {
+                if let Some(current) = &self.content.current_window {
+                    if window == current {
+                        let win = format!("-{}: {}- ", index, window);
+                        windows_len += win.len();
+                        windows.push_str(&win);
+                    } else {
+                        if self.content.highlighted.iter().find(|w| w == &window).is_some() {
+                            windows.push_str(&format!("{}", termion::style::Bold));
+                        }
+                        let win = format!("[{}: {}] ", index, window);
+                        windows_len += win.len();
+                        windows.push_str(&win);
+                        windows.push_str(&format!("{}", termion::style::NoBold));
+                    }
+                }
+                index += 1;
+            }
+
+            let start = self.x + self.w - windows_len as u16;
+            write!(screen, "{}{}", termion::cursor::Goto(start, self.y), windows).unwrap();
+
+            write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
         }
 
-        let start = self.x + self.w - windows_len as u16;
-        write!(screen, "{}{}", termion::cursor::Goto(start, self.y), windows).unwrap();
-
-        write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
-        write!(screen, "{}", termion::cursor::Restore).unwrap();
-        screen.flush().unwrap();
+        self.restore_cursor();
+        self.screen.borrow_mut().flush().unwrap();
     }
 
     fn event(&mut self, event: &mut UIEvent) {

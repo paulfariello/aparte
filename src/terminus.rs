@@ -40,6 +40,18 @@ pub struct View<'a, T, E> {
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E) + 'a>>>>,
 }
 
+impl<'a, T, E> View<'a, T, E> {
+    pub fn save_cursor(&mut self) {
+        let mut screen = self.screen.borrow_mut();
+        write!(screen, "{}", termion::cursor::Save).unwrap();
+    }
+
+    pub fn restore_cursor(&mut self) {
+        let mut screen = self.screen.borrow_mut();
+        write!(screen, "{}", termion::cursor::Restore).unwrap();
+    }
+}
+
 default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = match self.width {
@@ -598,42 +610,43 @@ impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
 
 impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
     fn redraw(&mut self) {
-        let mut screen = self.screen.borrow_mut();
+        self.save_cursor();
 
-        write!(screen, "{}", termion::cursor::Save).unwrap();
+        {
+            let mut screen = self.screen.borrow_mut();
 
-        self.content.next_line = 0;
-        let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
-        let count = buffers.collect::<Vec<_>>().len();
+            self.content.next_line = 0;
+            let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+            let count = buffers.collect::<Vec<_>>().len();
 
-        let mut buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+            let mut buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
 
-        if count > self.h as usize {
-            for _ in 0 .. count - self.h as usize - self.content.view {
-                if buffers.next().is_none() {
-                    break;
+            if count > self.h as usize {
+                for _ in 0 .. count - self.h as usize - self.content.view {
+                    if buffers.next().is_none() {
+                        break;
+                    }
                 }
             }
+
+            for y in self.y .. self.y + self.h {
+                write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
+
+                for _ in self.x  .. self.x + self.w {
+                    write!(screen, " ").unwrap();
+                }
+
+                write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
+
+                if let Some(buf) = buffers.next() {
+                    write!(screen, "{}", buf).unwrap();
+                    self.content.next_line += 1;
+                }
+                screen.flush().unwrap();
+            }
         }
 
-        for y in self.y .. self.y + self.h {
-            write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
-
-            for _ in self.x  .. self.x + self.w {
-                write!(screen, " ").unwrap();
-            }
-
-            write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
-
-            if let Some(buf) = buffers.next() {
-                write!(screen, "{}", buf).unwrap();
-                self.content.next_line += 1;
-            }
-            screen.flush().unwrap();
-        }
-
-        write!(screen, "{}", termion::cursor::Restore).unwrap();
-
-        screen.flush().unwrap();
+        self.restore_cursor();
+        self.screen.borrow_mut().flush().unwrap();
     }
 }
