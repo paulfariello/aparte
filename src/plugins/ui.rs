@@ -18,7 +18,7 @@ use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 use std::str::FromStr;
 
-use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError};
+use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, Contact};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
@@ -30,8 +30,9 @@ enum UIEvent<'a> {
     ReadPassword,
     Connected(String),
     Message(Message),
-    AddWindow(String, Option<View<'a, BufferedWin<Message>, UIEvent<'a>>>),
+    AddWindow(String, Option<Box<dyn ViewTrait<UIEvent<'a>> + 'a>>),
     ChangeWindow(String),
+    Contact(Contact),
 }
 
 #[derive(Debug, Clone)]
@@ -286,6 +287,15 @@ impl fmt::Display for Message {
     }
 }
 
+impl fmt::Display for Contact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{} ({})", name, self.jid),
+            None => write!(f, "{}", self.jid),
+        }
+    }
+}
+
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
@@ -328,7 +338,7 @@ impl<'a> UIPlugin<'a> {
                 });
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(chat)));
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(Box::new(chat))));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             },
             ConversationKind::Group => {
@@ -349,7 +359,7 @@ impl<'a> UIPlugin<'a> {
                 });
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(chat)));
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(Box::new(chat))));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             }
         }
@@ -450,7 +460,8 @@ impl<'a> Plugin for UIPlugin<'a> {
         self.root.layout(1, 1);
         self.root.redraw();
 
-        let console = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+        let mut console = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent);
+        console.push(View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
             match event {
                 UIEvent::Message(Message::Log(message)) => {
                     view.recv_message(&Message::Log(message.clone()), true);
@@ -459,10 +470,18 @@ impl<'a> Plugin for UIPlugin<'a> {
                 UIEvent::Key(Key::PageDown) => view.page_down(),
                 _ => {},
             }
-        });
+        }));
+        console.push(View::<BufferedWin<Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+            match event {
+                UIEvent::Contact(contact) => {
+                    view.recv_message(&contact, true);
+                },
+                _ => {},
+            }
+        }));
 
         self.windows.push("console".to_string());
-        self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(console)));
+        self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(Box::new(console))));
         self.change_window("console");
 
         Ok(())
@@ -548,6 +567,9 @@ impl<'a> Plugin for UIPlugin<'a> {
                     aparte.log(format!("Unknown window {}", window));
                 }
             },
+            Event::Contact(contact) => {
+                self.root.event(&mut UIEvent::Contact(contact.clone()));
+            }
             _ => {},
         }
     }

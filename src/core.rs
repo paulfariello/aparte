@@ -1,5 +1,6 @@
 use futures::Sink;
 use futures::unsync::mpsc::UnboundedSender;
+use std::hash::{Hash, Hasher};
 use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
@@ -237,6 +238,26 @@ impl TryFrom<Message> for xmpp_parsers::Element {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Contact {
+    pub jid: BareJid,
+    pub name: Option<String>,
+}
+
+impl Hash for Contact {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.jid.hash(state);
+    }
+}
+
+impl PartialEq for Contact {
+    fn eq(&self, other: &Self) -> bool {
+        self.jid == other.jid
+    }
+}
+
+impl Eq for Contact {}
+
 #[derive(Debug, Clone)]
 pub enum CommandOrMessage {
     Command(Command),
@@ -275,6 +296,7 @@ pub enum Event {
     Iq(iq::Iq),
     ReadPassword(Command),
     Win(String),
+    Contact(Contact),
 }
 
 pub trait Plugin: fmt::Display {

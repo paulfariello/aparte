@@ -1,33 +1,12 @@
 use std::fmt;
 use std::rc::Rc;
-use std::hash::{Hash, Hasher};
 use std::collections::HashSet;
 use uuid::Uuid;
-use xmpp_parsers::{Element, roster, ns, BareJid};
+use xmpp_parsers::{Element, roster, ns};
 use xmpp_parsers::iq::{Iq, IqType};
 use std::convert::TryFrom;
 
-use crate::core::{Plugin, Aparte, Event};
-
-#[derive(Clone, Debug)]
-pub struct Contact {
-    jid: BareJid,
-    name: Option<String>,
-}
-
-impl Hash for Contact {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.jid.hash(state);
-    }
-}
-
-impl PartialEq for Contact {
-    fn eq(&self, other: &Self) -> bool {
-        self.jid == other.jid
-    }
-}
-
-impl Eq for Contact {}
+use crate::core::{Plugin, Aparte, Event, Contact};
 
 impl From<roster::Item> for Contact {
     fn from(item: roster::Item) -> Self {
@@ -69,11 +48,9 @@ impl Plugin for RosterPlugin {
                     if payload.is("query", ns::ROSTER) {
                         if let Ok(roster) = roster::Roster::try_from(payload) {
                             for item in roster.items {
-                                self.contacts.insert(item.clone().into());
-                                match item.name {
-                                    Some(name) => info!("roster: {} ({})", name, item.jid),
-                                    None => info!("roster: {}", item.jid),
-                                };
+                                let contact: Contact = item.clone().into();
+                                self.contacts.insert(contact.clone());
+                                Rc::clone(&aparte).event(Event::Contact(contact.clone()));
                             }
                         }
                     }
