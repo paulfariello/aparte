@@ -42,6 +42,8 @@ fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
         handle_message(aparte, message);
     } else if let Some(iq) = Iq::try_from(stanza.clone()).ok() {
         Rc::clone(&aparte).event(Event::Iq(iq));
+    } else if let Some(presence) = Presence::try_from(stanza.clone()).ok() {
+        Rc::clone(&aparte).event(Event::Presence(presence));
     }
 }
 

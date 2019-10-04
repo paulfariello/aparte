@@ -13,8 +13,7 @@ use std::rc::Rc;
 use std::string::FromUtf8Error;
 use tokio_xmpp::Packet;
 use uuid::Uuid;
-use xmpp_parsers::{Element, FullJid, BareJid, Jid};
-use xmpp_parsers::iq;
+use xmpp_parsers::{Element, FullJid, BareJid, Jid, roster, presence, iq};
 use xmpp_parsers;
 use chrono::{Utc, DateTime};
 
@@ -242,6 +241,8 @@ impl TryFrom<Message> for xmpp_parsers::Element {
 pub struct Contact {
     pub jid: BareJid,
     pub name: Option<String>,
+    pub subscription: roster::Subscription,
+    pub presence: Option<presence::Show>,
 }
 
 impl Hash for Contact {
@@ -294,6 +295,7 @@ pub enum Event {
     Chat(BareJid),
     Join(FullJid),
     Iq(iq::Iq),
+    Presence(presence::Presence),
     ReadPassword(Command),
     Win(String),
     Contact(Contact),

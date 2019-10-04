@@ -1,8 +1,8 @@
 use std::fmt;
 use std::rc::Rc;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use uuid::Uuid;
-use xmpp_parsers::{Element, roster, ns};
+use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
 use xmpp_parsers::iq::{Iq, IqType};
 use std::convert::TryFrom;
 
@@ -13,12 +13,14 @@ impl From<roster::Item> for Contact {
         Self {
             jid: item.jid.clone(),
             name: item.name.clone(),
+            subscription: item.subscription.clone(),
+            presence: None,
         }
     }
 }
 
 pub struct RosterPlugin {
-    contacts: HashSet<Contact>,
+    contacts: HashMap<BareJid, Contact>,
 }
 
 impl RosterPlugin {
@@ -32,7 +34,7 @@ impl RosterPlugin {
 impl Plugin for RosterPlugin {
     fn new() -> RosterPlugin {
         RosterPlugin {
-            contacts: HashSet::new(),
+            contacts: HashMap::new(),
         }
     }
 
@@ -46,13 +48,25 @@ impl Plugin for RosterPlugin {
             Event::Iq(iq) => {
                 if let IqType::Result(Some(payload)) = iq.payload.clone() {
                     if payload.is("query", ns::ROSTER) {
-                        if let Ok(roster) = roster::Roster::try_from(payload) {
+                        if let Ok(roster) = roster::Roster::try_from(payload.clone()) {
                             for item in roster.items {
                                 let contact: Contact = item.clone().into();
-                                self.contacts.insert(contact.clone());
+                                self.contacts.insert(contact.jid.clone(), contact.clone());
                                 Rc::clone(&aparte).event(Event::Contact(contact.clone()));
                             }
                         }
+                    }
+                }
+            },
+            Event::Presence(presence) => {
+                if let Some(from) = &presence.from {
+                    let jid = match from {
+                        Jid::Bare(jid) => jid.clone(),
+                        Jid::Full(jid) => jid.clone().into(),
+                    };
+                    info!("presence");
+                    if let Some(contact) = self.contacts.get_mut(&jid) {
+                        contact.presence = presence.show.clone();
                     }
                 }
             },
