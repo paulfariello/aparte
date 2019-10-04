@@ -38,17 +38,37 @@ pub struct View<'a, T, E> {
     pub h: u16,
     pub content: T,
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E) + 'a>>>>,
+    #[cfg(feature = "no-cursor-save")]
+    pub cursor_x: Option<u16>,
+    #[cfg(feature = "no-cursor-save")]
+    pub cursor_y: Option<u16>,
 }
 
 impl<'a, T, E> View<'a, T, E> {
+    #[cfg(not(feature = "no-cursor-save"))]
     pub fn save_cursor(&mut self) {
         let mut screen = self.screen.borrow_mut();
         write!(screen, "{}", termion::cursor::Save).unwrap();
     }
 
+    #[cfg(feature = "no-cursor-save")]
+    pub fn save_cursor(&mut self) {
+        let mut screen = self.screen.borrow_mut();
+        let (x, y) = screen.cursor_pos().unwrap();
+        self.cursor_x = Some(x);
+        self.cursor_y = Some(y);
+    }
+
+    #[cfg(not(feature = "no-cursor-save"))]
     pub fn restore_cursor(&mut self) {
         let mut screen = self.screen.borrow_mut();
         write!(screen, "{}", termion::cursor::Restore).unwrap();
+    }
+
+    #[cfg(feature = "no-cursor-save")]
+    pub fn restore_cursor(&mut self) {
+        let mut screen = self.screen.borrow_mut();
+        write!(screen, "{}", termion::cursor::Goto(self.cursor_x.unwrap(), self.cursor_y.unwrap())).unwrap();
     }
 }
 
@@ -136,6 +156,10 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
             y: 1,
             w: 0,
             h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
             content: FrameLayout {
                 children: HashMap::new(),
                 current: None,
@@ -215,6 +239,10 @@ impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
             y: 0,
             w: 0,
             h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
             content: LinearLayout {
                 orientation: orientation,
                 children: Vec::new(),
@@ -386,6 +414,10 @@ impl<'a, E> View<'a, Input, E> {
             y: 0,
             w: 0,
             h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
             content: Input {
                 buf: String::new(),
                 tmp_buf: None,
@@ -544,6 +576,10 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
             y: 0,
             w: 0,
             h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
             content: BufferedWin {
                 next_line: 0,
                 buf: Vec::new(),

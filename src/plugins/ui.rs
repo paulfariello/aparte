@@ -60,6 +60,10 @@ impl View<'_, TitleBar, UIEvent<'_>> {
             y: 0,
             w: 0,
             h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
             content: TitleBar {
                 window_name: None,
             },
@@ -125,6 +129,10 @@ impl View<'_, WinBar, UIEvent<'_>> {
             y: 0,
             w: 0,
             h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
             content: WinBar {
                 connection: None,
                 windows: Vec::new(),
