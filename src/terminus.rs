@@ -44,11 +44,37 @@ pub struct View<'a, T, E> {
     pub cursor_y: Option<u16>,
 }
 
+macro_rules! vprint {
+    ($view:expr, $fmt:expr) => {
+        {
+            let mut screen = $view.screen.borrow_mut();
+            write!(screen, $fmt).unwrap();
+        }
+    };
+    ($view:expr, $fmt:expr, $($arg:tt)*) => {
+        {
+            let mut screen = $view.screen.borrow_mut();
+            write!(screen, $fmt, $($arg)*).unwrap();
+        }
+    };
+}
+
+macro_rules! goto {
+    ($view:expr, $x:expr, $y:expr) => {
+        vprint!($view, "{}", termion::cursor::Goto($x, $y));
+    }
+}
+
+macro_rules! flush {
+    ($view:expr) => {
+        $view.screen.borrow_mut().flush().unwrap();
+    }
+}
+
 impl<'a, T, E> View<'a, T, E> {
     #[cfg(not(feature = "no-cursor-save"))]
     pub fn save_cursor(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        write!(screen, "{}", termion::cursor::Save).unwrap();
+        vprint!(self, "{}", termion::cursor::Save);
     }
 
     #[cfg(feature = "no-cursor-save")]
@@ -61,15 +87,14 @@ impl<'a, T, E> View<'a, T, E> {
 
     #[cfg(not(feature = "no-cursor-save"))]
     pub fn restore_cursor(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        write!(screen, "{}", termion::cursor::Restore).unwrap();
+        vprint!(self, "{}", termion::cursor::Restore);
     }
 
     #[cfg(feature = "no-cursor-save")]
     pub fn restore_cursor(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        write!(screen, "{}", termion::cursor::Goto(self.cursor_x.unwrap(), self.cursor_y.unwrap())).unwrap();
+        goto!(self, self.cursor_x.unwrap(), self.cursor_y.unwrap());
     }
+
 }
 
 default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
@@ -436,51 +461,46 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn key(&mut self, c: char) {
-        let mut screen = self.screen.borrow_mut();
         self.content.buf.push(c);
         if !self.content.password {
-            write!(screen, "{}", c).unwrap();
-            screen.flush().unwrap();
+            vprint!(self, "{}", c);
+            flush!(self);
         }
     }
 
     pub fn delete(&mut self) {
-        let mut screen = self.screen.borrow_mut();
         self.content.buf.pop();
         if !self.content.password {
-            write!(screen, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1)).unwrap();
-            screen.flush().unwrap();
+            vprint!(self, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1));
+            flush!(self);
         }
     }
 
     pub fn clear(&mut self) {
-        let mut screen = self.screen.borrow_mut();
         self.content.buf.clear();
         let _ = self.content.tmp_buf.take();
         self.content.password = false;
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
+        goto!(self, self.x, self.y);
         for _ in 0 .. self.w {
-            write!(screen, " ").unwrap();
+            vprint!(self, " ");
         }
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-        screen.flush().unwrap();
+        goto!(self, self.x, self.y);
+        flush!(self);
     }
 
     pub fn left(&mut self) {
         if !self.content.password {
-            let mut screen = self.screen.borrow_mut();
-            write!(screen, "{}", termion::cursor::Left(1)).unwrap();
-            screen.flush().unwrap();
+            vprint!(self, "{}", termion::cursor::Left(1));
+            flush!(self);
         }
     }
 
     pub fn right(&mut self) {
         if !self.content.password {
-            let mut screen = self.screen.borrow_mut();
-            let (x, _y) = screen.cursor_pos().unwrap();
+            let (x, _y) = { self.screen.borrow_mut().cursor_pos().unwrap() };
             if x as usize <= self.content.buf.len() {
-                write!(screen, "{}", termion::cursor::Right(1)).unwrap();
-                screen.flush().unwrap();
+                vprint!(self, "{}", termion::cursor::Right(1));
+                flush!(self);
             }
         }
     }
@@ -488,9 +508,8 @@ impl<'a, E> View<'a, Input, E> {
     pub fn password(&mut self) {
         self.clear();
         self.content.password = true;
-        let mut screen = self.screen.borrow_mut();
-        write!(screen, "password: ").unwrap();
-        screen.flush().unwrap();
+        vprint!(self, "password: ");
+        flush!(self);
     }
 
     pub fn validate(&mut self) -> (String, bool) {
@@ -536,16 +555,15 @@ impl<'a, E> View<'a, Input, E> {
 
 impl<E> ViewTrait<E> for View<'_, Input, E> {
     fn redraw(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
+        goto!(self, self.x, self.y);
         for _ in 0 .. self.w {
-            write!(screen, " ").unwrap();
+            vprint!(self, " ");
         }
-        write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-        write!(screen, "{}", self.content.buf).unwrap();
 
-        screen.flush().unwrap();
+        goto!(self, self.x, self.y);
+        vprint!(self, "{}", self.content.buf);
+
+        flush!(self);
     }
 }
 
@@ -647,42 +665,35 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
     fn redraw(&mut self) {
         self.save_cursor();
 
-        {
-            let mut screen = self.screen.borrow_mut();
+        self.content.next_line = 0;
+        let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+        let count = buffers.collect::<Vec<_>>().len();
 
-            self.content.next_line = 0;
-            let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
-            let count = buffers.collect::<Vec<_>>().len();
+        let mut buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
 
-            let mut buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
-
-            if count > self.h as usize {
-                for _ in 0 .. count - self.h as usize - self.content.view {
-                    if buffers.next().is_none() {
-                        break;
-                    }
+        if count > self.h as usize {
+            for _ in 0 .. count - self.h as usize - self.content.view {
+                if buffers.next().is_none() {
+                    break;
                 }
             }
+        }
 
-            for y in self.y .. self.y + self.h {
-                write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
+        for y in self.y .. self.y + self.h {
+            goto!(self, self.x, y);
+            for _ in self.x  .. self.x + self.w {
+                vprint!(self, " ");
+            }
 
-                for _ in self.x  .. self.x + self.w {
-                    write!(screen, " ").unwrap();
-                }
-
-                write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
-
-                if let Some(buf) = buffers.next() {
-                    write!(screen, "{}", buf).unwrap();
-                    self.content.next_line += 1;
-                }
-                screen.flush().unwrap();
+            goto!(self, self.x, y);
+            if let Some(buf) = buffers.next() {
+                vprint!(self, "{}", buf);
+                self.content.next_line += 1;
             }
         }
 
         self.restore_cursor();
-        self.screen.borrow_mut().flush().unwrap();
+        flush!(self);
     }
 }
 
@@ -696,8 +707,8 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
     pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
-            width: Dimension::WrapContent,
-            height: Dimension::WrapContent,
+            width: Dimension::MatchParent,
+            height: Dimension::MatchParent,
             x: 0,
             y: 0,
             w: 0,
@@ -721,7 +732,7 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
     }
 
     pub fn add_item(&mut self, item: V, group: Option<G>) {
-        unimplemented!();
+        //unimplemented!();
     }
 }
 
@@ -729,25 +740,21 @@ impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::E
     fn redraw(&mut self) {
         self.save_cursor();
 
-        {
-            let mut screen = self.screen.borrow_mut();
-            let mut y = self.y;
+        let mut y = self.y;
 
-            for (group, items) in &self.content.items {
-                write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
-                write!(screen, "{}", group);
+        for (group, items) in &self.content.items {
+            goto!(self, self.x, y);
+            vprint!(self, "{}", group);
+            y += 1;
+
+            for item in items {
+                goto!(self, self.x, y);
+                vprint!(self, "  {}", item);
                 y += 1;
-
-                for item in items {
-                    write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
-                    write!(screen, "  {}", item);
-                    y += 1;
-                }
             }
-            screen.flush().unwrap();
         }
 
         self.restore_cursor();
-        self.screen.borrow_mut().flush().unwrap();
+        flush!(self);
     }
 }
