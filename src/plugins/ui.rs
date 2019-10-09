@@ -19,7 +19,7 @@ use xmpp_parsers::{BareJid, Jid};
 use std::str::FromStr;
 
 use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, Contact};
-use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window};
+use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
@@ -471,10 +471,10 @@ impl<'a> Plugin for UIPlugin<'a> {
                 _ => {},
             }
         }));
-        console.push(View::<BufferedWin<Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+        console.push(View::<ListView<String, Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
             match event {
                 UIEvent::Contact(contact) => {
-                    view.recv_message(&contact, true);
+                    view.add_item(contact.clone(), None);
                 },
                 _ => {},
             }

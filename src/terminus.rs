@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::io::{Write, Stdout};
@@ -679,6 +679,72 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
                 }
                 screen.flush().unwrap();
             }
+        }
+
+        self.restore_cursor();
+        self.screen.borrow_mut().flush().unwrap();
+    }
+}
+
+pub struct ListView<G, V>
+    where G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq
+{
+    items: HashMap<G, HashSet<V>>,
+}
+
+impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E> View<'a, ListView<G, V>, E> {
+    pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
+        Self {
+            screen: screen,
+            width: Dimension::WrapContent,
+            height: Dimension::WrapContent,
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_x: None,
+            #[cfg(feature = "no-cursor-save")]
+            cursor_y: None,
+            content: ListView {
+                items: HashMap::new(),
+            },
+            event_handler: None,
+        }
+    }
+
+    pub fn with_event<F>(mut self, event_handler: F) -> Self
+        where F: FnMut(&mut Self, &mut E), F: 'a
+    {
+        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
+        self
+    }
+
+    pub fn add_item(&mut self, item: V, group: Option<G>) {
+        unimplemented!();
+    }
+}
+
+impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E> ViewTrait<E> for View<'_, ListView<G, V>, E> {
+    fn redraw(&mut self) {
+        self.save_cursor();
+
+        {
+            let mut screen = self.screen.borrow_mut();
+            let mut y = self.y;
+
+            for (group, items) in &self.content.items {
+                write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
+                write!(screen, "{}", group);
+                y += 1;
+
+                for item in items {
+                    write!(screen, "{}", termion::cursor::Goto(self.x, y)).unwrap();
+                    write!(screen, "  {}", item);
+                    y += 1;
+                }
+            }
+            screen.flush().unwrap();
         }
 
         self.restore_cursor();
