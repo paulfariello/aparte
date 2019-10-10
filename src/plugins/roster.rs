@@ -6,21 +6,22 @@ use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
 use xmpp_parsers::iq::{Iq, IqType};
 use std::convert::TryFrom;
 
-use crate::core::{Plugin, Aparte, Event, Contact, ContactPresence};
+use crate::core::{Plugin, Aparte, Event, contact};
 
-impl From<roster::Item> for Contact {
+impl From<roster::Item> for contact::Contact {
     fn from(item: roster::Item) -> Self {
         Self {
             jid: item.jid.clone(),
             name: item.name.clone(),
             subscription: item.subscription.clone(),
-            presence: ContactPresence::Unavailable,
+            presence: contact::Presence::Unavailable,
+            groups: Vec::new(),
         }
     }
 }
 
 pub struct RosterPlugin {
-    contacts: HashMap<BareJid, Contact>,
+    contacts: HashMap<BareJid, contact::Contact>,
 }
 
 impl RosterPlugin {
@@ -50,7 +51,7 @@ impl Plugin for RosterPlugin {
                     if payload.is("query", ns::ROSTER) {
                         if let Ok(roster) = roster::Roster::try_from(payload.clone()) {
                             for item in roster.items {
-                                let contact: Contact = item.clone().into();
+                                let contact: contact::Contact = item.clone().into();
                                 self.contacts.insert(contact.jid.clone(), contact.clone());
                                 Rc::clone(&aparte).event(Event::Contact(contact.clone()));
                             }
@@ -66,11 +67,11 @@ impl Plugin for RosterPlugin {
                     };
                     if let Some(contact) = self.contacts.get_mut(&jid) {
                         contact.presence = match presence.show {
-                            Some(presence::Show::Away) => ContactPresence::Away,
-                            Some(presence::Show::Chat) => ContactPresence::Chat,
-                            Some(presence::Show::Dnd) => ContactPresence::Dnd,
-                            Some(presence::Show::Xa) => ContactPresence::Xa,
-                            None => ContactPresence::Available,
+                            Some(presence::Show::Away) => contact::Presence::Away,
+                            Some(presence::Show::Chat) => contact::Presence::Chat,
+                            Some(presence::Show::Dnd) => contact::Presence::Dnd,
+                            Some(presence::Show::Xa) => contact::Presence::Xa,
+                            None => contact::Presence::Available,
                         };
                         Rc::clone(&aparte).event(Event::ContactUpdate(contact.clone()));
                     }

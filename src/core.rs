@@ -1,6 +1,5 @@
 use futures::Sink;
 use futures::unsync::mpsc::UnboundedSender;
-use std::hash::{Hash, Hasher};
 use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
@@ -13,9 +12,10 @@ use std::rc::Rc;
 use std::string::FromUtf8Error;
 use tokio_xmpp::Packet;
 use uuid::Uuid;
-use xmpp_parsers::{Element, FullJid, BareJid, Jid, roster, presence, iq};
+use xmpp_parsers::{Element, FullJid, BareJid, Jid, presence, iq};
 use xmpp_parsers;
 use chrono::{Utc, DateTime};
+
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -237,37 +237,61 @@ impl TryFrom<Message> for xmpp_parsers::Element {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum ContactPresence {
-    Unavailable,
-    Available,
-    Away,
-    Chat,
-    Dnd,
-    Xa,
-}
+pub mod contact {
+    use xmpp_parsers::roster::Subscription;
+    use std::hash::{Hash, Hasher};
+    use xmpp_parsers::BareJid;
 
-#[derive(Clone, Debug)]
-pub struct Contact {
-    pub jid: BareJid,
-    pub name: Option<String>,
-    pub subscription: roster::Subscription,
-    pub presence: ContactPresence,
-}
-
-impl Hash for Contact {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.jid.hash(state);
+    #[derive(Clone, Debug)]
+    pub enum Presence {
+        Unavailable,
+        Available,
+        Away,
+        Chat,
+        Dnd,
+        Xa,
     }
-}
 
-impl PartialEq for Contact {
-    fn eq(&self, other: &Self) -> bool {
-        self.jid == other.jid
+    #[derive(Clone, Debug)]
+    pub struct Group(pub String);
+
+    impl Hash for Group {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.hash(state);
+        }
     }
-}
 
-impl Eq for Contact {}
+    impl PartialEq for Group {
+        fn eq(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+
+    impl Eq for Group {}
+
+    #[derive(Clone, Debug)]
+    pub struct Contact {
+        pub jid: BareJid,
+        pub name: Option<String>,
+        pub subscription: Subscription,
+        pub presence: Presence,
+        pub groups: Vec<Group>,
+    }
+
+    impl Hash for Contact {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.jid.hash(state);
+        }
+    }
+
+    impl PartialEq for Contact {
+        fn eq(&self, other: &Self) -> bool {
+            self.jid == other.jid
+        }
+    }
+
+    impl Eq for Contact {}
+}
 
 #[derive(Debug, Clone)]
 pub enum CommandOrMessage {
@@ -308,8 +332,8 @@ pub enum Event {
     Presence(presence::Presence),
     ReadPassword(Command),
     Win(String),
-    Contact(Contact),
-    ContactUpdate(Contact),
+    Contact(contact::Contact),
+    ContactUpdate(contact::Contact),
 }
 
 pub trait Plugin: fmt::Display {

@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, hash_map::Entry, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::io::{Write, Stdout};
@@ -700,7 +700,7 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
 pub struct ListView<G, V>
     where G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq
 {
-    items: HashMap<G, HashSet<V>>,
+    items: HashMap<Option<G>, HashSet<V>>,
 }
 
 impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E> View<'a, ListView<G, V>, E> {
@@ -731,22 +731,27 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         self
     }
 
+    pub fn with_none_group(mut self) -> Self {
+        if let Entry::Vacant(vacant) = self.content.items.entry(None) {
+            vacant.insert(HashSet::new());
+        }
+        self
+    }
+
     pub fn add_group(&mut self, group: G) {
-        self.content.items.insert(group, HashSet::new());
+        if let Entry::Vacant(vacant) = self.content.items.entry(Some(group)) {
+            vacant.insert(HashSet::new());
+        }
     }
 
     pub fn insert(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
-        if let Some(group) = group {
-            if let Some(items) = self.content.items.get_mut(&group) {
-                items.replace(item);
-                self.redraw();
+        if let Some(items) = self.content.items.get_mut(&group) {
+            items.replace(item);
+            self.redraw();
 
-                Ok(())
-            } else {
-                Err(())
-            }
+            Ok(())
         } else {
-            unimplemented!();
+            Err(())
         }
     }
 }
@@ -759,12 +764,18 @@ impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::E
 
         for (group, items) in &self.content.items {
             goto!(self, self.x, y);
-            vprint!(self, "{}", group);
-            y += 1;
+            if group.is_some() {
+                vprint!(self, "{}", group.as_ref().unwrap());
+                y += 1;
+            }
 
             for item in items {
                 goto!(self, self.x, y);
-                vprint!(self, "  {}", item);
+                match group {
+                    Some(_) => vprint!(self, "  {}", item),
+                    None => vprint!(self, "{}", item),
+                };
+
                 y += 1;
             }
         }

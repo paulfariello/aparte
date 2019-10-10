@@ -18,7 +18,7 @@ use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 use std::str::FromStr;
 
-use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, Contact, ContactPresence};
+use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, contact};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
@@ -32,9 +32,9 @@ enum UIEvent<'a> {
     Message(Message),
     AddWindow(String, Option<Box<dyn ViewTrait<UIEvent<'a>> + 'a>>),
     ChangeWindow(String),
-    ContactGroup(String),
-    Contact(Contact),
-    ContactUpdate(Contact),
+    ContactGroup(contact::Group),
+    Contact(contact::Contact),
+    ContactUpdate(contact::Contact),
 }
 
 #[derive(Debug, Clone)]
@@ -289,11 +289,17 @@ impl fmt::Display for Message {
     }
 }
 
-impl fmt::Display for Contact {
+impl fmt::Display for contact::Group {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}{}", color::Fg(color::Yellow), self.0, color::Fg(color::White))
+    }
+}
+
+impl fmt::Display for contact::Contact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.presence {
-            ContactPresence::Available | ContactPresence::Chat => write!(f, "{}", color::Fg(color::Green)),
-            ContactPresence::Away | ContactPresence::Dnd | ContactPresence::Xa | ContactPresence::Unavailable => write!(f, "{}", color::Fg(color::White)),
+            contact::Presence::Available | contact::Presence::Chat => write!(f, "{}", color::Fg(color::Green)),
+            contact::Presence::Away | contact::Presence::Dnd | contact::Presence::Xa | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White)),
         };
 
         match &self.name {
@@ -478,21 +484,20 @@ impl<'a> Plugin for UIPlugin<'a> {
                 _ => {},
             }
         }));
-        let mut roster = View::<ListView<String, Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+        let mut roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
                 UIEvent::Contact(contact) => {
-                    view.insert(contact.clone(), Some("".to_string()));
+                    view.insert(contact.clone(), None);
                 },
                 UIEvent::ContactGroup(group) => {
                     view.add_group(group.clone());
                 },
                 UIEvent::ContactUpdate(contact) => {
-                    view.insert(contact.clone(), Some("".to_string()));
+                    view.insert(contact.clone(), None);
                 }
                 _ => {},
             }
         });
-        roster.add_group("".to_string());
         console.push(roster);
 
         self.windows.push("console".to_string());
