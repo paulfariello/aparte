@@ -8,14 +8,25 @@ use std::convert::TryFrom;
 
 use crate::core::{Plugin, Aparte, Event, contact};
 
+impl From<roster::Group> for contact::Group {
+    fn from(item: roster::Group) -> Self {
+        Self(item.0)
+    }
+}
+
 impl From<roster::Item> for contact::Contact {
     fn from(item: roster::Item) -> Self {
+        let mut groups = Vec::new();
+        for group in item.groups {
+            groups.push(group.into());
+        }
+
         Self {
             jid: item.jid.clone(),
             name: item.name.clone(),
             subscription: item.subscription.clone(),
             presence: contact::Presence::Unavailable,
-            groups: Vec::new(),
+            groups: groups,
         }
     }
 }

@@ -32,7 +32,6 @@ enum UIEvent<'a> {
     Message(Message),
     AddWindow(String, Option<Box<dyn ViewTrait<UIEvent<'a>> + 'a>>),
     ChangeWindow(String),
-    ContactGroup(contact::Group),
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
 }
@@ -486,14 +485,14 @@ impl<'a> Plugin for UIPlugin<'a> {
         }));
         let mut roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
-                UIEvent::Contact(contact) => {
-                    view.insert(contact.clone(), None).unwrap();
-                },
-                UIEvent::ContactGroup(group) => {
-                    view.add_group(group.clone());
-                },
-                UIEvent::ContactUpdate(contact) => {
-                    view.insert(contact.clone(), None).unwrap();
+                UIEvent::Contact(contact) | UIEvent::ContactUpdate(contact) => {
+                    if contact.groups.len() > 0 {
+                        for group in &contact.groups {
+                            view.insert(contact.clone(), Some(group.clone()));
+                        }
+                    } else {
+                            view.insert(contact.clone(), None);
+                    }
                 }
                 _ => {},
             }

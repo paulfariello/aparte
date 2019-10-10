@@ -744,15 +744,18 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         }
     }
 
-    pub fn insert(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
-        if let Some(items) = self.content.items.get_mut(&group) {
-            items.replace(item);
-            self.redraw();
-
-            Ok(())
-        } else {
-            Err(())
+    pub fn insert(&mut self, item: V, group: Option<G>) {
+        match self.content.items.entry(group) {
+            Entry::Vacant(vacant) => {
+                let mut items = HashSet::new();
+                items.insert(item);
+                vacant.insert(items);
+            },
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().replace(item);
+            }
         }
+        self.redraw();
     }
 }
 
