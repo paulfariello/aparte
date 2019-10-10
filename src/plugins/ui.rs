@@ -32,6 +32,7 @@ enum UIEvent<'a> {
     Message(Message),
     AddWindow(String, Option<Box<dyn ViewTrait<UIEvent<'a>> + 'a>>),
     ChangeWindow(String),
+    ContactGroup(String),
     Contact(Contact),
 }
 
@@ -471,14 +472,19 @@ impl<'a> Plugin for UIPlugin<'a> {
                 _ => {},
             }
         }));
-        console.push(View::<ListView<String, Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+        let mut roster = View::<ListView<String, Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
             match event {
                 UIEvent::Contact(contact) => {
-                    view.add_item(contact.clone(), None);
+                    view.add_item(contact.clone(), Some("".to_string()));
+                },
+                UIEvent::ContactGroup(group) => {
+                    view.add_group(group.clone());
                 },
                 _ => {},
             }
-        }));
+        });
+        roster.add_group("".to_string());
+        console.push(roster);
 
         self.windows.push("console".to_string());
         self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(Box::new(console))));

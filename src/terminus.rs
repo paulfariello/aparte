@@ -731,8 +731,23 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         self
     }
 
-    pub fn add_item(&mut self, item: V, group: Option<G>) {
-        //unimplemented!();
+    pub fn add_group(&mut self, group: G) {
+        self.content.items.insert(group, HashSet::new());
+    }
+
+    pub fn add_item(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
+        if let Some(group) = group {
+            if let Some(items) = self.content.items.get_mut(&group) {
+                items.insert(item);
+                self.redraw();
+
+                Ok(())
+            } else {
+                Err(())
+            }
+        } else {
+            unimplemented!();
+        }
     }
 }
 
