@@ -298,8 +298,8 @@ impl fmt::Display for contact::Group {
 impl fmt::Display for contact::Contact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.presence {
-            contact::Presence::Available | contact::Presence::Chat => write!(f, "{}", color::Fg(color::Green)),
-            contact::Presence::Away | contact::Presence::Dnd | contact::Presence::Xa | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White)),
+            contact::Presence::Available | contact::Presence::Chat => write!(f, "{}", color::Fg(color::Green))?,
+            contact::Presence::Away | contact::Presence::Dnd | contact::Presence::Xa | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
         };
 
         match &self.name {
@@ -487,13 +487,13 @@ impl<'a> Plugin for UIPlugin<'a> {
         let mut roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
                 UIEvent::Contact(contact) => {
-                    view.insert(contact.clone(), None);
+                    view.insert(contact.clone(), None).unwrap();
                 },
                 UIEvent::ContactGroup(group) => {
                     view.add_group(group.clone());
                 },
                 UIEvent::ContactUpdate(contact) => {
-                    view.insert(contact.clone(), None);
+                    view.insert(contact.clone(), None).unwrap();
                 }
                 _ => {},
             }
