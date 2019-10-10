@@ -735,10 +735,10 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         self.content.items.insert(group, HashSet::new());
     }
 
-    pub fn add_item(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
+    pub fn insert(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
         if let Some(group) = group {
             if let Some(items) = self.content.items.get_mut(&group) {
-                items.insert(item);
+                items.replace(item);
                 self.redraw();
 
                 Ok(())

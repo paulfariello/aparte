@@ -18,7 +18,7 @@ use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 use std::str::FromStr;
 
-use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, Contact};
+use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, Contact, ContactPresence};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
@@ -34,6 +34,7 @@ enum UIEvent<'a> {
     ChangeWindow(String),
     ContactGroup(String),
     Contact(Contact),
+    ContactUpdate(Contact),
 }
 
 #[derive(Debug, Clone)]
@@ -290,9 +291,14 @@ impl fmt::Display for Message {
 
 impl fmt::Display for Contact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.presence {
+            ContactPresence::Available | ContactPresence::Chat => write!(f, "{}", color::Fg(color::Green)),
+            ContactPresence::Away | ContactPresence::Dnd | ContactPresence::Xa | ContactPresence::Unavailable => write!(f, "{}", color::Fg(color::White)),
+        };
+
         match &self.name {
-            Some(name) => write!(f, "{} ({})", name, self.jid),
-            None => write!(f, "{}", self.jid),
+            Some(name) => write!(f, "{} ({}){}", name, self.jid, color::Fg(color::White)),
+            None => write!(f, "{}{}", self.jid, color::Fg(color::White)),
         }
     }
 }
@@ -475,11 +481,14 @@ impl<'a> Plugin for UIPlugin<'a> {
         let mut roster = View::<ListView<String, Contact>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
             match event {
                 UIEvent::Contact(contact) => {
-                    view.add_item(contact.clone(), Some("".to_string()));
+                    view.insert(contact.clone(), Some("".to_string()));
                 },
                 UIEvent::ContactGroup(group) => {
                     view.add_group(group.clone());
                 },
+                UIEvent::ContactUpdate(contact) => {
+                    view.insert(contact.clone(), Some("".to_string()));
+                }
                 _ => {},
             }
         });
@@ -575,7 +584,10 @@ impl<'a> Plugin for UIPlugin<'a> {
             },
             Event::Contact(contact) => {
                 self.root.event(&mut UIEvent::Contact(contact.clone()));
-            }
+            },
+            Event::ContactUpdate(contact) => {
+                self.root.event(&mut UIEvent::ContactUpdate(contact.clone()));
+            },
             _ => {},
         }
     }

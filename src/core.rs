@@ -238,11 +238,21 @@ impl TryFrom<Message> for xmpp_parsers::Element {
 }
 
 #[derive(Clone, Debug)]
+pub enum ContactPresence {
+    Unavailable,
+    Available,
+    Away,
+    Chat,
+    Dnd,
+    Xa,
+}
+
+#[derive(Clone, Debug)]
 pub struct Contact {
     pub jid: BareJid,
     pub name: Option<String>,
     pub subscription: roster::Subscription,
-    pub presence: Option<presence::Show>,
+    pub presence: ContactPresence,
 }
 
 impl Hash for Contact {
@@ -299,6 +309,7 @@ pub enum Event {
     ReadPassword(Command),
     Win(String),
     Contact(Contact),
+    ContactUpdate(Contact),
 }
 
 pub trait Plugin: fmt::Display {

@@ -6,7 +6,7 @@ use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
 use xmpp_parsers::iq::{Iq, IqType};
 use std::convert::TryFrom;
 
-use crate::core::{Plugin, Aparte, Event, Contact};
+use crate::core::{Plugin, Aparte, Event, Contact, ContactPresence};
 
 impl From<roster::Item> for Contact {
     fn from(item: roster::Item) -> Self {
@@ -14,7 +14,7 @@ impl From<roster::Item> for Contact {
             jid: item.jid.clone(),
             name: item.name.clone(),
             subscription: item.subscription.clone(),
-            presence: None,
+            presence: ContactPresence::Unavailable,
         }
     }
 }
@@ -64,9 +64,15 @@ impl Plugin for RosterPlugin {
                         Jid::Bare(jid) => jid.clone(),
                         Jid::Full(jid) => jid.clone().into(),
                     };
-                    info!("presence");
                     if let Some(contact) = self.contacts.get_mut(&jid) {
-                        contact.presence = presence.show.clone();
+                        contact.presence = match presence.show {
+                            Some(presence::Show::Away) => ContactPresence::Away,
+                            Some(presence::Show::Chat) => ContactPresence::Chat,
+                            Some(presence::Show::Dnd) => ContactPresence::Dnd,
+                            Some(presence::Show::Xa) => ContactPresence::Xa,
+                            None => ContactPresence::Available,
+                        };
+                        Rc::clone(&aparte).event(Event::ContactUpdate(contact.clone()));
                     }
                 }
             },
