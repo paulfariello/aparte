@@ -354,6 +354,7 @@ impl<'a> UIPlugin<'a> {
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             },
             ConversationKind::Group => {
+                let mut layout = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent);
                 let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
                     match event {
                         UIEvent::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
@@ -369,9 +370,14 @@ impl<'a> UIPlugin<'a> {
                         _ => {},
                     }
                 });
+                layout.push(chat);
+
+                let mut roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+                });
+                layout.push(roster);
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(Box::new(chat))));
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(Box::new(layout))));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             }
         }
