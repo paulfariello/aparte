@@ -293,6 +293,51 @@ pub mod contact {
     impl Eq for Contact {}
 }
 
+pub mod conversation {
+    use xmpp_parsers::BareJid;
+    use std::collections::HashMap;
+    use super::contact::Contact;
+
+    #[derive(Clone, Debug)]
+    pub enum Affiliation {
+        Owner,
+        Admin,
+        Member,
+        Outcast,
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum Role {
+        Visitor,
+        Participant,
+        Moderator,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Occupant {
+        pub name: String,
+        pub jid: Option<BareJid>,
+        pub affiliation: Option<Affiliation>,
+        pub role: Option<Role>,
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct Channel {
+        pub jid: BareJid,
+        pub name: Option<String>,
+        pub occupants: HashMap<String, Occupant>,
+    }
+
+    pub struct Chat {
+        pub contact: Contact,
+    }
+
+    pub enum Conversation {
+        Chat(Chat),
+        Channel(Channel),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum CommandOrMessage {
     Command(Command),

@@ -31,11 +31,11 @@ impl From<roster::Item> for contact::Contact {
     }
 }
 
-pub struct RosterPlugin {
+pub struct ContactPlugin {
     contacts: HashMap<BareJid, contact::Contact>,
 }
 
-impl RosterPlugin {
+impl ContactPlugin {
     fn request(&self) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let iq = Iq::from_get(id, roster::Roster { ver: None, items: Vec::new() });
@@ -43,9 +43,9 @@ impl RosterPlugin {
     }
 }
 
-impl Plugin for RosterPlugin {
-    fn new() -> RosterPlugin {
-        RosterPlugin {
+impl Plugin for ContactPlugin {
+    fn new() -> ContactPlugin {
+        Self {
             contacts: HashMap::new(),
         }
     }
@@ -93,8 +93,8 @@ impl Plugin for RosterPlugin {
     }
 }
 
-impl fmt::Display for RosterPlugin {
+impl fmt::Display for ContactPlugin {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Roster management")
+        write!(f, "Contact management")
     }
 }
