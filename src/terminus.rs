@@ -765,6 +765,15 @@ impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::E
 
         let mut y = self.y;
 
+        for y in self.y .. self.y + self.h {
+            goto!(self, self.x, y);
+            for _ in self.x  .. self.x + self.w {
+                vprint!(self, " ");
+            }
+
+            goto!(self, self.x, y);
+        }
+
         for (group, items) in &self.content.items {
             goto!(self, self.x, y);
             if group.is_some() {

@@ -56,32 +56,35 @@ impl Plugin for ConversationPlugin {
                 self.conversations.insert(jid.to_string(), conversation);
             },
             Event::Join(jid) => {
+                let channel_jid: BareJid = jid.clone().into();
                 let conversation = conversation::Conversation::Channel(conversation::Channel {
-                    jid: jid.clone().into(),
+                    jid: channel_jid.clone(),
                     nick: jid.resource.clone(),
                     name: None,
                     occupants: HashMap::new(),
                 });
-                self.conversations.insert(jid.to_string(), conversation);
+                self.conversations.insert(channel_jid.to_string(), conversation);
             },
             Event::Presence(presence) => {
                 if let Some(Jid::Full(from)) = &presence.from {
                     let channel_jid: BareJid = from.clone().into();
                     if let Some(conversation::Conversation::Channel(channel)) = self.conversations.get_mut(&channel_jid.to_string()) {
                         for payload in presence.clone().payloads {
-                            if let Some(item) = muc::user::Item::try_from(payload).ok() {
-                                let occupant_jid = match item.jid {
-                                    Some(full) => Some(full.into()),
-                                    None => None,
-                                };
-                                let occupant = conversation::Occupant {
-                                    nick: from.resource.clone(),
-                                    jid: occupant_jid,
-                                    affiliation: item.affiliation.into(),
-                                    role: item.role.into(),
-                                };
-                                Rc::clone(&aparte).event(Event::Occupant(occupant.clone()));
-                                channel.occupants.insert(occupant.nick.clone(), occupant);
+                            if let Some(muc_user) = muc::user::MucUser::try_from(payload).ok() {
+                                for item in muc_user.items {
+                                    let occupant_jid = match item.jid {
+                                        Some(full) => Some(full.into()),
+                                        None => None,
+                                    };
+                                    let occupant = conversation::Occupant {
+                                        nick: from.resource.clone(),
+                                        jid: occupant_jid,
+                                        affiliation: item.affiliation.into(),
+                                        role: item.role.into(),
+                                    };
+                                    Rc::clone(&aparte).event(Event::Occupant(occupant.clone()));
+                                    channel.occupants.insert(occupant.nick.clone(), occupant);
+                                }
                             }
                         }
                     }

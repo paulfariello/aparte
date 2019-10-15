@@ -18,7 +18,7 @@ use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 use std::str::FromStr;
 
-use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, contact};
+use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, contact, conversation};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
@@ -34,6 +34,7 @@ enum UIEvent<'a> {
     ChangeWindow(String),
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
+    Occupant(conversation::Occupant),
 }
 
 #[derive(Debug, Clone)]
@@ -308,6 +309,12 @@ impl fmt::Display for contact::Contact {
     }
 }
 
+impl fmt::Display for conversation::Occupant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}{}", color::Fg(color::Green), self.nick, color::Fg(color::White))
+    }
+}
+
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
@@ -372,7 +379,13 @@ impl<'a> UIPlugin<'a> {
                 });
                 layout.push(chat);
 
-                let mut roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+                let mut roster = View::<ListView<contact::Group, conversation::Occupant>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+                    match event {
+                        UIEvent::Occupant(occupant) => {
+                            view.insert(occupant.clone(), None);
+                        },
+                        _ => {},
+                    }
                 });
                 layout.push(roster);
 
@@ -597,6 +610,9 @@ impl<'a> Plugin for UIPlugin<'a> {
             },
             Event::ContactUpdate(contact) => {
                 self.root.event(&mut UIEvent::ContactUpdate(contact.clone()));
+            },
+            Event::Occupant(occupant) => {
+                self.root.event(&mut UIEvent::Occupant(occupant.clone()));
             },
             _ => {},
         }
