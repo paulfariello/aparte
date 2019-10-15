@@ -399,10 +399,9 @@ impl Aparte {
         }
     }
 
-    pub fn add_plugin<T: 'static>(&mut self, plugin: Box<dyn AnyPlugin>) -> Result<(), ()> {
+    pub fn add_plugin<T: 'static + fmt::Display + Plugin>(&mut self, plugin: T) {
         info!("Add plugin `{}`", plugin);
-        self.plugins.insert(TypeId::of::<T>(), RefCell::new(plugin));
-        Ok(())
+        self.plugins.insert(TypeId::of::<T>(), RefCell::new(Box::new(plugin)));
     }
 
     pub fn get_plugin<T: 'static>(&self) -> Option<Ref<T>> {

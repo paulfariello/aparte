@@ -314,10 +314,11 @@ fn main() {
     info!("Starting aparté");
 
     let mut aparte = Aparte::new();
-    aparte.add_plugin::<plugins::disco::Disco>(Box::new(plugins::disco::Disco::new())).unwrap();
-    aparte.add_plugin::<plugins::carbons::CarbonsPlugin>(Box::new(plugins::carbons::CarbonsPlugin::new())).unwrap();
-    aparte.add_plugin::<plugins::roster::RosterPlugin>(Box::new(plugins::roster::RosterPlugin::new())).unwrap();
-    aparte.add_plugin::<plugins::ui::UIPlugin>(Box::new(plugins::ui::UIPlugin::new())).unwrap();
+    aparte.add_plugin(plugins::disco::Disco::new());
+    aparte.add_plugin(plugins::carbons::CarbonsPlugin::new());
+    aparte.add_plugin(plugins::contact::ContactPlugin::new());
+    aparte.add_plugin(plugins::conversation::ConversationPlugin::new());
+    aparte.add_plugin(plugins::ui::UIPlugin::new());
 
     aparte.add_command("connect", connect);
     aparte.add_command("win", win);
