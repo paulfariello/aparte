@@ -294,9 +294,9 @@ pub mod contact {
 }
 
 pub mod conversation {
-    use xmpp_parsers::BareJid;
     use std::collections::HashMap;
-    use super::contact::Contact;
+    use std::hash::{Hash, Hasher};
+    use xmpp_parsers::BareJid;
 
     #[derive(Clone, Debug)]
     pub enum Affiliation {
@@ -304,6 +304,7 @@ pub mod conversation {
         Admin,
         Member,
         Outcast,
+        None,
     }
 
     #[derive(Clone, Debug)]
@@ -315,27 +316,42 @@ pub mod conversation {
 
     #[derive(Clone, Debug)]
     pub struct Occupant {
-        pub name: String,
+        pub nick: String,
         pub jid: Option<BareJid>,
-        pub affiliation: Option<Affiliation>,
-        pub role: Option<Role>,
+        pub affiliation: Affiliation,
+        pub role: Role,
     }
 
     #[derive(Clone, Debug)]
     pub struct Channel {
         pub jid: BareJid,
+        pub nick: String,
         pub name: Option<String>,
         pub occupants: HashMap<String, Occupant>,
     }
 
     pub struct Chat {
-        pub contact: Contact,
+        pub contact: BareJid,
     }
 
     pub enum Conversation {
         Chat(Chat),
         Channel(Channel),
     }
+
+    impl Hash for Occupant {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.nick.hash(state);
+        }
+    }
+
+    impl PartialEq for Occupant {
+        fn eq(&self, other: &Self) -> bool {
+            self.nick == other.nick
+        }
+    }
+
+    impl Eq for Occupant {}
 }
 
 #[derive(Debug, Clone)]
@@ -379,6 +395,7 @@ pub enum Event {
     Win(String),
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
+    Occupant(conversation::Occupant),
 }
 
 pub trait Plugin: fmt::Display {

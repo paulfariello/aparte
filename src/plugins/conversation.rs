@@ -1,18 +1,39 @@
+use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::rc::Rc;
-use std::collections::HashMap;
-use uuid::Uuid;
-use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
-use xmpp_parsers::iq::{Iq, IqType};
-use std::convert::TryFrom;
+use xmpp_parsers::{Jid, BareJid, muc};
 
-use crate::core::{Plugin, Aparte, Event, conversation,};
+use crate::core::{Plugin, Aparte, Event, conversation};
 
 pub struct ConversationPlugin {
-    conversations: HashMap<BareJid, conversation::Conversation>,
+    conversations: HashMap<String, conversation::Conversation>,
 }
 
 impl ConversationPlugin {
+}
+
+impl From<muc::user::Role> for conversation::Role {
+    fn from(role: muc::user::Role) -> Self {
+        match role {
+            muc::user::Role::Moderator => conversation::Role::Moderator,
+            muc::user::Role::Participant => conversation::Role::Participant,
+            muc::user::Role::Visitor => conversation::Role::Visitor,
+            muc::user::Role::None => unreachable!(),
+        }
+    }
+}
+
+impl From<muc::user::Affiliation> for conversation::Affiliation {
+    fn from(role: muc::user::Affiliation) -> Self {
+        match role {
+            muc::user::Affiliation::Owner => conversation::Affiliation::Owner,
+            muc::user::Affiliation::Admin => conversation::Affiliation::Admin,
+            muc::user::Affiliation::Member => conversation::Affiliation::Member,
+            muc::user::Affiliation::Outcast => conversation::Affiliation::Outcast,
+            muc::user::Affiliation::None => conversation::Affiliation::None,
+        }
+    }
 }
 
 impl Plugin for ConversationPlugin {
@@ -28,6 +49,44 @@ impl Plugin for ConversationPlugin {
 
     fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
         match event {
+            Event::Chat(jid) => {
+                let conversation = conversation::Conversation::Chat(conversation::Chat {
+                    contact: jid.clone(),
+                });
+                self.conversations.insert(jid.to_string(), conversation);
+            },
+            Event::Join(jid) => {
+                let conversation = conversation::Conversation::Channel(conversation::Channel {
+                    jid: jid.clone().into(),
+                    nick: jid.resource.clone(),
+                    name: None,
+                    occupants: HashMap::new(),
+                });
+                self.conversations.insert(jid.to_string(), conversation);
+            },
+            Event::Presence(presence) => {
+                if let Some(Jid::Full(from)) = &presence.from {
+                    let channel_jid: BareJid = from.clone().into();
+                    if let Some(conversation::Conversation::Channel(channel)) = self.conversations.get_mut(&channel_jid.to_string()) {
+                        for payload in presence.clone().payloads {
+                            if let Some(item) = muc::user::Item::try_from(payload).ok() {
+                                let occupant_jid = match item.jid {
+                                    Some(full) => Some(full.into()),
+                                    None => None,
+                                };
+                                let occupant = conversation::Occupant {
+                                    nick: from.resource.clone(),
+                                    jid: occupant_jid,
+                                    affiliation: item.affiliation.into(),
+                                    role: item.role.into(),
+                                };
+                                Rc::clone(&aparte).event(Event::Occupant(occupant.clone()));
+                                channel.occupants.insert(occupant.nick.clone(), occupant);
+                            }
+                        }
+                    }
+                }
+            },
             _ => {},
         }
     }
