@@ -242,7 +242,7 @@ pub mod contact {
     use std::hash::{Hash, Hasher};
     use xmpp_parsers::BareJid;
 
-    #[derive(Clone, Debug)]
+    #[derive(Hash, Eq, PartialEq, Clone, Debug)]
     pub enum Presence {
         Unavailable,
         Available,
@@ -298,7 +298,7 @@ pub mod conversation {
     use std::hash::{Hash, Hasher};
     use xmpp_parsers::BareJid;
 
-    #[derive(Clone, Debug)]
+    #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
     pub enum Affiliation {
         Owner,
         Admin,
@@ -307,7 +307,7 @@ pub mod conversation {
         None,
     }
 
-    #[derive(Clone, Debug)]
+    #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
     pub enum Role {
         Visitor,
         Participant,

@@ -315,6 +315,16 @@ impl fmt::Display for conversation::Occupant {
     }
 }
 
+impl fmt::Display for conversation::Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            conversation::Role::Moderator => write!(f, "{}Moderators{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
+            conversation::Role::Participant => write!(f, "{}Participants{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
+            conversation::Role::Visitor => write!(f, "{}Visitors{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
+        }
+    }
+}
+
 pub struct UIPlugin<'a> {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
@@ -379,10 +389,10 @@ impl<'a> UIPlugin<'a> {
                 });
                 layout.push(chat);
 
-                let mut roster = View::<ListView<contact::Group, conversation::Occupant>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+                let mut roster = View::<ListView<conversation::Role, conversation::Occupant>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
                     match event {
                         UIEvent::Occupant(occupant) => {
-                            view.insert(occupant.clone(), None);
+                            view.insert(occupant.clone(), Some(occupant.role));
                         },
                         _ => {},
                     }
