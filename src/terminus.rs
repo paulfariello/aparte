@@ -22,6 +22,7 @@ pub enum Dimension {
 pub trait ViewTrait<E> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>);
     fn layout(&mut self, top: u16, left: u16);
+    fn is_dirty(&self) -> bool;
     fn get_measured_width(&self) -> Option<u16>;
     fn get_measured_height(&self) -> Option<u16>;
     fn redraw(&mut self);
@@ -34,8 +35,9 @@ pub struct View<'a, T, E> {
     pub height: Dimension,
     pub x: u16,
     pub y: u16,
-    pub w: u16,
-    pub h: u16,
+    pub w: Option<u16>,
+    pub h: Option<u16>,
+    pub dirty: bool,
     pub content: T,
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E) + 'a>>>>,
     #[cfg(feature = "no-cursor-save")]
@@ -100,33 +102,23 @@ impl<'a, T, E> View<'a, T, E> {
 default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
         self.w = match self.width {
-            Dimension::MatchParent => {
-                match width_spec {
-                    Some(width_spec) => width_spec,
-                    None => 0,
-                }
-            },
+            Dimension::MatchParent => width_spec,
             Dimension::WrapContent => unreachable!(),
             Dimension::Absolute(width) => {
                 match width_spec {
-                    Some(width_spec) => cmp::min(width, width_spec),
-                    None => width,
+                    Some(width_spec) => Some(cmp::min(width, width_spec)),
+                    None => Some(width),
                 }
             }
         };
 
         self.h = match self.height {
-            Dimension::MatchParent => {
-                match height_spec {
-                    Some(height_spec) => height_spec,
-                    None => 0,
-                }
-            },
+            Dimension::MatchParent => height_spec,
             Dimension::WrapContent => unreachable!(),
             Dimension::Absolute(height) => {
                 match height_spec {
-                    Some(height_spec) => cmp::min(height, height_spec),
-                    None => height,
+                    Some(height_spec) => Some(cmp::min(height, height_spec)),
+                    None => Some(height),
                 }
             },
         };
@@ -135,22 +127,19 @@ default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
     fn layout(&mut self, top: u16, left: u16) {
         self.x = left;
         self.y = top;
+        self.dirty = false;
     }
 
     fn get_measured_width(&self) -> Option<u16> {
-        if self.w > 0 {
-            Some(self.w)
-        } else {
-            None
-        }
+        self.w
     }
 
     fn get_measured_height(&self) -> Option<u16> {
-        if self.h > 0 {
-            Some(self.h)
-        } else {
-            None
-        }
+        self.h
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn event(&mut self, event: &mut E) {
@@ -179,8 +168,9 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
             height: Dimension::MatchParent,
             x: 1,
             y: 1,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -207,7 +197,7 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
 
     pub fn insert(&mut self, key: K, mut widget: Box<dyn ViewTrait<E> + 'a>)
     {
-        widget.measure(Some(self.w), Some(self.h));
+        widget.measure(self.w, self.h);
         widget.layout(self.y, self.x);
         self.content.children.insert(key, widget);
     }
@@ -217,17 +207,18 @@ impl<K, E> ViewTrait<E> for View<'_, FrameLayout<'_, K, E>, E>
     where K: Hash + Eq
 {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
-        self.w = width_spec.unwrap_or(0);
-        self.h = height_spec.unwrap_or(0);
+        self.w = width_spec;
+        self.h = height_spec;
 
         for (_, child) in self.content.children.iter_mut() {
-            child.measure(Some(self.w), Some(self.h));
+            child.measure(self.w, self.h);
         }
     }
 
     fn layout(&mut self, top: u16, left: u16) {
         self.x = left;
         self.y = top;
+        self.dirty = false;
 
         for (_, child) in self.content.children.iter_mut() {
             child.layout(top, left);
@@ -239,6 +230,14 @@ impl<K, E> ViewTrait<E> for View<'_, FrameLayout<'_, K, E>, E>
             let child = self.content.children.get_mut(current).unwrap();
             child.redraw();
         }
+    }
+
+    fn is_dirty(&self) -> bool {
+        let mut dirty = false;
+        for (_, child) in self.content.children.iter() {
+            dirty |= child.is_dirty()
+        }
+        dirty
     }
 }
 
@@ -261,8 +260,9 @@ impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
             height: height,
             x: 0,
             y: 0,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -369,8 +369,8 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
             Orientation::Horizontal => max_height,
         };
 
-        self.w = 0;
-        self.h = 0;
+        self.w = Some(0);
+        self.h = Some(0);
 
         for child in self.content.children.iter_mut() {
             let mut width_spec = match child.get_measured_width() {
@@ -384,23 +384,23 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
             };
 
             if self.content.orientation == Orientation::Horizontal && max_width.is_some() {
-               width_spec = Some(cmp::min(width_spec.unwrap(), max_width.unwrap() - self.w));
+               width_spec = Some(cmp::min(width_spec.unwrap(), max_width.unwrap() - self.w.unwrap()));
             }
 
             if self.content.orientation == Orientation::Vertical && max_height.is_some() {
-                height_spec = Some(cmp::min(height_spec.unwrap(), max_height.unwrap() - self.h));
+                height_spec = Some(cmp::min(height_spec.unwrap(), max_height.unwrap() - self.h.unwrap()));
             }
 
             child.measure(width_spec, height_spec);
 
             match self.content.orientation {
                 Orientation::Vertical => {
-                    self.w = Some(cmp::max(self.w, child.get_measured_width().unwrap_or(0)));
-                    self.h = Some(self.h + child.get_measured_height().unwrap_or(0));
+                    self.w = Some(cmp::max(self.w.unwrap(), child.get_measured_width().unwrap_or(0)));
+                    self.h = Some(self.h.unwrap() + child.get_measured_height().unwrap_or(0));
                 },
                 Orientation::Horizontal => {
-                    self.w = self.w + child.get_measured_width().unwrap_or(0);
-                    self.h = cmp::max(self.h, child.get_measured_height().unwrap_or(0));
+                    self.w = Some(self.w.unwrap() + child.get_measured_width().unwrap_or(0));
+                    self.h = Some(cmp::max(self.h.unwrap(), child.get_measured_height().unwrap_or(0)));
                 },
             }
         }
@@ -409,6 +409,7 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
     fn layout(&mut self, top: u16, left: u16) {
         self.x = left;
         self.y = top;
+        self.dirty = false;
 
         let mut x = self.x;
         let mut y = self.y;
@@ -428,10 +429,12 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
         }
     }
 
-    fn event(&mut self, event: &mut E) {
-        for child in self.content.children.iter_mut() {
-            child.event(event);
+    fn is_dirty(&self) -> bool {
+        let mut dirty = false;
+        for child in self.content.children.iter() {
+            dirty |= child.is_dirty()
         }
+        dirty
     }
 }
 
@@ -451,8 +454,9 @@ impl<'a, E> View<'a, Input, E> {
             height: Dimension::Absolute(1),
             x: 0,
             y: 0,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -496,7 +500,7 @@ impl<'a, E> View<'a, Input, E> {
         let _ = self.content.tmp_buf.take();
         self.content.password = false;
         goto!(self, self.x, self.y);
-        for _ in 0 .. self.w {
+        for _ in 0 .. self.w.unwrap() {
             vprint!(self, " ");
         }
         goto!(self, self.x, self.y);
@@ -571,7 +575,7 @@ impl<'a, E> View<'a, Input, E> {
 impl<E> ViewTrait<E> for View<'_, Input, E> {
     fn redraw(&mut self) {
         goto!(self, self.x, self.y);
-        for _ in 0 .. self.w {
+        for _ in 0 .. self.w.unwrap() {
             vprint!(self, " ");
         }
 
@@ -606,8 +610,9 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
             height: Dimension::MatchParent,
             x: 0,
             y: 0,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -648,14 +653,14 @@ impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
         let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
         let count = buffers.collect::<Vec<_>>().len();
 
-        if count < self.h as usize {
+        if count < self.h.unwrap() as usize {
             return;
         }
 
-        let max = count - self.h as usize;
+        let max = count - self.h.unwrap() as usize;
 
-        if self.content.view + (self.h as usize) < max {
-            self.content.view += self.h as usize;
+        if self.content.view + (self.h.unwrap() as usize) < max {
+            self.content.view += self.h.unwrap() as usize;
         } else {
             self.content.view = max;
         }
@@ -664,8 +669,8 @@ impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
     }
 
     fn page_down(&mut self) {
-        if self.content.view > self.h as usize {
-            self.content.view -= self.h as usize;
+        if self.content.view > self.h.unwrap() as usize {
+            self.content.view -= self.h.unwrap() as usize;
         } else {
             self.content.view = 0;
         }
@@ -686,17 +691,17 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
 
         let mut buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
 
-        if count > self.h as usize {
-            for _ in 0 .. count - self.h as usize - self.content.view {
+        if count > self.h.unwrap() as usize {
+            for _ in 0 .. count - self.h.unwrap() as usize - self.content.view {
                 if buffers.next().is_none() {
                     break;
                 }
             }
         }
 
-        for y in self.y .. self.y + self.h {
+        for y in self.y .. self.y + self.h.unwrap() {
             goto!(self, self.x, y);
-            for _ in self.x  .. self.x + self.w {
+            for _ in self.x  .. self.x + self.w.unwrap() {
                 vprint!(self, " ");
             }
 
@@ -722,12 +727,13 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
     pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
-            width: Dimension::MatchParent,
+            width: Dimension::WrapContent,
             height: Dimension::MatchParent,
             x: 0,
             y: 0,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -770,19 +776,71 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
                 occupied.get_mut().replace(item);
             }
         }
-        self.redraw();
+        self.dirty = true
     }
 }
 
 impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E> ViewTrait<E> for View<'_, ListView<G, V>, E> {
+    fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
+        self.w = match self.width {
+            Dimension::MatchParent => width_spec,
+            Dimension::WrapContent => {
+                let mut width: u16 = 0;
+                for (group, items) in &self.content.items {
+                    if let Some(group) = group {
+                        width = cmp::max(width, format!("{}", group).len() as u16);
+                    }
+
+                    for item in items {
+                        width = cmp::max(width, format!("  {}", item).len() as u16);
+                    }
+                }
+                match width_spec {
+                    Some(width_spec) => Some(cmp::min(width, width_spec)),
+                    None => Some(width),
+                }
+            },
+            Dimension::Absolute(width) => {
+                match width_spec {
+                    Some(width_spec) => Some(cmp::min(width, width_spec)),
+                    None => Some(width),
+                }
+            }
+        };
+
+        self.h = match self.height {
+            Dimension::MatchParent => height_spec,
+            Dimension::WrapContent => {
+                let mut height: u16 = 0;
+                for (group, items) in &self.content.items {
+                    if group.is_some() {
+                        height += 1;
+                    }
+
+                    height += items.len() as u16;
+                }
+                match height_spec {
+                    Some(height_spec) => Some(cmp::min(height, height_spec)),
+                    None => Some(height),
+                }
+            },
+            Dimension::Absolute(height) => {
+                match height_spec {
+                    Some(height_spec) => Some(cmp::min(height, height_spec)),
+                    None => Some(height),
+                }
+            },
+        };
+    }
+
     fn redraw(&mut self) {
         self.save_cursor();
 
         let mut y = self.y;
 
-        for y in self.y .. self.y + self.h {
+        for y in self.y .. self.y + self.h.unwrap() {
             goto!(self, self.x, y);
-            for _ in self.x  .. self.x + self.w {
+            for _ in self.x  .. self.x + self.w.unwrap() {
                 vprint!(self, " ");
             }
 

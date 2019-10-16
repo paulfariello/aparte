@@ -61,8 +61,9 @@ impl View<'_, TitleBar, UIEvent<'_>> {
             height: Dimension::Absolute(1),
             x: 0,
             y: 0,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -90,7 +91,7 @@ impl ViewTrait<UIEvent<'_>> for View<'_, TitleBar, UIEvent<'_>> {
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
             write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
 
-            for _ in 0 .. self.w {
+            for _ in 0 .. self.w.unwrap() {
                 write!(screen, " ").unwrap();
             }
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
@@ -130,8 +131,9 @@ impl View<'_, WinBar, UIEvent<'_>> {
             height: Dimension::Absolute(1),
             x: 0,
             y: 0,
-            w: 0,
-            h: 0,
+            w: None,
+            h: None,
+            dirty: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -176,7 +178,7 @@ impl ViewTrait<UIEvent<'_>> for View<'_, WinBar, UIEvent<'_>> {
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
             write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
 
-            for _ in 0 .. self.w {
+            for _ in 0 .. self.w.unwrap() {
                 write!(screen, " ").unwrap();
             }
 
@@ -208,7 +210,7 @@ impl ViewTrait<UIEvent<'_>> for View<'_, WinBar, UIEvent<'_>> {
                 index += 1;
             }
 
-            let start = self.x + self.w - windows_len as u16;
+            let start = self.x + self.w.unwrap() - windows_len as u16;
             write!(screen, "{}{}", termion::cursor::Goto(start, self.y), windows).unwrap();
 
             write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
@@ -371,7 +373,11 @@ impl<'a> UIPlugin<'a> {
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             },
             ConversationKind::Group => {
-                let mut layout = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent);
+                let mut layout = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+                    for child in layout.content.children.iter_mut() {
+                        child.event(event);
+                    }
+                });
                 let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
                     match event {
                         UIEvent::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
@@ -438,7 +444,18 @@ impl<'a> Plugin for UIPlugin<'a> {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
-        let mut layout = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent);
+        let mut layout = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+            for child in layout.content.children.iter_mut() {
+                child.event(event);
+            }
+
+            if layout.is_dirty() {
+                layout.measure(layout.w, layout.h);
+                layout.layout(layout.x, layout.y);
+                layout.redraw();
+            }
+        });
+
 
         let title_bar = View::<TitleBar, UIEvent>::new(screen.clone());
         let frame = View::<FrameLayout::<String, UIEvent<'a>>, UIEvent<'a>>::new(screen.clone()).with_event(|frame, event| {
@@ -501,7 +518,11 @@ impl<'a> Plugin for UIPlugin<'a> {
         self.root.layout(1, 1);
         self.root.redraw();
 
-        let mut console = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent);
+        let mut console = View::<LinearLayout::<UIEvent<'a>>, UIEvent<'a>>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+            for child in layout.content.children.iter_mut() {
+                child.event(event);
+            }
+        });
         console.push(View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
             match event {
                 UIEvent::Message(Message::Log(message)) => {
