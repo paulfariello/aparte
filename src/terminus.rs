@@ -280,10 +280,25 @@ impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
     {
         self.content.children.push(Box::new(widget));
     }
+
+    pub fn with_event<F>(mut self, event_handler: F) -> Self
+        where F: FnMut(&mut Self, &mut E), F: 'a
+    {
+        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
+        self
+    }
 }
 
 impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
+        /* Measure dimension of this layout with the following stpes:
+         *
+         *  - Compute max dimension from parent
+         *  - Compute min dimension from children
+         *  - Split remaining space for each child that don't have strong size requirement
+         *    (answered 0 to first measure pass)
+         *  - Set dimension for each children
+         */
         let max_width = match self.width {
             Dimension::MatchParent => width_spec,
             Dimension::WrapContent => width_spec,
@@ -316,7 +331,7 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
                     min_height += child.get_measured_height().unwrap_or(0);
                 },
                 Orientation::Horizontal => {
-                    min_width += child.get_measured_height().unwrap_or(0);
+                    min_width += child.get_measured_width().unwrap_or(0);
                     min_height = cmp::max(min_height, child.get_measured_height().unwrap_or(0));
                 },
             }
@@ -380,12 +395,12 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
 
             match self.content.orientation {
                 Orientation::Vertical => {
-                    self.w = cmp::max(self.w, child.get_measured_width().unwrap());
-                    self.h += child.get_measured_height().unwrap();
+                    self.w = Some(cmp::max(self.w, child.get_measured_width().unwrap_or(0)));
+                    self.h = Some(self.h + child.get_measured_height().unwrap_or(0));
                 },
                 Orientation::Horizontal => {
-                    self.w += child.get_measured_width().unwrap();
-                    self.h = cmp::max(self.w, child.get_measured_height().unwrap());
+                    self.w = self.w + child.get_measured_width().unwrap_or(0);
+                    self.h = cmp::max(self.h, child.get_measured_height().unwrap_or(0));
                 },
             }
         }
