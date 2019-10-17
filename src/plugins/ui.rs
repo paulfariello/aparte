@@ -395,7 +395,7 @@ impl<'a> UIPlugin<'a> {
                 });
                 layout.push(chat);
 
-                let mut roster = View::<ListView<conversation::Role, conversation::Occupant>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+                let roster = View::<ListView<conversation::Role, conversation::Occupant>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
                     match event {
                         UIEvent::Occupant(occupant) => {
                             view.insert(occupant.clone(), Some(occupant.role));
@@ -533,7 +533,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                 _ => {},
             }
         }));
-        let mut roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+        let roster = View::<ListView<contact::Group, contact::Contact>, UIEvent<'a>>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
                 UIEvent::Contact(contact) | UIEvent::ContactUpdate(contact) => {
                     if contact.groups.len() > 0 {
@@ -644,6 +644,12 @@ impl<'a> Plugin for UIPlugin<'a> {
             },
             Event::Occupant(occupant) => {
                 self.root.event(&mut UIEvent::Occupant(occupant.clone()));
+            },
+            Event::Signal(signal_hook::SIGWINCH) => {
+                let (width, height) = termion::terminal_size().unwrap();
+                self.root.measure(Some(width), Some(height));
+                self.root.layout(1, 1);
+                self.root.redraw();
             },
             _ => {},
         }

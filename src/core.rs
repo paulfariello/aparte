@@ -396,6 +396,7 @@ pub enum Event {
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
     Occupant(conversation::Occupant),
+    Signal(i32),
 }
 
 pub trait Plugin: fmt::Display {

@@ -14,22 +14,23 @@ extern crate minidom;
 extern crate derive_error;
 extern crate tokio_file_unix;
 extern crate dirs;
+extern crate signal_hook;
 
-
+use chrono::Utc;
 use futures::{future, Future, Sink, Stream};
 use log::LevelFilter;
+use signal_hook::iterator::Signals;
 use std::convert::TryFrom;
 use std::rc::Rc;
+use std::str::FromStr;
 use tokio::runtime::current_thread::Runtime;
 use tokio_xmpp::{Client, Error as XmppError};
 use uuid::Uuid;
-use xmpp_parsers::{Element, Jid};
-use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
-use xmpp_parsers::muc::Muc;
-use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use xmpp_parsers::iq::Iq;
-use std::str::FromStr;
-use chrono::Utc;
+use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
+use xmpp_parsers::muc::Muc;
+use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
+use xmpp_parsers::{Element, Jid};
 
 mod core;
 mod terminus;
@@ -337,7 +338,15 @@ fn main() {
         ui.command_stream(Rc::clone(&aparte))
     };
 
-    let res = rt.block_on(command_stream.for_each(move |command_or_message| {
+    let sig_aparte = Rc::clone(&aparte); // TODO use ARC ?
+    let signals = Signals::new(&[signal_hook::SIGWINCH]).unwrap().into_async().unwrap().for_each(move |sig| {
+        Rc::clone(&sig_aparte).event(Event::Signal(sig));
+        Ok(())
+    }).map_err(|e| panic!("{}", e));
+
+    rt.spawn(signals);
+
+    rt.block_on(command_stream.for_each(move |command_or_message| {
         match command_or_message {
             CommandOrMessage::Message(message) => {
                 Rc::clone(&aparte).event(Event::Message(message.clone()));
@@ -358,6 +367,4 @@ fn main() {
 
         Ok(())
     }));
-
-    info!("! {:?}", res);
 }
