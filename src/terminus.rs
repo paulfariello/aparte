@@ -11,6 +11,33 @@ use termion::screen::AlternateScreen;
 
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
+fn term_string_visible_len(string: &str) -> usize {
+    let mut len = 0;
+    let mut iter = string.chars();
+
+    while let Some(c) = iter.next() {
+        match c {
+            '\x1B' => {
+                if let Some(c) = iter.next() {
+                    if c == '[' {
+                        while let Some(c) = iter.next() {
+                            match c {
+                                '\x30'..='\x3f' => {}, // parameter bytes
+                                '\x20'..='\x2f' => {}, // intermediate bytes
+                                '\x40'..='\x7E' => break, // final byte
+                                _ => break,
+                            }
+                        }
+                    }
+                }
+            },
+            _ => { len += 1; },
+        }
+    }
+
+    len
+}
+
 #[derive(Clone)]
 pub enum Dimension {
     MatchParent,
@@ -788,11 +815,16 @@ impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::E
                 let mut width: u16 = 0;
                 for (group, items) in &self.content.items {
                     if let Some(group) = group {
-                        width = cmp::max(width, format!("{}", group).len() as u16);
+                        width = cmp::max(width, term_string_visible_len(&format!("{}", group)) as u16);
                     }
 
+                    let indent = match group {
+                        Some(_) => "  ",
+                        None => "",
+                    };
+
                     for item in items {
-                        width = cmp::max(width, format!("  {}", item).len() as u16);
+                        width = cmp::max(width, term_string_visible_len(&format!("{}{}", indent, item)) as u16);
                     }
                 }
                 match width_spec {
@@ -867,5 +899,16 @@ impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::E
 
         self.restore_cursor();
         flush!(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_term_string_visible_len_is_correct() {
+        assert_eq!(term_string_visible_len(&format!("{}ab{}", termion::color::Bg(termion::color::Red), termion::cursor::Goto(1, 123))), 2);
+        assert_eq!(term_string_visible_len(&format!("{}ab{}", termion::cursor::Goto(1, 123), termion::color::Bg(termion::color::Red))), 2);
     }
 }
