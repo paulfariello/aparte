@@ -556,3 +556,41 @@ impl Aparte {
         self.event(Event::Message(message));
     }
 }
+
+#[macro_export]
+macro_rules! assign_command_args {
+    ($command:ident, $index:ident) => ();
+    ($command:ident, $index:ident, $arg:ident) => (
+        let $arg = {
+            if $command.args.len() > $index {
+                Some($command.args[$index].clone())
+            } else {
+                None
+            }
+        };
+    );
+    ($command:ident, $index:ident, $arg:ident, $($args:ident),+) => (
+        let $arg = {
+            if $command.args.len() > $index {
+                Some($command.args[$index].clone())
+            } else {
+                None
+            }
+        };
+
+        $index += 1;
+
+        assign_command_args!($command, $index, $($args),*);
+    );
+}
+
+#[macro_export]
+macro_rules! command_def {
+    ($name:ident, $($arg:ident),*, |$aparte:ident, $command:ident| => $body:block) => (
+        fn $name($aparte: Rc<Aparte>, $command: Command) -> Result<(), ()> {
+            let mut index = 0;
+            assign_command_args!($command, index, $($arg),*);
+            $body
+        }
+    );
+}

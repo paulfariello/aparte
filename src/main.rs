@@ -179,75 +179,39 @@ fn win(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     }
 }
 
-fn msg(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
-    match command.args.len() {
-        0 => {
-            Rc::clone(&aparte).log(format!("Missing contact and message"));
-            Err(())
-        },
-        1 => {
-            match aparte.current_connection() {
-                Some(_connection) => {
-                    match Jid::from_str(&command.args[0]) {
-                        Ok(jid) => {
-                            let to = match jid {
-                                Jid::Bare(jid) => jid,
-                                Jid::Full(jid) => jid.into(),
-                            };
-                            Rc::clone(&aparte).event(Event::Chat(to));
-                            Ok(())
-                        },
-                        Err(err) => {
-                            Rc::clone(&aparte).log(format!("Invalid JID {}: {}", command.args[0], err));
-                            Err(())
-                        }
+command_def!(msg, contact, message, |aparte, command| => {
+    match aparte.current_connection() {
+        Some(connection) => {
+            match Jid::from_str(&contact.clone().unwrap()) {
+                Ok(jid) => {
+                    let to = match jid.clone() {
+                        Jid::Bare(jid) => jid,
+                        Jid::Full(jid) => jid.into(),
+                    };
+                    Rc::clone(&aparte).event(Event::Chat(to));
+                    if message.is_some() {
+                        let id = Uuid::new_v4().to_string();
+                        let from: Jid = connection.into();
+                        let timestamp = Utc::now();
+                        let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
+                        Rc::clone(&aparte).event(Event::Message(message.clone()));
+
+                        aparte.send(Element::try_from(message).unwrap());
                     }
-                },
-                None => {
-                    Rc::clone(&aparte).log(format!("No connection found"));
                     Ok(())
+                },
+                Err(err) => {
+                    Rc::clone(&aparte).log(format!("Invalid JID {}: {}", contact.unwrap(), err));
+                    Err(())
                 }
             }
         },
-        2 => {
-            match aparte.current_connection() {
-                Some(connection) => {
-                    match Jid::from_str(&command.args[0]) {
-                        Ok(to) => {
-                            let id = Uuid::new_v4().to_string();
-                            let from: Jid = connection.into();
-                            let timestamp = Utc::now();
-                            let message = Message::outgoing_chat(id, timestamp, &from, &to, &command.args[1]);
-                            Rc::clone(&aparte).event(Event::Message(message.clone()));
-
-                            aparte.send(Element::try_from(message).unwrap());
-
-                            let to = match to {
-                                Jid::Bare(jid) => jid,
-                                Jid::Full(jid) => jid.into(),
-                            };
-                            Rc::clone(&aparte).event(Event::Chat(to));
-
-                            Ok(())
-                        },
-                        Err(err) => {
-                            Rc::clone(&aparte).log(format!("Invalid JID {}: {}", command.args[0], err));
-                            Err(())
-                        }
-                    }
-                },
-                None => {
-                    Rc::clone(&aparte).log(format!("No connection found"));
-                    Ok(())
-                }
-            }
-        },
-        _ => {
-            Rc::clone(&aparte).log(format!("Too many arguments"));
-            Err(())
+        None => {
+            Rc::clone(&aparte).log(format!("No connection found"));
+            Ok(())
         }
     }
-}
+});
 
 fn join(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     match command.args.len() {
