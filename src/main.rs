@@ -88,175 +88,160 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
     }
 }
 
-fn connect(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
-    match command.args.len() {
-        1 => {
-            Rc::clone(&aparte).event(Event::ReadPassword(command.clone()));
-            Ok(())
-        },
-        2 => {
-            let account = command.args[0].clone();
-            let password = command.args[1].clone();
+command_def!{
+    connect,
+    account, password password,
+    |aparte, command| => {
+        if let Ok(jid) = Jid::from_str(&account) {
+            let full_jid = match jid {
+                Jid::Full(jid) => jid,
+                Jid::Bare(jid) => jid.with_resource("aparte"),
+            };
+            Rc::clone(&aparte).log(format!("Connecting to {}", account));
+            let client = Client::new(&full_jid.to_string(), &password).unwrap();
 
-            if let Ok(jid) = Jid::from_str(&command.args[0]) {
-                let full_jid = match jid {
-                    Jid::Full(jid) => jid,
-                    Jid::Bare(jid) => jid.with_resource("aparte"),
-                };
-                Rc::clone(&aparte).log(format!("Connecting to {}", account));
-                let client = Client::new(&full_jid.to_string(), &password).unwrap();
+            let (sink, stream) = client.split();
+            let (tx, rx) = futures::unsync::mpsc::unbounded();
 
-                let (sink, stream) = client.split();
-                let (tx, rx) = futures::unsync::mpsc::unbounded();
+            Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
 
-                Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
-
-                tokio::runtime::current_thread::spawn(
-                    rx.forward(
-                        sink.sink_map_err(|_| panic!("Pipe"))
+            tokio::runtime::current_thread::spawn(
+                rx.forward(
+                    sink.sink_map_err(|_| panic!("Pipe"))
                     ).map(|(rx, mut sink)| {
-                        drop(rx);
-                        let _ = sink.close();
-                    }).map_err(|e| {
+                    drop(rx);
+                    let _ = sink.close();
+                }).map_err(|e| {
                         panic!("Send error: {:?}", e);
                     })
                 );
 
-                let event_aparte = Rc::clone(&aparte);
-                let client = stream.for_each(move |event| {
-                    if event.is_online() {
-                        Rc::clone(&event_aparte).log(format!("Connected as {}", account));
+            let event_aparte = Rc::clone(&aparte);
+            let client = stream.for_each(move |event| {
+                if event.is_online() {
+                    Rc::clone(&event_aparte).log(format!("Connected as {}", account));
 
-                        Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
+                    Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
 
-                        let mut presence = Presence::new(PresenceType::None);
-                        presence.show = Some(PresenceShow::Chat);
+                    let mut presence = Presence::new(PresenceType::None);
+                    presence.show = Some(PresenceShow::Chat);
 
-                        event_aparte.send(presence.into());
-                    } else if let Some(stanza) = event.into_stanza() {
-                        debug!("RECV: {}", String::from(&stanza));
+                    event_aparte.send(presence.into());
+                } else if let Some(stanza) = event.into_stanza() {
+                    debug!("RECV: {}", String::from(&stanza));
 
-                        handle_stanza(Rc::clone(&event_aparte), stanza);
-                    }
+                    handle_stanza(Rc::clone(&event_aparte), stanza);
+                }
 
-                    future::ok(())
-                });
+                future::ok(())
+            });
 
-                let error_aparte = Rc::clone(&aparte);
-                let client = client.map_err(move |error| {
-                    match error {
-                        XmppError::Auth(auth) => {
-                            Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
-                        },
-                        error => {
-                            Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
-                        },
-                    }
-                });
+            let error_aparte = Rc::clone(&aparte);
+            let client = client.map_err(move |error| {
+                match error {
+                    XmppError::Auth(auth) => {
+                        Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
+                    },
+                    error => {
+                        Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
+                    },
+                }
+            });
 
-                tokio::runtime::current_thread::spawn(client);
+            tokio::runtime::current_thread::spawn(client);
 
-                Ok(())
-            } else {
-                Rc::clone(&aparte).log(format!("Invalid JID {}", command.args[0]));
-                Err(())
-            }
-        }
-        _ => {
-            Rc::clone(&aparte).log(format!("Missing jid"));
+            Ok(())
+        } else {
+            Rc::clone(&aparte).log(format!("Invalid JID {}", account));
             Err(())
         }
     }
 }
 
-fn win(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
-    if command.args.len() != 1 {
-        Rc::clone(&aparte).log(format!("Missing windows name"));
-        Err(())
-    } else {
-        aparte.event(Event::Win(command.args[0].clone()));
+
+command_def!{
+    win,
+    window,
+    |aparte, command| => {
+        aparte.event(Event::Win(window.clone()));
         Ok(())
     }
 }
 
-command_def!(msg, contact, message optional, |aparte, command| => {
-    match aparte.current_connection() {
-        Some(connection) => {
-            match Jid::from_str(&contact.clone()) {
-                Ok(jid) => {
-                    let to = match jid.clone() {
-                        Jid::Bare(jid) => jid,
-                        Jid::Full(jid) => jid.into(),
-                    };
-                    Rc::clone(&aparte).event(Event::Chat(to));
-                    if message.is_some() {
-                        let id = Uuid::new_v4().to_string();
-                        let from: Jid = connection.into();
-                        let timestamp = Utc::now();
-                        let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
-                        Rc::clone(&aparte).event(Event::Message(message.clone()));
+command_def!{
+    msg,
+    contact, message optional,
+    |aparte, command| => {
+        match aparte.current_connection() {
+            Some(connection) => {
+                match Jid::from_str(&contact.clone()) {
+                    Ok(jid) => {
+                        let to = match jid.clone() {
+                            Jid::Bare(jid) => jid,
+                            Jid::Full(jid) => jid.into(),
+                        };
+                        Rc::clone(&aparte).event(Event::Chat(to));
+                        if message.is_some() {
+                            let id = Uuid::new_v4().to_string();
+                            let from: Jid = connection.into();
+                            let timestamp = Utc::now();
+                            let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
+                            Rc::clone(&aparte).event(Event::Message(message.clone()));
 
-                        aparte.send(Element::try_from(message).unwrap());
+                            aparte.send(Element::try_from(message).unwrap());
+                        }
+                        Ok(())
+                    },
+                    Err(err) => {
+                        Rc::clone(&aparte).log(format!("Invalid JID {}: {}", contact, err));
+                        Err(())
                     }
-                    Ok(())
-                },
-                Err(err) => {
-                    Rc::clone(&aparte).log(format!("Invalid JID {}: {}", contact, err));
-                    Err(())
                 }
+            },
+            None => {
+                Rc::clone(&aparte).log(format!("No connection found"));
+                Ok(())
             }
-        },
-        None => {
-            Rc::clone(&aparte).log(format!("No connection found"));
-            Ok(())
         }
     }
-});
+}
 
-fn join(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
-    match command.args.len() {
-        0 => {
-            Rc::clone(&aparte).log(format!("Missing Muc"));
-            Err(())
-        },
-        1 => {
-            match aparte.current_connection() {
-                Some(connection) => {
-                    match Jid::from_str(&command.args[0]) {
-                        Ok(jid) => {
-                            let to = match jid {
-                                Jid::Full(jid) => jid,
-                                Jid::Bare(jid) => {
-                                    let node = connection.node.clone().unwrap();
-                                    jid.with_resource(node)
-                                }
-                            };
-                            let from: Jid = connection.into();
+command_def!{
+    join,
+    muc,
+    |aparte, command| => {
+        match aparte.current_connection() {
+            Some(connection) => {
+                match Jid::from_str(&muc) {
+                    Ok(jid) => {
+                        let to = match jid {
+                            Jid::Full(jid) => jid,
+                            Jid::Bare(jid) => {
+                                let node = connection.node.clone().unwrap();
+                                jid.with_resource(node)
+                            }
+                        };
+                        let from: Jid = connection.into();
 
-                            let mut presence = Presence::new(PresenceType::None);
-                            presence = presence.with_to(Some(Jid::Full(to.clone())));
-                            presence = presence.with_from(Some(from));
-                            presence.add_payload(Muc::new());
-                            aparte.send(presence.into());
-                            aparte.event(Event::Join(to.clone()));
+                        let mut presence = Presence::new(PresenceType::None);
+                        presence = presence.with_to(Some(Jid::Full(to.clone())));
+                        presence = presence.with_from(Some(from));
+                        presence.add_payload(Muc::new());
+                        aparte.send(presence.into());
+                        aparte.event(Event::Join(to.clone()));
 
-                            Ok(())
-                        },
-                        Err(err) => {
-                            Rc::clone(&aparte).log(format!("Invalid JID {}: {}", command.args[0], err));
-                            Err(())
-                        }
+                        Ok(())
+                    },
+                    Err(err) => {
+                        Rc::clone(&aparte).log(format!("Invalid JID {}: {}", muc, err));
+                        Err(())
                     }
-                },
-                None => {
-                    Rc::clone(&aparte).log(format!("No connection found"));
-                    Ok(())
                 }
+            },
+            None => {
+                Rc::clone(&aparte).log(format!("No connection found"));
+                Ok(())
             }
-        },
-        _ => {
-            Rc::clone(&aparte).log(format!("Too many arguments"));
-            Err(())
         }
     }
 }
