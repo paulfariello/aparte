@@ -560,7 +560,7 @@ impl Aparte {
 #[macro_export]
 macro_rules! assign_command_args {
     ($command:ident, $index:ident) => ();
-    ($command:ident, $index:ident, $arg:ident) => (
+    ($command:ident, $index:ident, $arg:ident optional) => (
         let $arg = {
             if $command.args.len() > $index {
                 Some($command.args[$index].clone())
@@ -569,7 +569,13 @@ macro_rules! assign_command_args {
             }
         };
     );
-    ($command:ident, $index:ident, $arg:ident, $($args:ident),+) => (
+    ($command:ident, $index:ident, $arg:ident) => (
+        if $command.args.len() > $index {
+            return Err(())
+        }
+        let $arg = $command.args[$index].clone();
+    );
+    ($command:ident, $index:ident, $arg:ident optional, $($args:ident),+) => (
         let $arg = {
             if $command.args.len() > $index {
                 Some($command.args[$index].clone())
@@ -582,14 +588,25 @@ macro_rules! assign_command_args {
 
         assign_command_args!($command, $index, $($args),*);
     );
+    ($command:ident, $index:ident, $arg:ident, $($args:ident $($optional:ident)?),+) => (
+        if $command.args.len() > $index {
+            return Err(())
+        }
+
+        let $arg = $command.args[$index].clone();
+
+        $index += 1;
+
+        assign_command_args!($command, $index, $($args $($optional)?),*);
+    );
 }
 
 #[macro_export]
 macro_rules! command_def {
-    ($name:ident, $($arg:ident),*, |$aparte:ident, $command:ident| => $body:block) => (
+    ($name:ident, $($arg:ident $($optional:ident)?),*, |$aparte:ident, $command:ident| => $body:block) => (
         fn $name($aparte: Rc<Aparte>, $command: Command) -> Result<(), ()> {
             let mut index = 0;
-            assign_command_args!($command, index, $($arg),*);
+            assign_command_args!($command, index, $($arg $($optional)?),*);
             $body
         }
     );

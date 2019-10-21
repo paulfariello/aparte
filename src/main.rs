@@ -179,10 +179,10 @@ fn win(aparte: Rc<Aparte>, command: Command) -> Result<(), ()> {
     }
 }
 
-command_def!(msg, contact, message, |aparte, command| => {
+command_def!(msg, contact, message optional, |aparte, command| => {
     match aparte.current_connection() {
         Some(connection) => {
-            match Jid::from_str(&contact.clone().unwrap()) {
+            match Jid::from_str(&contact.clone()) {
                 Ok(jid) => {
                     let to = match jid.clone() {
                         Jid::Bare(jid) => jid,
@@ -201,7 +201,7 @@ command_def!(msg, contact, message, |aparte, command| => {
                     Ok(())
                 },
                 Err(err) => {
-                    Rc::clone(&aparte).log(format!("Invalid JID {}: {}", contact.unwrap(), err));
+                    Rc::clone(&aparte).log(format!("Invalid JID {}: {}", contact, err));
                     Err(())
                 }
             }
