@@ -36,7 +36,7 @@ mod core;
 mod terminus;
 mod plugins;
 
-use crate::core::{Aparte, Plugin, Event, Command, CommandOrMessage, Message};
+use crate::core::{Aparte, Plugin, Event, CommandParser, Command, CommandOrMessage, Message};
 
 fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
     if let Some(message) = XmppParsersMessage::try_from(stanza.clone()).ok() {
@@ -152,8 +152,7 @@ command_def!{
 
             Ok(())
         } else {
-            Rc::clone(&aparte).log(format!("Invalid JID {}", account));
-            Err(())
+            Err(format!("Invalid JID {}", account))
         }
     }
 }
@@ -193,14 +192,12 @@ command_def!{
                         Ok(())
                     },
                     Err(err) => {
-                        Rc::clone(&aparte).log(format!("Invalid JID {}: {}", contact, err));
-                        Err(())
+                        Err(format!("Invalid JID {}: {}", contact, err))
                     }
                 }
             },
             None => {
-                Rc::clone(&aparte).log(format!("No connection found"));
-                Ok(())
+                Err(format!("No connection found"))
             }
         }
     }
@@ -233,14 +230,12 @@ command_def!{
                         Ok(())
                     },
                     Err(err) => {
-                        Rc::clone(&aparte).log(format!("Invalid JID {}: {}", muc, err));
-                        Err(())
+                        Err(format!("Invalid JID {}: {}", muc, err))
                     }
                 }
             },
             None => {
-                Rc::clone(&aparte).log(format!("No connection found"));
-                Ok(())
+                Err(format!("No connection found"))
             }
         }
     }
@@ -270,10 +265,10 @@ fn main() {
     aparte.add_plugin(plugins::conversation::ConversationPlugin::new());
     aparte.add_plugin(plugins::ui::UIPlugin::new());
 
-    aparte.add_command("connect", connect);
-    aparte.add_command("win", win);
-    aparte.add_command("msg", msg);
-    aparte.add_command("join", join);
+    aparte.add_command(connect());
+    aparte.add_command(win());
+    aparte.add_command(msg());
+    aparte.add_command(join());
 
     aparte.init().unwrap();
 
@@ -304,12 +299,9 @@ fn main() {
                 }
             }
             CommandOrMessage::Command(command) => {
-                let result = {
-                    Rc::clone(&aparte).parse_command(command.clone())
-                };
-
-                if result.is_err() {
-                    Rc::clone(&aparte).log(format!("Unknown command {}", command.name));
+                match Rc::clone(&aparte).parse_command(command.clone()) {
+                    Err(err) => Rc::clone(&aparte).log(err),
+                    Ok(()) => {},
                 }
             }
         };

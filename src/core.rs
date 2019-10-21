@@ -375,6 +375,11 @@ impl Command {
     }
 }
 
+pub struct CommandParser {
+    pub name: &'static str,
+    pub parser: Box<dyn Fn(Rc<Aparte>, Command) -> Result<(), String>>,
+}
+
 #[derive(Debug, Error)]
 pub enum CommandError {
     Io(IoError),
@@ -431,7 +436,7 @@ pub struct Connection {
 }
 
 pub struct Aparte {
-    commands: HashMap<String, fn(Rc<Aparte>, Command) -> Result<(), ()>>,
+    commands: HashMap<String, CommandParser>,
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
@@ -451,14 +456,14 @@ impl Aparte {
         }
     }
 
-    pub fn add_command(&mut self, name: &str, command: fn(Rc<Aparte>, Command) -> Result<(), ()>) {
-        self.commands.insert(name.to_string(), command);
+    pub fn add_command(&mut self, command: CommandParser) {
+        self.commands.insert(command.name.to_string(), command);
     }
 
-    pub fn parse_command(self: Rc<Self>, command: Command) -> Result<(), ()> {
-        match self.commands.get(&command.name) {
-            Some(parser) => parser(self, command),
-            None => Err(()),
+    pub fn parse_command(self: Rc<Self>, command: Command) -> Result<(), String> {
+        match Rc::clone(&self).commands.get(&command.name) {
+            Some(parser) => (parser.parser)(self, command),
+            None => Err(format!("Unknown command {}", command.name)),
         }
     }
 
@@ -579,8 +584,7 @@ macro_rules! assign_command_args {
     );
     ($aparte:ident, $command:ident, $index:ident, $arg:ident) => (
         if $command.args.len() <= $index {
-            Rc::clone(&$aparte).log(format!("Missing {} argument", stringify!($arg)));
-            return Err(())
+            return Err(format!("Missing {} argument", stringify!($arg)))
         }
         let $arg = $command.args[$index].clone();
     );
@@ -599,8 +603,7 @@ macro_rules! assign_command_args {
     );
     ($aparte:ident, $command:ident, $index:ident, $arg:ident, $($args:ident $($optional:ident)?),+) => (
         if $command.args.len() <= $index {
-            Rc::clone(&$aparte).log(format!("Missing {} argument", stringify!($arg)));
-            return Err(())
+            return Err(format!("Missing {} argument", stringify!($arg)))
         }
 
         let $arg = $command.args[$index].clone();
@@ -614,11 +617,16 @@ macro_rules! assign_command_args {
 #[macro_export]
 macro_rules! command_def {
     ($name:ident, $($arg:ident $($optional:ident)?),*, |$aparte:ident, $command:ident| => $body:block) => (
-        fn $name($aparte: Rc<Aparte>, $command: Command) -> Result<(), ()> {
-            #[allow(unused_mut)]
-            let mut index = 0;
-            assign_command_args!($aparte, $command, index, $($arg $($optional)?),*);
-            $body
+        fn $name() -> CommandParser {
+            CommandParser {
+                name: stringify!($name),
+                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
+                    #[allow(unused_mut)]
+                    let mut index = 0;
+                    assign_command_args!($aparte, $command, index, $($arg $($optional)?),*);
+                    $body
+                })
+            }
         }
     );
 }
