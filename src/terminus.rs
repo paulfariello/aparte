@@ -471,6 +471,7 @@ pub struct Input {
     pub password: bool,
     pub history: Vec<String>,
     pub history_index: usize,
+    pub cursor: usize,
 }
 
 impl<'a, E> View<'a, Input, E> {
@@ -494,6 +495,7 @@ impl<'a, E> View<'a, Input, E> {
                 password: false,
                 history: Vec::new(),
                 history_index: 0,
+                cursor: 0,
             },
             event_handler: None,
         }
@@ -507,23 +509,49 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn key(&mut self, c: char) {
-        self.content.buf.push(c);
+        self.content.buf.insert(self.content.cursor, c);
+        self.content.cursor += 1;
         if !self.content.password {
-            vprint!(self, "{}", c);
-            flush!(self);
+            self.redraw();
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.content.cursor > 0 {
+            self.content.buf.remove(self.content.cursor - 1);
+            self.content.cursor -= 1;
+        }
+        if !self.content.password {
+            self.redraw();
         }
     }
 
     pub fn delete(&mut self) {
-        self.content.buf.pop();
+        if self.content.cursor < self.content.buf.len() {
+            self.content.buf.remove(self.content.cursor);
+        }
         if !self.content.password {
-            vprint!(self, "{} {}", termion::cursor::Left(1), termion::cursor::Left(1));
-            flush!(self);
+            self.redraw();
+        }
+    }
+
+    pub fn home(&mut self) {
+        self.content.cursor = 0;
+        if !self.content.password {
+            self.redraw();
+        }
+    }
+
+    pub fn end(&mut self) {
+        self.content.cursor = self.content.buf.len();
+        if !self.content.password {
+            self.redraw();
         }
     }
 
     pub fn clear(&mut self) {
         self.content.buf.clear();
+        self.content.cursor = 0;
         let _ = self.content.tmp_buf.take();
         self.content.password = false;
         goto!(self, self.x, self.y);
@@ -535,19 +563,20 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn left(&mut self) {
+        if self.content.cursor > 0 {
+            self.content.cursor -= 1;
+        }
         if !self.content.password {
-            vprint!(self, "{}", termion::cursor::Left(1));
-            flush!(self);
+            self.redraw();
         }
     }
 
     pub fn right(&mut self) {
+        if self.content.cursor < self.content.buf.len() {
+            self.content.cursor += 1;
+        }
         if !self.content.password {
-            let (x, _y) = { self.screen.borrow_mut().cursor_pos().unwrap() };
-            if x as usize <= self.content.buf.len() {
-                vprint!(self, "{}", termion::cursor::Right(1));
-                flush!(self);
-            }
+            self.redraw()
         }
     }
 
@@ -580,6 +609,7 @@ impl<'a, E> View<'a, Input, E> {
 
         self.content.history_index -= 1;
         self.content.buf = self.content.history[self.content.history_index].clone();
+        self.content.cursor = self.content.buf.len();
         self.redraw();
     }
 
@@ -594,6 +624,7 @@ impl<'a, E> View<'a, Input, E> {
         } else {
             self.content.buf = self.content.history[self.content.history_index].clone();
         }
+        self.content.cursor = self.content.buf.len();
 
         self.redraw();
     }
@@ -608,6 +639,7 @@ impl<E> ViewTrait<E> for View<'_, Input, E> {
 
         goto!(self, self.x, self.y);
         vprint!(self, "{}", self.content.buf);
+        goto!(self, self.x + self.content.cursor as u16, self.y);
 
         flush!(self);
     }

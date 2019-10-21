@@ -478,7 +478,10 @@ impl<'a> Plugin for UIPlugin<'a> {
         let input = View::<Input, UIEvent<'a>>::new(screen.clone()).with_event(|input, event| {
             match event {
                 UIEvent::Key(Key::Char(c)) => input.key(*c),
-                UIEvent::Key(Key::Backspace) => input.delete(),
+                UIEvent::Key(Key::Backspace) => input.backspace(),
+                UIEvent::Key(Key::Delete) => input.delete(),
+                UIEvent::Key(Key::Home) => input.home(),
+                UIEvent::Key(Key::End) => input.end(),
                 UIEvent::Key(Key::Up) => input.previous(),
                 UIEvent::Key(Key::Down) => input.next(),
                 UIEvent::Key(Key::Left) => input.left(),
@@ -688,6 +691,15 @@ impl Decoder for KeyCodec {
             match key {
                 Ok(Key::Backspace) => {
                     ui.event(UIEvent::Key(Key::Backspace));
+                },
+                Ok(Key::Delete) => {
+                    ui.event(UIEvent::Key(Key::Delete));
+                },
+                Ok(Key::Home) => {
+                    ui.event(UIEvent::Key(Key::Home));
+                },
+                Ok(Key::End) => {
+                    ui.event(UIEvent::Key(Key::End));
                 },
                 Ok(Key::Left) => {
                     ui.event(UIEvent::Key(Key::Left));
