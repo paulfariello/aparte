@@ -27,6 +27,8 @@ type Screen = AlternateScreen<RawTerminal<Stdout>>;
 enum UIEvent<'a> {
     Key(Key),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
+    Complete(Rc<RefCell<Option<(String, usize, bool)>>>),
+    Completed(String),
     ReadPassword,
     Connected(String),
     Message(Message),
@@ -490,6 +492,15 @@ impl<'a> Plugin for UIPlugin<'a> {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
                 },
+                UIEvent::Complete(result) => {
+                    let mut result = result.borrow_mut();
+                    result.replace((input.content.buf.clone(), input.content.cursor, input.content.password));
+                },
+                UIEvent::Completed(completion) => {
+                    input.content.buf = completion.clone();
+                    input.content.cursor = input.content.buf.len();
+                    input.redraw();
+                },
                 UIEvent::ReadPassword => input.password(),
                 _ => {}
             }
@@ -719,7 +730,29 @@ impl Decoder for KeyCodec {
                 Ok(Key::PageDown) => {
                     ui.event(UIEvent::Key(Key::PageDown));
                 },
-                Ok(Key::Char('\t')) => {},
+                Ok(Key::Char('\t')) => {
+                    let result = Rc::new(RefCell::new(None));
+                    let event = UIEvent::Complete(Rc::clone(&result));
+
+                    ui.event(event);
+
+                    let result = result.borrow_mut();
+                    let (raw_buf, cursor, password) = result.as_ref().unwrap();
+
+                    if *password {
+                        ui.event(UIEvent::Key(Key::Char('\t')));
+                    } else {
+                        let raw_buf = raw_buf.clone();
+                        if raw_buf.starts_with("/") {
+                            if let Ok(splitted) = shell_words::split(&raw_buf) {
+                                let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
+                                if let Ok(completion) = self.aparte.autocomplete(&raw_buf, *cursor, command) {
+                                    ui.event(UIEvent::Completed(completion));
+                                }
+                            }
+                        }
+                    }
+                },
                 Ok(Key::Char('\n')) => {
                     let result = Rc::new(RefCell::new(None));
                     let event = UIEvent::Validate(Rc::clone(&result));

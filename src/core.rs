@@ -462,6 +462,10 @@ impl Aparte {
         }
     }
 
+    pub fn autocomplete(&self, buf: &str, cursor: usize, command: Command) -> Result<String, ()> {
+        Ok("autocompleted".to_string())
+    }
+
     pub fn add_plugin<T: 'static + fmt::Display + Plugin>(&mut self, plugin: T) {
         info!("Add plugin `{}`", plugin);
         self.plugins.insert(TypeId::of::<T>(), RefCell::new(Box::new(plugin)));
