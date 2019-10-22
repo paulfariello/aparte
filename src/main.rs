@@ -90,8 +90,9 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
 
 command_def!{
     connect,
-    account, password password,
-    |aparte, command| => {
+    account,
+    (password) password,
+    |aparte, command| {
         if let Ok(jid) = Jid::from_str(&account) {
             let full_jid = match jid {
                 Jid::Full(jid) => jid,
@@ -157,11 +158,10 @@ command_def!{
     }
 }
 
-
 command_def!{
     win,
     window,
-    |aparte, command| => {
+    |aparte, command| {
         aparte.event(Event::Win(window.clone()));
         Ok(())
     }
@@ -169,8 +169,9 @@ command_def!{
 
 command_def!{
     msg,
-    contact, message optional,
-    |aparte, command| => {
+    contact,
+    (optional) message,
+    |aparte, command| {
         match aparte.current_connection() {
             Some(connection) => {
                 match Jid::from_str(&contact.clone()) {
@@ -206,7 +207,7 @@ command_def!{
 command_def!{
     join,
     muc,
-    |aparte, command| => {
+    |aparte, command| {
         match aparte.current_connection() {
             Some(connection) => {
                 match Jid::from_str(&muc) {

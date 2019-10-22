@@ -378,6 +378,7 @@ impl Command {
 pub struct CommandParser {
     pub name: &'static str,
     pub parser: Box<dyn Fn(Rc<Aparte>, Command) -> Result<(), String>>,
+    pub completions: Vec<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>,
 }
 
 #[derive(Debug, Error)]
@@ -563,9 +564,9 @@ impl Aparte {
 }
 
 #[macro_export]
-macro_rules! assign_command_args {
+macro_rules! parse_command_args {
     ($aparte:ident, $command:ident, $index:ident) => ();
-    ($aparte:ident, $command:ident, $index:ident, $arg:ident password) => (
+    ($aparte:ident, $command:ident, $index:ident, (password) $arg:ident) => (
         if $command.args.len() <= $index {
             Rc::clone(&$aparte).event(Event::ReadPassword($command.clone()));
             return Ok(())
@@ -573,7 +574,7 @@ macro_rules! assign_command_args {
 
         let $arg = $command.args[$index].clone();
     );
-    ($aparte:ident, $command:ident, $index:ident, $arg:ident optional) => (
+    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident) => (
         let $arg = {
             if $command.args.len() > $index {
                 Some($command.args[$index].clone())
@@ -588,7 +589,7 @@ macro_rules! assign_command_args {
         }
         let $arg = $command.args[$index].clone();
     );
-    ($aparte:ident, $command:ident, $index:ident, $arg:ident optional, $($args:ident),+) => (
+    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident, $($(($attr:ident))? $args:ident),+) => (
         let $arg = {
             if $command.args.len() > $index {
                 Some($command.args[$index].clone())
@@ -599,9 +600,9 @@ macro_rules! assign_command_args {
 
         $index += 1;
 
-        assign_command_args!($command, $index, $($args),*);
+        parse_command_args!($command, $index, $($(($attr))? $args),*);
     );
-    ($aparte:ident, $command:ident, $index:ident, $arg:ident, $($args:ident $($optional:ident)?),+) => (
+    ($aparte:ident, $command:ident, $index:ident, $arg:ident, $($(($attr:ident))? $args:ident),+) => (
         if $command.args.len() <= $index {
             return Err(format!("Missing {} argument", stringify!($arg)))
         }
@@ -610,22 +611,46 @@ macro_rules! assign_command_args {
 
         $index += 1;
 
-        assign_command_args!($aparte, $command, $index, $($args $($optional)?),*);
+        parse_command_args!($aparte, $command, $index, $($(($attr))? $args),*);
+    );
+}
+
+#[macro_export]
+macro_rules! generate_command_completions {
+    ($completions:ident) => ();
+    ($completions:ident, $argname:ident) => (
+        $completions.push(None);
+    );
+    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }) => (
+        $completions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
+    );
+    ($completions:ident, $argname:ident, $($argnames:ident$(: $args:tt)?),+) => (
+        $completions.push(None);
+        generate_command_completions!($completions, $($argnames$(: $args)?),*);
+    );
+    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| => $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
+        $completions.push(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion }));
+        generate_command_completions!($completions, $($argnames$(: $args)?),*);
     );
 }
 
 #[macro_export]
 macro_rules! command_def {
-    ($name:ident, $($arg:ident $($optional:ident)?),*, |$aparte:ident, $command:ident| => $body:block) => (
+    ($name:ident, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
+            let mut completions = Vec::<Option<Box<dyn std::ops::Fn(std::rc::Rc<core::Aparte>, core::Command) -> std::vec::Vec<std::string::String>>>>::new();
+
+            generate_command_completions!(completions, $($argnames$(: $args)?),*);
+
             CommandParser {
                 name: stringify!($name),
                 parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
                     #[allow(unused_mut)]
                     let mut index = 0;
-                    assign_command_args!($aparte, $command, index, $($arg $($optional)?),*);
+                    parse_command_args!($aparte, $command, index, $($(($attr))? $argnames),*);
                     $body
-                })
+                }),
+                completions: completions,
             }
         }
     );
