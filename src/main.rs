@@ -160,7 +160,13 @@ command_def!{
 
 command_def!{
     win,
-    window,
+    window: {
+        completion: |aparte, command| {
+            let mut accounts = Vec::new();
+            accounts.push("needle@nuage.me".to_string());
+            accounts
+        }
+    },
     |aparte, command| {
         aparte.event(Event::Win(window.clone()));
         Ok(())

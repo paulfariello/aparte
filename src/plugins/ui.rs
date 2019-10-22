@@ -746,8 +746,9 @@ impl Decoder for KeyCodec {
                         if raw_buf.starts_with("/") {
                             if let Ok(splitted) = shell_words::split(&raw_buf) {
                                 let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
-                                if let Ok(completion) = self.aparte.autocomplete(&raw_buf, *cursor, command) {
-                                    ui.event(UIEvent::Completed(completion));
+                                let completion = self.aparte.autocomplete(&raw_buf, *cursor, command);
+                                if completion.len() > 0 {
+                                    ui.event(UIEvent::Completed(completion[0].clone()));
                                 }
                             }
                         }
