@@ -3,10 +3,12 @@ use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
+use std::str::FromStr;
 use termion::color;
 use termion::event::Key;
 use termion::input::TermRead;
@@ -16,7 +18,6 @@ use tokio::codec::FramedRead;
 use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
-use std::str::FromStr;
 
 use crate::core::{Plugin, Aparte, Event, Message, XmppMessage, Command, CommandOrMessage, CommandError, contact, conversation};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
@@ -744,8 +745,7 @@ impl Decoder for KeyCodec {
                     } else {
                         let raw_buf = raw_buf.clone();
                         if raw_buf.starts_with("/") {
-                            if let Ok(splitted) = shell_words::split(&raw_buf) {
-                                let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
+                            if let Ok(command) = Command::try_from(&*raw_buf) {
                                 let completion = self.aparte.autocomplete(&raw_buf, *cursor, command);
                                 if completion.len() > 0 {
                                     ui.event(UIEvent::Completed(completion[0].clone()));
@@ -768,13 +768,11 @@ impl Decoder for KeyCodec {
                         command.args.push(raw_buf.clone());
                         self.queue.push(Ok(CommandOrMessage::Command(command)));
                     } else if raw_buf.starts_with("/") {
-                        let splitted = shell_words::split(&raw_buf);
-                        match splitted {
-                            Ok(splitted) => {
-                                let command = Command::new(splitted[0][1..].to_string(), splitted[1..].to_vec());
+                        match Command::try_from(&*raw_buf) {
+                            Ok(command) => {
                                 self.queue.push(Ok(CommandOrMessage::Command(command)));
                             },
-                            Err(err) => self.queue.push(Err(CommandError::Parse(err))),
+                            Err(err) => self.queue.push(Err(CommandError::Parse)),
                         }
                     } else if raw_buf.len() > 0 {
                         if let Some(current_window) = ui.current_window.clone() {

@@ -1,6 +1,5 @@
 use futures::Sink;
 use futures::unsync::mpsc::UnboundedSender;
-use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
@@ -205,9 +204,6 @@ impl PartialEq for Message {
 impl std::cmp::Eq for Message {
 }
 
-//impl TryFrom<xmpp_parsers::Message> for Message {
-//}
-
 impl TryFrom<Message> for xmpp_parsers::Element {
     type Error = ();
 
@@ -364,14 +360,146 @@ pub enum CommandOrMessage {
 pub struct Command {
     pub name: String,
     pub args: Vec<String>,
+    pub cursor: usize,
 }
 
 impl Command {
     pub fn new(command: String, args: Vec<String>) -> Self {
         Self {
             name: command,
+            cursor: args.len() + 1,
             args: args,
         }
+    }
+
+    fn parse_with_cursor(string: &str, cursor: usize) -> Result<Self, &'static str> {
+        enum State {
+            Initial,
+            Delimiter,
+            SimplyQuoted,
+            DoublyQuoted,
+            Unquoted,
+            UnquotedEscaped,
+            SimplyQuotedEscaped,
+            DoublyQuotedEscaped,
+        };
+
+        use State::*;
+
+        let mut string_cursor = cursor;
+        let mut tokens: Vec<String> = Vec::new();
+        let mut token = String::new();
+        let mut state = Initial;
+        let mut chars = string.chars();
+        let mut token_cursor = None;
+
+        loop {
+            let c = chars.next();
+            state = match state {
+                Initial => match c {
+                    Some('/') => Delimiter,
+                    _ => return Err("Missing starting /"),
+                },
+                Delimiter => match c {
+                    Some(' ') => Delimiter,
+                    Some('\'') => SimplyQuoted,
+                    Some('\"') => DoublyQuoted,
+                    Some('\\') => UnquotedEscaped,
+                    Some(c) => {
+                        token.push(c);
+                        Unquoted
+                    },
+                    None => {
+                        tokens.push(token);
+                        break;
+                    }
+                },
+                SimplyQuoted => match c {
+                    Some('\'') => Unquoted,
+                    Some('\\') => SimplyQuotedEscaped,
+                    Some(c) => {
+                        token.push(c);
+                        SimplyQuoted
+                    },
+                    None => return Err("Missing closing quote"),
+                },
+                DoublyQuoted => match c {
+                    Some('\"') => Unquoted,
+                    Some('\\') => DoublyQuotedEscaped,
+                    Some(c) => {
+                        token.push(c);
+                        DoublyQuoted
+                    },
+                    None => return Err("Missing closing quote"),
+                },
+                Unquoted => match c {
+                    Some('\'') => SimplyQuoted,
+                    Some('\"') => DoublyQuoted,
+                    Some('\\') => UnquotedEscaped,
+                    Some(' ') => {
+                        tokens.push(token);
+                        token = String::new();
+                        Delimiter
+                    },
+                    Some(c) => {
+                        token.push(c);
+                        Unquoted
+                    },
+                    None => {
+                        tokens.push(token);
+                        token = String::new();
+                        break;
+                    }
+                },
+                UnquotedEscaped => match c {
+                    Some(c) => {
+                        token.push(c);
+                        Unquoted
+                    },
+                    None => return Err("Missing escaped char"),
+                },
+                SimplyQuotedEscaped => match c {
+                    Some(c) => {
+                        token.push(c);
+                        SimplyQuoted
+                    },
+                    None => return Err("Missing escaped char"),
+                },
+                DoublyQuotedEscaped => match c {
+                    Some(c) => {
+                        token.push(c);
+                        DoublyQuoted
+                    },
+                    None => return Err("Missing escaped char"),
+                }
+            };
+
+            if string_cursor == 0 {
+                if token_cursor.is_none() {
+                    token_cursor = Some(tokens.len());
+                }
+            } else {
+                string_cursor -= 1;
+            }
+        }
+
+        if token_cursor.is_none() {
+            token_cursor = Some(tokens.len());
+        }
+
+        Ok(Command {
+            name: tokens[0].clone(),
+            args: tokens[1..].to_vec(),
+            cursor: token_cursor.unwrap(),
+        })
+    }
+}
+
+impl TryFrom<&str> for Command {
+    type Error = &'static str;
+
+    fn try_from(string: &str) -> Result<Self, Self::Error> {
+        Command::parse_with_cursor(string, string.len())
     }
 }
 
@@ -385,7 +513,7 @@ pub struct CommandParser {
 pub enum CommandError {
     Io(IoError),
     Utf8(FromUtf8Error),
-    Parse(ParseError),
+    Parse,
 }
 
 pub enum Event {
@@ -672,4 +800,86 @@ macro_rules! command_def {
             }
         }
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_command_parsing() {
+        let command = Command::try_from("/test command");
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "command");
+        assert_eq!(command.cursor, 2);
+    }
+
+    #[test]
+    fn test_multiple_args_command_parsing() {
+        let command = Command::try_from("/test command with args");
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 3);
+        assert_eq!(command.args[0], "command");
+        assert_eq!(command.args[1], "with");
+        assert_eq!(command.args[2], "args");
+        assert_eq!(command.cursor, 4);
+    }
+
+    #[test]
+    fn test_doubly_quoted_arg_command_parsing() {
+        let command = Command::try_from("/test \"command with arg\"");
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "command with arg");
+        assert_eq!(command.cursor, 2);
+    }
+
+    #[test]
+    fn test_simply_quoted_arg_command_parsing() {
+        let command = Command::try_from("/test 'command with arg'");
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "command with arg");
+        assert_eq!(command.cursor, 2);
+    }
+
+    #[test]
+    fn test_mixed_quote_arg_command_parsing() {
+        let command = Command::try_from("/test 'command with \" arg'");
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "command with \" arg");
+        assert_eq!(command.cursor, 2);
+    }
+
+    #[test]
+    fn test_missing_closing_quote() {
+        let command = Command::try_from("/test \"command with arg");
+        assert!(command.is_err());
+        assert_eq!(command.err(), Some("Missing closing quote"));
+    }
+
+    #[test]
+    fn test_command_parsing_with_cursor() {
+        let command = Command::parse_with_cursor("/test command with args", 10);
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 3);
+        assert_eq!(command.args[0], "command");
+        assert_eq!(command.args[1], "with");
+        assert_eq!(command.args[2], "args");
+        assert_eq!(command.cursor, 1);
+    }
 }

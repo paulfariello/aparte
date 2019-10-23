@@ -23,6 +23,5 @@ bytes = "0.4"
 tokio-codec = "0.1"
 tokio-file-unix = "0.5"
 dirs = "2.0"
-shell-words = "0.1"
 chrono = "0.4"
 signal-hook = { version = "0.1", features = ["tokio-support"] }
