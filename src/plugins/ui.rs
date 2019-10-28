@@ -337,6 +337,8 @@ pub struct UIPlugin<'a> {
     conversations: HashMap<String, Conversation>,
     root: Box<dyn ViewTrait<UIEvent<'a>> + 'a>,
     password_command: Option<Command>,
+    completion: Option<Vec<String>>,
+    current_completion: usize,
 }
 
 impl<'a> UIPlugin<'a> {
@@ -349,6 +351,10 @@ impl<'a> UIPlugin<'a> {
     }
 
     fn event(&mut self, mut event: UIEvent<'a>) {
+        match event {
+            UIEvent::Key(_) => self.reset_completion(),
+            _ => {},
+        }
         self.root.event(&mut event);
     }
 
@@ -441,6 +447,43 @@ impl<'a> UIPlugin<'a> {
             self.change_window(&self.windows[0].clone());
         }
     }
+
+    pub fn autocomplete(&mut self, aparte: Rc<Aparte>, command: &mut Command) {
+        let completion = match &self.completion {
+            None => {
+                let completion = aparte.autocomplete(command.clone());
+                if completion.len() == 0 {
+                    return
+                }
+                self.completion = Some(completion);
+                self.current_completion = 0;
+                self.completion.as_ref().unwrap()
+            }
+            Some(completion) => {
+                self.current_completion += 1;
+                self.current_completion %= completion.len();
+                completion
+            }
+        };
+
+        match command.cursor {
+            0 => {
+                command.name = completion[self.current_completion].clone();
+            },
+            index => {
+                if command.args.len() < index {
+                    command.args.push(completion[self.current_completion].clone());
+                } else {
+                    command.args[index - 1] = completion[self.current_completion].clone();
+                }
+            }
+        }
+    }
+
+    pub fn reset_completion(&mut self) {
+        self.completion = None;
+        self.current_completion = 0;
+    }
 }
 
 impl<'a> Plugin for UIPlugin<'a> {
@@ -519,6 +562,8 @@ impl<'a> Plugin for UIPlugin<'a> {
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
+            completion: None,
+            current_completion: 0,
         }
     }
 
@@ -746,18 +791,8 @@ impl Decoder for KeyCodec {
                         let raw_buf = raw_buf.clone();
                         if raw_buf.starts_with("/") {
                             if let Ok(mut command) = Command::parse_with_cursor(&*raw_buf, *cursor) {
-                                let completion = self.aparte.autocomplete(command.clone());
-                                if completion.len() > 0 {
-                                    match command.cursor {
-                                        0 => {
-                                            command.name = completion[0].clone();
-                                        },
-                                        index => {
-                                            command.args[index - 1] = completion[0].clone();
-                                        }
-                                    }
-                                    ui.event(UIEvent::Completed(command.assemble()));
-                                }
+                                ui.autocomplete(Rc::clone(&self.aparte), &mut command);
+                                ui.event(UIEvent::Completed(command.assemble()));
                             }
                         }
                     }
