@@ -372,7 +372,7 @@ impl Command {
         }
     }
 
-    fn parse_with_cursor(string: &str, cursor: usize) -> Result<Self, &'static str> {
+    pub fn parse_with_cursor(string: &str, cursor: usize) -> Result<Self, &'static str> {
         enum State {
             Initial,
             Delimiter,
@@ -492,6 +492,69 @@ impl Command {
             args: tokens[1..].to_vec(),
             cursor: token_cursor.unwrap(),
         })
+    }
+
+    fn escape(arg: &str) -> String {
+        let mut quote = None;
+        let mut escaped = String::with_capacity(arg.len());
+        for c in arg.chars() {
+            escaped.extend(match c {
+                '\\' => "\\\\".to_string(),
+                ' ' => {
+                    if quote.is_none() {
+                        quote = Some(' ');
+                    }
+                    " ".to_string()
+                },
+                '\'' => {
+                    match quote {
+                        Some('\'') => "\\'".to_string(),
+                        Some('"') => "'".to_string(),
+                        Some(' ') | None => {
+                            quote = Some('"');
+                            "'".to_string()
+                        },
+                        Some(_) => unreachable!(),
+                    }
+                }
+                '"' => {
+                    match quote {
+                        Some('\'') => "\"".to_string(),
+                        Some('"') => "\\\"".to_string(),
+                        Some(' ') | None => {
+                            quote = Some('\'');
+                            "\"".to_string()
+                        },
+                        Some(_) => unreachable!(),
+                    }
+                }
+                c => c.to_string(),
+            }.chars())
+        }
+
+        if quote == Some(' ') {
+            quote = Some('"');
+        }
+
+        if quote.is_none() {
+            return escaped;
+        } else {
+            return format!("{}{}{}", quote.unwrap(), escaped, quote.unwrap());
+        }
+
+    }
+
+    pub fn assemble(&self) -> String {
+        let mut command = "/".to_string();
+
+        command.extend(self.name.chars());
+
+        for arg in &self.args {
+            command.push(' ');
+            command.extend(Command::escape(arg).chars());
+        }
+
+        command
     }
 }
 
@@ -881,5 +944,60 @@ mod tests {
         assert_eq!(command.args[1], "with");
         assert_eq!(command.args[2], "args");
         assert_eq!(command.cursor, 1);
+    }
+
+    #[test]
+    fn test_command_assemble() {
+        let command = Command {
+            name: "test".to_string(),
+            args: vec!["foo".to_string(), "bar".to_string()],
+            cursor: 0,
+        };
+
+        assert_eq!(command.assemble(), "/test foo bar");
+    }
+
+    #[test]
+    fn test_command_with_double_quote_assemble() {
+        let command = Command {
+            name: "test".to_string(),
+            args: vec!["fo\"o".to_string(), "bar".to_string()],
+            cursor: 0,
+        };
+
+        assert_eq!(command.assemble(), "/test 'fo\"o' bar");
+    }
+
+    #[test]
+    fn test_command_with_simple_quote_assemble() {
+        let command = Command {
+            name: "test".to_string(),
+            args: vec!["fo'o".to_string(), "bar".to_string()],
+            cursor: 0,
+        };
+
+        assert_eq!(command.assemble(), "/test \"fo'o\" bar");
+    }
+
+    #[test]
+    fn test_command_with_space_assemble() {
+        let command = Command {
+            name: "test".to_string(),
+            args: vec!["foo bar".to_string()],
+            cursor: 0,
+        };
+
+        assert_eq!(command.assemble(), "/test \"foo bar\"");
+    }
+
+    #[test]
+    fn test_command_with_space_and_quote_assemble() {
+        let command = Command {
+            name: "test".to_string(),
+            args: vec!["foo bar\"".to_string()],
+            cursor: 0,
+        };
+
+        assert_eq!(command.assemble(), "/test 'foo bar\"'");
     }
 }
