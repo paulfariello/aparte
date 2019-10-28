@@ -410,7 +410,6 @@ impl Command {
                         Unquoted
                     },
                     None => {
-                        tokens.push(token);
                         break;
                     }
                 },
@@ -476,7 +475,10 @@ impl Command {
 
             if string_cursor == 0 {
                 if token_cursor.is_none() {
-                    token_cursor = Some(tokens.len());
+                    token_cursor = match c {
+                        Some(_) => Some(tokens.len()),
+                        None => None,
+                    }
                 }
             } else {
                 string_cursor -= 1;
@@ -484,14 +486,25 @@ impl Command {
         }
 
         if token_cursor.is_none() {
-            token_cursor = Some(tokens.len());
+            token_cursor = match state {
+                Delimiter => Some(tokens.len()),
+                _ => Some(tokens.len() - 1),
+            };
         }
 
-        Ok(Command {
-            name: tokens[0].clone(),
-            args: tokens[1..].to_vec(),
-            cursor: token_cursor.unwrap(),
-        })
+        if tokens.len() > 0 {
+            Ok(Command {
+                name: tokens[0].clone(),
+                args: tokens[1..].to_vec(),
+                cursor: token_cursor.unwrap(),
+            })
+        } else {
+            Ok(Command {
+                name: "".to_string(),
+                args: Vec::new(),
+                cursor: token_cursor.unwrap(),
+            })
+        }
     }
 
     fn escape(arg: &str) -> String {
@@ -659,8 +672,8 @@ impl Aparte {
         }
     }
 
-    pub fn autocomplete(&self, buf: &str, cursor: usize, command: Command) -> Vec<String> {
-        if command.args.len() == 0 {
+    pub fn autocomplete(&self, command: Command) -> Vec<String> {
+        if command.cursor == 0 {
             self.commands.iter().filter_map(|c| {
                 if c.0.starts_with(&command.name) {
                     Some(c.0.to_string())
@@ -670,7 +683,7 @@ impl Aparte {
             }).collect()
         } else {
             if let Some(parser) = self.commands.get(&command.name) {
-                if let Some(completion) = &parser.completions[command.args.len()] {
+                if let Some(completion) = &parser.completions[command.cursor - 1] {
                     completion(self, command)
                 } else {
                     Vec::new()
@@ -877,7 +890,7 @@ mod tests {
         assert_eq!(command.name, "test");
         assert_eq!(command.args.len(), 1);
         assert_eq!(command.args[0], "command");
-        assert_eq!(command.cursor, 2);
+        assert_eq!(command.cursor, 1);
     }
 
     #[test]
@@ -890,7 +903,7 @@ mod tests {
         assert_eq!(command.args[0], "command");
         assert_eq!(command.args[1], "with");
         assert_eq!(command.args[2], "args");
-        assert_eq!(command.cursor, 4);
+        assert_eq!(command.cursor, 3);
     }
 
     #[test]
@@ -901,7 +914,7 @@ mod tests {
         assert_eq!(command.name, "test");
         assert_eq!(command.args.len(), 1);
         assert_eq!(command.args[0], "command with arg");
-        assert_eq!(command.cursor, 2);
+        assert_eq!(command.cursor, 1);
     }
 
     #[test]
@@ -912,7 +925,7 @@ mod tests {
         assert_eq!(command.name, "test");
         assert_eq!(command.args.len(), 1);
         assert_eq!(command.args[0], "command with arg");
-        assert_eq!(command.cursor, 2);
+        assert_eq!(command.cursor, 1);
     }
 
     #[test]
@@ -923,7 +936,7 @@ mod tests {
         assert_eq!(command.name, "test");
         assert_eq!(command.args.len(), 1);
         assert_eq!(command.args[0], "command with \" arg");
-        assert_eq!(command.cursor, 2);
+        assert_eq!(command.cursor, 1);
     }
 
     #[test]
@@ -934,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn test_command_parsing_with_cursor() {
+    fn test_command_args_parsing_with_cursor() {
         let command = Command::parse_with_cursor("/test command with args", 10);
         assert!(command.is_ok());
         let command = command.unwrap();
@@ -944,6 +957,36 @@ mod tests {
         assert_eq!(command.args[1], "with");
         assert_eq!(command.args[2], "args");
         assert_eq!(command.cursor, 1);
+    }
+
+    #[test]
+    fn test_command_parsing_with_cursor() {
+        let command = Command::parse_with_cursor("/te", 3);
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "te");
+        assert_eq!(command.args.len(), 0);
+        assert_eq!(command.cursor, 0);
+    }
+
+    #[test]
+    fn test_command_end_with_space_parsing_with_cursor() {
+        let command = Command::parse_with_cursor("/test ", 6);
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "test");
+        assert_eq!(command.args.len(), 0);
+        assert_eq!(command.cursor, 1);
+    }
+
+    #[test]
+    fn test_no_command_parsing_with_cursor() {
+        let command = Command::parse_with_cursor("/", 1);
+        assert!(command.is_ok());
+        let command = command.unwrap();
+        assert_eq!(command.name, "");
+        assert_eq!(command.args.len(), 0);
+        assert_eq!(command.cursor, 0);
     }
 
     #[test]

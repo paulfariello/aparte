@@ -745,10 +745,18 @@ impl Decoder for KeyCodec {
                     } else {
                         let raw_buf = raw_buf.clone();
                         if raw_buf.starts_with("/") {
-                            if let Ok(command) = Command::parse_with_cursor(&*raw_buf, *cursor) {
-                                let completion = self.aparte.autocomplete(&raw_buf, *cursor, command);
+                            if let Ok(mut command) = Command::parse_with_cursor(&*raw_buf, *cursor) {
+                                let completion = self.aparte.autocomplete(command.clone());
                                 if completion.len() > 0 {
-                                    ui.event(UIEvent::Completed(completion[0].clone()));
+                                    match command.cursor {
+                                        0 => {
+                                            command.name = completion[0].clone();
+                                        },
+                                        index => {
+                                            command.args[index - 1] = completion[0].clone();
+                                        }
+                                    }
+                                    ui.event(UIEvent::Completed(command.assemble()));
                                 }
                             }
                         }
