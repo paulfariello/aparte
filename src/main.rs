@@ -163,7 +163,6 @@ command_def!{
     window: {
         completion: |aparte, command| {
             let mut accounts = Vec::new();
-            accounts.push("needle@nuage.me".to_string());
             accounts
         }
     },
