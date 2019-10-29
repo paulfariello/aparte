@@ -683,8 +683,12 @@ impl Aparte {
             }).collect()
         } else {
             if let Some(parser) = self.commands.get(&command.name) {
-                if let Some(completion) = &parser.completions[command.cursor - 1] {
-                    completion(self, command)
+                if command.cursor - 1 < parser.completions.len() {
+                    if let Some(completion) = &parser.completions[command.cursor - 1] {
+                        completion(self, command)
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 }
