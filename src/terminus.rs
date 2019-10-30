@@ -5,7 +5,6 @@ use std::fmt;
 use std::hash::Hash;
 use std::io::{Write, Stdout};
 use std::rc::Rc;
-use termion::cursor::DetectCursorPos;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 
