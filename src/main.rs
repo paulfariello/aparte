@@ -36,11 +36,13 @@ mod core;
 mod contact;
 mod conversation;
 mod message;
+mod command;
 mod terminus;
 mod plugins;
 
-use crate::core::{Aparte, Plugin, Event, CommandParser, Command, CommandOrMessage};
+use crate::core::{Aparte, Plugin, Event, CommandOrMessage};
 use crate::message::{Message};
+use crate::command::{CommandParser, Command};
 
 fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
     if let Some(message) = XmppParsersMessage::try_from(stanza.clone()).ok() {

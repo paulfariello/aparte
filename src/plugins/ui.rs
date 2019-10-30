@@ -19,9 +19,10 @@ use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::core::{Plugin, Aparte, Event, Command, CommandOrMessage, CommandError};
+use crate::core::{Plugin, Aparte, Event, CommandOrMessage};
 use crate::{contact, conversation};
 use crate::message::{Message, XmppMessage};
+use crate::command::{Command, CommandError};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
 pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
