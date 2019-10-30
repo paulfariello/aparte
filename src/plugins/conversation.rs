@@ -4,7 +4,8 @@ use std::fmt;
 use std::rc::Rc;
 use xmpp_parsers::{Jid, BareJid, muc};
 
-use crate::core::{Plugin, Aparte, Event, conversation};
+use crate::core::{Plugin, Aparte, Event};
+use crate::conversation;
 
 pub struct ConversationPlugin {
     conversations: HashMap<String, conversation::Conversation>,

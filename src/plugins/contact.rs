@@ -6,7 +6,8 @@ use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
 use xmpp_parsers::iq::{Iq, IqType};
 use std::convert::TryFrom;
 
-use crate::core::{Plugin, Aparte, Event, contact};
+use crate::core::{Plugin, Aparte, Event};
+use crate::contact;
 
 impl From<roster::Group> for contact::Group {
     fn from(item: roster::Group) -> Self {

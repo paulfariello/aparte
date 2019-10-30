@@ -33,6 +33,8 @@ use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceTyp
 use xmpp_parsers::{Element, Jid};
 
 mod core;
+mod contact;
+mod conversation;
 mod terminus;
 mod plugins;
 

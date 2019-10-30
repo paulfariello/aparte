@@ -15,6 +15,8 @@ use xmpp_parsers::{Element, FullJid, BareJid, Jid, presence, iq};
 use xmpp_parsers;
 use chrono::{Utc, DateTime};
 
+use crate::{contact, conversation};
+
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -233,122 +235,6 @@ impl TryFrom<Message> for xmpp_parsers::Element {
     }
 }
 
-pub mod contact {
-    use xmpp_parsers::roster::Subscription;
-    use std::hash::{Hash, Hasher};
-    use xmpp_parsers::BareJid;
-
-    #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-    pub enum Presence {
-        Unavailable,
-        Available,
-        Away,
-        Chat,
-        Dnd,
-        Xa,
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct Group(pub String);
-
-    impl Hash for Group {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.0.hash(state);
-        }
-    }
-
-    impl PartialEq for Group {
-        fn eq(&self, other: &Self) -> bool {
-            self.0 == other.0
-        }
-    }
-
-    impl Eq for Group {}
-
-    #[derive(Clone, Debug)]
-    pub struct Contact {
-        pub jid: BareJid,
-        pub name: Option<String>,
-        pub subscription: Subscription,
-        pub presence: Presence,
-        pub groups: Vec<Group>,
-    }
-
-    impl Hash for Contact {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.jid.hash(state);
-        }
-    }
-
-    impl PartialEq for Contact {
-        fn eq(&self, other: &Self) -> bool {
-            self.jid == other.jid
-        }
-    }
-
-    impl Eq for Contact {}
-}
-
-pub mod conversation {
-    use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
-    use xmpp_parsers::BareJid;
-
-    #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
-    pub enum Affiliation {
-        Owner,
-        Admin,
-        Member,
-        Outcast,
-        None,
-    }
-
-    #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
-    pub enum Role {
-        Visitor,
-        Participant,
-        Moderator,
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct Occupant {
-        pub nick: String,
-        pub jid: Option<BareJid>,
-        pub affiliation: Affiliation,
-        pub role: Role,
-    }
-
-    #[derive(Clone, Debug)]
-    pub struct Channel {
-        pub jid: BareJid,
-        pub nick: String,
-        pub name: Option<String>,
-        pub occupants: HashMap<String, Occupant>,
-    }
-
-    pub struct Chat {
-        pub contact: BareJid,
-    }
-
-    pub enum Conversation {
-        Chat(Chat),
-        Channel(Channel),
-    }
-
-    impl Hash for Occupant {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.nick.hash(state);
-        }
-    }
-
-    impl PartialEq for Occupant {
-        fn eq(&self, other: &Self) -> bool {
-            self.nick == other.nick
-        }
-    }
-
-    impl Eq for Occupant {}
-}
 
 #[derive(Debug, Clone)]
 pub enum CommandOrMessage {
