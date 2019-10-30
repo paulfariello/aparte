@@ -33,6 +33,8 @@ use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceTyp
 use xmpp_parsers::{Element, Jid};
 
 mod core;
+mod config;
+mod account;
 mod contact;
 mod conversation;
 mod message;
@@ -96,7 +98,11 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
 
 command_def!{
     connect,
-    account,
+    account: {
+        completion: |aparte, command| {
+            aparte.config.accounts.iter().map(|(_, account)| account.login.clone()).collect()
+        }
+    },
     (password) password,
     |aparte, command| {
         if let Ok(jid) = Jid::from_str(&account) {
@@ -256,7 +262,6 @@ command_def!{
 fn main() {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     let data_dir = dirs::data_dir().unwrap();
-
     let aparte_data = data_dir.join("aparté");
 
     if let Err(e) = std::fs::create_dir_all(&aparte_data) {
@@ -268,9 +273,18 @@ fn main() {
         panic!("Cannot setup log to file: {}", e);
     }
 
+    let conf_dir = dirs::config_dir().unwrap();
+    let aparte_conf = conf_dir.join("aparté");
+
+    if let Err(e) = std::fs::create_dir_all(&aparte_conf) {
+        panic!("Cannot create aparté data dir: {}", e);
+    }
+
+    let config = aparte_conf.join("config.toml");
+
     info!("Starting aparté");
 
-    let mut aparte = Aparte::new();
+    let mut aparte = Aparte::new(config);
     aparte.add_plugin(plugins::disco::Disco::new());
     aparte.add_plugin(plugins::carbons::CarbonsPlugin::new());
     aparte.add_plugin(plugins::contact::ContactPlugin::new());

@@ -4,6 +4,9 @@ use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
 use std::fmt;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::path::PathBuf;
 use std::rc::Rc;
 use tokio_xmpp::Packet;
 use xmpp_parsers::{Element, FullJid, BareJid, presence, iq};
@@ -12,6 +15,7 @@ use xmpp_parsers;
 use crate::{contact, conversation};
 use crate::message::Message;
 use crate::command::{Command, CommandParser};
+use crate::config::Config;
 
 #[derive(Debug, Clone)]
 pub enum CommandOrMessage {
@@ -74,10 +78,24 @@ pub struct Aparte {
     current_connection: RefCell<Option<String>>,
     event_lock: RefCell<()>,
     event_queue: RefCell<Vec<Event>>,
+    pub config: Config,
+
 }
 
 impl Aparte {
-    pub fn new() -> Self {
+    pub fn new(config_path: PathBuf) -> Self {
+        let mut config_file = match OpenOptions::new().read(true).write(true).create(true).open(config_path) {
+            Err(err) => panic!("Cannot read config file {}", err),
+            Ok(config_file) => config_file,
+        };
+
+        let mut config_str = String::new();
+        config_file.read_to_string(&mut config_str);
+        let config = match toml::from_str(&config_str) {
+            Err(err) => panic!("Cannot read config file {}", err),
+            Ok(config) => config,
+        };
+
         Self {
             commands: HashMap::new(),
             plugins: HashMap::new(),
@@ -85,6 +103,7 @@ impl Aparte {
             current_connection: RefCell::new(None),
             event_lock: RefCell::new(()),
             event_queue: RefCell::new(Vec::new()),
+            config: config,
         }
     }
 
@@ -281,8 +300,8 @@ macro_rules! generate_command_completions {
         $completions.push(None);
         generate_command_completions!($completions, $($argnames$(: $args)?),*);
     );
-    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| => $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
-        $completions.push(Box::new(|$aparte: &Aparte, $command: Command| -> Vec<String> { $completion }));
+    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
+        $completions.push(Some(Box::new(|$aparte: &Aparte, $command: Command| -> Vec<String> { $completion })));
         generate_command_completions!($completions, $($argnames$(: $args)?),*);
     );
 }

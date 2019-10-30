@@ -25,3 +25,5 @@ tokio-file-unix = "0.5"
 dirs = "2.0"
 chrono = "0.4"
 signal-hook = { version = "0.1", features = ["tokio-support"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.5"
