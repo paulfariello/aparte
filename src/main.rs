@@ -173,12 +173,12 @@ command_def!{
 command_def!{
     win,
     window: {
-        completion: |aparte, command| {
+        completion: |aparte, _command| {
             let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
             ui.get_windows()
         }
     },
-    |aparte, command| {
+    |aparte, _command| {
         aparte.event(Event::Win(window.clone()));
         Ok(())
     }
@@ -186,9 +186,14 @@ command_def!{
 
 command_def!{
     msg,
-    contact,
+    contact: {
+        completion: |aparte, _command| {
+            let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
+            contact.contacts.iter().map(|c| c.0.to_string()).collect()
+        }
+    },
     (optional) message,
-    |aparte, command| {
+    |aparte, _command| {
         match aparte.current_connection() {
             Some(connection) => {
                 match Jid::from_str(&contact.clone()) {

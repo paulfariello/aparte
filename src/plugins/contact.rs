@@ -33,7 +33,7 @@ impl From<roster::Item> for contact::Contact {
 }
 
 pub struct ContactPlugin {
-    contacts: HashMap<BareJid, contact::Contact>,
+    pub contacts: HashMap<BareJid, contact::Contact>,
 }
 
 impl ContactPlugin {
