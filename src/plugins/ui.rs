@@ -461,17 +461,14 @@ impl<'a> UIPlugin<'a> {
             }
         };
 
-        match command.cursor {
-            0 => {
-                command.name = completion[self.current_completion].clone();
-            },
-            index => {
-                if command.args.len() < index {
-                    command.args.push(completion[self.current_completion].clone());
-                } else {
-                    command.args[index - 1] = completion[self.current_completion].clone();
-                }
-            }
+        if completion.len() == 0 {
+            return;
+        }
+
+        if command.cursor < command.args.len() {
+            command.args[command.cursor] = completion[self.current_completion].clone();
+        } else {
+            command.args.push(completion[self.current_completion].clone());
         }
 
         self.current_completion += 1;
@@ -814,7 +811,16 @@ impl Decoder for KeyCodec {
                                     };
 
                                     if call_completion {
-                                        let completion = self.aparte.autocomplete(command.clone());
+                                        let mut completion = self.aparte.autocomplete(command.clone());
+                                        if command.cursor < command.args.len() {
+                                            completion = completion.iter().filter_map(|c| {
+                                                if c.starts_with(&command.args[command.cursor]) {
+                                                    Some(c.to_string())
+                                                } else {
+                                                    None
+                                                }
+                                            }).collect();
+                                        }
                                         let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                                         ui.completion = Some(completion);
                                         ui.current_completion = 0;

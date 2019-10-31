@@ -120,13 +120,7 @@ impl Aparte {
 
     pub fn autocomplete(&self, command: Command) -> Vec<String> {
         if command.cursor == 0 {
-            self.commands.iter().filter_map(|c| {
-                if c.0.starts_with(&command.name) {
-                    Some(c.0.to_string())
-                } else {
-                    None
-                }
-            }).collect()
+            self.commands.iter().map(|c| c.0.to_string()).collect()
         } else {
             if let Some(parser) = self.commands.get(&command.args[0]) {
                 if command.cursor - 1 < parser.completions.len() {
@@ -318,7 +312,7 @@ macro_rules! command_def {
                 name: stringify!($name),
                 parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
                     #[allow(unused_mut)]
-                    let mut index = 0;
+                    let mut index = 1;
                     parse_command_args!($aparte, $command, index, $($(($attr))? $argnames),*);
                     $body
                 }),
