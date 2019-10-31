@@ -174,8 +174,8 @@ command_def!{
     win,
     window: {
         completion: |aparte, command| {
-            let mut accounts = Vec::new();
-            accounts
+            let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
+            ui.get_windows()
         }
     },
     |aparte, command| {

@@ -454,17 +454,9 @@ impl<'a> UIPlugin<'a> {
     pub fn autocomplete(&mut self, aparte: Rc<Aparte>, command: &mut Command) {
         let completion = match &self.completion {
             None => {
-                let completion = aparte.autocomplete(command.clone());
-                if completion.len() == 0 {
-                    return
-                }
-                self.completion = Some(completion);
-                self.current_completion = 0;
-                self.completion.as_ref().unwrap()
+                return;
             }
             Some(completion) => {
-                self.current_completion += 1;
-                self.current_completion %= completion.len();
                 completion
             }
         };
@@ -481,11 +473,18 @@ impl<'a> UIPlugin<'a> {
                 }
             }
         }
+
+        self.current_completion += 1;
+        self.current_completion %= completion.len();
     }
 
     pub fn reset_completion(&mut self) {
         self.completion = None;
         self.current_completion = 0;
+    }
+
+    pub fn get_windows(&self) -> Vec<String> {
+        self.windows.clone()
     }
 }
 
@@ -744,56 +743,84 @@ impl Decoder for KeyCodec {
     type Error = CommandError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
 
         let mut keys = buf.keys();
         while let Some(key) = keys.next() {
             match key {
                 Ok(Key::Backspace) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Backspace));
                 },
                 Ok(Key::Delete) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Delete));
                 },
                 Ok(Key::Home) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Home));
                 },
                 Ok(Key::End) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::End));
                 },
                 Ok(Key::Left) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Left));
                 },
                 Ok(Key::Right) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Right));
                 },
                 Ok(Key::Up) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Up));
                 },
                 Ok(Key::Down) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Down));
                 },
                 Ok(Key::PageUp) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::PageUp));
                 },
                 Ok(Key::PageDown) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::PageDown));
                 },
                 Ok(Key::Char('\t')) => {
                     let result = Rc::new(RefCell::new(None));
                     let event = UIEvent::Complete(Rc::clone(&result));
 
-                    ui.event(event);
+                    let (raw_buf, cursor, password) = {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(event);
 
-                    let result = result.borrow_mut();
-                    let (raw_buf, cursor, password) = result.as_ref().unwrap();
+                        let result = result.borrow_mut();
+                        result.as_ref().unwrap().clone()
+                    };
 
-                    if *password {
+                    if password {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                         ui.event(UIEvent::Key(Key::Char('\t')));
                     } else {
                         let raw_buf = raw_buf.clone();
                         if raw_buf.starts_with("/") {
-                            if let Ok(mut command) = Command::parse_with_cursor(&*raw_buf, *cursor) {
+                            if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
+                                {
+                                    let call_completion = {
+                                        let ui = self.aparte.get_plugin::<UIPlugin>().unwrap();
+                                        ui.completion.is_none()
+                                    };
+
+                                    if call_completion {
+                                        let completion = self.aparte.autocomplete(command.clone());
+                                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                                        ui.completion = Some(completion);
+                                        ui.current_completion = 0;
+                                    }
+                                }
+
+                                let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                                 ui.autocomplete(Rc::clone(&self.aparte), &mut command);
                                 ui.event(UIEvent::Completed(command.assemble()));
                             }
@@ -801,6 +828,7 @@ impl Decoder for KeyCodec {
                     }
                 },
                 Ok(Key::Char('\n')) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     let result = Rc::new(RefCell::new(None));
                     let event = UIEvent::Validate(Rc::clone(&result));
 
@@ -847,6 +875,7 @@ impl Decoder for KeyCodec {
                     }
                 },
                 Ok(Key::Alt('\x1b')) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     match keys.next() {
                         Some(Ok(Key::Char('['))) => {
                             match keys.next() {
@@ -867,6 +896,7 @@ impl Decoder for KeyCodec {
                     };
                 },
                 Ok(Key::Char(c)) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Char(c)));
                 },
                 Ok(Key::Ctrl('c')) => {
