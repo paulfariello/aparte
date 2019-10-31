@@ -470,7 +470,21 @@ pub struct Input {
     pub password: bool,
     pub history: Vec<String>,
     pub history_index: usize,
+    // Used to index code points in buf (don't use it to directly index buf)
     pub cursor: usize,
+}
+
+impl Input {
+    pub fn byte_index(&self, mut cursor: usize) -> usize {
+        let mut byte_index = 0;
+        while cursor > 0 {
+            byte_index += 1;
+            if self.buf.is_char_boundary(byte_index) {
+                cursor -= 1;
+            }
+        }
+        byte_index
+    }
 }
 
 impl<'a, E> View<'a, Input, E> {
@@ -508,7 +522,8 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn key(&mut self, c: char) {
-        self.content.buf.insert(self.content.cursor, c);
+        let byte_index = self.content.byte_index(self.content.cursor);
+        self.content.buf.insert(byte_index, c);
         self.content.cursor += 1;
         if !self.content.password {
             self.redraw();
@@ -517,7 +532,11 @@ impl<'a, E> View<'a, Input, E> {
 
     pub fn backspace(&mut self) {
         if self.content.cursor > 0 {
-            self.content.buf.remove(self.content.cursor - 1);
+            let byte_index = self.content.byte_index(self.content.cursor - 1);
+            self.content.buf.remove(byte_index);
+            while !self.content.buf.is_char_boundary(byte_index) {
+                self.content.buf.remove(byte_index);
+            }
             self.content.cursor -= 1;
         }
         if !self.content.password {
@@ -535,7 +554,7 @@ impl<'a, E> View<'a, Input, E> {
 
         use WordParserState::*;
 
-        let mut iter = self.content.buf[..self.content.cursor].chars().rev();
+        let mut iter = self.content.buf[..self.content.byte_index(self.content.cursor)].chars().rev();
         let mut state = Init;
         let mut word_start = self.content.cursor;
 
@@ -575,7 +594,7 @@ impl<'a, E> View<'a, Input, E> {
 
             word_start -= 1;
         }
-        self.content.buf.replace_range(word_start..self.content.cursor, "");
+        self.content.buf.replace_range(self.content.byte_index(word_start)..self.content.byte_index(self.content.cursor), "");
         self.content.cursor = word_start;
         if !self.content.password {
             self.redraw();
@@ -998,5 +1017,22 @@ mod tests {
     fn test_term_string_visible_len_is_correct() {
         assert_eq!(term_string_visible_len(&format!("{}ab{}", termion::color::Bg(termion::color::Red), termion::cursor::Goto(1, 123))), 2);
         assert_eq!(term_string_visible_len(&format!("{}ab{}", termion::cursor::Goto(1, 123), termion::color::Bg(termion::color::Red))), 2);
+    }
+
+    #[test]
+    fn test_input_byte_index_for_cursor() {
+        let input = Input {
+            buf: "aça".to_string(),
+            tmp_buf: None,
+            password: true,
+            history: Vec::new(),
+            history_index: 0,
+            cursor: 1,
+        };
+
+        assert_eq!(input.buf.len(), 4);
+        assert_eq!(input.byte_index(0), 0);
+        assert_eq!(input.byte_index(1), 1);
+        assert_eq!(input.byte_index(2), 3);
     }
 }
