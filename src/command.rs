@@ -7,16 +7,14 @@ use crate::core::Aparte;
 
 #[derive(Debug, Clone)]
 pub struct Command {
-    pub name: String,
     pub args: Vec<String>,
     pub cursor: usize,
 }
 
 impl Command {
-    pub fn new(command: String, args: Vec<String>) -> Self {
+    pub fn new(args: Vec<String>) -> Self {
         Self {
-            name: command,
-            cursor: args.len() + 1,
+            cursor: args.len(),
             args: args,
         }
     }
@@ -143,14 +141,12 @@ impl Command {
 
         if tokens.len() > 0 {
             Ok(Command {
-                name: tokens[0].clone(),
-                args: tokens[1..].to_vec(),
+                args: tokens,
                 cursor: token_cursor.unwrap(),
             })
         } else {
             Ok(Command {
-                name: "".to_string(),
-                args: Vec::new(),
+                args: vec!["".to_string()],
                 cursor: token_cursor.unwrap(),
             })
         }
@@ -209,10 +205,13 @@ impl Command {
     pub fn assemble(&self) -> String {
         let mut command = "/".to_string();
 
-        command.extend(self.name.chars());
-
+        let mut first = true;
         for arg in &self.args {
-            command.push(' ');
+            if ! first {
+                command.push(' ');
+            } else {
+                first = false;
+            }
             command.extend(Command::escape(arg).chars());
         }
 
@@ -250,9 +249,9 @@ mod tests {
         let command = Command::try_from("/test command");
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 1);
-        assert_eq!(command.args[0], "command");
+        assert_eq!(command.args.len(), 2);
+        assert_eq!(command.args[0], "test");
+        assert_eq!(command.args[1], "command");
         assert_eq!(command.cursor, 1);
     }
 
@@ -261,11 +260,11 @@ mod tests {
         let command = Command::try_from("/test command with args");
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 3);
-        assert_eq!(command.args[0], "command");
-        assert_eq!(command.args[1], "with");
-        assert_eq!(command.args[2], "args");
+        assert_eq!(command.args.len(), 4);
+        assert_eq!(command.args[0], "test");
+        assert_eq!(command.args[1], "command");
+        assert_eq!(command.args[2], "with");
+        assert_eq!(command.args[3], "args");
         assert_eq!(command.cursor, 3);
     }
 
@@ -274,9 +273,9 @@ mod tests {
         let command = Command::try_from("/test \"command with arg\"");
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 1);
-        assert_eq!(command.args[0], "command with arg");
+        assert_eq!(command.args.len(), 2);
+        assert_eq!(command.args[0], "test");
+        assert_eq!(command.args[1], "command with arg");
         assert_eq!(command.cursor, 1);
     }
 
@@ -285,9 +284,9 @@ mod tests {
         let command = Command::try_from("/test 'command with arg'");
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 1);
-        assert_eq!(command.args[0], "command with arg");
+        assert_eq!(command.args.len(), 2);
+        assert_eq!(command.args[0], "test");
+        assert_eq!(command.args[1], "command with arg");
         assert_eq!(command.cursor, 1);
     }
 
@@ -296,9 +295,9 @@ mod tests {
         let command = Command::try_from("/test 'command with \" arg'");
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 1);
-        assert_eq!(command.args[0], "command with \" arg");
+        assert_eq!(command.args.len(), 2);
+        assert_eq!(command.args[0], "test");
+        assert_eq!(command.args[1], "command with \" arg");
         assert_eq!(command.cursor, 1);
     }
 
@@ -314,11 +313,11 @@ mod tests {
         let command = Command::parse_with_cursor("/test command with args", 10);
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 3);
-        assert_eq!(command.args[0], "command");
-        assert_eq!(command.args[1], "with");
-        assert_eq!(command.args[2], "args");
+        assert_eq!(command.args.len(), 4);
+        assert_eq!(command.args[0], "test");
+        assert_eq!(command.args[1], "command");
+        assert_eq!(command.args[2], "with");
+        assert_eq!(command.args[3], "args");
         assert_eq!(command.cursor, 1);
     }
 
@@ -327,8 +326,8 @@ mod tests {
         let command = Command::parse_with_cursor("/te", 3);
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "te");
-        assert_eq!(command.args.len(), 0);
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "te");
         assert_eq!(command.cursor, 0);
     }
 
@@ -337,8 +336,8 @@ mod tests {
         let command = Command::parse_with_cursor("/test ", 6);
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "test");
-        assert_eq!(command.args.len(), 0);
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "test");
         assert_eq!(command.cursor, 1);
     }
 
@@ -347,27 +346,25 @@ mod tests {
         let command = Command::parse_with_cursor("/", 1);
         assert!(command.is_ok());
         let command = command.unwrap();
-        assert_eq!(command.name, "");
-        assert_eq!(command.args.len(), 0);
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(command.args[0], "");
         assert_eq!(command.cursor, 0);
     }
 
     #[test]
     fn test_command_assemble() {
         let command = Command {
-            name: "test".to_string(),
             args: vec!["foo".to_string(), "bar".to_string()],
             cursor: 0,
         };
 
-        assert_eq!(command.assemble(), "/test foo bar");
+        assert_eq!(command.assemble(), "/foo bar");
     }
 
     #[test]
     fn test_command_with_double_quote_assemble() {
         let command = Command {
-            name: "test".to_string(),
-            args: vec!["fo\"o".to_string(), "bar".to_string()],
+            args: vec!["test".to_string(), "fo\"o".to_string(), "bar".to_string()],
             cursor: 0,
         };
 
@@ -377,8 +374,7 @@ mod tests {
     #[test]
     fn test_command_with_simple_quote_assemble() {
         let command = Command {
-            name: "test".to_string(),
-            args: vec!["fo'o".to_string(), "bar".to_string()],
+            args: vec!["test".to_string(), "fo'o".to_string(), "bar".to_string()],
             cursor: 0,
         };
 
@@ -388,8 +384,7 @@ mod tests {
     #[test]
     fn test_command_with_space_assemble() {
         let command = Command {
-            name: "test".to_string(),
-            args: vec!["foo bar".to_string()],
+            args: vec!["test".to_string(), "foo bar".to_string()],
             cursor: 0,
         };
 
@@ -399,8 +394,7 @@ mod tests {
     #[test]
     fn test_command_with_space_and_quote_assemble() {
         let command = Command {
-            name: "test".to_string(),
-            args: vec!["foo bar\"".to_string()],
+            args: vec!["test".to_string(), "foo bar\"".to_string()],
             cursor: 0,
         };
 

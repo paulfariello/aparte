@@ -112,9 +112,9 @@ impl Aparte {
     }
 
     pub fn parse_command(self: Rc<Self>, command: Command) -> Result<(), String> {
-        match Rc::clone(&self).commands.get(&command.name) {
+        match Rc::clone(&self).commands.get(&command.args[0]) {
             Some(parser) => (parser.parser)(self, command),
-            None => Err(format!("Unknown command {}", command.name)),
+            None => Err(format!("Unknown command {}", command.args[0])),
         }
     }
 
@@ -128,7 +128,7 @@ impl Aparte {
                 }
             }).collect()
         } else {
-            if let Some(parser) = self.commands.get(&command.name) {
+            if let Some(parser) = self.commands.get(&command.args[0]) {
                 if command.cursor - 1 < parser.completions.len() {
                     if let Some(completion) = &parser.completions[command.cursor - 1] {
                         completion(self, command)
