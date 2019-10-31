@@ -525,6 +525,63 @@ impl<'a, E> View<'a, Input, E> {
         }
     }
 
+    pub fn backward_delete_word(&mut self) {
+        enum WordParserState {
+            Init,
+            Space,
+            Separator,
+            Word,
+        };
+
+        use WordParserState::*;
+
+        let mut iter = self.content.buf[..self.content.cursor].chars().rev();
+        let mut state = Init;
+        let mut word_start = self.content.cursor;
+
+        while let Some(c) = iter.next() {
+            state = match state {
+                Init => {
+                    match c {
+                        ' ' => Space,
+                        '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
+                            | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
+                        c => Word,
+                    }
+                },
+                Space => {
+                    match c {
+                        ' ' => Space,
+                        '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
+                            | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
+                        c => Word,
+                    }
+                }
+                Separator => {
+                    match c {
+                        '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
+                            | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
+                        c => break,
+                    }
+                }
+                Word => {
+                    match c {
+                        ' ' | '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<'
+                            | '=' | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => break,
+                        c => Word,
+                    }
+                }
+            };
+
+            word_start -= 1;
+        }
+        self.content.buf.replace_range(word_start..self.content.cursor, "");
+        self.content.cursor = word_start;
+        if !self.content.password {
+            self.redraw();
+        }
+    }
+
     pub fn delete(&mut self) {
         if self.content.cursor < self.content.buf.len() {
             self.content.buf.remove(self.content.cursor);

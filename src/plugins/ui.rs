@@ -534,6 +534,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                 UIEvent::Key(Key::Down) => input.next(),
                 UIEvent::Key(Key::Left) => input.left(),
                 UIEvent::Key(Key::Right) => input.right(),
+                UIEvent::Key(Key::Ctrl('w')) => input.backward_delete_word(),
                 UIEvent::Validate(result) => {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
@@ -898,6 +899,10 @@ impl Decoder for KeyCodec {
                 Ok(Key::Char(c)) => {
                     let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                     ui.event(UIEvent::Key(Key::Char(c)));
+                },
+                Ok(Key::Ctrl('w')) => {
+                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                    ui.event(UIEvent::Key(Key::Ctrl('w')));
                 },
                 Ok(Key::Ctrl('c')) => {
                     self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c"))));
