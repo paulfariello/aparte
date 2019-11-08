@@ -38,6 +38,7 @@ pub enum Event {
     ContactUpdate(contact::Contact),
     Occupant(conversation::Occupant),
     Signal(i32),
+    Quit,
 }
 
 pub trait Plugin: fmt::Display {
@@ -302,6 +303,20 @@ macro_rules! generate_command_completions {
 
 #[macro_export]
 macro_rules! command_def {
+    ($name:ident, |$aparte:ident, $command:ident| $body:block) => (
+        fn $name() -> CommandParser {
+            let completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
+
+            CommandParser {
+                name: stringify!($name),
+                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
+                    #[allow(unused_mut)]
+                    $body
+                }),
+                completions: completions,
+            }
+        }
+    );
     ($name:ident, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
             let mut completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();

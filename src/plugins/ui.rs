@@ -9,6 +9,7 @@ use std::io::{Error as IoError, ErrorKind};
 use std::io::{Write, Stdout};
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use termion::color;
 use termion::event::Key;
 use termion::input::TermRead;
@@ -342,6 +343,7 @@ pub struct UIPlugin<'a> {
     password_command: Option<Command>,
     completion: Option<Vec<String>>,
     current_completion: usize,
+    running: Rc<AtomicBool>,
 }
 
 impl<'a> UIPlugin<'a> {
@@ -350,7 +352,7 @@ impl<'a> UIPlugin<'a> {
         let file = tokio_file_unix::File::new_nb(file).unwrap();
         let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
 
-        FramedRead::new(file, KeyCodec::new(aparte))
+        FramedRead::new(file, KeyCodec::new(aparte, Rc::clone(&self.running)))
     }
 
     fn event(&mut self, mut event: UIEvent<'a>) {
@@ -564,6 +566,7 @@ impl<'a> Plugin for UIPlugin<'a> {
             password_command: None,
             completion: None,
             current_completion: 0,
+            running: Rc::new(AtomicBool::new(true)),
         }
     }
 
@@ -711,6 +714,9 @@ impl<'a> Plugin for UIPlugin<'a> {
                 self.root.layout(1, 1);
                 self.root.redraw();
             },
+            Event::Quit => {
+                self.running.swap(false, Ordering::Relaxed);
+            }
             _ => {},
         }
     }
@@ -725,13 +731,15 @@ impl<'a> fmt::Display for UIPlugin<'a> {
 pub struct KeyCodec {
     queue: Vec<Result<CommandOrMessage, CommandError>>,
     aparte: Rc<Aparte>,
+    running: Rc<AtomicBool>,
 }
 
 impl KeyCodec {
-    pub fn new(aparte: Rc<Aparte>) -> Self {
+    pub fn new(aparte: Rc<Aparte>, running: Rc<AtomicBool>) -> Self {
         Self {
             queue: Vec::new(),
             aparte: aparte,
+            running: running,
         }
     }
 }
@@ -741,184 +749,184 @@ impl Decoder for KeyCodec {
     type Error = CommandError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-
-        let mut keys = buf.keys();
-        while let Some(key) = keys.next() {
-            match key {
-                Ok(Key::Backspace) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Backspace));
-                },
-                Ok(Key::Delete) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Delete));
-                },
-                Ok(Key::Home) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Home));
-                },
-                Ok(Key::End) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::End));
-                },
-                Ok(Key::Left) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Left));
-                },
-                Ok(Key::Right) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Right));
-                },
-                Ok(Key::Up) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Up));
-                },
-                Ok(Key::Down) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Down));
-                },
-                Ok(Key::PageUp) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::PageUp));
-                },
-                Ok(Key::PageDown) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::PageDown));
-                },
-                Ok(Key::Char('\t')) => {
-                    let result = Rc::new(RefCell::new(None));
-                    let event = UIEvent::Complete(Rc::clone(&result));
-
-                    let (raw_buf, cursor, password) = {
+        if self.running.load(Ordering::Relaxed) {
+            let mut keys = buf.keys();
+            while let Some(key) = keys.next() {
+                match key {
+                    Ok(Key::Backspace) => {
                         let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Backspace));
+                    },
+                    Ok(Key::Delete) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Delete));
+                    },
+                    Ok(Key::Home) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Home));
+                    },
+                    Ok(Key::End) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::End));
+                    },
+                    Ok(Key::Left) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Left));
+                    },
+                    Ok(Key::Right) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Right));
+                    },
+                    Ok(Key::Up) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Up));
+                    },
+                    Ok(Key::Down) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Down));
+                    },
+                    Ok(Key::PageUp) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::PageUp));
+                    },
+                    Ok(Key::PageDown) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::PageDown));
+                    },
+                    Ok(Key::Char('\t')) => {
+                        let result = Rc::new(RefCell::new(None));
+                        let event = UIEvent::Complete(Rc::clone(&result));
+
+                        let (raw_buf, cursor, password) = {
+                            let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                            ui.event(event);
+
+                            let result = result.borrow_mut();
+                            result.as_ref().unwrap().clone()
+                        };
+
+                        if password {
+                            let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                            ui.event(UIEvent::Key(Key::Char('\t')));
+                        } else {
+                            let raw_buf = raw_buf.clone();
+                            if raw_buf.starts_with("/") {
+                                if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
+                                    {
+                                        let call_completion = {
+                                            let ui = self.aparte.get_plugin::<UIPlugin>().unwrap();
+                                            ui.completion.is_none()
+                                        };
+
+                                        if call_completion {
+                                            let mut completion = self.aparte.autocomplete(command.clone());
+                                            if command.cursor < command.args.len() {
+                                                completion = completion.iter().filter_map(|c| {
+                                                    if c.starts_with(&command.args[command.cursor]) {
+                                                        Some(c.to_string())
+                                                    } else {
+                                                        None
+                                                    }
+                                                }).collect();
+                                            }
+                                            let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                                            ui.completion = Some(completion);
+                                            ui.current_completion = 0;
+                                        }
+                                    }
+
+                                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                                    ui.autocomplete(&mut command);
+                                    ui.event(UIEvent::Completed(command.assemble()));
+                                }
+                            }
+                        }
+                    },
+                    Ok(Key::Char('\n')) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        let result = Rc::new(RefCell::new(None));
+                        let event = UIEvent::Validate(Rc::clone(&result));
+
                         ui.event(event);
 
                         let result = result.borrow_mut();
-                        result.as_ref().unwrap().clone()
-                    };
-
-                    if password {
-                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                        ui.event(UIEvent::Key(Key::Char('\t')));
-                    } else {
+                        let (raw_buf, password) = result.as_ref().unwrap();
                         let raw_buf = raw_buf.clone();
-                        if raw_buf.starts_with("/") {
-                            if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
-                                {
-                                    let call_completion = {
-                                        let ui = self.aparte.get_plugin::<UIPlugin>().unwrap();
-                                        ui.completion.is_none()
-                                    };
-
-                                    if call_completion {
-                                        let mut completion = self.aparte.autocomplete(command.clone());
-                                        if command.cursor < command.args.len() {
-                                            completion = completion.iter().filter_map(|c| {
-                                                if c.starts_with(&command.args[command.cursor]) {
-                                                    Some(c.to_string())
-                                                } else {
-                                                    None
-                                                }
-                                            }).collect();
-                                        }
-                                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                                        ui.completion = Some(completion);
-                                        ui.current_completion = 0;
+                        if *password {
+                            let mut command = ui.password_command.take().unwrap();
+                            command.args.push(raw_buf.clone());
+                            self.queue.push(Ok(CommandOrMessage::Command(command)));
+                        } else if raw_buf.starts_with("/") {
+                            match Command::try_from(&*raw_buf) {
+                                Ok(command) => {
+                                    self.queue.push(Ok(CommandOrMessage::Command(command)));
+                                },
+                                Err(_) => self.queue.push(Err(CommandError::Parse)),
+                            }
+                        } else if raw_buf.len() > 0 {
+                            if let Some(current_window) = ui.current_window.clone() {
+                                if let Some(conversation) = ui.conversations.get(&current_window) {
+                                    let us = self.aparte.current_connection().unwrap().clone().into();
+                                    match conversation.kind {
+                                        ConversationKind::Chat => {
+                                            let from: Jid = us;
+                                            let to: Jid = conversation.jid.clone().into();
+                                            let id = Uuid::new_v4();
+                                            let timestamp = Utc::now();
+                                            let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                            self.queue.push(Ok(CommandOrMessage::Message(message)));
+                                        },
+                                        ConversationKind::Group => {
+                                            let from: Jid = us;
+                                            let to: Jid = conversation.jid.clone().into();
+                                            let id = Uuid::new_v4();
+                                            let timestamp = Utc::now();
+                                            let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                            self.queue.push(Ok(CommandOrMessage::Message(message)));
+                                        },
                                     }
                                 }
-
-                                let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                                ui.autocomplete(Rc::clone(&self.aparte), &mut command);
-                                ui.event(UIEvent::Completed(command.assemble()));
                             }
                         }
-                    }
-                },
-                Ok(Key::Char('\n')) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    let result = Rc::new(RefCell::new(None));
-                    let event = UIEvent::Validate(Rc::clone(&result));
-
-                    ui.event(event);
-
-                    let result = result.borrow_mut();
-                    let (raw_buf, password) = result.as_ref().unwrap();
-                    let raw_buf = raw_buf.clone();
-                    if *password {
-                        let mut command = ui.password_command.take().unwrap();
-                        command.args.push(raw_buf.clone());
-                        self.queue.push(Ok(CommandOrMessage::Command(command)));
-                    } else if raw_buf.starts_with("/") {
-                        match Command::try_from(&*raw_buf) {
-                            Ok(command) => {
-                                self.queue.push(Ok(CommandOrMessage::Command(command)));
+                    },
+                    Ok(Key::Alt('\x1b')) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        match keys.next() {
+                            Some(Ok(Key::Char('['))) => {
+                                match keys.next() {
+                                    Some(Ok(Key::Char('C'))) => {
+                                        ui.next_window();
+                                    },
+                                    Some(Ok(Key::Char('D'))) => {
+                                        ui.prev_window();
+                                    },
+                                    Some(Ok(_)) => {},
+                                    Some(Err(_)) => {},
+                                    None => {},
+                                };
                             },
-                            Err(err) => self.queue.push(Err(CommandError::Parse)),
-                        }
-                    } else if raw_buf.len() > 0 {
-                        if let Some(current_window) = ui.current_window.clone() {
-                            if let Some(conversation) = ui.conversations.get(&current_window) {
-                                let us = self.aparte.current_connection().unwrap().clone().into();
-                                match conversation.kind {
-                                    ConversationKind::Chat => {
-                                        let from: Jid = us;
-                                        let to: Jid = conversation.jid.clone().into();
-                                        let id = Uuid::new_v4();
-                                        let timestamp = Utc::now();
-                                        let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
-                                        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                                    },
-                                    ConversationKind::Group => {
-                                        let from: Jid = us;
-                                        let to: Jid = conversation.jid.clone().into();
-                                        let id = Uuid::new_v4();
-                                        let timestamp = Utc::now();
-                                        let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
-                                        self.queue.push(Ok(CommandOrMessage::Message(message)));
-                                    },
-                                }
-                            }
-                        }
-                    }
-                },
-                Ok(Key::Alt('\x1b')) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    match keys.next() {
-                        Some(Ok(Key::Char('['))) => {
-                            match keys.next() {
-                                Some(Ok(Key::Char('C'))) => {
-                                    ui.next_window();
-                                },
-                                Some(Ok(Key::Char('D'))) => {
-                                    ui.prev_window();
-                                },
-                                Some(Ok(_)) => {},
-                                Some(Err(_)) => {},
-                                None => {},
-                            };
-                        },
-                        Some(Ok(_)) => {},
-                        Some(Err(_)) => {},
-                        None => {},
-                    };
-                },
-                Ok(Key::Char(c)) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Char(c)));
-                },
-                Ok(Key::Ctrl('w')) => {
-                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                    ui.event(UIEvent::Key(Key::Ctrl('w')));
-                },
-                Ok(Key::Ctrl('c')) => {
-                    self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "ctrl+c"))));
-                },
-                Ok(_) => {},
-                Err(_) => {},
-            };
-        }
+                            Some(Ok(_)) => {},
+                            Some(Err(_)) => {},
+                            None => {},
+                        };
+                    },
+                    Ok(Key::Char(c)) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Char(c)));
+                    },
+                    Ok(Key::Ctrl('w')) => {
+                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
+                        ui.event(UIEvent::Key(Key::Ctrl('w')));
+                    },
+                    Ok(_) => {},
+                    Err(_) => {},
+                };
+            }
 
-        buf.clear();
+            buf.clear();
+        } else {
+            self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "quit"))));
+        }
 
         match self.queue.pop() {
             Some(Ok(command)) => Ok(Some(command)),

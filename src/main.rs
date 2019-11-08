@@ -264,6 +264,15 @@ command_def!{
     }
 }
 
+command_def!{
+    quit,
+    |aparte, _command| {
+        aparte.event(Event::Quit);
+
+        Ok(())
+    }
+}
+
 fn main() {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     let data_dir = dirs::data_dir().unwrap();
@@ -300,6 +309,7 @@ fn main() {
     aparte.add_command(win());
     aparte.add_command(msg());
     aparte.add_command(join());
+    aparte.add_command(quit());
 
     aparte.init().unwrap();
 
