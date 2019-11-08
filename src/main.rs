@@ -99,12 +99,12 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
 command_def!{
     connect,
     account: {
-        completion: |aparte, command| {
+        completion: |aparte, _command| {
             aparte.config.accounts.iter().map(|(_, account)| account.login.clone()).collect()
         }
     },
     (password) password,
-    |aparte, command| {
+    |aparte, _command| {
         if let Ok(jid) = Jid::from_str(&account) {
             let full_jid = match jid {
                 Jid::Full(jid) => jid,
@@ -229,7 +229,7 @@ command_def!{
 command_def!{
     join,
     muc,
-    |aparte, command| {
+    |aparte, _command| {
         match aparte.current_connection() {
             Some(connection) => {
                 match Jid::from_str(&muc) {

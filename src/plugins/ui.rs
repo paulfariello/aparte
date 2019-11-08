@@ -451,7 +451,7 @@ impl<'a> UIPlugin<'a> {
         }
     }
 
-    pub fn autocomplete(&mut self, aparte: Rc<Aparte>, command: &mut Command) {
+    pub fn autocomplete(&mut self, command: &mut Command) {
         let completion = match &self.completion {
             None => {
                 return;

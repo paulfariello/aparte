@@ -93,7 +93,6 @@ impl Command {
                     },
                     None => {
                         tokens.push(token);
-                        token = String::new();
                         break;
                     }
                 },
