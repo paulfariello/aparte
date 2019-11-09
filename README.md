@@ -7,3 +7,10 @@ Demo
 ----
 
 [![asciicast](https://asciinema.org/a/272523.png)](https://asciinema.org/a/272523)
+
+Features
+--------
+
+  - [x] Channel
+  - [x] Roster
+  - [x] Auto completion
