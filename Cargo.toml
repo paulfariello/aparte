@@ -13,7 +13,7 @@ simple-logging = "2.0"
 futures = "0.1"
 tokio = "0.1"
 tokio-xmpp = "1.0"
-xmpp-parsers = { path = "../xmpp-parsers/" }
+xmpp-parsers = "0.16"
 rpassword = "3.0"
 uuid = { version = "0.7", features = ["v4"]  }
 minidom = "0.11"
