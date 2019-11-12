@@ -6,4 +6,5 @@ rust:
 jobs:
   allow_failures:
     - rust: stable
+    - rust: beta
   fast_finish: true

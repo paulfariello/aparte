@@ -9,7 +9,6 @@ extern crate tokio_xmpp;
 extern crate xmpp_parsers;
 extern crate rpassword;
 extern crate futures;
-extern crate minidom;
 #[macro_use]
 extern crate derive_error;
 extern crate tokio_file_unix;
@@ -244,8 +243,8 @@ command_def!{
                         let from: Jid = connection.into();
 
                         let mut presence = Presence::new(PresenceType::None);
-                        presence = presence.with_to(Some(Jid::Full(to.clone())));
-                        presence = presence.with_from(Some(from));
+                        presence = presence.with_to(Jid::Full(to.clone()));
+                        presence = presence.with_from(from);
                         presence.add_payload(Muc::new());
                         aparte.send(presence.into());
                         aparte.event(Event::Join(to.clone()));
