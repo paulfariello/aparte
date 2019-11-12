@@ -336,3 +336,95 @@ macro_rules! command_def {
         }
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    command_def!{
+        no_args,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_without_args() {
+        let cmd = no_args();
+
+        assert_eq!(cmd.name, "no_args");
+    }
+
+    command_def!{
+        one_arg,
+        _first_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_one_arg() {
+        let cmd = one_arg();
+
+        assert_eq!(cmd.name, "one_arg");
+    }
+
+    command_def!{
+        one_arg_completion,
+        _first_arg: {
+            completion: |_aparte, _command| {
+                Vec::new()
+            }
+        },
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_one_arg_with_completion() {
+        let cmd = one_arg_completion();
+
+        assert_eq!(cmd.name, "one_arg_completion");
+        assert_eq!(cmd.completions.len(), 1);
+    }
+
+    command_def!{
+        two_args,
+        _first_arg,
+        _second_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_two_args() {
+        let cmd = two_args();
+
+        assert_eq!(cmd.name, "two_args");
+        assert_eq!(cmd.completions.len(), 2);
+    }
+
+    command_def!{
+        two_args_completion,
+        _first_arg: {
+            completion: |_aparte, _command| {
+                Vec::new()
+            }
+        },
+        _second_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_two_args_with_completion() {
+        let cmd = two_args_completion();
+
+        assert_eq!(cmd.name, "two_args_completion");
+        assert_eq!(cmd.completions.len(), 2);
+    }
+}
