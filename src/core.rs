@@ -73,7 +73,7 @@ pub struct Connection {
 }
 
 pub struct Aparte {
-    commands: HashMap<String, CommandParser>,
+    pub commands: HashMap<String, CommandParser>,
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
@@ -303,12 +303,13 @@ macro_rules! generate_command_completions {
 
 #[macro_export]
 macro_rules! command_def {
-    ($name:ident, |$aparte:ident, $command:ident| $body:block) => (
+    ($name:ident, $help: tt, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
             let completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
 
             CommandParser {
                 name: stringify!($name),
+                help: $help,
                 parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
                     #[allow(unused_mut)]
                     $body
@@ -317,7 +318,7 @@ macro_rules! command_def {
             }
         }
     );
-    ($name:ident, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
+    ($name:ident, $help: tt, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
             let mut completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
 
@@ -325,6 +326,7 @@ macro_rules! command_def {
 
             CommandParser {
                 name: stringify!($name),
+                help: $help,
                 parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
                     #[allow(unused_mut)]
                     let mut index = 1;
@@ -343,6 +345,7 @@ mod tests {
 
     command_def!{
         no_args,
+        "help",
         |_aparte, _command| {
             Ok(())
         }
@@ -353,10 +356,12 @@ mod tests {
         let cmd = no_args();
 
         assert_eq!(cmd.name, "no_args");
+        assert_eq!(cmd.help, "help");
     }
 
     command_def!{
         one_arg,
+        "help",
         _first_arg,
         |_aparte, _command| {
             Ok(())
@@ -368,10 +373,12 @@ mod tests {
         let cmd = one_arg();
 
         assert_eq!(cmd.name, "one_arg");
+        assert_eq!(cmd.help, "help");
     }
 
     command_def!{
         one_arg_completion,
+        "help",
         _first_arg: {
             completion: |_aparte, _command| {
                 Vec::new()
@@ -387,11 +394,13 @@ mod tests {
         let cmd = one_arg_completion();
 
         assert_eq!(cmd.name, "one_arg_completion");
+        assert_eq!(cmd.help, "help");
         assert_eq!(cmd.completions.len(), 1);
     }
 
     command_def!{
         two_args,
+        "help",
         _first_arg,
         _second_arg,
         |_aparte, _command| {
@@ -404,11 +413,13 @@ mod tests {
         let cmd = two_args();
 
         assert_eq!(cmd.name, "two_args");
+        assert_eq!(cmd.help, "help");
         assert_eq!(cmd.completions.len(), 2);
     }
 
     command_def!{
         two_args_completion,
+        "help",
         _first_arg: {
             completion: |_aparte, _command| {
                 Vec::new()
@@ -425,6 +436,7 @@ mod tests {
         let cmd = two_args_completion();
 
         assert_eq!(cmd.name, "two_args_completion");
+        assert_eq!(cmd.help, "help");
         assert_eq!(cmd.completions.len(), 2);
     }
 }

@@ -97,6 +97,7 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
 
 command_def!{
     connect,
+    "/connect <account@server.tld>",
     account: {
         completion: |aparte, _command| {
             aparte.config.accounts.iter().map(|(_, account)| account.login.clone()).collect()
@@ -171,6 +172,7 @@ command_def!{
 
 command_def!{
     win,
+    "/win <contact@server.tld>",
     window: {
         completion: |aparte, _command| {
             let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
@@ -185,6 +187,7 @@ command_def!{
 
 command_def!{
     msg,
+    "/msg <contact@server.tld> [<message>]",
     contact: {
         completion: |aparte, _command| {
             let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
@@ -227,6 +230,7 @@ command_def!{
 
 command_def!{
     join,
+    "/join <room@conference.server.tld>",
     muc,
     |aparte, _command| {
         match aparte.current_connection() {
@@ -265,8 +269,28 @@ command_def!{
 
 command_def!{
     quit,
+    "/quit",
     |aparte, _command| {
         aparte.event(Event::Quit);
+
+        Ok(())
+    }
+}
+
+command_def!{
+    help,
+    "/help <command>",
+    cmd: {
+        completion: |aparte, _command| {
+            aparte.commands.iter().map(|c| c.0.to_string()).collect()
+        }
+    },
+    |aparte, _command| {
+        let command = aparte.commands.get(&cmd);
+        match command {
+            Some(command) => Rc::clone(&aparte).log(command.help.to_string()),
+            None => Rc::clone(&aparte).log(format!("Unknown command {}", cmd)),
+        }
 
         Ok(())
     }
@@ -304,6 +328,7 @@ fn main() {
     aparte.add_plugin(plugins::conversation::ConversationPlugin::new());
     aparte.add_plugin(plugins::ui::UIPlugin::new());
 
+    aparte.add_command(help());
     aparte.add_command(connect());
     aparte.add_command(win());
     aparte.add_command(msg());
