@@ -1,6 +1,7 @@
 [package]
 name = "aparte"
 version = "0.1.0"
+description = "Simple XMPP console client written in Rust and inspired by Profanity."
 authors = ["Paul Fariello <paul@fariello.eu>"]
 edition = "2018"
 license = "MPL-2.0"
