@@ -1,266 +1,26 @@
 use futures::Sink;
 use futures::unsync::mpsc::UnboundedSender;
-use shell_words::ParseError;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt;
-use std::hash;
-use std::io::Error as IoError;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::path::PathBuf;
 use std::rc::Rc;
-use std::string::FromUtf8Error;
 use tokio_xmpp::Packet;
-use uuid::Uuid;
-use xmpp_parsers::{Element, FullJid, BareJid, Jid};
+use xmpp_parsers::{Element, FullJid, BareJid, presence, iq};
 use xmpp_parsers;
-use chrono::{Utc, DateTime};
+
+use crate::{contact, conversation};
+use crate::message::Message;
+use crate::command::{Command, CommandParser};
+use crate::config::Config;
 
 #[derive(Debug, Clone)]
-pub struct ChatMessage {
-    pub id: String,
-    pub timestamp: DateTime<Utc>,
-    pub from: BareJid,
-    pub from_full: Jid,
-    pub to: BareJid,
-    pub to_full: Jid,
-    pub body: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct GroupchatMessage {
-    pub id: String,
-    pub timestamp: DateTime<Utc>,
-    pub from: BareJid,
-    pub from_full: Jid,
-    pub to: BareJid,
-    pub to_full: Jid,
-    pub body: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum XmppMessage {
-    Chat(ChatMessage),
-    Groupchat(GroupchatMessage),
-}
-
-#[derive(Debug, Clone)]
-pub struct LogMessage {
-    pub id: String,
-    pub timestamp: DateTime<Utc>,
-    pub body: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum Message {
-    Incoming(XmppMessage),
-    Outgoing(XmppMessage),
-    Log(LogMessage),
-}
-
-impl Message {
-    pub fn incoming_chat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
-        Message::Incoming(XmppMessage::Chat(ChatMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
-            from_full: from_full.clone(),
-            to: to.clone(),
-            to_full: to_full.clone(),
-            body: body.to_string(),
-        }))
-    }
-
-    pub fn outgoing_chat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
-        Message::Outgoing(XmppMessage::Chat(ChatMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
-            from_full: from_full.clone(),
-            to: to.clone(),
-            to_full: to_full.clone(),
-            body: body.to_string(),
-        }))
-    }
-
-    pub fn incoming_groupchat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
-        Message::Incoming(XmppMessage::Groupchat(GroupchatMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
-            from_full: from_full.clone(),
-            to: to.clone(),
-            to_full: to_full.clone(),
-            body: body.to_string(),
-        }))
-    }
-
-    pub fn outgoing_groupchat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
-        Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
-            from_full: from_full.clone(),
-            to: to.clone(),
-            to_full: to_full.clone(),
-            body: body.to_string(),
-        }))
-    }
-
-    pub fn log(msg: String) -> Self {
-        Message::Log(LogMessage {
-            id: Uuid::new_v4().to_string(),
-            timestamp: Utc::now(),
-            body: msg
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn body(&self) -> &str {
-        match self {
-            Message::Outgoing(XmppMessage::Chat(ChatMessage { body, .. }))
-                | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
-                | Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
-                | Message::Incoming(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
-                | Message::Log(LogMessage { body, .. }) => &body,
-        }
-    }
-}
-
-impl hash::Hash for Message {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        match self {
-            Message::Log(message) => message.id.hash(state),
-            Message::Incoming(XmppMessage::Chat(message))
-                | Message::Outgoing(XmppMessage::Chat(message)) => message.id.hash(state),
-            Message::Incoming(XmppMessage::Groupchat(message))
-                | Message::Outgoing(XmppMessage::Groupchat(message)) => message.id.hash(state),
-        }
-    }
-}
-
-impl PartialEq for Message {
-    fn eq(&self, other: &Self) -> bool {
-        let my_id = match self {
-            Message::Log(message) => &message.id,
-            Message::Incoming(XmppMessage::Chat(message))
-                | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
-            Message::Incoming(XmppMessage::Groupchat(message))
-                | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
-        };
-
-        let other_id = match other {
-            Message::Log(message) => &message.id,
-            Message::Incoming(XmppMessage::Chat(message))
-                | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
-            Message::Incoming(XmppMessage::Groupchat(message))
-                | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
-        };
-
-        my_id == other_id
-    }
-}
-
-impl std::cmp::Eq for Message {
-}
-
-//impl TryFrom<xmpp_parsers::Message> for Message {
-//}
-
-impl TryFrom<Message> for xmpp_parsers::Element {
-    type Error = ();
-
-    fn try_from(message: Message) -> Result<Self, Self::Error> {
-        match message {
-            Message::Log(_) => {
-                Err(())
-            },
-            Message::Incoming(_) => {
-                Err(())
-            },
-            Message::Outgoing(XmppMessage::Chat(message)) => {
-                let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
-                xmpp_message.id = Some(message.id);
-                xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
-                xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
-                Ok(xmpp_message.into())
-            },
-            Message::Outgoing(XmppMessage::Groupchat(message)) => {
-                let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
-                xmpp_message.id = Some(message.id);
-                xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
-                xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
-                Ok(xmpp_message.into())
-            }
-        }
-    }
-}
-
 pub enum CommandOrMessage {
     Command(Command),
     Message(Message),
-}
-
-#[derive(Debug, Clone)]
-pub struct Command {
-    pub name: String,
-    pub args: Vec<String>,
-}
-
-impl Command {
-    pub fn new(command: String, args: Vec<String>) -> Self {
-        Self {
-            name: command,
-            args: args,
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum CommandError {
-    Io(IoError),
-    Utf8(FromUtf8Error),
-    Parse(ParseError),
 }
 
 pub enum Event {
@@ -270,6 +30,15 @@ pub enum Event {
     Message(Message),
     Chat(BareJid),
     Join(FullJid),
+    Iq(iq::Iq),
+    Presence(presence::Presence),
+    ReadPassword(Command),
+    Win(String),
+    Contact(contact::Contact),
+    ContactUpdate(contact::Contact),
+    Occupant(conversation::Occupant),
+    Signal(i32),
+    Quit,
 }
 
 pub trait Plugin: fmt::Display {
@@ -304,37 +73,75 @@ pub struct Connection {
 }
 
 pub struct Aparte {
-    commands: HashMap<String, fn(Rc<Aparte>, &Command) -> Result<(), ()>>,
+    pub commands: HashMap<String, CommandParser>,
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
+    event_lock: RefCell<()>,
+    event_queue: RefCell<Vec<Event>>,
+    pub config: Config,
+
 }
 
 impl Aparte {
-    pub fn new() -> Self {
+    pub fn new(config_path: PathBuf) -> Self {
+        let mut config_file = match OpenOptions::new().read(true).write(true).create(true).open(config_path) {
+            Err(err) => panic!("Cannot read config file {}", err),
+            Ok(config_file) => config_file,
+        };
+
+        let mut config_str = String::new();
+        config_file.read_to_string(&mut config_str);
+        let config = match toml::from_str(&config_str) {
+            Err(err) => panic!("Cannot read config file {}", err),
+            Ok(config) => config,
+        };
+
         Self {
             commands: HashMap::new(),
             plugins: HashMap::new(),
             connections: RefCell::new(HashMap::new()),
             current_connection: RefCell::new(None),
+            event_lock: RefCell::new(()),
+            event_queue: RefCell::new(Vec::new()),
+            config: config,
         }
     }
 
-    pub fn add_command(&mut self, name: &str, command: fn(Rc<Aparte>, &Command) -> Result<(), ()>) {
-        self.commands.insert(name.to_string(), command);
+    pub fn add_command(&mut self, command: CommandParser) {
+        self.commands.insert(command.name.to_string(), command);
     }
 
-    pub fn parse_command(self: Rc<Self>, command: &Command) -> Result<(), ()> {
-        match self.commands.get(&command.name) {
-            Some(parser) => parser(self, command),
-            None => Err(()),
+    pub fn parse_command(self: Rc<Self>, command: Command) -> Result<(), String> {
+        match Rc::clone(&self).commands.get(&command.args[0]) {
+            Some(parser) => (parser.parser)(self, command),
+            None => Err(format!("Unknown command {}", command.args[0])),
         }
     }
 
-    pub fn add_plugin<T: 'static>(&mut self, plugin: Box<dyn AnyPlugin>) -> Result<(), ()> {
+    pub fn autocomplete(&self, command: Command) -> Vec<String> {
+        if command.cursor == 0 {
+            self.commands.iter().map(|c| c.0.to_string()).collect()
+        } else {
+            if let Some(parser) = self.commands.get(&command.args[0]) {
+                if command.cursor - 1 < parser.completions.len() {
+                    if let Some(completion) = &parser.completions[command.cursor - 1] {
+                        completion(self, command)
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn add_plugin<T: 'static + fmt::Display + Plugin>(&mut self, plugin: T) {
         info!("Add plugin `{}`", plugin);
-        self.plugins.insert(TypeId::of::<T>(), RefCell::new(plugin));
-        Ok(())
+        self.plugins.insert(TypeId::of::<T>(), RefCell::new(Box::new(plugin)));
     }
 
     pub fn get_plugin<T: 'static>(&self) -> Option<Ref<T>> {
@@ -406,13 +213,230 @@ impl Aparte {
     }
 
     pub fn event(self: Rc<Self>, event: Event) {
-        for (_, plugin) in self.plugins.iter() {
-            plugin.borrow_mut().as_plugin().on_event(Rc::clone(&self), &event);
+        self.event_queue.borrow_mut().push(event);
+        if let Ok(_lock) = self.event_lock.try_borrow_mut() {
+            while self.event_queue.borrow().len() > 0 {
+                let event = self.event_queue.borrow_mut().remove(0);
+                for (_, plugin) in self.plugins.iter() {
+                    plugin.borrow_mut().as_plugin().on_event(Rc::clone(&self), &event);
+                }
+            }
         }
     }
 
     pub fn log(self: Rc<Self>, message: String) {
         let message = Message::log(message);
         self.event(Event::Message(message));
+    }
+}
+
+#[macro_export]
+macro_rules! parse_command_args {
+    ($aparte:ident, $command:ident, $index:ident) => ();
+    ($aparte:ident, $command:ident, $index:ident, (password) $arg:ident) => (
+        if $command.args.len() <= $index {
+            Rc::clone(&$aparte).event(Event::ReadPassword($command.clone()));
+            return Ok(())
+        }
+
+        let $arg = $command.args[$index].clone();
+    );
+    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident) => (
+        let $arg = {
+            if $command.args.len() > $index {
+                Some($command.args[$index].clone())
+            } else {
+                None
+            }
+        };
+    );
+    ($aparte:ident, $command:ident, $index:ident, $arg:ident) => (
+        if $command.args.len() <= $index {
+            return Err(format!("Missing {} argument", stringify!($arg)))
+        }
+        let $arg = $command.args[$index].clone();
+    );
+    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident, $($(($attr:ident))? $args:ident),+) => (
+        let $arg = {
+            if $command.args.len() > $index {
+                Some($command.args[$index].clone())
+            } else {
+                None
+            }
+        };
+
+        $index += 1;
+
+        parse_command_args!($command, $index, $($(($attr))? $args),*);
+    );
+    ($aparte:ident, $command:ident, $index:ident, $arg:ident, $($(($attr:ident))? $args:ident),+) => (
+        if $command.args.len() <= $index {
+            return Err(format!("Missing {} argument", stringify!($arg)))
+        }
+
+        let $arg = $command.args[$index].clone();
+
+        $index += 1;
+
+        parse_command_args!($aparte, $command, $index, $($(($attr))? $args),*);
+    );
+}
+
+#[macro_export]
+macro_rules! generate_command_completions {
+    ($completions:ident) => ();
+    ($completions:ident, $argname:ident) => (
+        $completions.push(None);
+    );
+    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }) => (
+        $completions.push(Some(Box::new(|$aparte: &Aparte, $command: Command| -> Vec<String> { $completion })));
+    );
+    ($completions:ident, $argname:ident, $($argnames:ident$(: $args:tt)?),+) => (
+        $completions.push(None);
+        generate_command_completions!($completions, $($argnames$(: $args)?),*);
+    );
+    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
+        $completions.push(Some(Box::new(|$aparte: &Aparte, $command: Command| -> Vec<String> { $completion })));
+        generate_command_completions!($completions, $($argnames$(: $args)?),*);
+    );
+}
+
+#[macro_export]
+macro_rules! command_def {
+    ($name:ident, $help: tt, |$aparte:ident, $command:ident| $body:block) => (
+        fn $name() -> CommandParser {
+            let completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
+
+            CommandParser {
+                name: stringify!($name),
+                help: $help,
+                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
+                    #[allow(unused_mut)]
+                    $body
+                }),
+                completions: completions,
+            }
+        }
+    );
+    ($name:ident, $help: tt, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
+        fn $name() -> CommandParser {
+            let mut completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
+
+            generate_command_completions!(completions, $($argnames$(: $args)?),*);
+
+            CommandParser {
+                name: stringify!($name),
+                help: $help,
+                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
+                    #[allow(unused_mut)]
+                    let mut index = 1;
+                    parse_command_args!($aparte, $command, index, $($(($attr))? $argnames),*);
+                    $body
+                }),
+                completions: completions,
+            }
+        }
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    command_def!{
+        no_args,
+        "help",
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_without_args() {
+        let cmd = no_args();
+
+        assert_eq!(cmd.name, "no_args");
+        assert_eq!(cmd.help, "help");
+    }
+
+    command_def!{
+        one_arg,
+        "help",
+        _first_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_one_arg() {
+        let cmd = one_arg();
+
+        assert_eq!(cmd.name, "one_arg");
+        assert_eq!(cmd.help, "help");
+    }
+
+    command_def!{
+        one_arg_completion,
+        "help",
+        _first_arg: {
+            completion: |_aparte, _command| {
+                Vec::new()
+            }
+        },
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_one_arg_with_completion() {
+        let cmd = one_arg_completion();
+
+        assert_eq!(cmd.name, "one_arg_completion");
+        assert_eq!(cmd.help, "help");
+        assert_eq!(cmd.completions.len(), 1);
+    }
+
+    command_def!{
+        two_args,
+        "help",
+        _first_arg,
+        _second_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_two_args() {
+        let cmd = two_args();
+
+        assert_eq!(cmd.name, "two_args");
+        assert_eq!(cmd.help, "help");
+        assert_eq!(cmd.completions.len(), 2);
+    }
+
+    command_def!{
+        two_args_completion,
+        "help",
+        _first_arg: {
+            completion: |_aparte, _command| {
+                Vec::new()
+            }
+        },
+        _second_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_two_args_with_completion() {
+        let cmd = two_args_completion();
+
+        assert_eq!(cmd.name, "two_args_completion");
+        assert_eq!(cmd.help, "help");
+        assert_eq!(cmd.completions.len(), 2);
     }
 }
