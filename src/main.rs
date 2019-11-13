@@ -392,7 +392,13 @@ fn main() {
 
     let aparte = Rc::new(aparte);
 
-    Rc::clone(&aparte).log(format!("Welcome to Aparté {}", VERSION));
+    Rc::clone(&aparte).log(r#"
+▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
+▌▖▌▞▀▖▐ ▞▀▖▞▀▖▛▚▀▖▞▀▖ ▜▀ ▞▀▖ ▙▄▌▛▀▖▝▀▖▙▀▖▜▀ ▞▀▖
+▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
+▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
+"#.to_string());
+    Rc::clone(&aparte).log(format!("Version: {}", VERSION));
 
     let mut rt = Runtime::new().unwrap();
     let command_stream = {
