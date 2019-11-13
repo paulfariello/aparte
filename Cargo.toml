@@ -1,8 +1,10 @@
 [package]
-name = "aparté"
+name = "aparte"
 version = "0.1.0"
 authors = ["Paul Fariello <paul@fariello.eu>"]
 edition = "2018"
+license = "MPL-2.0"
+repository = "https://github.com/paulfariello/aparte"
 
 [features]
 no-cursor-save = []
