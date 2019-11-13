@@ -249,7 +249,11 @@ impl fmt::Display for Message {
         match self {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                write!(f, "{} - {}", timestamp.format("%T"), message.body)
+                for line in message.body.lines() {
+                    write!(f, "{} - {}\n", timestamp.format("%T"), line);
+                }
+
+                Ok(())
             },
             Message::Incoming(XmppMessage::Chat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());

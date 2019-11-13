@@ -97,7 +97,17 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
 
 command_def!{
     connect,
-    "/connect <account@server.tld>",
+    r#"/connect <account>
+
+  account       Account to connect to
+
+Description:
+  Connect to the given account.
+
+Examples:
+  /connect account@server.tld
+  /connect account@server.tld:5223
+"#,
     account: {
         completion: |aparte, _command| {
             aparte.config.accounts.iter().map(|(_, account)| account.login.clone()).collect()
@@ -172,7 +182,16 @@ command_def!{
 
 command_def!{
     win,
-    "/win <contact@server.tld>",
+    r#"Usage: /win <window>
+
+  window        Name of the window to switch to
+
+Description:
+  Switch to a given window.
+
+Examples:
+  /win console
+  /win contact@server.tld"#,
     window: {
         completion: |aparte, _command| {
             let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
@@ -187,7 +206,19 @@ command_def!{
 
 command_def!{
     msg,
-    "/msg <contact@server.tld> [<message>]",
+    r#"/msg <contact> [<message>]
+
+  contact       Contact to send a message to
+  message       Optionnal message to be sent
+
+Description:
+  Open a window for a private discussion with a given contact and optionnaly
+  send a message.
+
+Example:
+  /msg contact@server.tld
+  /msg contact@server.tld "Hi there!"
+"#,
     contact: {
         completion: |aparte, _command| {
             let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
@@ -230,7 +261,14 @@ command_def!{
 
 command_def!{
     join,
-    "/join <room@conference.server.tld>",
+    r#"/join <channel>
+
+  channel       Channel JID to join
+Description:
+  Open a window and join a given channel.
+
+Example:
+  /join channel@conference.server.tld"#,
     muc,
     |aparte, _command| {
         match aparte.current_connection() {
@@ -269,7 +307,13 @@ command_def!{
 
 command_def!{
     quit,
-    "/quit",
+    r#"/quit
+
+Description:
+  Quit Aparté.
+
+Example:
+  /quit"#,
     |aparte, _command| {
         aparte.event(Event::Quit);
 
@@ -279,7 +323,16 @@ command_def!{
 
 command_def!{
     help,
-    "/help <command>",
+    r#"/help <command>
+
+  command       Name of command
+
+Description:
+  Print help of a given command.
+
+Examples:
+  /help help
+  /help win"#,
     cmd: {
         completion: |aparte, _command| {
             aparte.commands.iter().map(|c| c.0.to_string()).collect()
