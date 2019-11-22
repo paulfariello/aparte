@@ -378,11 +378,12 @@ fn main() {
     info!("Starting aparté");
 
     let mut aparte = Aparte::new(config);
-    aparte.add_plugin(plugins::disco::Disco::new());
     aparte.add_plugin(plugins::carbons::CarbonsPlugin::new());
     aparte.add_plugin(plugins::contact::ContactPlugin::new());
     aparte.add_plugin(plugins::conversation::ConversationPlugin::new());
+    aparte.add_plugin(plugins::disco::Disco::new());
     aparte.add_plugin(plugins::ui::UIPlugin::new());
+    aparte.add_plugin(plugins::mam::MamPlugin::new());
 
     aparte.add_command(help());
     aparte.add_command(connect());

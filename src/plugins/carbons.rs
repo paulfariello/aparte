@@ -7,6 +7,7 @@ use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::iq::Iq;
+use xmpp_parsers::ns;
 
 use crate::core::{Plugin, Aparte, Event};
 use crate::plugins::disco;
@@ -29,7 +30,7 @@ impl Plugin for CarbonsPlugin {
 
     fn init(&mut self, aparte: &Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_plugin_mut::<disco::Disco>().unwrap();
-        disco.add_feature("urn:xmpp:carbons:2")
+        disco.add_feature(ns::CARBONS)
     }
 
     fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
