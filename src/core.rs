@@ -95,9 +95,12 @@ impl Aparte {
 
         let mut config_str = String::new();
         config_file.read_to_string(&mut config_str);
-        let config = match toml::from_str(&config_str) {
-            Err(err) => panic!("Cannot read config file {}", err),
-            Ok(config) => config,
+        let config = match config_str.len() {
+            0 => Config { accounts: HashMap::new() },
+            _ => match toml::from_str(&config_str) {
+                Err(err) => panic!("Cannot read config file {}", err),
+                Ok(config) => config,
+            },
         };
 
         Self {
