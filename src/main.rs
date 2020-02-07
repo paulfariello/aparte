@@ -28,7 +28,7 @@ use std::str::FromStr;
 use tokio::runtime::current_thread::Runtime;
 use tokio_xmpp::{Client, Error as XmppError};
 use uuid::Uuid;
-use xmpp_parsers::iq::Iq;
+use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
@@ -52,6 +52,12 @@ fn handle_stanza(aparte: Rc<Aparte>, stanza: Element) {
     if let Some(message) = XmppParsersMessage::try_from(stanza.clone()).ok() {
         handle_message(aparte, message);
     } else if let Some(iq) = Iq::try_from(stanza.clone()).ok() {
+        if let IqType::Error(stanza) = iq.payload.clone() {
+            if let Some(text) = stanza.texts.get("en") {
+              let message = Message::log(text.clone());
+              Rc::clone(&aparte).event(Event::Message(message));
+            }
+        }
         Rc::clone(&aparte).event(Event::Iq(iq));
     } else if let Some(presence) = Presence::try_from(stanza.clone()).ok() {
         Rc::clone(&aparte).event(Event::Presence(presence));
