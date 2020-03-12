@@ -57,14 +57,15 @@ impl Plugin for MamPlugin {
         MamPlugin { }
     }
 
-    fn init(&mut self, aparte: &Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
         Ok(())
     }
 
     fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
         match event {
             Event::Join(jid) => aparte.send(self.query(Jid::Bare(jid.clone().into()))),
-            Event::Chat(jid) => aparte.send(self.query(Jid::Bare(jid.clone().into()))),
+            Event::Chat(jid) => aparte.send(self.query(jid.clone().into())),
+            Event::LoadHistory(jid) => aparte.send(self.query(jid.clone().into())),
             _ => {},
         }
     }

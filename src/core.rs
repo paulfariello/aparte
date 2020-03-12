@@ -41,6 +41,7 @@ pub enum Event {
     ContactUpdate(contact::Contact),
     Occupant(conversation::Occupant),
     Signal(i32),
+    LoadHistory(BareJid),
     Quit,
 }
 

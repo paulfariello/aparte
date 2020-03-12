@@ -370,10 +370,11 @@ impl<'a> UIPlugin<'a> {
         self.root.event(&mut event);
     }
 
-    fn add_conversation(&mut self, conversation: Conversation) {
+    fn add_conversation(&mut self, aparte: Rc<Aparte>, conversation: Conversation) {
+        let jid = conversation.jid.clone();
         match conversation.kind {
             ConversationKind::Chat => {
-                let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(|view, event| {
+                let chat = View::<BufferedWin<Message>, UIEvent<'a>>::new(self.screen.clone()).with_event(move |view, event| {
                     match event {
                         UIEvent::Message(Message::Incoming(XmppMessage::Chat(message))) => {
                             // TODO check to == us
@@ -383,7 +384,10 @@ impl<'a> UIPlugin<'a> {
                             // TODO check from == us
                             view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
                         },
-                        UIEvent::Key(Key::PageUp) => view.page_up(),
+                        UIEvent::Key(Key::PageUp) => {
+                            Rc::clone(&aparte).event(Event::LoadHistory(jid.clone()));
+                            view.page_up();
+                        },
                         UIEvent::Key(Key::PageDown) => view.page_down(),
                         _ => {},
                     }
@@ -640,7 +644,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                     Message::Incoming(XmppMessage::Chat(message)) => {
                         let window_name = message.from.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(Conversation {
+                            self.add_conversation(aparte, Conversation {
                                 jid: BareJid::from_str(&window_name).unwrap(),
                                 kind: ConversationKind::Chat,
                             });
@@ -649,7 +653,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                     Message::Outgoing(XmppMessage::Chat(message)) => {
                         let window_name = message.to.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(Conversation {
+                            self.add_conversation(aparte, Conversation {
                                 jid: BareJid::from_str(&window_name).unwrap(),
                                 kind: ConversationKind::Chat,
                             });
@@ -658,7 +662,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                     Message::Incoming(XmppMessage::Groupchat(message)) => {
                         let window_name = message.from.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(Conversation {
+                            self.add_conversation(aparte, Conversation {
                                 jid: BareJid::from_str(&window_name).unwrap(),
                                 kind: ConversationKind::Group,
                             });
@@ -667,7 +671,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                     Message::Outgoing(XmppMessage::Groupchat(message)) => {
                         let window_name = message.to.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(Conversation {
+                            self.add_conversation(aparte, Conversation {
                                 jid: BareJid::from_str(&window_name).unwrap(),
                                 kind: ConversationKind::Group,
                             });
@@ -681,7 +685,7 @@ impl<'a> Plugin for UIPlugin<'a> {
             Event::Chat(jid) => {
                 let win_name = jid.to_string();
                 if !self.conversations.contains_key(&win_name) {
-                    self.add_conversation(Conversation {
+                    self.add_conversation(aparte, Conversation {
                         jid: BareJid::from_str(&win_name).unwrap(),
                         kind: ConversationKind::Chat,
                     });
@@ -692,7 +696,7 @@ impl<'a> Plugin for UIPlugin<'a> {
                 let bare: BareJid = jid.clone().into();
                 let win_name = bare.to_string();
                 if !self.conversations.contains_key(&win_name) {
-                    self.add_conversation(Conversation {
+                    self.add_conversation(aparte, Conversation {
                         jid: BareJid::from_str(&win_name).unwrap(),
                         kind: ConversationKind::Group,
                     });
