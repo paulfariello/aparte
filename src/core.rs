@@ -14,11 +14,13 @@ use std::rc::Rc;
 use tokio_xmpp::Packet;
 use xmpp_parsers::{Element, FullJid, BareJid, presence, iq};
 use xmpp_parsers;
+use termion::event::Key;
 
 use crate::{contact, conversation};
 use crate::message::Message;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
+use crate::terminus::ViewTrait;
 
 #[derive(Debug, Clone)]
 pub enum CommandOrMessage {
@@ -43,6 +45,12 @@ pub enum Event {
     Signal(i32),
     LoadHistory(BareJid),
     Quit,
+    Key(Key),
+    Validate(Rc<RefCell<Option<(String, bool)>>>),
+    Complete(Rc<RefCell<Option<(String, usize, bool)>>>),
+    Completed(String),
+    AddWindow(String, Option<Box<dyn ViewTrait<Event>>>),
+    ChangeWindow(String),
 }
 
 pub trait Plugin: fmt::Display {
