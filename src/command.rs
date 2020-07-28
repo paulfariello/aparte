@@ -2,9 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
-use std::io::Error as IoError;
 use std::rc::Rc;
-use std::string::FromUtf8Error;
 
 use crate::core::Aparte;
 
@@ -15,13 +13,6 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(args: Vec<String>) -> Self {
-        Self {
-            cursor: args.len(),
-            args: args,
-        }
-    }
-
     pub fn parse_with_cursor(string: &str, cursor: usize) -> Result<Self, &'static str> {
         enum State {
             Initial,
@@ -234,13 +225,6 @@ pub struct CommandParser {
     pub help: &'static str,
     pub parser: Box<dyn Fn(Rc<Aparte>, Command) -> Result<(), String>>,
     pub completions: Vec<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>,
-}
-
-#[derive(Debug, Error)]
-pub enum CommandError {
-    Io(IoError),
-    Utf8(FromUtf8Error),
-    Parse,
 }
 
 #[cfg(test)]

@@ -12,7 +12,6 @@ extern crate tokio_xmpp;
 extern crate xmpp_parsers;
 extern crate rpassword;
 extern crate futures;
-#[macro_use]
 extern crate derive_error;
 extern crate tokio_file_unix;
 extern crate dirs;
@@ -44,7 +43,7 @@ mod command;
 mod terminus;
 mod plugins;
 
-use crate::core::{Aparte, Plugin, Event, CommandOrMessage};
+use crate::core::{Aparte, Plugin, Event};
 use crate::message::{Message};
 use crate::command::{CommandParser, Command};
 
@@ -411,9 +410,9 @@ fn main() {
     Rc::clone(&aparte).log(format!("Version: {}", VERSION));
 
     let mut rt = Runtime::new().unwrap();
-    let command_stream = {
+    let event_stream = {
         let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
-        ui.command_stream(Rc::clone(&aparte))
+        ui.event_stream(Rc::clone(&aparte))
     };
 
     let sig_aparte = Rc::clone(&aparte); // TODO use ARC ?
@@ -424,22 +423,12 @@ fn main() {
 
     rt.spawn(signals);
 
-    rt.block_on(command_stream.for_each(move |command_or_message| {
-        match command_or_message {
-            CommandOrMessage::Message(message) => {
-                Rc::clone(&aparte).event(Event::Message(message.clone()));
-                if let Ok(xmpp_message) = Element::try_from(message) {
-                    aparte.send(xmpp_message);
-                }
-            }
-            CommandOrMessage::Command(command) => {
-                match Rc::clone(&aparte).parse_command(command.clone()) {
-                    Err(err) => Rc::clone(&aparte).log(err),
-                    Ok(()) => {},
-                }
-            }
-        };
+    if let Err(e) = rt.block_on(event_stream.for_each(move |event| {
+        Rc::clone(&aparte).event(event);
 
         Ok(())
-    }));
+    })) {
+      info!("Error in event stream: {}", e);
+    }
+
 }

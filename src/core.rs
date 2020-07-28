@@ -11,6 +11,7 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::convert::TryFrom;
 use tokio_xmpp::Packet;
 use xmpp_parsers::{Element, FullJid, BareJid, presence, iq};
 use xmpp_parsers;
@@ -22,16 +23,13 @@ use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::terminus::ViewTrait;
 
-#[derive(Debug, Clone)]
-pub enum CommandOrMessage {
-    Command(Command),
-    Message(Message),
-}
-
 pub enum Event {
     Connected(FullJid),
     #[allow(dead_code)]
     Disconnected(FullJid),
+    Command(Command),
+    CommandError(String),
+    SendMessage(Message),
     Message(Message),
     Chat(BareJid),
     Join(FullJid),
@@ -103,7 +101,10 @@ impl Aparte {
         };
 
         let mut config_str = String::new();
-        config_file.read_to_string(&mut config_str);
+        if let Err(e) = config_file.read_to_string(&mut config_str) {
+            panic!("Cannot read config file {}", e);
+        }
+
         let config = match config_str.len() {
             0 => Config { accounts: HashMap::new() },
             _ => match toml::from_str(&config_str) {
@@ -234,6 +235,22 @@ impl Aparte {
                 let event = self.event_queue.borrow_mut().remove(0);
                 for (_, plugin) in self.plugins.iter() {
                     plugin.borrow_mut().as_plugin().on_event(Rc::clone(&self), &event);
+                }
+
+                match event {
+                    Event::Command(command) => {
+                        match Rc::clone(&self).parse_command(command) {
+                            Err(err) => Rc::clone(&self).log(err),
+                            Ok(()) => {},
+                        }
+                    },
+                    Event::SendMessage(message) => {
+                        Rc::clone(&self).event(Event::Message(message.clone()));
+                        if let Ok(xmpp_message) = Element::try_from(message) {
+                            self.send(xmpp_message);
+                        }
+                    },
+                    _ => {},
                 }
             }
         }

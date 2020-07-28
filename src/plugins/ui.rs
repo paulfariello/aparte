@@ -23,13 +23,13 @@ use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::core::{Plugin, Aparte, Event, CommandOrMessage};
+use crate::core::{Plugin, Aparte, Event};
 use crate::{contact, conversation};
 use crate::message::{Message, XmppMessage};
-use crate::command::{Command, CommandError};
+use crate::command::{Command};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
-pub type CommandStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
+pub type EventStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 #[derive(Debug, Clone)]
@@ -238,7 +238,7 @@ impl fmt::Display for Message {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 for line in message.body.lines() {
-                    write!(f, "{} - {}\n", timestamp.format("%T"), line);
+                    write!(f, "{} - {}\n", timestamp.format("%T"), line)?;
                 }
 
                 Ok(())
@@ -339,7 +339,7 @@ pub struct UIPlugin {
 }
 
 impl UIPlugin {
-    pub fn command_stream(&self, aparte: Rc<Aparte>) -> CommandStream {
+    pub fn event_stream(&self, aparte: Rc<Aparte>) -> EventStream {
         let file = tokio_file_unix::raw_stdin().unwrap();
         let file = tokio_file_unix::File::new_nb(file).unwrap();
         let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
@@ -703,12 +703,109 @@ impl Plugin for UIPlugin {
                 self.root.redraw();
             },
             Event::Key(key) => {
-                self.reset_completion();
-                self.root.event(&mut Event::Key(key.clone()));
+                match key {
+                    Key::Char('\t') => {
+                        let result = Rc::new(RefCell::new(None));
+
+                        let (raw_buf, cursor, password) = {
+                            self.root.event(&mut Event::Complete(Rc::clone(&result)));
+
+                            let result = result.borrow_mut();
+                            result.as_ref().unwrap().clone()
+                        };
+
+                        if password {
+                            Rc::clone(&aparte).event(Event::Key(Key::Char('\t')));
+                        } else {
+                            let raw_buf = raw_buf.clone();
+                            if raw_buf.starts_with("/") {
+                                if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
+                                    {
+                                        let call_completion = {
+                                            self.completion.is_none()
+                                        };
+
+                                        if call_completion {
+                                            let mut completion = aparte.autocomplete(command.clone());
+                                            if command.cursor < command.args.len() {
+                                                completion = completion.iter().filter_map(|c| {
+                                                    if c.starts_with(&command.args[command.cursor]) {
+                                                        Some(c.to_string())
+                                                    } else {
+                                                        None
+                                                    }
+                                                }).collect();
+                                            }
+                                            self.completion = Some(completion);
+                                            self.current_completion = 0;
+                                        }
+                                    }
+
+                                    self.autocomplete(&mut command);
+                                    Rc::clone(&aparte).event(Event::Completed(command.assemble()));
+                                }
+                            }
+                        }
+                    },
+                    Key::Char('\n') => {
+                        let result = Rc::new(RefCell::new(None));
+                        // TODO avoid direct send to root, should go back to main event loop
+                        self.root.event(&mut Event::Validate(Rc::clone(&result)));
+
+                        let result = result.borrow_mut();
+                        let (raw_buf, password) = result.as_ref().unwrap();
+                        let raw_buf = raw_buf.clone();
+                        if *password {
+                            let mut command = self.password_command.take().unwrap();
+                            command.args.push(raw_buf.clone());
+                            Rc::clone(&aparte).event(Event::Command(command));
+                        } else if raw_buf.starts_with("/") {
+                            match Command::try_from(&*raw_buf) {
+                                Ok(command) => {
+                                    Rc::clone(&aparte).event(Event::Command(command));
+                                },
+                                Err(error) => {
+                                    Rc::clone(&aparte).event(Event::CommandError(error.to_string()));
+                                }
+                            }
+                        } else if raw_buf.len() > 0 {
+                            if let Some(current_window) = self.current_window.clone() {
+                                if let Some(conversation) = self.conversations.get(&current_window) {
+                                    let us = aparte.current_connection().unwrap().clone().into();
+                                    match conversation.kind {
+                                        ConversationKind::Chat => {
+                                            let from: Jid = us;
+                                            let to: Jid = conversation.jid.clone().into();
+                                            let id = Uuid::new_v4();
+                                            let timestamp = Utc::now();
+                                            let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                            Rc::clone(&aparte).event(Event::SendMessage(message));
+                                        },
+                                        ConversationKind::Group => {
+                                            let from: Jid = us;
+                                            let to: Jid = conversation.jid.clone().into();
+                                            let id = Uuid::new_v4();
+                                            let timestamp = Utc::now();
+                                            let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                            Rc::clone(&aparte).event(Event::SendMessage(message));
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    _ => {
+                        self.reset_completion();
+                        self.root.event(&mut Event::Key(key.clone()));
+                    }
+                }
             },
             Event::Quit => {
                 self.running.swap(false, Ordering::Relaxed);
-            }
+            },
+            Event::Completed(command) => {
+                self.root.event(&mut Event::Completed(command.clone()));
+            },
             _ => {},
         }
     }
@@ -721,7 +818,7 @@ impl fmt::Display for UIPlugin {
 }
 
 pub struct KeyCodec {
-    queue: Vec<Result<CommandOrMessage, CommandError>>,
+    queue: Vec<Result<Event, IoError>>,
     aparte: Rc<Aparte>,
     running: Rc<AtomicBool>,
 }
@@ -737,138 +834,14 @@ impl KeyCodec {
 }
 
 impl Decoder for KeyCodec {
-    type Item = CommandOrMessage;
-    type Error = CommandError;
+    type Item = Event;
+    type Error = IoError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if self.running.load(Ordering::Relaxed) {
             let mut keys = buf.keys();
             while let Some(key) = keys.next() {
                 match key {
-                    Ok(Key::Backspace) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Backspace));
-                    },
-                    Ok(Key::Delete) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Delete));
-                    },
-                    Ok(Key::Home) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Home));
-                    },
-                    Ok(Key::End) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::End));
-                    },
-                    Ok(Key::Left) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Left));
-                    },
-                    Ok(Key::Right) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Right));
-                    },
-                    Ok(Key::Up) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Up));
-                    },
-                    Ok(Key::Down) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Down));
-                    },
-                    Ok(Key::PageUp) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::PageUp));
-                    },
-                    Ok(Key::PageDown) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::PageDown));
-                    },
-                    Ok(Key::Char('\t')) => {
-                        let result = Rc::new(RefCell::new(None));
-                        let event = Event::Complete(Rc::clone(&result));
-
-                        let (raw_buf, cursor, password) = {
-                            Rc::clone(&self.aparte).event(event);
-
-                            let result = result.borrow_mut();
-                            result.as_ref().unwrap().clone()
-                        };
-
-                        if password {
-                            Rc::clone(&self.aparte).event(Event::Key(Key::Char('\t')));
-                        } else {
-                            let raw_buf = raw_buf.clone();
-                            if raw_buf.starts_with("/") {
-                                if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
-                                    {
-                                        let call_completion = {
-                                            let ui = self.aparte.get_plugin::<UIPlugin>().unwrap();
-                                            ui.completion.is_none()
-                                        };
-
-                                        if call_completion {
-                                            let mut completion = self.aparte.autocomplete(command.clone());
-                                            if command.cursor < command.args.len() {
-                                                completion = completion.iter().filter_map(|c| {
-                                                    if c.starts_with(&command.args[command.cursor]) {
-                                                        Some(c.to_string())
-                                                    } else {
-                                                        None
-                                                    }
-                                                }).collect();
-                                            }
-                                            let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                                            ui.completion = Some(completion);
-                                            ui.current_completion = 0;
-                                        }
-                                    }
-
-                                    let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                                    ui.autocomplete(&mut command);
-                                    Rc::clone(&self.aparte).event(Event::Completed(command.assemble()));
-                                }
-                            }
-                        }
-                    },
-                    Ok(Key::Char('\n')) => {
-                        let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
-                        let result = Rc::new(RefCell::new(None));
-                        let event = Event::Validate(Rc::clone(&result));
-
-                        Rc::clone(&self.aparte).event(event);
-
-                        let result = result.borrow_mut();
-                        let (raw_buf, password) = result.as_ref().unwrap();
-                        let raw_buf = raw_buf.clone();
-                        if *password {
-                            let mut command = ui.password_command.take().unwrap();
-                            command.args.push(raw_buf.clone());
-                            self.queue.push(Ok(CommandOrMessage::Command(command)));
-                        } else if raw_buf.starts_with("/") {
-                            match Command::try_from(&*raw_buf) {
-                                Ok(command) => {
-                                    self.queue.push(Ok(CommandOrMessage::Command(command)));
-                                },
-                                Err(_) => self.queue.push(Err(CommandError::Parse)),
-                            }
-                        } else if raw_buf.len() > 0 {
-                            if let Some(current_window) = ui.current_window.clone() {
-                                if let Some(conversation) = ui.conversations.get(&current_window) {
-                                    let us = self.aparte.current_connection().unwrap().clone().into();
-                                    match conversation.kind {
-                                        ConversationKind::Chat => {
-                                            let from: Jid = us;
-                                            let to: Jid = conversation.jid.clone().into();
-                                            let id = Uuid::new_v4();
-                                            let timestamp = Utc::now();
-                                            let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
-                                            self.queue.push(Ok(CommandOrMessage::Message(message)));
-                                        },
-                                        ConversationKind::Group => {
-                                            let from: Jid = us;
-                                            let to: Jid = conversation.jid.clone().into();
-                                            let id = Uuid::new_v4();
-                                            let timestamp = Utc::now();
-                                            let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
-                                            self.queue.push(Ok(CommandOrMessage::Message(message)));
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                    },
                     Ok(Key::Alt('\x1b')) => {
                         let mut ui = self.aparte.get_plugin_mut::<UIPlugin>().unwrap();
                         match keys.next() {
@@ -890,12 +863,16 @@ impl Decoder for KeyCodec {
                             None => {},
                         };
                     },
-                    Ok(Key::Char(c)) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Char(c)));
-                    },
-                    Ok(Key::Ctrl('w')) => {
-                        Rc::clone(&self.aparte).event(Event::Key(Key::Ctrl('w')));
-                    },
+                    Ok(Key::Char(c)) => self.queue.push(Ok(Event::Key(Key::Char(c)))),
+                    Ok(Key::Backspace) => self.queue.push(Ok(Event::Key(Key::Backspace))),
+                    Ok(Key::Delete) => self.queue.push(Ok(Event::Key(Key::Delete))),
+                    Ok(Key::Home) => self.queue.push(Ok(Event::Key(Key::Home))),
+                    Ok(Key::End) => self.queue.push(Ok(Event::Key(Key::End))),
+                    Ok(Key::Up) => self.queue.push(Ok(Event::Key(Key::Up))),
+                    Ok(Key::Down) => self.queue.push(Ok(Event::Key(Key::Down))),
+                    Ok(Key::Left) => self.queue.push(Ok(Event::Key(Key::Left))),
+                    Ok(Key::Right) => self.queue.push(Ok(Event::Key(Key::Right))),
+                    Ok(Key::Ctrl(c)) => self.queue.push(Ok(Event::Key(Key::Ctrl(c)))),
                     Ok(_) => {},
                     Err(_) => {},
                 };
@@ -903,7 +880,7 @@ impl Decoder for KeyCodec {
 
             buf.clear();
         } else {
-            self.queue.push(Err(CommandError::Io(IoError::new(ErrorKind::BrokenPipe, "quit"))));
+            self.queue.push(Err(IoError::new(ErrorKind::BrokenPipe, "quit")));
         }
 
         match self.queue.pop() {
