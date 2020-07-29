@@ -190,16 +190,20 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
                 if let Some(current) = &self.content.current_window {
                     if window == current {
                         let win = format!("-{}: {}- ", index, window);
-                        windows_len += win.len();
-                        windows.push_str(&win);
+                        if (win.len() as u16) < self.w.unwrap() - windows_len {
+                            windows_len += win.len() as u16;
+                            windows.push_str(&win);
+                        }
                     } else {
                         if self.content.highlighted.iter().find(|w| w == &window).is_some() {
                             windows.push_str(&format!("{}", termion::style::Bold));
                         }
                         let win = format!("[{}: {}] ", index, window);
-                        windows_len += win.len();
-                        windows.push_str(&win);
-                        windows.push_str(&format!("{}", termion::style::NoBold));
+                        if (win.len() as u16) < self.w.unwrap() - windows_len {
+                            windows_len += win.len() as u16;
+                            windows.push_str(&win);
+                            windows.push_str(&format!("{}", termion::style::NoBold));
+                        }
                     }
                 }
                 index += 1;
