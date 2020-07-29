@@ -23,7 +23,7 @@ impl From<muc::user::Role> for conversation::Role {
             muc::user::Role::Moderator => conversation::Role::Moderator,
             muc::user::Role::Participant => conversation::Role::Participant,
             muc::user::Role::Visitor => conversation::Role::Visitor,
-            muc::user::Role::None => unreachable!(),
+            muc::user::Role::None => conversation::Role::None,
         }
     }
 }

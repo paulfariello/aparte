@@ -326,6 +326,7 @@ impl fmt::Display for conversation::Role {
             conversation::Role::Moderator => write!(f, "{}Moderators{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
             conversation::Role::Participant => write!(f, "{}Participants{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
             conversation::Role::Visitor => write!(f, "{}Visitors{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
+            conversation::Role::None => write!(f, "{}Others{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
         }
     }
 }

@@ -19,6 +19,7 @@ pub enum Role {
     Visitor,
     Participant,
     Moderator,
+    None,
 }
 
 #[derive(Clone, Debug)]
