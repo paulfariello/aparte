@@ -359,11 +359,15 @@ impl UIPlugin {
                     match event {
                         Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
                             // TODO check to == us
-                            view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())), true);
+                            if message.from == jid {
+                                view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())), true);
+                            }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
                             // TODO check from == us
-                            view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
+                            if message.to == jid {
+                                view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
+                            }
                         },
                         Event::Key(Key::PageUp) => {
                             Rc::clone(&aparte).event(Event::LoadHistory(jid.clone()));
@@ -384,15 +388,19 @@ impl UIPlugin {
                         child.event(event);
                     }
                 });
-                let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(|view, event| {
+                let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(move |view, event| {
                     match event {
                         Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
                             // TODO check to == us
-                            view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())), true);
+                            if message.from == jid {
+                                view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())), true);
+                            }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
                             // TODO check from == us
-                            view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())), true);
+                            if message.to == jid {
+                                view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())), true);
+                            }
                         },
                         Event::Key(Key::PageUp) => view.page_up(),
                         Event::Key(Key::PageDown) => view.page_down(),
