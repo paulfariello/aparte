@@ -79,13 +79,13 @@ macro_rules! vprint {
     ($view:expr, $fmt:expr) => {
         {
             let mut screen = $view.screen.borrow_mut();
-            write!(screen, $fmt).unwrap();
+            while let Err(_) = write!(screen, $fmt) { };
         }
     };
     ($view:expr, $fmt:expr, $($arg:tt)*) => {
         {
             let mut screen = $view.screen.borrow_mut();
-            write!(screen, $fmt, $($arg)*).unwrap();
+            while let Err(_) = write!(screen, $fmt, $($arg)*) { };
         }
     };
 }
