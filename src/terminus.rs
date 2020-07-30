@@ -8,6 +8,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::io::{Write, Stdout};
 use std::rc::Rc;
+use unicode_segmentation::UnicodeSegmentation;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 
@@ -877,14 +878,42 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
         self.save_cursor();
 
         self.content.next_line = 0;
-        let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
-        let count = buffers.collect::<Vec<_>>().len();
 
-        let mut buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
+        let max_len = self.w.unwrap() as usize;
+
+        let mut buffers: Vec<String> = Vec::new();
+        let mut count = 0;
+
+        for buf in &self.content.buf {
+            let formatted = format!("{}", buf);
+            for line in formatted.lines() {
+                let words = line.split_word_bounds();
+
+                let mut line_len = 0;
+                let mut chunk = String::new();
+                for word in words {
+                    let word_len = word.graphemes(true).collect::<Vec<_>>().len();
+
+                    if line_len + word_len > max_len {
+                        // Wrap line
+                        buffers.push(chunk);
+                        chunk = String::new();
+                        line_len = 0;
+                    }
+
+                    chunk.push_str(word);
+                    line_len += word_len;
+                }
+
+                buffers.push(chunk);
+            }
+        }
+
+        let mut iter = buffers.iter();
 
         if count > self.h.unwrap() as usize {
             for _ in 0 .. count - self.h.unwrap() as usize - self.content.view {
-                if buffers.next().is_none() {
+                if iter.next().is_none() {
                     break;
                 }
             }
@@ -897,7 +926,7 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
             }
 
             goto!(self, self.x, y);
-            if let Some(buf) = buffers.next() {
+            if let Some(buf) = iter.next() {
                 vprint!(self, "{}", buf);
                 self.content.next_line += 1;
             }
