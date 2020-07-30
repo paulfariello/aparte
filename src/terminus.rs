@@ -254,20 +254,6 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
         widget.layout(self.y, self.x);
         self.content.children.insert(key, widget);
     }
-
-    pub fn show(&mut self) {
-        self.visible = true;
-        for (_, child) in self.content.children.iter_mut() {
-            child.show();
-        }
-    }
-
-    pub fn hide(&mut self) {
-        self.visible = false;
-        for (_, child) in self.content.children.iter_mut() {
-            child.hide();
-        }
-    }
 }
 
 impl<K, E> ViewTrait<E> for View<'_, FrameLayout<'_, K, E>, E>
@@ -305,6 +291,20 @@ impl<K, E> ViewTrait<E> for View<'_, FrameLayout<'_, K, E>, E>
             dirty |= child.is_dirty()
         }
         dirty
+    }
+
+    fn show(&mut self) {
+        self.visible = true;
+        for (_, child) in self.content.children.iter_mut() {
+            child.show();
+        }
+    }
+
+    fn hide(&mut self) {
+        self.visible = false;
+        for (_, child) in self.content.children.iter_mut() {
+            child.hide();
+        }
     }
 }
 
@@ -354,20 +354,6 @@ impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
-    }
-
-    pub fn show(&mut self) {
-        self.visible = true;
-        for child in self.content.children.iter_mut() {
-            child.show();
-        }
-    }
-
-    pub fn hide(&mut self) {
-        self.visible = false;
-        for child in self.content.children.iter_mut() {
-            child.hide();
-        }
     }
 }
 
@@ -517,6 +503,20 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
             dirty |= child.is_dirty()
         }
         dirty
+    }
+
+    fn show(&mut self) {
+        self.visible = true;
+        for child in self.content.children.iter_mut() {
+            child.show();
+        }
+    }
+
+    fn hide(&mut self) {
+        self.visible = false;
+        for child in self.content.children.iter_mut() {
+            child.hide();
+        }
     }
 }
 
