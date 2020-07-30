@@ -244,7 +244,7 @@ impl fmt::Display for Message {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 for line in message.body.lines() {
-                    write!(f, "{} - {}\n", timestamp.format("%T"), line)?;
+                    write!(f, "{}{} - {}\n", color::Fg(color::White), timestamp.format("%T"), line)?;
                 }
 
                 Ok(())
@@ -254,7 +254,8 @@ impl fmt::Display for Message {
                 let padding_len = format!("{} - {}: ", timestamp.format("%T"), message.from).len();
                 let padding = " ".repeat(padding_len);
 
-                write!(f, "{} - {}{}:{} ", timestamp.format("%T"), color::Fg(color::Green), message.from, color::Fg(color::White))?;
+                write!(f, "{}{} - {}{}:{} ", color::Fg(color::White), timestamp.format("%T"),
+                    color::Fg(color::Green), message.from, color::Fg(color::White))?;
 
                 let mut iter = message.body.lines();
                 if let Some(line) = iter.next() {
