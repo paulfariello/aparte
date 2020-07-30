@@ -5,7 +5,7 @@ use bytes::BytesMut;
 use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
@@ -841,7 +841,7 @@ impl fmt::Display for UIPlugin {
 }
 
 pub struct KeyCodec {
-    queue: Vec<Result<Event, IoError>>,
+    queue: VecDeque<Result<Event, IoError>>,
     aparte: Rc<Aparte>,
     running: Rc<AtomicBool>,
 }
@@ -849,7 +849,7 @@ pub struct KeyCodec {
 impl KeyCodec {
     pub fn new(aparte: Rc<Aparte>, running: Rc<AtomicBool>) -> Self {
         Self {
-            queue: Vec::new(),
+            queue: VecDeque::new(),
             aparte: aparte,
             running: running,
         }
@@ -886,16 +886,16 @@ impl Decoder for KeyCodec {
                             None => {},
                         };
                     },
-                    Ok(Key::Char(c)) => self.queue.push(Ok(Event::Key(Key::Char(c)))),
-                    Ok(Key::Backspace) => self.queue.push(Ok(Event::Key(Key::Backspace))),
-                    Ok(Key::Delete) => self.queue.push(Ok(Event::Key(Key::Delete))),
-                    Ok(Key::Home) => self.queue.push(Ok(Event::Key(Key::Home))),
-                    Ok(Key::End) => self.queue.push(Ok(Event::Key(Key::End))),
-                    Ok(Key::Up) => self.queue.push(Ok(Event::Key(Key::Up))),
-                    Ok(Key::Down) => self.queue.push(Ok(Event::Key(Key::Down))),
-                    Ok(Key::Left) => self.queue.push(Ok(Event::Key(Key::Left))),
-                    Ok(Key::Right) => self.queue.push(Ok(Event::Key(Key::Right))),
-                    Ok(Key::Ctrl(c)) => self.queue.push(Ok(Event::Key(Key::Ctrl(c)))),
+                    Ok(Key::Char(c)) => self.queue.push_back(Ok(Event::Key(Key::Char(c)))),
+                    Ok(Key::Backspace) => self.queue.push_back(Ok(Event::Key(Key::Backspace))),
+                    Ok(Key::Delete) => self.queue.push_back(Ok(Event::Key(Key::Delete))),
+                    Ok(Key::Home) => self.queue.push_back(Ok(Event::Key(Key::Home))),
+                    Ok(Key::End) => self.queue.push_back(Ok(Event::Key(Key::End))),
+                    Ok(Key::Up) => self.queue.push_back(Ok(Event::Key(Key::Up))),
+                    Ok(Key::Down) => self.queue.push_back(Ok(Event::Key(Key::Down))),
+                    Ok(Key::Left) => self.queue.push_back(Ok(Event::Key(Key::Left))),
+                    Ok(Key::Right) => self.queue.push_back(Ok(Event::Key(Key::Right))),
+                    Ok(Key::Ctrl(c)) => self.queue.push_back(Ok(Event::Key(Key::Ctrl(c)))),
                     Ok(_) => {},
                     Err(_) => {},
                 };
@@ -903,10 +903,10 @@ impl Decoder for KeyCodec {
 
             buf.clear();
         } else {
-            self.queue.push(Err(IoError::new(ErrorKind::BrokenPipe, "quit")));
+            self.queue.push_back(Err(IoError::new(ErrorKind::BrokenPipe, "quit")));
         }
 
-        match self.queue.pop() {
+        match self.queue.pop_front() {
             Some(Ok(command)) => Ok(Some(command)),
             Some(Err(err)) => Err(err),
             None => Ok(None),
