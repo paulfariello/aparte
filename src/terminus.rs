@@ -825,6 +825,38 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
+
+    fn get_rendered_buffers(&self) -> Vec<String> {
+        let max_len = self.w.unwrap() as usize;
+        let mut buffers: Vec<String> = Vec::new();
+
+        for buf in &self.content.buf {
+            let formatted = format!("{}", buf);
+            for line in formatted.lines() {
+                let words = line.split_word_bounds();
+
+                let mut line_len = 0;
+                let mut chunk = String::new();
+                for word in words {
+                    let word_len = word.graphemes(true).collect::<Vec<_>>().len();
+
+                    if line_len + word_len > max_len {
+                        // Wrap line
+                        buffers.push(chunk);
+                        chunk = String::new();
+                        line_len = 0;
+                    }
+
+                    chunk.push_str(word);
+                    line_len += word_len;
+                }
+
+                buffers.push(chunk);
+            }
+        }
+
+        buffers
+    }
 }
 
 impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
@@ -842,8 +874,8 @@ impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
     }
 
     fn page_up(&mut self) {
-        let buffers = self.content.buf.iter().flat_map(|m| format!("{}", m).lines().map(str::to_owned).collect::<Vec<_>>());
-        let count = buffers.collect::<Vec<_>>().len();
+        let buffers = self.get_rendered_buffers();
+        let count = buffers.len();
 
         if count < self.h.unwrap() as usize {
             return;
@@ -879,36 +911,8 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
 
         self.content.next_line = 0;
 
-        let max_len = self.w.unwrap() as usize;
-
-        let mut buffers: Vec<String> = Vec::new();
-        let mut count = 0;
-
-        for buf in &self.content.buf {
-            let formatted = format!("{}", buf);
-            for line in formatted.lines() {
-                let words = line.split_word_bounds();
-
-                let mut line_len = 0;
-                let mut chunk = String::new();
-                for word in words {
-                    let word_len = word.graphemes(true).collect::<Vec<_>>().len();
-
-                    if line_len + word_len > max_len {
-                        // Wrap line
-                        buffers.push(chunk);
-                        chunk = String::new();
-                        line_len = 0;
-                    }
-
-                    chunk.push_str(word);
-                    line_len += word_len;
-                }
-
-                buffers.push(chunk);
-            }
-        }
-
+        let buffers = self.get_rendered_buffers();
+        let count = buffers.len();
         let mut iter = buffers.iter();
 
         if count > self.h.unwrap() as usize {
