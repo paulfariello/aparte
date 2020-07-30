@@ -268,7 +268,8 @@ impl fmt::Display for Message {
             },
             Message::Outgoing(XmppMessage::Chat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                write!(f, "{} - {}me:{} {}", timestamp.format("%T"), color::Fg(color::Yellow), color::Fg(color::White), message.body)
+                write!(f, "{}{} - {}me:{} {}", color::Fg(color::White), timestamp.format("%T"),
+                    color::Fg(color::Yellow), color::Fg(color::White), message.body)
             }
             Message::Incoming(XmppMessage::Groupchat(message)) => {
                 if let Jid::Full(from) = &message.from_full {
@@ -276,7 +277,8 @@ impl fmt::Display for Message {
                     let padding_len = format!("{} - {}: ", timestamp.format("%T"), from.resource).len();
                     let padding = " ".repeat(padding_len);
 
-                    write!(f, "{} - {}{}:{} ", timestamp.format("%T"), color::Fg(color::Green), from.resource, color::Fg(color::White))?;
+                    write!(f, "{}{} - {}{}:{} ", color::Fg(color::White), timestamp.format("%T"),
+                        color::Fg(color::Green), from.resource, color::Fg(color::White))?;
 
                     let mut iter = message.body.lines();
                     if let Some(line) = iter.next() {
@@ -290,7 +292,8 @@ impl fmt::Display for Message {
             },
             Message::Outgoing(XmppMessage::Groupchat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                write!(f, "{} - {}me:{} {}", timestamp.format("%T"), color::Fg(color::Yellow), color::Fg(color::White), message.body)
+                write!(f, "{}{} - {}me:{} {}", color::Fg(color::White), timestamp.format("%T"),
+                    color::Fg(color::Yellow), color::Fg(color::White), message.body)
             }
         }
     }
