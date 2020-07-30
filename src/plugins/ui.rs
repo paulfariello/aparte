@@ -420,7 +420,7 @@ impl UIPlugin {
                 let roster_jid = jid.clone();
                 let roster = View::<ListView<conversation::Role, conversation::Occupant>, Event>::new(self.screen.clone()).with_none_group().with_event(move |view, event| {
                     match event {
-                        Event::Occupant{conversation: conversation, occupant: occupant} => {
+                        Event::Occupant{conversation, occupant} => {
                             if roster_jid == *conversation {
                                 view.insert(occupant.clone(), Some(occupant.role));
                             }
@@ -716,7 +716,7 @@ impl Plugin for UIPlugin {
             Event::ContactUpdate(contact) => {
                 self.root.event(&mut Event::ContactUpdate(contact.clone()));
             },
-            Event::Occupant{conversation: conversation, occupant: occupant} => {
+            Event::Occupant{conversation, occupant} => {
                 self.root.event(&mut Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()});
             },
             Event::Signal(signal_hook::SIGWINCH) => {
