@@ -15,25 +15,32 @@ use termion::screen::AlternateScreen;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 fn term_string_visible_len(string: &str) -> usize {
+    // Count each grapheme on a given struct but ignore invisible chars sequences like '\x1b[…'
     let mut len = 0;
-    let mut iter = string.chars();
+    let mut iter = string.graphemes(true);
 
-    while let Some(c) = iter.next() {
-        match c {
-            '\x1B' => {
-                if let Some(c) = iter.next() {
-                    if c == '[' {
-                        while let Some(c) = iter.next() {
-                            match c {
-                                '\x30'..='\x3f' => {}, // parameter bytes
-                                '\x20'..='\x2f' => {}, // intermediate bytes
-                                '\x40'..='\x7E' => break, // final byte
-                                _ => break,
+    while let Some(grapheme) = iter.next() {
+        match grapheme {
+            "\x1b" => {
+                if let Some(grapheme) = iter.next() {
+                    if grapheme == "[" {
+                        while let Some(grapheme) = iter.next() {
+                            let chars = grapheme.chars().collect::<Vec<_>>();
+                            if chars.len() == 1 {
+                                match chars[0] {
+                                    '\x30'..='\x3f' => {}, // parameter bytes
+                                    '\x20'..='\x2f' => {}, // intermediate bytes
+                                    '\x40'..='\x7e' => break, // final byte
+                                    _ => break,
+                                }
+                            } else {
+                                len += 1;
+                                break;
                             }
                         }
                     }
                 }
-            },
+            }
             _ => { len += 1; },
         }
     }
@@ -833,22 +840,89 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
         for buf in &self.content.buf {
             let formatted = format!("{}", buf);
             for line in formatted.lines() {
-                let words = line.split_word_bounds();
+                let mut words = line.split_word_bounds();
 
                 let mut line_len = 0;
                 let mut chunk = String::new();
-                for word in words {
-                    let word_len = word.graphemes(true).collect::<Vec<_>>().len();
+                while let Some(word) = words.next() {
+                    let visible_word;
+                    let mut remaining = String::new();
 
-                    if line_len + word_len > max_len {
+                    // We can safely unwrap here because split_word_bounds produce non empty words
+                    let first_char = word.chars().next().unwrap();
+
+                    if first_char == '\x1b' {
+                        // Handle Escape sequence: see https://www.ecma-international.org/publications/files/ECMA-ST/Ecma-048.pdf
+                        // First char is a word boundary
+                        //
+                        // We must ignore them for the visible length count but include them in the
+                        // final chunk that will be written to the terminal
+
+                        if let Some(word) = words.next() {
+                            match word {
+                                "[" => {
+                                    // Control Sequence Introducer are accepted and can safely be
+                                    // written to terminal
+                                    let mut escape = String::from("\x1b[");
+                                    let mut end = false;
+
+                                    while let Some(word) = words.next() {
+                                        for c in word.chars() {
+                                            // Push all char belonging to escape sequence
+                                            // but keep remaining for wrap computation
+                                            if !end {
+                                                escape.push(c);
+                                                match c {
+                                                    '\x30'..='\x3f' => {}, // parameter bytes
+                                                    '\x20'..='\x2f' => {}, // intermediate bytes
+                                                    '\x40'..='\x7e' => {
+                                                        // final byte
+                                                        chunk.push_str(&escape);
+                                                        end = true;
+                                                    },
+                                                    _ => {
+                                                        // Invalid escape sequence, just ignore it
+                                                        end = true;
+                                                    },
+                                                }
+                                            } else {
+                                                remaining.push(c);
+                                            }
+                                        }
+
+                                        if end {
+                                            break;
+                                        }
+                                    }
+                                },
+                                _ => {
+                                    // Other sequence are not handled and just ignored
+                                }
+                            }
+                        } else {
+                            // Nothing is following the escape char
+                            // We can simply ignore it
+                        }
+                        visible_word = remaining.as_str();
+                    } else {
+                        visible_word = word;
+                    }
+
+                    if visible_word.len() == 0 {
+                        continue;
+                    }
+
+                    let grapheme_count = visible_word.graphemes(true).collect::<Vec<_>>().len();
+
+                    if line_len + grapheme_count > max_len {
                         // Wrap line
                         buffers.push(chunk);
                         chunk = String::new();
                         line_len = 0;
                     }
 
-                    chunk.push_str(word);
-                    line_len += word_len;
+                    chunk.push_str(visible_word);
+                    line_len += grapheme_count;
                 }
 
                 buffers.push(chunk);
@@ -1108,6 +1182,11 @@ mod tests {
     fn test_term_string_visible_len_is_correct() {
         assert_eq!(term_string_visible_len(&format!("{}ab{}", termion::color::Bg(termion::color::Red), termion::cursor::Goto(1, 123))), 2);
         assert_eq!(term_string_visible_len(&format!("{}ab{}", termion::cursor::Goto(1, 123), termion::color::Bg(termion::color::Red))), 2);
+        assert_eq!(term_string_visible_len(&format!("{}🍻{}", termion::cursor::Goto(1, 123), termion::color::Bg(termion::color::Red))), 1);
+        assert_eq!(term_string_visible_len(&format!("{}12:34:56 - {}me:{}",
+                                                    termion::color::Fg(termion::color::White),
+                                                    termion::color::Fg(termion::color::Yellow),
+                                                    termion::color::Fg(termion::color::White))), 14)
     }
 
     #[test]
