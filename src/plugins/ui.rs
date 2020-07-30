@@ -394,17 +394,19 @@ impl UIPlugin {
                         child.event(event);
                     }
                 });
+
+                let chat_jid = jid.clone();
                 let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(move |view, event| {
                     match event {
                         Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
                             // TODO check to == us
-                            if message.from == jid {
+                            if message.from == chat_jid {
                                 view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())));
                             }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
                             // TODO check from == us
-                            if message.to == jid {
+                            if message.to == chat_jid {
                                 view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())));
                             }
                         },
@@ -415,10 +417,13 @@ impl UIPlugin {
                 });
                 layout.push(chat);
 
-                let roster = View::<ListView<conversation::Role, conversation::Occupant>, Event>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+                let roster_jid = jid.clone();
+                let roster = View::<ListView<conversation::Role, conversation::Occupant>, Event>::new(self.screen.clone()).with_none_group().with_event(move |view, event| {
                     match event {
-                        Event::Occupant(occupant) => {
-                            view.insert(occupant.clone(), Some(occupant.role));
+                        Event::Occupant{conversation: conversation, occupant: occupant} => {
+                            if roster_jid == *conversation {
+                                view.insert(occupant.clone(), Some(occupant.role));
+                            }
                         },
                         _ => {},
                     }
@@ -711,8 +716,8 @@ impl Plugin for UIPlugin {
             Event::ContactUpdate(contact) => {
                 self.root.event(&mut Event::ContactUpdate(contact.clone()));
             },
-            Event::Occupant(occupant) => {
-                self.root.event(&mut Event::Occupant(occupant.clone()));
+            Event::Occupant{conversation: conversation, occupant: occupant} => {
+                self.root.event(&mut Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()});
             },
             Event::Signal(signal_hook::SIGWINCH) => {
                 let (width, height) = termion::terminal_size().unwrap();

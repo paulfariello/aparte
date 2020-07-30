@@ -86,7 +86,7 @@ impl Plugin for ConversationPlugin {
                                         affiliation: item.affiliation.into(),
                                         role: item.role.into(),
                                     };
-                                    Rc::clone(&aparte).event(Event::Occupant(occupant.clone()));
+                                    Rc::clone(&aparte).event(Event::Occupant{conversation: channel_jid.clone(), occupant: occupant.clone()});
                                     channel.occupants.insert(occupant.nick.clone(), occupant);
                                 }
                             }

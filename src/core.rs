@@ -39,7 +39,7 @@ pub enum Event {
     Win(String),
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
-    Occupant(conversation::Occupant),
+    Occupant{conversation: BareJid, occupant: conversation::Occupant},
     Signal(i32),
     LoadHistory(BareJid),
     Quit,
