@@ -52,6 +52,8 @@ pub trait ViewTrait<E> {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>);
     fn layout(&mut self, top: u16, left: u16);
     fn is_dirty(&self) -> bool;
+    fn show(&mut self);
+    fn hide(&mut self);
     fn get_measured_width(&self) -> Option<u16>;
     fn get_measured_height(&self) -> Option<u16>;
     fn redraw(&mut self);
@@ -67,6 +69,7 @@ pub struct View<'a, T, E> {
     pub w: Option<u16>,
     pub h: Option<u16>,
     pub dirty: bool,
+    pub visible: bool,
     pub content: T,
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E) + 'a>>>>,
     #[cfg(feature = "no-cursor-save")]
@@ -171,6 +174,14 @@ default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
         self.dirty
     }
 
+    fn show(&mut self) {
+        self.visible = true;
+    }
+
+    fn hide(&mut self) {
+        self.visible = false;
+    }
+
     fn event(&mut self, event: &mut E) {
         if let Some(handler) = &self.event_handler {
             let handler = Rc::clone(handler);
@@ -200,6 +211,7 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -220,7 +232,18 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
     }
 
     pub fn current(&mut self, key: K) {
+        if let Some(current) = &self.content.current {
+            let child = self.content.children.get_mut(current).unwrap();
+            child.hide();
+        }
+
         self.content.current = Some(key);
+
+        if let Some(current) = &self.content.current {
+            let child = self.content.children.get_mut(current).unwrap();
+            child.show();
+        }
+
         self.redraw();
     }
 
@@ -229,6 +252,20 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
         widget.measure(self.w, self.h);
         widget.layout(self.y, self.x);
         self.content.children.insert(key, widget);
+    }
+
+    pub fn show(&mut self) {
+        self.visible = true;
+        for (_, child) in self.content.children.iter_mut() {
+            child.show();
+        }
+    }
+
+    pub fn hide(&mut self) {
+        self.visible = false;
+        for (_, child) in self.content.children.iter_mut() {
+            child.hide();
+        }
     }
 }
 
@@ -292,6 +329,7 @@ impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -315,6 +353,20 @@ impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
+    }
+
+    pub fn show(&mut self) {
+        self.visible = true;
+        for child in self.content.children.iter_mut() {
+            child.show();
+        }
+    }
+
+    pub fn hide(&mut self) {
+        self.visible = false;
+        for child in self.content.children.iter_mut() {
+            child.hide();
+        }
     }
 }
 
@@ -501,6 +553,7 @@ impl<'a, E> View<'a, Input, E> {
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -726,7 +779,7 @@ impl<E> ViewTrait<E> for View<'_, Input, E> {
 pub trait BufferedMessage = fmt::Display + Hash + std::cmp::Eq + std::clone::Clone;
 
 pub trait Window<T: BufferedMessage, E>: ViewTrait<E> {
-    fn recv_message(&mut self, message: &T, print: bool);
+    fn recv_message(&mut self, message: &T);
     fn send_message(&self);
     fn page_up(&mut self);
     fn page_down(&mut self);
@@ -750,6 +803,7 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -773,7 +827,7 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
 }
 
 impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
-    fn recv_message(&mut self, message: &T, print: bool) {
+    fn recv_message(&mut self, message: &T) {
         if self.content.history.contains_key(message) {
             return;
         }
@@ -781,7 +835,7 @@ impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
         self.content.history.insert(message.clone(), self.content.buf.len());
         self.content.buf.push(message.clone());
 
-        if print {
+        if self.visible {
             self.redraw();
         }
     }
@@ -871,6 +925,7 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]

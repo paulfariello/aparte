@@ -59,6 +59,7 @@ impl View<'_, TitleBar, Event> {
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -129,6 +130,7 @@ impl View<'_, WinBar, Event> {
             w: None,
             h: None,
             dirty: true,
+            visible: true,
             #[cfg(feature = "no-cursor-save")]
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
@@ -361,13 +363,13 @@ impl UIPlugin {
                         Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
                             // TODO check to == us
                             if message.from == jid {
-                                view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())), true);
+                                view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())));
                             }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
                             // TODO check from == us
                             if message.to == jid {
-                                view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())), true);
+                                view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())));
                             }
                         },
                         Event::Key(Key::PageUp) => {
@@ -394,13 +396,13 @@ impl UIPlugin {
                         Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
                             // TODO check to == us
                             if message.from == jid {
-                                view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())), true);
+                                view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())));
                             }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
                             // TODO check from == us
                             if message.to == jid {
-                                view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())), true);
+                                view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())));
                             }
                         },
                         Event::Key(Key::PageUp) => view.page_up(),
@@ -590,7 +592,7 @@ impl Plugin for UIPlugin {
         console.push(View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(|view, event| {
             match event {
                 Event::Message(Message::Log(message)) => {
-                    view.recv_message(&Message::Log(message.clone()), true);
+                    view.recv_message(&Message::Log(message.clone()));
                 },
                 Event::Key(Key::PageUp) => view.page_up(),
                 Event::Key(Key::PageDown) => view.page_down(),
