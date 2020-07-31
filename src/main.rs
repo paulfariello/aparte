@@ -367,7 +367,7 @@ fn main() {
     }
 
     let aparte_log = aparte_data.join("aparte.log");
-    if let Err(e) = simple_logging::log_to_file(aparte_log, LevelFilter::Debug) {
+    if let Err(e) = simple_logging::log_to_file(aparte_log, LevelFilter::Info) {
         panic!("Cannot setup log to file: {}", e);
     }
 
