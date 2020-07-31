@@ -672,6 +672,21 @@ impl<'a, E> View<'a, Input, E> {
         }
     }
 
+    pub fn delete_from_cursor_to_start(&mut self) {
+        self.content.buf.replace_range(0..self.content.byte_index(self.content.cursor), "");
+        self.content.cursor = 0;
+        if !self.content.password {
+            self.redraw();
+        }
+    }
+
+    pub fn delete_from_cursor_to_end(&mut self) {
+        self.content.buf.replace_range(self.content.byte_index(self.content.cursor).., "");
+        if !self.content.password {
+            self.redraw();
+        }
+    }
+
     pub fn delete(&mut self) {
         if self.content.cursor < self.content.buf.len() {
             self.content.buf.remove(self.content.cursor);

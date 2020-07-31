@@ -547,7 +547,14 @@ impl Plugin for UIPlugin {
                 Event::Key(Key::Down) => input.next(),
                 Event::Key(Key::Left) => input.left(),
                 Event::Key(Key::Right) => input.right(),
+                Event::Key(Key::Ctrl('a')) => input.home(),
+                Event::Key(Key::Ctrl('b')) => input.left(),
+                Event::Key(Key::Ctrl('e')) => input.end(),
+                Event::Key(Key::Ctrl('f')) => input.right(),
+                Event::Key(Key::Ctrl('h')) => input.backspace(),
                 Event::Key(Key::Ctrl('w')) => input.backward_delete_word(),
+                Event::Key(Key::Ctrl('u')) => input.delete_from_cursor_to_start(),
+                Event::Key(Key::Ctrl('k')) => input.delete_from_cursor_to_end(),
                 Event::Validate(result) => {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
