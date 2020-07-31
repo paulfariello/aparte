@@ -257,6 +257,7 @@ impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
 
     pub fn insert(&mut self, key: K, mut widget: Box<dyn ViewTrait<E> + 'a>)
     {
+        widget.hide();
         widget.measure(self.w, self.h);
         widget.layout(self.y, self.x);
         self.content.children.insert(key, widget);
