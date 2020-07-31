@@ -62,6 +62,7 @@ pub trait ViewTrait<E> {
     fn is_dirty(&self) -> bool;
     fn show(&mut self);
     fn hide(&mut self);
+    fn bell(&mut self);
     fn get_measured_width(&self) -> Option<u16>;
     fn get_measured_height(&self) -> Option<u16>;
     fn redraw(&mut self);
@@ -188,6 +189,11 @@ default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
 
     fn hide(&mut self) {
         self.visible = false;
+    }
+
+    fn bell(&mut self) {
+        vprint!(self, "\x07");
+        flush!(self);
     }
 
     fn event(&mut self, event: &mut E) {

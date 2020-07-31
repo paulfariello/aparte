@@ -368,6 +368,7 @@ impl UIPlugin {
                             // TODO check to == us
                             if message.from == jid {
                                 view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())));
+                                view.bell();
                             }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
@@ -403,6 +404,7 @@ impl UIPlugin {
                             // TODO check to == us
                             if message.from == chat_jid {
                                 view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())));
+                                view.bell();
                             }
                         },
                         Event::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
