@@ -110,7 +110,7 @@ macro_rules! goto {
 
 macro_rules! flush {
     ($view:expr) => {
-        $view.screen.borrow_mut().flush().unwrap();
+        while let Err(_) = $view.screen.borrow_mut().flush() {};
     }
 }
 

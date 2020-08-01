@@ -99,7 +99,7 @@ impl ViewTrait<Event> for View<'_, TitleBar, Event> {
         }
 
         self.restore_cursor();
-        self.screen.borrow_mut().flush().unwrap();
+        while let Err(_) = self.screen.borrow_mut().flush() {};
     }
 
     fn event(&mut self, event: &mut Event) {
@@ -218,7 +218,7 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
         }
 
         self.restore_cursor();
-        self.screen.borrow_mut().flush().unwrap();
+        while let Err(_) = self.screen.borrow_mut().flush() {};
     }
 
     fn event(&mut self, event: &mut Event) {
