@@ -224,7 +224,7 @@ pub struct CommandParser {
     pub name: &'static str,
     pub help: &'static str,
     pub parser: Box<dyn Fn(Rc<Aparte>, Command) -> Result<(), String>>,
-    pub completions: Vec<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>,
+    pub autocompletions: Vec<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>,
 }
 
 #[cfg(test)]

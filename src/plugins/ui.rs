@@ -344,8 +344,6 @@ pub struct UIPlugin {
     conversations: HashMap<String, Conversation>,
     root: Box<dyn ViewTrait<Event>>,
     password_command: Option<Command>,
-    completion: Option<Vec<String>>,
-    current_completion: usize,
     running: Rc<AtomicBool>,
 }
 
@@ -467,35 +465,6 @@ impl UIPlugin {
         }
     }
 
-    pub fn autocomplete(&mut self, command: &mut Command) {
-        let completion = match &self.completion {
-            None => {
-                return;
-            }
-            Some(completion) => {
-                completion
-            }
-        };
-
-        if completion.len() == 0 {
-            return;
-        }
-
-        if command.cursor < command.args.len() {
-            command.args[command.cursor] = completion[self.current_completion].clone();
-        } else {
-            command.args.push(completion[self.current_completion].clone());
-        }
-
-        self.current_completion += 1;
-        self.current_completion %= completion.len();
-    }
-
-    pub fn reset_completion(&mut self) {
-        self.completion = None;
-        self.current_completion = 0;
-    }
-
     pub fn get_windows(&self) -> Vec<String> {
         self.windows.clone()
     }
@@ -559,13 +528,13 @@ impl Plugin for UIPlugin {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
                 },
-                Event::Complete(result) => {
+                Event::GetInput(result) => {
                     let mut result = result.borrow_mut();
                     result.replace((input.content.buf.clone(), input.content.cursor, input.content.password));
                 },
-                Event::Completed(completion) => {
-                    input.content.buf = completion.clone();
-                    input.content.cursor = input.content.buf.len();
+                Event::Completed(raw_buf, cursor) => {
+                    input.content.buf = raw_buf.clone();
+                    input.content.cursor = cursor.clone();
                     input.redraw();
                 },
                 Event::ReadPassword(_) => input.password(),
@@ -585,8 +554,6 @@ impl Plugin for UIPlugin {
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
-            completion: None,
-            current_completion: 0,
             running: Rc::new(AtomicBool::new(true)),
         }
     }
@@ -741,7 +708,7 @@ impl Plugin for UIPlugin {
                         let result = Rc::new(RefCell::new(None));
 
                         let (raw_buf, cursor, password) = {
-                            self.root.event(&mut Event::Complete(Rc::clone(&result)));
+                            self.root.event(&mut Event::GetInput(Rc::clone(&result)));
 
                             let result = result.borrow_mut();
                             result.as_ref().unwrap().clone()
@@ -750,34 +717,7 @@ impl Plugin for UIPlugin {
                         if password {
                             Rc::clone(&aparte).event(Event::Key(Key::Char('\t')));
                         } else {
-                            let raw_buf = raw_buf.clone();
-                            if raw_buf.starts_with("/") {
-                                if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
-                                    {
-                                        let call_completion = {
-                                            self.completion.is_none()
-                                        };
-
-                                        if call_completion {
-                                            let mut completion = aparte.autocomplete(command.clone());
-                                            if command.cursor < command.args.len() {
-                                                completion = completion.iter().filter_map(|c| {
-                                                    if c.starts_with(&command.args[command.cursor]) {
-                                                        Some(c.to_string())
-                                                    } else {
-                                                        None
-                                                    }
-                                                }).collect();
-                                            }
-                                            self.completion = Some(completion);
-                                            self.current_completion = 0;
-                                        }
-                                    }
-
-                                    self.autocomplete(&mut command);
-                                    Rc::clone(&aparte).event(Event::Completed(command.assemble()));
-                                }
-                            }
+                            Rc::clone(&aparte).event(Event::AutoComplete(raw_buf, cursor));
                         }
                     },
                     Key::Char('\n') => {
@@ -828,7 +768,7 @@ impl Plugin for UIPlugin {
                         }
                     },
                     _ => {
-                        self.reset_completion();
+                        Rc::clone(&aparte).event(Event::ResetCompletion);
                         self.root.event(&mut Event::Key(key.clone()));
                     }
                 }
@@ -836,8 +776,8 @@ impl Plugin for UIPlugin {
             Event::Quit => {
                 self.running.swap(false, Ordering::Relaxed);
             },
-            Event::Completed(command) => {
-                self.root.event(&mut Event::Completed(command.clone()));
+            Event::Completed(raw_buf, cursor) => {
+                self.root.event(&mut Event::Completed(raw_buf.clone(), cursor.clone()));
             },
             _ => {},
         }
@@ -881,9 +821,11 @@ impl Decoder for KeyCodec {
                             Some(Ok(Key::Char('['))) => {
                                 match keys.next() {
                                     Some(Ok(Key::Char('C'))) => {
+                                        // TODO trigger a real event
                                         ui.next_window();
                                     },
                                     Some(Ok(Key::Char('D'))) => {
+                                        // TODO trigger a real event
                                         ui.prev_window();
                                     },
                                     Some(Ok(_)) => {},
@@ -906,6 +848,7 @@ impl Decoder for KeyCodec {
                     Ok(Key::Left) => self.queue.push_back(Ok(Event::Key(Key::Left))),
                     Ok(Key::Right) => self.queue.push_back(Ok(Event::Key(Key::Right))),
                     Ok(Key::Ctrl(c)) => self.queue.push_back(Ok(Event::Key(Key::Ctrl(c)))),
+                    Ok(Key::Alt(c)) => self.queue.push_back(Ok(Event::Key(Key::Alt(c)))),
                     Ok(_) => {},
                     Err(_) => {},
                 };

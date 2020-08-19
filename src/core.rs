@@ -45,8 +45,10 @@ pub enum Event {
     Quit,
     Key(Key),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
-    Complete(Rc<RefCell<Option<(String, usize, bool)>>>),
-    Completed(String),
+    GetInput(Rc<RefCell<Option<(String, usize, bool)>>>),
+    AutoComplete(String, usize),
+    ResetCompletion,
+    Completed(String, usize),
     AddWindow(String, Option<Box<dyn ViewTrait<Event>>>),
     ChangeWindow(String),
 }
@@ -132,26 +134,6 @@ impl Aparte {
         match Rc::clone(&self).commands.get(&command.args[0]) {
             Some(parser) => (parser.parser)(self, command),
             None => Err(format!("Unknown command {}", command.args[0])),
-        }
-    }
-
-    pub fn autocomplete(&self, command: Command) -> Vec<String> {
-        if command.cursor == 0 {
-            self.commands.iter().map(|c| c.0.to_string()).collect()
-        } else {
-            if let Some(parser) = self.commands.get(&command.args[0]) {
-                if command.cursor - 1 < parser.completions.len() {
-                    if let Some(completion) = &parser.completions[command.cursor - 1] {
-                        completion(self, command)
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
         }
     }
 
@@ -315,21 +297,21 @@ macro_rules! parse_command_args {
 }
 
 #[macro_export]
-macro_rules! generate_command_completions {
-    ($completions:ident) => ();
-    ($completions:ident, $argname:ident) => (
-        $completions.push(None);
+macro_rules! generate_command_autocompletions {
+    ($autocompletions:ident) => ();
+    ($autocompletions:ident, $argname:ident) => (
+        $autocompletions.push(None);
     );
-    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }) => (
-        $completions.push(Some(Box::new(|$aparte: &Aparte, $command: Command| -> Vec<String> { $completion })));
+    ($autocompletions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }) => (
+        $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
     );
-    ($completions:ident, $argname:ident, $($argnames:ident$(: $args:tt)?),+) => (
-        $completions.push(None);
-        generate_command_completions!($completions, $($argnames$(: $args)?),*);
+    ($autocompletions:ident, $argname:ident, $($argnames:ident$(: $args:tt)?),+) => (
+        $autocompletions.push(None);
+        generate_command_autocompletions!($autocompletions, $($argnames$(: $args)?),*);
     );
-    ($completions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
-        $completions.push(Some(Box::new(|$aparte: &Aparte, $command: Command| -> Vec<String> { $completion })));
-        generate_command_completions!($completions, $($argnames$(: $args)?),*);
+    ($autocompletions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
+        $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
+        generate_command_autocompletions!($autocompletions, $($argnames$(: $args)?),*);
     );
 }
 
@@ -337,7 +319,7 @@ macro_rules! generate_command_completions {
 macro_rules! command_def {
     ($name:ident, $help: tt, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
-            let completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
+            let autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
 
             CommandParser {
                 name: stringify!($name),
@@ -346,15 +328,15 @@ macro_rules! command_def {
                     #[allow(unused_mut)]
                     $body
                 }),
-                completions: completions,
+                autocompletions: autocompletions,
             }
         }
     );
     ($name:ident, $help: tt, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
-            let mut completions = Vec::<Option<Box<dyn Fn(&Aparte, Command) -> Vec<String>>>>::new();
+            let mut autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
 
-            generate_command_completions!(completions, $($argnames$(: $args)?),*);
+            generate_command_autocompletions!(autocompletions, $($argnames$(: $args)?),*);
 
             CommandParser {
                 name: stringify!($name),
@@ -365,7 +347,7 @@ macro_rules! command_def {
                     parse_command_args!($aparte, $command, index, $($(($attr))? $argnames),*);
                     $body
                 }),
-                completions: completions,
+                autocompletions: autocompletions,
             }
         }
     );
@@ -427,7 +409,7 @@ mod tests {
 
         assert_eq!(cmd.name, "one_arg_completion");
         assert_eq!(cmd.help, "help");
-        assert_eq!(cmd.completions.len(), 1);
+        assert_eq!(cmd.autocompletions.len(), 1);
     }
 
     command_def!{
@@ -446,7 +428,7 @@ mod tests {
 
         assert_eq!(cmd.name, "two_args");
         assert_eq!(cmd.help, "help");
-        assert_eq!(cmd.completions.len(), 2);
+        assert_eq!(cmd.autocompletions.len(), 2);
     }
 
     command_def!{
@@ -469,6 +451,6 @@ mod tests {
 
         assert_eq!(cmd.name, "two_args_completion");
         assert_eq!(cmd.help, "help");
-        assert_eq!(cmd.completions.len(), 2);
+        assert_eq!(cmd.autocompletions.len(), 2);
     }
 }
