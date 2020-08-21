@@ -1265,6 +1265,7 @@ mod tests {
             history: Vec::new(),
             history_index: 0,
             cursor: 1,
+            view: 0
         };
 
         assert_eq!(input.buf.len(), 4);
