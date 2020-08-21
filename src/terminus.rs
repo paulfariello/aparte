@@ -701,8 +701,11 @@ impl<'a, E> View<'a, Input, E> {
     pub fn delete(&mut self) {
         if self.content.cursor < self.content.buf.len() {
             let byte_index = self.content.byte_index(self.content.cursor);
-            // TODO remove all char
-            self.content.buf.remove(self.content.byte_index(self.content.cursor));
+
+            self.content.buf.remove(byte_index);
+            while !self.content.buf.is_char_boundary(byte_index) {
+                self.content.buf.remove(byte_index);
+            }
         }
         if !self.content.password {
             self.redraw();
