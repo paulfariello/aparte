@@ -228,11 +228,35 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
             },
             Event::AddWindow(name, _) => {
                 self.add_window(name);
-            }
+            },
             Event::Connected(jid) => {
                 self.content.connection = Some(jid.to_string());
                 self.redraw();
-            }
+            },
+            Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
+                let mut highlighted = None;
+                for window in &self.content.windows {
+                    if &message.from.to_string() == window && Some(window) != self.content.current_window.as_ref() {
+                        highlighted = Some(window.clone());
+                    }
+                }
+                if highlighted.is_some() {
+                    self.highlight_window(&highlighted.unwrap());
+                    self.redraw();
+                }
+            },
+            Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
+                let mut highlighted = None;
+                for window in &self.content.windows {
+                    if &message.from.to_string() == window && Some(window) != self.content.current_window.as_ref() {
+                        highlighted = Some(window.clone());
+                    }
+                }
+                if highlighted.is_some() {
+                    self.highlight_window(&highlighted.unwrap());
+                    self.redraw();
+                }
+            },
             _ => {},
         }
     }
