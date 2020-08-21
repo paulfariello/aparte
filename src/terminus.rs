@@ -542,12 +542,20 @@ pub struct Input {
     pub history_index: usize,
     // Used to index code points in buf (don't use it to directly index buf)
     pub cursor: usize,
+    // start index (in code points) of the view inside the buffer
+    // |-----------------------|
+    // | buffer text           |
+    // |-----------------------|
+    //     |-----------|
+    //     | view      |
+    //     |-----------|
+    pub view: usize,
 }
 
 impl Input {
     pub fn byte_index(&self, mut cursor: usize) -> usize {
         let mut byte_index = 0;
-        while cursor > 0 {
+        while cursor > 0 && byte_index < self.buf.len() {
             byte_index += 1;
             if self.buf.is_char_boundary(byte_index) {
                 cursor -= 1;
@@ -580,6 +588,7 @@ impl<'a, E> View<'a, Input, E> {
                 history: Vec::new(),
                 history_index: 0,
                 cursor: 0,
+                view: 0,
             },
             event_handler: None,
         }
@@ -596,6 +605,7 @@ impl<'a, E> View<'a, Input, E> {
         let byte_index = self.content.byte_index(self.content.cursor);
         self.content.buf.insert(byte_index, c);
         self.content.cursor += 1;
+
         if !self.content.password {
             self.redraw();
         }
@@ -675,6 +685,7 @@ impl<'a, E> View<'a, Input, E> {
     pub fn delete_from_cursor_to_start(&mut self) {
         self.content.buf.replace_range(0..self.content.byte_index(self.content.cursor), "");
         self.content.cursor = 0;
+        self.content.view = 0;
         if !self.content.password {
             self.redraw();
         }
@@ -689,7 +700,9 @@ impl<'a, E> View<'a, Input, E> {
 
     pub fn delete(&mut self) {
         if self.content.cursor < self.content.buf.len() {
-            self.content.buf.remove(self.content.cursor);
+            let byte_index = self.content.byte_index(self.content.cursor);
+            // TODO remove all char
+            self.content.buf.remove(self.content.byte_index(self.content.cursor));
         }
         if !self.content.password {
             self.redraw();
@@ -698,13 +711,19 @@ impl<'a, E> View<'a, Input, E> {
 
     pub fn home(&mut self) {
         self.content.cursor = 0;
+        self.content.view = 0;
         if !self.content.password {
             self.redraw();
         }
     }
 
     pub fn end(&mut self) {
-        self.content.cursor = self.content.buf.len();
+        self.content.cursor = term_string_visible_len(&self.content.buf);
+        if self.content.cursor > self.w.unwrap() as usize - 1 {
+            self.content.view = self.content.cursor - (self.w.unwrap() as usize - 1);
+        } else {
+            self.content.view = 0;
+        }
         if !self.content.password {
             self.redraw();
         }
@@ -713,6 +732,7 @@ impl<'a, E> View<'a, Input, E> {
     pub fn clear(&mut self) {
         self.content.buf.clear();
         self.content.cursor = 0;
+        self.content.view = 0;
         let _ = self.content.tmp_buf.take();
         self.content.password = false;
         goto!(self, self.x, self.y);
@@ -733,7 +753,7 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn right(&mut self) {
-        if self.content.cursor < self.content.buf.len() {
+        if self.content.cursor < term_string_visible_len(&self.content.buf) {
             self.content.cursor += 1;
         }
         if !self.content.password {
@@ -770,7 +790,7 @@ impl<'a, E> View<'a, Input, E> {
 
         self.content.history_index -= 1;
         self.content.buf = self.content.history[self.content.history_index].clone();
-        self.content.cursor = self.content.buf.len();
+        self.end();
         self.redraw();
     }
 
@@ -785,7 +805,7 @@ impl<'a, E> View<'a, Input, E> {
         } else {
             self.content.buf = self.content.history[self.content.history_index].clone();
         }
-        self.content.cursor = self.content.buf.len();
+        self.end();
 
         self.redraw();
     }
@@ -793,14 +813,36 @@ impl<'a, E> View<'a, Input, E> {
 
 impl<E> ViewTrait<E> for View<'_, Input, E> {
     fn redraw(&mut self) {
+        // Max displayable size is view width less 1 for cursor
+        let max_size = (self.w.unwrap() - 1) as usize;
+        let max_index = term_string_visible_len(&self.content.buf);
+
+        // cursor must always be inside the view
+        if (self.content.cursor < self.content.view) {
+            if self.content.cursor < max_size {
+                self.content.view = 0;
+            } else {
+                self.content.view = self.content.cursor - (self.w.unwrap() as usize - 1);
+            }
+        } else if self.content.cursor > self.content.view + self.w.unwrap() as usize - 1 {
+            self.content.view = self.content.cursor - (self.w.unwrap() as usize - 1);
+        }
+        assert!(self.content.cursor >= self.content.view);
+        assert!(self.content.cursor <= self.content.view + max_size + 1);
+
+        let start_index = self.content.byte_index(self.content.view);
+        let end_index = self.content.byte_index(self.content.view + max_size);
+        let buf = &self.content.buf[start_index..end_index];
+        let cursor = self.content.cursor - self.content.view;
+
         goto!(self, self.x, self.y);
-        for _ in 0 .. self.w.unwrap() {
+        for _ in 0 .. max_size {
             vprint!(self, " ");
         }
 
         goto!(self, self.x, self.y);
-        vprint!(self, "{}", self.content.buf);
-        goto!(self, self.x + self.content.cursor as u16, self.y);
+        vprint!(self, "{}", buf);
+        goto!(self, self.x + cursor as u16, self.y);
 
         flush!(self);
     }
