@@ -171,6 +171,7 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
 
         {
             let mut screen = self.screen.borrow_mut();
+            let mut written = 0;
 
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
             write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
@@ -182,37 +183,41 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
             if let Some(connection) = &self.content.connection {
                 write!(screen, " {}", connection).unwrap();
+                written += 1 + connection.len();
             }
 
-            let mut windows = String::new();
-            let mut windows_len = 0;
+            if let Some(current_window) = &self.content.current_window {
+                write!(screen, " [{}{}{}]", termion::style::Bold, current_window, termion::style::NoBold);
+                written += 3 + current_window.len();
+            } else {
+                write!(screen, " []");
+                written += 3;
+            }
 
-            let mut index = 1;
-            for window in &self.content.windows {
-                if let Some(current) = &self.content.current_window {
-                    if window == current {
-                        let win = format!("-{}: {}- ", index, window);
-                        if (win.len() as u16) < self.w.unwrap() - windows_len {
-                            windows_len += win.len() as u16;
-                            windows.push_str(&win);
-                        }
-                    } else {
-                        if self.content.highlighted.iter().find(|w| w == &window).is_some() {
-                            windows.push_str(&format!("{}", termion::style::Bold));
-                        }
-                        let win = format!("[{}: {}] ", index, window);
-                        if (win.len() as u16) < self.w.unwrap() - windows_len {
-                            windows_len += win.len() as u16;
-                            windows.push_str(&win);
-                            windows.push_str(&format!("{}", termion::style::NoBold));
-                        }
+            let mut first = true;
+            for window in &self.content.highlighted {
+                if window.len() > self.w.unwrap() as usize - written {
+                    if !first {
+                        write!(screen, "…");
+                        written += 1;
                     }
                 }
-                index += 1;
+
+                if first {
+                    write!(screen, " [");
+                    written += 3; // Also count the closing bracket
+                    first = false;
+                } else {
+                    write!(screen, ", ");
+                    written += 2;
+                }
+                write!(screen, "{}{}{}", termion::style::Bold, window, termion::style::NoBold);
+                written += window.len();
             }
 
-            let start = self.x + self.w.unwrap() - windows_len as u16;
-            write!(screen, "{}{}", termion::cursor::Goto(start, self.y), windows).unwrap();
+            if !first {
+                write!(screen, "]");
+            }
 
             write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
         }
