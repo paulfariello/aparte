@@ -114,6 +114,7 @@ Description:
 
 Examples:
   /connect account@server.tld
+  /connect account@server.tld/resource
   /connect account@server.tld:5223
 "#,
     account: {
