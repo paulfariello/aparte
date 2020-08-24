@@ -365,6 +365,7 @@ pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
     current_window: Option<String>,
+    unread_windows: Vec<String>,
     conversations: HashMap<String, Conversation>,
     root: Box<dyn ViewTrait<Event>>,
     password_command: Option<Command>,
@@ -575,6 +576,7 @@ impl Plugin for UIPlugin {
             screen: screen,
             root: Box::new(layout),
             windows: Vec::new(),
+            unread_windows: Vec::new(),
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
@@ -650,6 +652,16 @@ impl Plugin for UIPlugin {
                                 kind: ConversationKind::Chat,
                             });
                         }
+
+                        let mut unread = None;
+                        for window in &self.windows {
+                            if &message.from.to_string() == window && Some(window) != self.current_window.as_ref() {
+                                unread = Some(window.clone());
+                            }
+                        }
+                        if unread.is_some() {
+                            self.unread_windows.push(unread.unwrap());
+                        }
                     },
                     Message::Outgoing(XmppMessage::Chat(message)) => {
                         let window_name = message.to.to_string();
@@ -667,6 +679,16 @@ impl Plugin for UIPlugin {
                                 jid: BareJid::from_str(&window_name).unwrap(),
                                 kind: ConversationKind::Group,
                             });
+                        }
+
+                        let mut unread = None;
+                        for window in &self.windows {
+                            if &message.from.to_string() == window && Some(window) != self.current_window.as_ref() {
+                                unread = Some(window.clone());
+                            }
+                        }
+                        if unread.is_some() {
+                            self.unread_windows.push(unread.unwrap());
                         }
                     },
                     Message::Outgoing(XmppMessage::Groupchat(message)) => {
@@ -789,6 +811,11 @@ impl Plugin for UIPlugin {
                                     }
                                 }
                             }
+                        }
+                    },
+                    Key::Alt('a') => {
+                        if let Some(window) = self.unread_windows.pop() {
+                            self.change_window(&window);
                         }
                     },
                     _ => {
