@@ -24,6 +24,7 @@ use crate::config::Config;
 use crate::terminus::ViewTrait;
 
 pub enum Event {
+    Start,
     Connected(FullJid),
     #[allow(dead_code)]
     Disconnected(FullJid),
@@ -198,6 +199,17 @@ impl Aparte {
         Ok(())
     }
 
+    pub fn start(self: Rc<Self>) {
+        for (_, account) in self.config.accounts.clone() {
+            if account.autoconnect {
+                Rc::clone(&self).event(Event::Command(Command {
+                    args: vec!["connect".to_string(), account.jid.clone()],
+                    cursor: 0
+                }));
+            }
+        }
+    }
+
     pub fn send(&self, element: Element) {
         debug!("SEND: {:?}", element);
         let packet = Packet::Stanza(element);
@@ -220,6 +232,9 @@ impl Aparte {
                 }
 
                 match event {
+                    Event::Start => {
+                        Rc::clone(&self).start();
+                    }
                     Event::Command(command) => {
                         match Rc::clone(&self).parse_command(command) {
                             Err(err) => Rc::clone(&self).log(err),

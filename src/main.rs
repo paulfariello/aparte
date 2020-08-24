@@ -438,6 +438,8 @@ fn main() {
 
     rt.spawn(signals);
 
+    Rc::clone(&aparte).event(Event::Start);
+
     if let Err(e) = rt.block_on(event_stream.for_each(move |event| {
         Rc::clone(&aparte).event(event);
 
