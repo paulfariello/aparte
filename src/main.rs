@@ -113,79 +113,92 @@ Description:
   Connect to the given account.
 
 Examples:
+  /connect myaccount
   /connect account@server.tld
   /connect account@server.tld/resource
   /connect account@server.tld:5223
 "#,
     account: {
         completion: |aparte, _command| {
-            aparte.config.accounts.iter().map(|(_, account)| account.login.clone()).collect()
+            aparte.config.accounts.iter().map(|(name, account)| name.clone()).collect()
         }
     },
     (password) password,
     |aparte, _command| {
-        if let Ok(jid) = Jid::from_str(&account) {
-            let full_jid = match jid {
-                Jid::Full(jid) => jid,
-                Jid::Bare(jid) => jid.with_resource("aparte"),
-            };
-            Rc::clone(&aparte).log(format!("Connecting to {}", account));
-            let client = Client::new(&full_jid.to_string(), &password).unwrap();
+        let jid;
 
-            let (sink, stream) = client.split();
-            let (tx, rx) = futures::unsync::mpsc::unbounded();
-
-            Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
-
-            tokio::runtime::current_thread::spawn(
-                rx.forward(
-                    sink.sink_map_err(|_| panic!("Pipe"))
-                    ).map(|(rx, mut sink)| {
-                    drop(rx);
-                    let _ = sink.close();
-                }).map_err(|e| {
-                        panic!("Send error: {:?}", e);
-                    })
-                );
-
-            let event_aparte = Rc::clone(&aparte);
-            let client = stream.for_each(move |event| {
-                if event.is_online() {
-                    Rc::clone(&event_aparte).log(format!("Connected as {}", account));
-
-                    Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
-
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence.show = Some(PresenceShow::Chat);
-
-                    event_aparte.send(presence.into());
-                } else if let Some(stanza) = event.into_stanza() {
-                    debug!("RECV: {}", String::from(&stanza));
-
-                    handle_stanza(Rc::clone(&event_aparte), stanza);
-                }
-
-                future::ok(())
-            });
-
-            let error_aparte = Rc::clone(&aparte);
-            let client = client.map_err(move |error| {
-                match error {
-                    XmppError::Auth(auth) => {
-                        Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
-                    },
-                    error => {
-                        Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
-                    },
-                }
-            });
-
-            tokio::runtime::current_thread::spawn(client);
-
-            Ok(())
+        if let Some((_, config)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account) {
+            if let Ok(jid_config) = Jid::from_str(&config.jid) {
+                jid = jid_config;
+            } else {
+                return Err(format!("Invalid account jid {}", config.jid));
+            }
+        } else if let Ok(jid_param) = Jid::from_str(&account) {
+            jid = jid_param;
         } else {
-            Err(format!("Invalid JID {}", account))
+            return Err(format!("Unknown account {}", account));
         }
+
+        let full_jid = match jid {
+            Jid::Full(jid) => jid,
+            Jid::Bare(jid) => jid.with_resource("aparte"),
+        };
+
+
+        Rc::clone(&aparte).log(format!("Connecting to {}", account));
+        let client = Client::new(&full_jid.to_string(), &password).unwrap();
+
+        let (sink, stream) = client.split();
+        let (tx, rx) = futures::unsync::mpsc::unbounded();
+
+        Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
+
+        tokio::runtime::current_thread::spawn(
+            rx.forward(
+                sink.sink_map_err(|_| panic!("Pipe"))
+                ).map(|(rx, mut sink)| {
+                drop(rx);
+                let _ = sink.close();
+            }).map_err(|e| {
+                    panic!("Send error: {:?}", e);
+                })
+            );
+
+        let event_aparte = Rc::clone(&aparte);
+        let client = stream.for_each(move |event| {
+            if event.is_online() {
+                Rc::clone(&event_aparte).log(format!("Connected as {}", account));
+
+                Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
+
+                let mut presence = Presence::new(PresenceType::None);
+                presence.show = Some(PresenceShow::Chat);
+
+                event_aparte.send(presence.into());
+            } else if let Some(stanza) = event.into_stanza() {
+                debug!("RECV: {}", String::from(&stanza));
+
+                handle_stanza(Rc::clone(&event_aparte), stanza);
+            }
+
+            future::ok(())
+        });
+
+        let error_aparte = Rc::clone(&aparte);
+        let client = client.map_err(move |error| {
+            match error {
+                XmppError::Auth(auth) => {
+                    Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
+                },
+                error => {
+                    Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
+                },
+            }
+        });
+
+        tokio::runtime::current_thread::spawn(client);
+
+        Ok(())
     }
 }
 
