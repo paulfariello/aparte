@@ -120,7 +120,7 @@ Examples:
 "#,
     account: {
         completion: |aparte, _command| {
-            aparte.config.accounts.iter().map(|(name, account)| name.clone()).collect()
+            aparte.config.accounts.iter().map(|(name, _)| name.clone()).collect()
         }
     },
     (password) password,

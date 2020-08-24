@@ -187,10 +187,10 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
             }
 
             if let Some(current_window) = &self.content.current_window {
-                write!(screen, " [{}{}{}]", termion::style::Bold, current_window, termion::style::NoBold);
+                write!(screen, " [{}{}{}]", termion::style::Bold, current_window, termion::style::NoBold).unwrap();
                 written += 3 + current_window.len();
             } else {
-                write!(screen, " []");
+                write!(screen, " []").unwrap();
                 written += 3;
             }
 
@@ -198,25 +198,25 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
             for window in &self.content.highlighted {
                 if window.len() > self.w.unwrap() as usize - written {
                     if !first {
-                        write!(screen, "…");
+                        write!(screen, "…").unwrap();
                         written += 1;
                     }
                 }
 
                 if first {
-                    write!(screen, " [");
+                    write!(screen, " [").unwrap();
                     written += 3; // Also count the closing bracket
                     first = false;
                 } else {
-                    write!(screen, ", ");
+                    write!(screen, ", ").unwrap();
                     written += 2;
                 }
-                write!(screen, "{}{}{}", termion::style::Bold, window, termion::style::NoBold);
+                write!(screen, "{}{}{}", termion::style::Bold, window, termion::style::NoBold).unwrap();
                 written += window.len();
             }
 
             if !first {
-                write!(screen, "]");
+                write!(screen, "]").unwrap();
             }
 
             write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();

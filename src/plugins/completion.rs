@@ -44,7 +44,7 @@ impl CompletionPlugin {
     pub fn build_completions(&mut self, aparte: Rc<Aparte>, raw_buf: String, cursor: usize) {
         if raw_buf.starts_with("/") {
             let mut completions = Vec::new();
-            if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
+            if let Ok(command) = Command::parse_with_cursor(&raw_buf, cursor) {
                 if command.cursor == 0 {
                     completions = Rc::clone(&aparte).commands.iter().map(|c| c.0.to_string()).collect()
                 } else {
@@ -87,7 +87,7 @@ impl Plugin for CompletionPlugin {
         }
     }
 
-    fn init(&mut self, aparte: &Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
         Ok(())
     }
 

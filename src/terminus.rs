@@ -818,10 +818,9 @@ impl<E> ViewTrait<E> for View<'_, Input, E> {
     fn redraw(&mut self) {
         // Max displayable size is view width less 1 for cursor
         let max_size = (self.w.unwrap() - 1) as usize;
-        let max_index = term_string_visible_len(&self.content.buf);
 
         // cursor must always be inside the view
-        if (self.content.cursor < self.content.view) {
+        if self.content.cursor < self.content.view {
             if self.content.cursor < max_size {
                 self.content.view = 0;
             } else {
