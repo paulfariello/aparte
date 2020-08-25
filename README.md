@@ -1,5 +1,5 @@
-Aparté ![](https://travis-ci.org/paulfariello/aparte.svg?branch=master)
-=======================================================================
+Aparté [![Build Status](https://www.travis-ci.org/paulfariello/aparte.svg?branch=master)](https://www.travis-ci.org/paulfariello/aparte)
+======
 
 Simple XMPP console client written in Rust and inspired by Profanity.
 
