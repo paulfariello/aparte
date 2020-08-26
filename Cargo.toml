@@ -12,7 +12,7 @@ no-cursor-save = []
 
 [dependencies]
 log = "0.4"
-simple-logging = "2.0"
+flexi_logger = "0.15"
 futures = "0.1"
 tokio = "0.1"
 tokio-xmpp = "1.0"

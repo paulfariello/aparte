@@ -6,7 +6,7 @@
 #![feature(specialization)]
 #[macro_use]
 extern crate log;
-extern crate simple_logging;
+extern crate flexi_logger;
 extern crate tokio;
 extern crate tokio_xmpp;
 extern crate xmpp_parsers;
@@ -380,9 +380,11 @@ fn main() {
         panic!("Cannot create aparté data dir: {}", e);
     }
 
-    let aparte_log = aparte_data.join("aparte.log");
-    if let Err(e) = simple_logging::log_to_file(aparte_log, LevelFilter::Info) {
-        panic!("Cannot setup log to file: {}", e);
+    let file_writer = flexi_logger::writers::FileLogWriter::builder().directory(aparte_data).suppress_timestamp().try_build().unwrap();
+    let log_target = flexi_logger::LogTarget::Writer(Box::new(file_writer));
+    let logger = flexi_logger::Logger::with_env_or_str("info").log_target(log_target);
+    if let Err(e) = logger.start() {
+      panic!("Cannot start logger: {}", e);
     }
 
     let conf_dir = dirs::config_dir().unwrap();
