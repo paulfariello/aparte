@@ -211,7 +211,9 @@ impl Aparte {
     }
 
     pub fn send(&self, element: Element) {
-        debug!("SEND: {:?}", element);
+        let mut raw = Vec::<u8>::new();
+        element.write_to(&mut raw);
+        debug!("SEND: {}", String::from_utf8(raw).unwrap());
         let packet = Packet::Stanza(element);
         // TODO use correct connection
         let mut connections = self.connections.borrow_mut();
