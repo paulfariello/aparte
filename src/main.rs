@@ -39,6 +39,7 @@ mod account;
 mod contact;
 mod conversation;
 mod message;
+#[macro_use]
 mod command;
 mod terminus;
 mod plugins;
@@ -145,7 +146,7 @@ Examples:
         };
 
 
-        Rc::clone(&aparte).log(format!("Connecting to {}", account));
+        Rc::clone(&aparte).log(format!("Connecting as {}", full_jid));
         let client = Client::new(&full_jid.to_string(), &password).unwrap();
 
         let (sink, stream) = client.split();
@@ -167,7 +168,7 @@ Examples:
         let event_aparte = Rc::clone(&aparte);
         let client = stream.for_each(move |event| {
             if event.is_online() {
-                Rc::clone(&event_aparte).log(format!("Connected as {}", account));
+                Rc::clone(&event_aparte).log(format!("Connected as {}", full_jid));
 
                 Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
 
@@ -404,6 +405,7 @@ fn main() {
     aparte.add_plugin(plugins::contact::ContactPlugin::new());
     aparte.add_plugin(plugins::conversation::ConversationPlugin::new());
     aparte.add_plugin(plugins::disco::Disco::new());
+    aparte.add_plugin(plugins::bookmarks::BookmarksPlugin::new());
     aparte.add_plugin(plugins::ui::UIPlugin::new());
     aparte.add_plugin(plugins::mam::MamPlugin::new());
 

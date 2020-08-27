@@ -227,6 +227,221 @@ pub struct CommandParser {
     pub autocompletions: Vec<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>,
 }
 
+#[macro_export]
+macro_rules! parse_command_args {
+    ($aparte:ident, $command:ident, $index:ident) => ();
+    ($aparte:ident, $command:ident, $index:ident, (password) $arg:ident) => (
+        if $command.args.len() <= $index {
+            Rc::clone(&$aparte).event(Event::ReadPassword($command.clone()));
+            return Ok(())
+        }
+
+        let $arg = $command.args[$index].clone();
+
+        $index += 1;
+    );
+    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident) => (
+        let $arg = {
+            if $command.args.len() > $index {
+                Some($command.args[$index].clone())
+            } else {
+                None
+            }
+        };
+
+        $index += 1;
+    );
+    ($aparte:ident, $command:ident, $index:ident, $arg:ident) => (
+        if $command.args.len() <= $index {
+            return Err(format!("Missing {} argument", stringify!($arg)))
+        }
+        let $arg = $command.args[$index].clone();
+    );
+    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident, $($(($attr:ident))? $args:ident),+) => (
+        let $arg = {
+            if $command.args.len() > $index {
+                Some($command.args[$index].clone())
+            } else {
+                None
+            }
+        };
+
+        $index += 1;
+
+        parse_command_args!($aparte, $command, $index, $($(($attr))? $args),*);
+    );
+    ($aparte:ident, $command:ident, $index:ident, $arg:ident, $($(($attr:ident))? $args:ident),+) => (
+        if $command.args.len() <= $index {
+            return Err(format!("Missing {} argument", stringify!($arg)))
+        }
+
+        let $arg = $command.args[$index].clone();
+
+        $index += 1;
+
+        parse_command_args!($aparte, $command, $index, $($(($attr))? $args),*);
+    );
+}
+
+#[macro_export]
+macro_rules! generate_command_autocompletions {
+    ($autocompletions:ident) => ();
+    ($autocompletions:ident, $argname:ident) => (
+        $autocompletions.push(None);
+    );
+    ($autocompletions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }) => (
+        $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
+    );
+    ($autocompletions:ident, $argname:ident, $($argnames:ident$(: $args:tt)?),+) => (
+        $autocompletions.push(None);
+        generate_command_autocompletions!($autocompletions, $($argnames$(: $args)?),*);
+    );
+    ($autocompletions:ident, $argname:ident: { completion: |$aparte:ident, $command:ident| $completion:block }, $($argnames:ident$(: $args:tt)?),+) => (
+        $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
+        generate_command_autocompletions!($autocompletions, $($argnames$(: $args)?),*);
+    );
+}
+
+#[macro_export]
+macro_rules! command_def {
+    ($name:ident, $help: tt, |$aparte:ident, $command:ident| $body:block) => (
+        fn $name() -> CommandParser {
+            let autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
+
+            CommandParser {
+                name: stringify!($name),
+                help: $help,
+                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
+                    #[allow(unused_mut)]
+                    $body
+                }),
+                autocompletions: autocompletions,
+            }
+        }
+    );
+    ($name:ident, $help: tt, $($(($attr:ident))? $argnames:ident$(: $args:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
+        fn $name() -> CommandParser {
+            let mut autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
+
+            generate_command_autocompletions!(autocompletions, $($argnames$(: $args)?),*);
+
+            CommandParser {
+                name: stringify!($name),
+                help: $help,
+                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
+                    #[allow(unused_mut)]
+                    let mut index = 1;
+                    parse_command_args!($aparte, $command, index, $($(($attr))? $argnames),*);
+                    $body
+                }),
+                autocompletions: autocompletions,
+            }
+        }
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    command_def!{
+        no_args,
+        "help",
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_without_args() {
+        let cmd = no_args();
+
+        assert_eq!(cmd.name, "no_args");
+        assert_eq!(cmd.help, "help");
+    }
+
+    command_def!{
+        one_arg,
+        "help",
+        _first_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_one_arg() {
+        let cmd = one_arg();
+
+        assert_eq!(cmd.name, "one_arg");
+        assert_eq!(cmd.help, "help");
+    }
+
+    command_def!{
+        one_arg_completion,
+        "help",
+        _first_arg: {
+            completion: |_aparte, _command| {
+                Vec::new()
+            }
+        },
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_one_arg_with_completion() {
+        let cmd = one_arg_completion();
+
+        assert_eq!(cmd.name, "one_arg_completion");
+        assert_eq!(cmd.help, "help");
+        assert_eq!(cmd.autocompletions.len(), 1);
+    }
+
+    command_def!{
+        two_args,
+        "help",
+        _first_arg,
+        _second_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_two_args() {
+        let cmd = two_args();
+
+        assert_eq!(cmd.name, "two_args");
+        assert_eq!(cmd.help, "help");
+        assert_eq!(cmd.autocompletions.len(), 2);
+    }
+
+    command_def!{
+        two_args_completion,
+        "help",
+        _first_arg: {
+            completion: |_aparte, _command| {
+                Vec::new()
+            }
+        },
+        _second_arg,
+        |_aparte, _command| {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_command_with_two_args_with_completion() {
+        let cmd = two_args_completion();
+
+        assert_eq!(cmd.name, "two_args_completion");
+        assert_eq!(cmd.help, "help");
+        assert_eq!(cmd.autocompletions.len(), 2);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
