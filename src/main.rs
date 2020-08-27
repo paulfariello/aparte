@@ -1,8 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#![feature(trace_macros)]
-
 #![feature(drain_filter)]
 #![feature(trait_alias)]
 #![feature(specialization)]
@@ -360,12 +358,12 @@ Examples:
   /help win"#,
     cmd: {
         completion: (|aparte, _command| {
-            aparte.commands.iter().map(|c| c.0.to_string()).collect()
+            aparte.commands.borrow().iter().map(|c| c.0.to_string()).collect()
         })
     },
     |aparte, _command| {
-        let command = aparte.commands.get(&cmd);
-        match command {
+        let commands = aparte.commands.borrow();
+        match commands.get(&cmd) {
             Some(command) => Rc::clone(&aparte).log(command.help.to_string()),
             None => Rc::clone(&aparte).log(format!("Unknown command {}", cmd)),
         }

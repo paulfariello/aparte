@@ -46,9 +46,9 @@ impl CompletionPlugin {
             let mut completions = Vec::new();
             if let Ok(command) = Command::parse_with_cursor(&raw_buf, cursor) {
                 if command.cursor == 0 {
-                    completions = Rc::clone(&aparte).commands.iter().map(|c| c.0.to_string()).collect()
+                    completions = Rc::clone(&aparte).commands.borrow().iter().map(|c| c.0.to_string()).collect()
                 } else {
-                    if let Some(parser) = Rc::clone(&aparte).commands.get(&command.args[0]) {
+                    if let Some(parser) = Rc::clone(&aparte).commands.borrow().get(&command.args[0]) {
                         if command.cursor - 1 < parser.autocompletions.len() {
                             if let Some(completion) = &parser.autocompletions[command.cursor - 1] {
                                 completions = completion(Rc::clone(&aparte), command.clone())

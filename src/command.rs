@@ -309,10 +309,10 @@ macro_rules! generate_command_autocompletions {
 #[macro_export]
 macro_rules! generate_sub_autocompletion {
     ($subs:ident, $subname:tt) => (
-        $ident.push($subname.clone());
+        $subs.push(String::from($subname));
     );
     ($subs:ident, $subname:tt, $($subnames:tt),+) => (
-        $ident.push($subname.clone());
+        $subs.push(String::from($subname));
         generate_sub_autocompletion($subs, $($subnames),*);
     );
 }
@@ -320,13 +320,13 @@ macro_rules! generate_sub_autocompletion {
 #[macro_export]
 macro_rules! generate_arg_autocompletion {
     ($autocompletions:ident) => ();
-    ($autocompletions:ident, sub: { $($subnames:ident: $subattrs:tt),+ }) => (
-        let sub = vec![];
+    ($autocompletions:ident, sub: { $($subnames:tt: $subfunc:ident),+ }) => (
+        let mut sub = vec![];
         generate_sub_autocompletion!(sub, $($subnames),*);
-        $autocompletions.push(Some(Box::new(move |_: Rc<Aparte>, _: Command| -> Vec<String> { sub })));
+        $autocompletions.push(Some(Box::new(move |_: Rc<Aparte>, _: Command| -> Vec<String> { sub.clone() })));
     );
-    ($autocompletions:ident, sub: { $($subnames:ident: $subattrs:tt),+ }, $($attrnames:ident: $attrs:tt),+) => (
-        let sub = vec![];
+    ($autocompletions:ident, sub: { $($subnames:tt: $subfunc:ident),+ }, $($attrnames:ident: $attrs:tt),+) => (
+        let mut sub = vec![];
         generate_sub_autocompletion!(sub, $($subnames),*);
         $autocompletions.push(Some(Box::new(move |_: Rc<Aparte>, _: Command| -> Vec<String> { sub })));
         generate_command_autocompletions!($autocompletions, $($attrnames: $attrs),*);
@@ -338,8 +338,6 @@ macro_rules! generate_arg_autocompletion {
         $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
         generate_command_autocompletions!($autocompletions, $($attrnames: $attrs),*);
     );
-    ($autocompletions:ident, $attrname:ident: $attr:tt) => ();
-    ($autocompletions:ident, $attrname:ident: $attr:tt, $($attrnames:ident: $attrs:tt),+) => ();
 }
 
 #[macro_export]

@@ -56,7 +56,7 @@ pub enum Event {
 
 pub trait Plugin: fmt::Display {
     fn new() -> Self where Self: Sized;
-    fn init(&mut self, mgr: &Aparte) -> Result<(), ()>;
+    fn init(&mut self, aparte: &Aparte) -> Result<(), ()>;
     fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event);
 }
 
@@ -86,7 +86,7 @@ pub struct Connection {
 }
 
 pub struct Aparte {
-    pub commands: HashMap<String, CommandParser>,
+    pub commands: RefCell<HashMap<String, CommandParser>>,
     plugins: HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>,
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
@@ -117,7 +117,7 @@ impl Aparte {
         };
 
         Self {
-            commands: HashMap::new(),
+            commands: RefCell::new(HashMap::new()),
             plugins: HashMap::new(),
             connections: RefCell::new(HashMap::new()),
             current_connection: RefCell::new(None),
@@ -127,12 +127,12 @@ impl Aparte {
         }
     }
 
-    pub fn add_command(&mut self, command: CommandParser) {
-        self.commands.insert(command.name.to_string(), command);
+    pub fn add_command(&self, command: CommandParser) {
+        self.commands.borrow_mut().insert(command.name.to_string(), command);
     }
 
     pub fn parse_command(self: Rc<Self>, command: Command) -> Result<(), String> {
-        match Rc::clone(&self).commands.get(&command.args[0]) {
+        match Rc::clone(&self).commands.borrow().get(&command.args[0]) {
             Some(parser) => (parser.parser)(self, command),
             None => Err(format!("Unknown command {}", command.args[0])),
         }
@@ -189,9 +189,9 @@ impl Aparte {
         }
     }
 
-    pub fn init(&mut self) -> Result<(), ()> {
+    pub fn init(&self) -> Result<(), ()> {
         for (_, plugin) in self.plugins.iter() {
-            if let Err(err) = plugin.borrow_mut().as_plugin().init(&self) {
+            if let Err(err) = plugin.borrow_mut().as_plugin().init(self) {
                 return Err(err);
             }
         }
