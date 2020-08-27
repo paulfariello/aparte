@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+#![feature(trace_macros)]
+
 #![feature(drain_filter)]
 #![feature(trait_alias)]
 #![feature(specialization)]
@@ -120,9 +122,9 @@ Examples:
   /connect account@server.tld:5223
 "#,
     account: {
-        completion: |aparte, _command| {
+        completion: (|aparte, _command| {
             aparte.config.accounts.iter().map(|(name, _)| name.clone()).collect()
-        }
+        })
     },
     (password) password,
     |aparte, _command| {
@@ -216,10 +218,10 @@ Examples:
   /win console
   /win contact@server.tld"#,
     window: {
-        completion: |aparte, _command| {
+        completion: (|aparte, _command| {
             let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
             ui.get_windows()
-        }
+        })
     },
     |aparte, _command| {
         aparte.event(Event::Win(window.clone()));
@@ -243,10 +245,10 @@ Example:
   /msg contact@server.tld "Hi there!"
 "#,
     contact: {
-        completion: |aparte, _command| {
+        completion: (|aparte, _command| {
             let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
             contact.contacts.iter().map(|c| c.0.to_string()).collect()
-        }
+        })
     },
     (optional) message,
     |aparte, _command| {
@@ -357,9 +359,9 @@ Examples:
   /help help
   /help win"#,
     cmd: {
-        completion: |aparte, _command| {
+        completion: (|aparte, _command| {
             aparte.commands.iter().map(|c| c.0.to_string()).collect()
-        }
+        })
     },
     |aparte, _command| {
         let command = aparte.commands.get(&cmd);
