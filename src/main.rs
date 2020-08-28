@@ -44,7 +44,7 @@ mod command;
 mod terminus;
 mod plugins;
 
-use crate::core::{Aparte, Plugin, Event};
+use crate::core::{Aparte, Plugin, Event, Password};
 use crate::message::{Message};
 use crate::command::{CommandParser, Command};
 
@@ -104,273 +104,272 @@ fn handle_message(aparte: Rc<Aparte>, message: XmppParsersMessage) {
     }
 }
 
-command_def!{
-    connect,
-    r#"/connect <account>
+command_def!(connect,
+r#"/connect <account>
 
-  account       Account to connect to
+    account       Account to connect to
 
 Description:
-  Connect to the given account.
+    Connect to the given account.
 
 Examples:
-  /connect myaccount
-  /connect account@server.tld
-  /connect account@server.tld/resource
-  /connect account@server.tld:5223
+    /connect myaccount
+    /connect account@server.tld
+    /connect account@server.tld/resource
+    /connect account@server.tld:5223
 "#,
-    account: {
+{
+    account: String = {
         completion: (|aparte, _command| {
             aparte.config.accounts.iter().map(|(name, _)| name.clone()).collect()
         })
     },
-    (password) password,
-    |aparte, _command| {
-        let jid;
+    password: Password<String>
+},
+|aparte, _command| {
+    let jid;
 
-        if let Some((_, config)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account) {
-            if let Ok(jid_config) = Jid::from_str(&config.jid) {
-                jid = jid_config;
-            } else {
-                return Err(format!("Invalid account jid {}", config.jid));
-            }
-        } else if let Ok(jid_param) = Jid::from_str(&account) {
-            jid = jid_param;
+    if let Some((_, config)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account) {
+        if let Ok(jid_config) = Jid::from_str(&config.jid) {
+            jid = jid_config;
         } else {
-            return Err(format!("Unknown account {}", account));
+            return Err(format!("Invalid account jid {}", config.jid));
+        }
+    } else if let Ok(jid_param) = Jid::from_str(&account) {
+        jid = jid_param;
+    } else {
+        return Err(format!("Unknown account {}", account));
+    }
+
+    let full_jid = match jid {
+        Jid::Full(jid) => jid,
+        Jid::Bare(jid) => jid.with_resource("aparte"),
+    };
+
+
+    Rc::clone(&aparte).log(format!("Connecting as {}", full_jid));
+    let client = Client::new(&full_jid.to_string(), &password.0).unwrap();
+
+    let (sink, stream) = client.split();
+    let (tx, rx) = futures::unsync::mpsc::unbounded();
+
+    Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
+
+    tokio::runtime::current_thread::spawn(
+        rx.forward(
+            sink.sink_map_err(|_| panic!("Pipe"))
+            ).map(|(rx, mut sink)| {
+            drop(rx);
+            let _ = sink.close();
+        }).map_err(|e| {
+                panic!("Send error: {:?}", e);
+            })
+        );
+
+    let event_aparte = Rc::clone(&aparte);
+    let client = stream.for_each(move |event| {
+        if event.is_online() {
+            Rc::clone(&event_aparte).log(format!("Connected as {}", full_jid));
+
+            Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
+
+            let mut presence = Presence::new(PresenceType::None);
+            presence.show = Some(PresenceShow::Chat);
+
+            event_aparte.send(presence.into());
+        } else if let Some(stanza) = event.into_stanza() {
+            debug!("RECV: {}", String::from(&stanza));
+
+            handle_stanza(Rc::clone(&event_aparte), stanza);
         }
 
-        let full_jid = match jid {
-            Jid::Full(jid) => jid,
-            Jid::Bare(jid) => jid.with_resource("aparte"),
-        };
+        future::ok(())
+    });
 
+    let error_aparte = Rc::clone(&aparte);
+    let client = client.map_err(move |error| {
+        match error {
+            XmppError::Auth(auth) => {
+                Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
+            },
+            error => {
+                Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
+            },
+        }
+    });
 
-        Rc::clone(&aparte).log(format!("Connecting as {}", full_jid));
-        let client = Client::new(&full_jid.to_string(), &password).unwrap();
+    tokio::runtime::current_thread::spawn(client);
 
-        let (sink, stream) = client.split();
-        let (tx, rx) = futures::unsync::mpsc::unbounded();
+    Ok(())
+});
 
-        Rc::clone(&aparte).add_connection(full_jid.clone(), tx);
+command_def!(win,
+r#"Usage: /win <window>
 
-        tokio::runtime::current_thread::spawn(
-            rx.forward(
-                sink.sink_map_err(|_| panic!("Pipe"))
-                ).map(|(rx, mut sink)| {
-                drop(rx);
-                let _ = sink.close();
-            }).map_err(|e| {
-                    panic!("Send error: {:?}", e);
-                })
-            );
-
-        let event_aparte = Rc::clone(&aparte);
-        let client = stream.for_each(move |event| {
-            if event.is_online() {
-                Rc::clone(&event_aparte).log(format!("Connected as {}", full_jid));
-
-                Rc::clone(&event_aparte).event(Event::Connected(full_jid.clone()));
-
-                let mut presence = Presence::new(PresenceType::None);
-                presence.show = Some(PresenceShow::Chat);
-
-                event_aparte.send(presence.into());
-            } else if let Some(stanza) = event.into_stanza() {
-                debug!("RECV: {}", String::from(&stanza));
-
-                handle_stanza(Rc::clone(&event_aparte), stanza);
-            }
-
-            future::ok(())
-        });
-
-        let error_aparte = Rc::clone(&aparte);
-        let client = client.map_err(move |error| {
-            match error {
-                XmppError::Auth(auth) => {
-                    Rc::clone(&error_aparte).log(format!("Authentication failed {}", auth));
-                },
-                error => {
-                    Rc::clone(&error_aparte).log(format!("Connection error {:?}", error));
-                },
-            }
-        });
-
-        tokio::runtime::current_thread::spawn(client);
-
-        Ok(())
-    }
-}
-
-command_def!{
-    win,
-    r#"Usage: /win <window>
-
-  window        Name of the window to switch to
+    window        Name of the window to switch to
 
 Description:
-  Switch to a given window.
+    Switch to a given window.
 
 Examples:
-  /win console
-  /win contact@server.tld"#,
-    window: {
+    /win console
+    /win contact@server.tld"#,
+{
+    window: String = {
         completion: (|aparte, _command| {
             let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
             ui.get_windows()
         })
-    },
-    |aparte, _command| {
-        aparte.event(Event::Win(window.clone()));
-        Ok(())
     }
-}
+},
+|aparte, _command| {
+    aparte.event(Event::Win(window.clone()));
+    Ok(())
+});
 
-command_def!{
-    msg,
-    r#"/msg <contact> [<message>]
+command_def!(msg,
+r#"/msg <contact> [<message>]
 
-  contact       Contact to send a message to
-  message       Optionnal message to be sent
+    contact       Contact to send a message to
+    message       Optionnal message to be sent
 
 Description:
-  Open a window for a private discussion with a given contact and optionnaly
-  send a message.
+    Open a window for a private discussion with a given contact and optionnaly
+    send a message.
 
 Example:
-  /msg contact@server.tld
-  /msg contact@server.tld "Hi there!"
+    /msg contact@server.tld
+    /msg contact@server.tld "Hi there!"
 "#,
-    contact: {
+{
+    contact: String = {
         completion: (|aparte, _command| {
             let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
             contact.contacts.iter().map(|c| c.0.to_string()).collect()
         })
     },
-    (optional) message,
-    |aparte, _command| {
-        match aparte.current_connection() {
-            Some(connection) => {
-                match Jid::from_str(&contact.clone()) {
-                    Ok(jid) => {
-                        let to = match jid.clone() {
-                            Jid::Bare(jid) => jid,
-                            Jid::Full(jid) => jid.into(),
-                        };
-                        Rc::clone(&aparte).event(Event::Chat(to));
-                        if message.is_some() {
-                            let id = Uuid::new_v4().to_string();
-                            let from: Jid = connection.into();
-                            let timestamp = Utc::now();
-                            let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
-                            Rc::clone(&aparte).event(Event::Message(message.clone()));
-
-                            aparte.send(Element::try_from(message).unwrap());
-                        }
-                        Ok(())
-                    },
-                    Err(err) => {
-                        Err(format!("Invalid JID {}: {}", contact, err))
-                    }
-                }
-            },
-            None => {
-                Err(format!("No connection found"))
-            }
-        }
-    }
-}
-
-command_def!{
-    join,
-    r#"/join <channel>
-
-  channel       Channel JID to join
-Description:
-  Open a window and join a given channel.
-
-Example:
-  /join channel@conference.server.tld"#,
-    muc,
-    |aparte, _command| {
-        match aparte.current_connection() {
-            Some(connection) => {
-                match Jid::from_str(&muc) {
-                    Ok(jid) => {
-                        let to = match jid {
-                            Jid::Full(jid) => jid,
-                            Jid::Bare(jid) => {
-                                let node = connection.node.clone().unwrap();
-                                jid.with_resource(node)
-                            }
-                        };
+    message: Option<String>
+},
+|aparte, _command| {
+    match aparte.current_connection() {
+        Some(connection) => {
+            match Jid::from_str(&contact.clone()) {
+                Ok(jid) => {
+                    let to = match jid.clone() {
+                        Jid::Bare(jid) => jid,
+                        Jid::Full(jid) => jid.into(),
+                    };
+                    Rc::clone(&aparte).event(Event::Chat(to));
+                    if message.is_some() {
+                        let id = Uuid::new_v4().to_string();
                         let from: Jid = connection.into();
+                        let timestamp = Utc::now();
+                        let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
+                        Rc::clone(&aparte).event(Event::Message(message.clone()));
 
-                        let mut presence = Presence::new(PresenceType::None);
-                        presence = presence.with_to(Jid::Full(to.clone()));
-                        presence = presence.with_from(from);
-                        presence.add_payload(Muc::new());
-                        aparte.send(presence.into());
-                        aparte.event(Event::Join(to.clone()));
-
-                        Ok(())
-                    },
-                    Err(err) => {
-                        Err(format!("Invalid JID {}: {}", muc, err))
+                        aparte.send(Element::try_from(message).unwrap());
                     }
+                    Ok(())
+                },
+                Err(err) => {
+                    Err(format!("Invalid JID {}: {}", contact, err))
                 }
-            },
-            None => {
-                Err(format!("No connection found"))
             }
+        },
+        None => {
+            Err(format!("No connection found"))
         }
     }
-}
+});
 
-command_def!{
-    quit,
-    r#"/quit
+command_def!(join,
+r#"/join <channel>
 
+    channel       Channel JID to join
 Description:
-  Quit Aparté.
+    Open a window and join a given channel.
 
 Example:
-  /quit"#,
-    |aparte, _command| {
-        aparte.event(Event::Quit);
+    /join channel@conference.server.tld"#,
+{
+    muc: String
+},
+|aparte, _command| {
+    match aparte.current_connection() {
+        Some(connection) => {
+            match Jid::from_str(&muc) {
+                Ok(jid) => {
+                    let to = match jid {
+                        Jid::Full(jid) => jid,
+                        Jid::Bare(jid) => {
+                            let node = connection.node.clone().unwrap();
+                            jid.with_resource(node)
+                        }
+                    };
+                    let from: Jid = connection.into();
 
-        Ok(())
+                    let mut presence = Presence::new(PresenceType::None);
+                    presence = presence.with_to(Jid::Full(to.clone()));
+                    presence = presence.with_from(from);
+                    presence.add_payload(Muc::new());
+                    aparte.send(presence.into());
+                    aparte.event(Event::Join(to.clone()));
+
+                    Ok(())
+                },
+                Err(err) => {
+                    Err(format!("Invalid JID {}: {}", muc, err))
+                }
+            }
+        },
+        None => {
+            Err(format!("No connection found"))
+        }
     }
-}
+});
 
-command_def!{
-    help,
-    r#"/help <command>
-
-  command       Name of command
+command_def!(quit,
+r#"/quit
 
 Description:
-  Print help of a given command.
+    Quit Aparté.
+
+Example:
+    /quit"#,
+{ },
+|aparte, _command| {
+    aparte.event(Event::Quit);
+
+    Ok(())
+});
+
+command_def!(help,
+r#"/help <command>
+
+    command       Name of command
+
+Description:
+    Print help of a given command.
 
 Examples:
-  /help help
-  /help win"#,
-    cmd: {
+    /help help
+    /help win"#,
+{
+    cmd: String = {
         completion: (|aparte, _command| {
             aparte.commands.borrow().iter().map(|c| c.0.to_string()).collect()
         })
-    },
-    |aparte, _command| {
-        let commands = aparte.commands.borrow();
-        match commands.get(&cmd) {
-            Some(command) => Rc::clone(&aparte).log(command.help.to_string()),
-            None => Rc::clone(&aparte).log(format!("Unknown command {}", cmd)),
-        }
-
-        Ok(())
     }
-}
+},
+|aparte, _command| {
+    let commands = aparte.commands.borrow();
+    match commands.get(&cmd) {
+        Some(command) => Rc::clone(&aparte).log(command.help.to_string()),
+        None => Rc::clone(&aparte).log(format!("Unknown command {}", cmd)),
+    }
+
+    Ok(())
+});
 
 fn main() {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");

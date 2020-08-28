@@ -6,16 +6,17 @@ use futures::unsync::mpsc::UnboundedSender;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::convert::TryFrom;
+use std::str::FromStr;
+use termion::event::Key;
 use tokio_xmpp::Packet;
 use xmpp_parsers::{Element, FullJid, BareJid, presence, iq};
 use xmpp_parsers;
-use termion::event::Key;
 
 use crate::{contact, conversation};
 use crate::message::Message;
@@ -77,6 +78,19 @@ impl<T> AnyPlugin for T where T: Any + Plugin {
 
     fn as_plugin(&mut self) -> &mut dyn Plugin {
         self
+    }
+}
+
+pub struct Password<T: FromStr>(pub T);
+
+impl<T: FromStr> FromStr for Password<T> {
+    type Err = T::Err;
+
+    fn from_str(s: &str) -> Result<Self, T::Err> {
+        match T::from_str(s) {
+            Err(e) => Err(e),
+            Ok(inner) => Ok(Password(inner)),
+        }
     }
 }
 

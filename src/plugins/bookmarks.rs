@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
+use std::str::FromStr;
+use std::collections::HashMap;
 use std::rc::Rc;
 use uuid::Uuid;
 use xmpp_parsers::Element;
@@ -13,81 +15,80 @@ use crate::core::{Plugin, Aparte, Event};
 use crate::command::{Command, CommandParser};
 use crate::plugins::disco;
 
-command_def!{
-    bookmark_add,
-    r#"/bookmark add <bookmark> <conference> [autojoin=on|off]
+command_def!(bookmark_add,
+r#"/bookmark add <bookmark> <conference> [autojoin=on|off]
 
-  bookmark    The bookmark friendly name
-  conference  The conference room jid
-  autojoin    Wether the conference room should be automatically joined on startup
-
-Description:
-  Add a bookmark
-
-Examples:
-  /bookmark add aparte aparte@conference.fariello.eu
-  /bookmark add aparte aparte@conference.fariello.eu/mynick
-  /bookmark add aparte aparte@conference.fariello.eu/mynick autojoin=on
-"#,
-    name,
-    conference,
-    (optional) autojoin,
-    |aparte, _command| {
-        Ok(())
-    }
-}
-
-command_def!{
-    bookmark_del,
-    r#"/bookmark del <bookmark>
-
-  bookmark    The bookmark friendly name
+    bookmark    The bookmark friendly name
+    conference  The conference room jid
+    autojoin    Wether the conference room should be automatically joined on startup
 
 Description:
-  Delete a bookmark
+    Add a bookmark
 
 Examples:
-  /bookmark del aparte
+    /bookmark add aparte aparte@conference.fariello.eu
+    /bookmark add aparte aparte@conference.fariello.eu/mynick
+    /bookmark add aparte aparte@conference.fariello.eu/mynick autojoin=on
 "#,
-    name,
-    |aparte, _command| {
-        Ok(())
-    }
-}
+{
+    name: String,
+    conference: String,
+    autojoin: Option<String>
+},
+|aparte, _command| {
+    // TODO
+    Ok(())
+});
 
-command_def!{
-    bookmark_edit,
-    r#"/bookmark edit <bookmark> [<conference>] [autojoin=on|off]
+command_def!(bookmark_del,
+r#"/bookmark del <bookmark>
 
-  bookmark    The bookmark friendly name
-  conference  The conference room jid
-  autojoin    Wether the conference room should be automatically joined on startup
+    bookmark    The bookmark friendly name
 
 Description:
-  Edit a bookmark
+    Delete a bookmark
 
 Examples:
-  /bookmark edit aparte autojoin=on
-  /bookmark edit aparte aparte@conference.fariello.eu
-  /bookmark edit aparte aparte@conference.fariello.eu autojoin=off
+    /bookmark del aparte
 "#,
-    name,
-    |aparte, _command| {
-        Ok(())
-    }
-}
+{
+    name: String
+},
+|aparte, _command| {
+    Ok(())
+});
 
-trace_macros!(true);
-command_def!{
-    bookmark,
-    r#"/bookmark add|del|edit"#,
-    action: {
-        sub: {
+command_def!(bookmark_edit,
+r#"/bookmark edit <bookmark> [<conference>] [autojoin=on|off]
+
+    bookmark    The bookmark friendly name
+    conference  The conference room jid
+    autojoin    Wether the conference room should be automatically joined on startup
+
+Description:
+    Edit a bookmark
+
+Examples:
+    /bookmark edit aparte autojoin=on
+    /bookmark edit aparte aparte@conference.fariello.eu
+    /bookmark edit aparte aparte@conference.fariello.eu autojoin=off
+"#,
+{
+    name: String
+},
+|aparte, _command| {
+    Ok(())
+});
+
+command_def!(bookmark,
+r#"/bookmark add|del|edit"#,
+{
+    action: Command = {
+        children: {
             "add": bookmark_add
         }
-    }
-}
-trace_macros!(false);
+    },
+});
 
 pub struct BookmarksPlugin {
 }

@@ -3,8 +3,32 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use crate::core::Aparte;
+
+macro_rules! test(
+    (Option<$type:ty>) => (
+        "Option final";
+    );
+    ($type:ty) => (
+        "Generic final";
+    );
+    (Option<$type:ty>, $($types:ty),+) => (
+        "Option recursive";
+        test!($($types),*);
+    );
+    ($type:ty, $($types:ty),+) => (
+        "Generic recursive";
+        test!($($types),*);
+    );
+);
+
+fn test() {
+    //trace_macros!(true);
+    //test!(Option<String>, Option<String>);
+    //trace_macros!(false);
+}
 
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -228,39 +252,47 @@ pub struct CommandParser {
 }
 
 #[macro_export]
-macro_rules! parse_command_args {
-    ($aparte:ident, $command:ident, $index:ident) => ();
-    ($aparte:ident, $command:ident, $index:ident, (password) $arg:ident) => (
+macro_rules! parse_subcommand_attrs(
+    ($map:ident, {}) => ();
+    ($map:ident, { children: $subcommands:tt $(, $($tail:tt)*)? }) => (
+        build_subcommand_map!($map, $subcommands);
+    );
+    ($map:ident, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => ();
+);
+
+#[macro_export]
+macro_rules! build_subcommand_map(
+    ($map:ident, {}) => ();
+    ($map:ident, { $subname:tt: $subparser:ident $(, $($tail:tt)*)? }) => (
+        $map.insert(String::from_str($subname).unwrap(), $subparser());
+        build_subcommand_map!($map, { $($tail*)? });
+    );
+    ($map:ident, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => ();
+);
+
+#[macro_export]
+macro_rules! parse_command_args(
+    ($aparte:ident, $command:ident, $index:ident, {}) => ();
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password<$type:ty> }) => (
         if $command.args.len() <= $index {
             Rc::clone(&$aparte).event(Event::ReadPassword($command.clone()));
             return Ok(())
         }
 
-        let $arg = $command.args[$index].clone();
-
-        $index += 1;
-    );
-    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident) => (
-        let $arg = {
-            if $command.args.len() > $index {
-                Some($command.args[$index].clone())
-            } else {
-                None
-            }
+        let $arg: Password<$type> = match Password::from_str(&$command.args[$index]) {
+            Ok(arg) => arg,
+            Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
         };
 
         $index += 1;
     );
-    ($aparte:ident, $command:ident, $index:ident, $arg:ident) => (
-        if $command.args.len() <= $index {
-            return Err(format!("Missing {} argument", stringify!($arg)))
-        }
-        let $arg = $command.args[$index].clone();
-    );
-    ($aparte:ident, $command:ident, $index:ident, (optional) $arg:ident, $($(($attr:ident))? $args:ident),+) => (
-        let $arg = {
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Option<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+        let $arg: Option<$type> = {
             if $command.args.len() > $index {
-                Some($command.args[$index].clone())
+                match <$type>::from_str(&$command.args[$index]) {
+                    Ok(arg) => Some(arg),
+                    Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
+                }
             } else {
                 None
             }
@@ -268,100 +300,86 @@ macro_rules! parse_command_args {
 
         $index += 1;
 
-        parse_command_args!($aparte, $command, $index, $($(($attr))? $args),*);
+        parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
-    ($aparte:ident, $command:ident, $index:ident, $arg:ident, $($(($attr:ident))? $args:ident),+) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
             return Err(format!("Missing {} argument", stringify!($arg)))
         }
 
-        let $arg = $command.args[$index].clone();
+        let mut sub_commands: HashMap<String, CommandParser> = HashMap::new();
+        parse_subcommand_attrs!(sub_commands, $attr);
+
+        return match sub_commands.get(&$command.args[$index]) {
+            Some(sub_parser) => (sub_parser.parser)($aparte, Command { args: $command.args[$index..].to_vec(), cursor: 0 }),
+            None => Err(format!("Invalid subcommand {}", $command.args[$index])),
+        };
+    );
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: $type:ty $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+        if $command.args.len() <= $index {
+            return Err(format!("Missing {} argument", stringify!($arg)))
+        }
+
+        let $arg: $type = match <$type>::from_str(&$command.args[$index]) {
+            Ok(arg) => arg,
+            Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
+        };
 
         $index += 1;
-
-        parse_command_args!($aparte, $command, $index, $($(($attr))? $args),*);
+        parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
-}
+);
 
 #[macro_export]
-macro_rules! generate_command_autocompletions {
-    ($autocompletions:ident) => ();
-    ($autocompletions:ident, $argname:ident) => (
+macro_rules! generate_command_autocompletions(
+    ($autocompletions:ident, {}) => ();
+    ($autocompletions:ident, { $argname:ident: $type:ty = $attrs:tt $(, $($tail:tt)*)? }) => (
+        let count = $autocompletions.len();
+        generate_arg_autocompletion!($autocompletions, $type, $attrs);
+        if count == $autocompletions.len() {
+            $autocompletions.push(None);
+        }
+        assert!($autocompletions.len() == count + 1, "Two completion pushed for the argument {}", stringify!($argname));
+        generate_command_autocompletions!($autocompletions, { $($($tail)*)? });
+    );
+    ($autocompletions:ident, { $argname:ident: $type:ty $(, $($tail:tt)*)? }) => (
         $autocompletions.push(None);
+        generate_command_autocompletions!($autocompletions, { $($($tail)*)? });
     );
-    ($autocompletions:ident, $argname:ident: { $($attrnames:ident: $attrs:tt),+ }) => (
-        generate_arg_autocompletion!($autocompletions, $($attrnames: $attrs),*);
-    );
-    ($autocompletions:ident, $argname:ident: {}) => (
-        $autocompletions.push(None);
-    );
-    ($autocompletions:ident, $argname:ident: { $($attrnames:ident: $attrs:tt),* }, $($argnames:ident$(: $args:tt)?),+) => (
-        generate_arg_autocompletion!($autocompletions, $($attrnames: $attrs),*);
-        generate_command_autocompletions!($autocompletions, $($argnames$(: $args)?),*);
-    );
-    ($autocompletions:ident, $argname:ident, $($argnames:ident$(: $args:tt)?),+) => (
-        $autocompletions.push(None);
-        generate_command_autocompletions!($autocompletions, $($argnames$(: $args)?),*);
-    );
-}
+);
 
 
 #[macro_export]
-macro_rules! generate_sub_autocompletion {
-    ($subs:ident, $subname:tt) => (
-        $subs.push(String::from($subname));
+macro_rules! generate_sub_autocompletion(
+    ($completion:ident, {}) => ();
+    ($completion:ident, { $subname:tt: $sub:ident $(, $($tail:tt)*)? }) => (
+        $completion.push(String::from($subname));
+        generate_sub_autocompletion!($completion, { $($($tail)*)? });
     );
-    ($subs:ident, $subname:tt, $($subnames:tt),+) => (
-        $subs.push(String::from($subname));
-        generate_sub_autocompletion($subs, $($subnames),*);
-    );
-}
+);
 
 #[macro_export]
-macro_rules! generate_arg_autocompletion {
-    ($autocompletions:ident) => ();
-    ($autocompletions:ident, sub: { $($subnames:tt: $subfunc:ident),+ }) => (
+macro_rules! generate_arg_autocompletion(
+    ($autocompletions:ident, $type:ty, {}) => ();
+    ($autocompletions:ident, $type:ty, { children: $subs:tt $(, $($tail:tt)*)? }) => (
         let mut sub = vec![];
-        generate_sub_autocompletion!(sub, $($subnames),*);
+        generate_sub_autocompletion!(sub, $subs);
         $autocompletions.push(Some(Box::new(move |_: Rc<Aparte>, _: Command| -> Vec<String> { sub.clone() })));
+        generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
-    ($autocompletions:ident, sub: { $($subnames:tt: $subfunc:ident),+ }, $($attrnames:ident: $attrs:tt),+) => (
-        let mut sub = vec![];
-        generate_sub_autocompletion!(sub, $($subnames),*);
-        $autocompletions.push(Some(Box::new(move |_: Rc<Aparte>, _: Command| -> Vec<String> { sub })));
-        generate_command_autocompletions!($autocompletions, $($attrnames: $attrs),*);
-    );
-    ($autocompletions:ident, completion: (|$aparte:ident, $command:ident| $completion:block) ) => (
+    ($autocompletions:ident, $type:ty, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => (
         $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
+        generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
-    ($autocompletions:ident, completion: (|$aparte:ident, $command:ident| $completion:block), $($attrnames:ident: $attrs:tt),+) => (
-        $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
-        generate_command_autocompletions!($autocompletions, $($attrnames: $attrs),*);
-    );
-}
+);
 
 #[macro_export]
-macro_rules! command_def {
-    ($name:ident, $help: tt, |$aparte:ident, $command:ident| $body:block) => (
-        fn $name() -> CommandParser {
-            let autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
-
-            CommandParser {
-                name: stringify!($name),
-                help: $help,
-                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
-                    #[allow(unused_mut)]
-                    $body
-                }),
-                autocompletions: autocompletions,
-            }
-        }
-    );
-    ($name:ident, $help: tt, $($(($attr:ident))? $argnames:ident$(: $attrs:tt)?),+) => (
+macro_rules! command_def (
+    ($name:ident, $help:tt, $args:tt) => (
         fn $name() -> CommandParser {
             let mut autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
 
-            generate_command_autocompletions!(autocompletions, $($argnames$(: $attrs)?),*);
+            generate_command_autocompletions!(autocompletions, $args);
 
             CommandParser {
                 name: stringify!($name),
@@ -369,18 +387,18 @@ macro_rules! command_def {
                 parser: Box::new(|aparte: Rc<Aparte>, command: Command| -> Result<(), String> {
                     #[allow(unused_mut)]
                     let mut index = 1;
-                    parse_command_args!(aparte, command, index, $($(($attr))? $argnames),*);
+                    parse_command_args!(aparte, command, index, $args);
                     Ok(())
                 }),
                 autocompletions: autocompletions,
             }
         }
     );
-    ($name:ident, $help: tt, $($(($attr:ident))? $argnames:ident$(: $attrs:tt)?),*, |$aparte:ident, $command:ident| $body:block) => (
+    ($name:ident, $help:tt, $args:tt, |$aparte:ident, $command:ident| $body:block) => (
         fn $name() -> CommandParser {
             let mut autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
 
-            generate_command_autocompletions!(autocompletions, $($argnames$(: $attrs)?),*);
+            generate_command_autocompletions!(autocompletions, $args);
 
             CommandParser {
                 name: stringify!($name),
@@ -388,26 +406,20 @@ macro_rules! command_def {
                 parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
                     #[allow(unused_mut)]
                     let mut index = 1;
-                    parse_command_args!($aparte, $command, index, $($(($attr))? $argnames),*);
+                    parse_command_args!($aparte, $command, index, $args);
                     $body
                 }),
                 autocompletions: autocompletions,
             }
         }
     );
-}
+);
 
 #[cfg(test)]
-mod tests {
+mod tests_command_macro {
     use super::*;
 
-    command_def!{
-        no_args,
-        "help",
-        |_aparte, _command| {
-            Ok(())
-        }
-    }
+    command_def!(no_args, "help", {}, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_without_args() {
@@ -417,14 +429,7 @@ mod tests {
         assert_eq!(cmd.help, "help");
     }
 
-    command_def!{
-        one_arg,
-        "help",
-        _first_arg,
-        |_aparte, _command| {
-            Ok(())
-        }
-    }
+    command_def!(one_arg, "help", { _first_arg: String }, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_with_one_arg() {
@@ -434,18 +439,13 @@ mod tests {
         assert_eq!(cmd.help, "help");
     }
 
-    command_def!{
-        one_arg_completion,
-        "help",
-        _first_arg: {
-            completion: |_aparte, _command| {
-                Vec::new()
-            }
-        },
-        |_aparte, _command| {
-            Ok(())
-        }
-    }
+    command_def!(one_arg_completion, "help", {
+                  _first_arg: String = {
+                      completion: (|_aparte, _command| {
+                          Vec::new()
+                      })
+                  }
+    }, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_with_one_arg_with_completion() {
@@ -456,15 +456,7 @@ mod tests {
         assert_eq!(cmd.autocompletions.len(), 1);
     }
 
-    command_def!{
-        two_args,
-        "help",
-        _first_arg,
-        _second_arg,
-        |_aparte, _command| {
-            Ok(())
-        }
-    }
+    command_def!(two_args, "help", { _first_arg: String, _second_arg: String }, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_with_two_args() {
@@ -475,19 +467,14 @@ mod tests {
         assert_eq!(cmd.autocompletions.len(), 2);
     }
 
-    command_def!{
-        two_args_completion,
-        "help",
-        _first_arg: {
-            completion: |_aparte, _command| {
+    command_def!(two_args_completion, "help", {
+        _first_arg: String = {
+            completion: (|_aparte, _command| {
                 Vec::new()
-            }
+            })
         },
-        _second_arg,
-        |_aparte, _command| {
-            Ok(())
-        }
-    }
+        _second_arg: String
+    }, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_with_two_args_with_completion() {
@@ -500,7 +487,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_command_parser {
     use super::*;
 
     #[test]
