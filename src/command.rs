@@ -2,33 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
-use std::rc::Rc;
-use std::str::FromStr;
 
 use crate::core::Aparte;
-
-macro_rules! test(
-    (Option<$type:ty>) => (
-        "Option final";
-    );
-    ($type:ty) => (
-        "Generic final";
-    );
-    (Option<$type:ty>, $($types:ty),+) => (
-        "Option recursive";
-        test!($($types),*);
-    );
-    ($type:ty, $($types:ty),+) => (
-        "Generic recursive";
-        test!($($types),*);
-    );
-);
-
-fn test() {
-    //trace_macros!(true);
-    //test!(Option<String>, Option<String>);
-    //trace_macros!(false);
-}
 
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -247,8 +222,8 @@ impl TryFrom<&str> for Command {
 pub struct CommandParser {
     pub name: &'static str,
     pub help: &'static str,
-    pub parser: Box<dyn Fn(Rc<Aparte>, Command) -> Result<(), String>>,
-    pub autocompletions: Vec<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>,
+    pub parser: fn(&mut Aparte, Command) -> Result<(), String>,
+    pub autocompletions: Vec<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>,
 }
 
 #[macro_export]
@@ -264,8 +239,8 @@ macro_rules! parse_subcommand_attrs(
 macro_rules! build_subcommand_map(
     ($map:ident, {}) => ();
     ($map:ident, { $subname:tt: $subparser:ident $(, $($tail:tt)*)? }) => (
-        $map.insert(String::from_str($subname).unwrap(), $subparser());
-        build_subcommand_map!($map, { $($tail*)? });
+        $map.insert(String::from_str($subname).unwrap(), $subparser::new());
+        build_subcommand_map!($map, { $($($tail)*)? });
     );
     ($map:ident, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => ();
 );
@@ -275,7 +250,7 @@ macro_rules! parse_command_args(
     ($aparte:ident, $command:ident, $index:ident, {}) => ();
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password<$type:ty> }) => (
         if $command.args.len() <= $index {
-            Rc::clone(&$aparte).event(Event::ReadPassword($command.clone()));
+            $aparte.schedule(Event::ReadPassword($command.clone()));
             return Ok(())
         }
 
@@ -284,6 +259,7 @@ macro_rules! parse_command_args(
             Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
         };
 
+        #[allow(unused_assignments)]
         $index += 1;
     );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Option<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
@@ -298,6 +274,7 @@ macro_rules! parse_command_args(
             }
         };
 
+        #[allow(unused_assignments)]
         $index += 1;
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
@@ -325,7 +302,9 @@ macro_rules! parse_command_args(
             Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
         };
 
+        #[allow(unused_assignments)]
         $index += 1;
+
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
 );
@@ -364,11 +343,11 @@ macro_rules! generate_arg_autocompletion(
     ($autocompletions:ident, $type:ty, { children: $subs:tt $(, $($tail:tt)*)? }) => (
         let mut sub = vec![];
         generate_sub_autocompletion!(sub, $subs);
-        $autocompletions.push(Some(Box::new(move |_: Rc<Aparte>, _: Command| -> Vec<String> { sub.clone() })));
+        $autocompletions.push(Some(Box::new(move |_: &mut Aparte, _: Command| -> Vec<String> { sub.clone() })));
         generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
     ($autocompletions:ident, $type:ty, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => (
-        $autocompletions.push(Some(Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Vec<String> { $completion })));
+        $autocompletions.push(Some(Box::new(|$aparte: &mut Aparte, $command: Command| -> Vec<String> { $completion })));
         generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
 );
@@ -376,40 +355,52 @@ macro_rules! generate_arg_autocompletion(
 #[macro_export]
 macro_rules! command_def (
     ($name:ident, $help:tt, $args:tt) => (
-        fn $name() -> CommandParser {
-            let mut autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
+        mod $name {
+            use super::*;
 
-            generate_command_autocompletions!(autocompletions, $args);
+            fn parser(aparte: &mut Aparte, command: Command) -> Result<(), String> {
+                #[allow(unused_variables, unused_mut)]
+                let mut index = 1;
+                parse_command_args!(aparte, command, index, $args);
+            }
 
-            CommandParser {
-                name: stringify!($name),
-                help: $help,
-                parser: Box::new(|aparte: Rc<Aparte>, command: Command| -> Result<(), String> {
-                    #[allow(unused_mut)]
-                    let mut index = 1;
-                    parse_command_args!(aparte, command, index, $args);
-                    Ok(())
-                }),
-                autocompletions: autocompletions,
+            pub fn new() -> CommandParser {
+                let mut autocompletions = Vec::<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>::new();
+
+                generate_command_autocompletions!(autocompletions, $args);
+
+                CommandParser {
+                    name: stringify!($name),
+                    help: $help,
+                    parser: parser,
+                    autocompletions: autocompletions,
+                }
             }
         }
     );
     ($name:ident, $help:tt, $args:tt, |$aparte:ident, $command:ident| $body:block) => (
-        fn $name() -> CommandParser {
-            let mut autocompletions = Vec::<Option<Box<dyn Fn(Rc<Aparte>, Command) -> Vec<String>>>>::new();
+        mod $name {
+            use super::*;
 
-            generate_command_autocompletions!(autocompletions, $args);
+            fn parser($aparte: &mut Aparte, $command: Command) -> Result<(), String> {
+                #[allow(unused_variables, unused_mut)]
+                let mut index = 1;
+                parse_command_args!($aparte, $command, index, $args);
+                $body
+            }
 
-            CommandParser {
-                name: stringify!($name),
-                help: $help,
-                parser: Box::new(|$aparte: Rc<Aparte>, $command: Command| -> Result<(), String> {
-                    #[allow(unused_mut)]
-                    let mut index = 1;
-                    parse_command_args!($aparte, $command, index, $args);
-                    $body
-                }),
-                autocompletions: autocompletions,
+            pub fn new() -> CommandParser {
+                #[allow(unused_mut)]
+                let mut autocompletions = Vec::<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>::new();
+
+                generate_command_autocompletions!(autocompletions, $args);
+
+                CommandParser {
+                    name: stringify!($name),
+                    help: $help,
+                    parser: parser,
+                    autocompletions: autocompletions,
+                }
             }
         }
     );
