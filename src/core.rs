@@ -5,7 +5,6 @@ use chrono::Utc;
 use core::fmt::Debug;
 use futures::unsync::mpsc::UnboundedSender;
 use futures::{future, Future, Sink, Stream};
-//use signal_hook::iterator::Signals;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::HashMap;
@@ -20,6 +19,8 @@ use std::sync::{Arc, Mutex};
 use termion::event::Key;
 use tokio::runtime::{Runtime as TokioRuntime, Handle as TokioHandle};
 use tokio::io;
+use tokio::signal::unix;
+use tokio::sync::mpsc;
 use tokio_xmpp::{AsyncClient as Client, Error as XmppError, Packet};
 use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
@@ -57,17 +58,14 @@ pub enum Event {
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
     Occupant{conversation: BareJid, occupant: conversation::Occupant},
-    Signal(i32),
+    WindowChange,
     #[allow(unused)]
     LoadHistory(BareJid),
     Quit,
     Key(Key),
-    Validate(Rc<RefCell<Option<(String, bool)>>>),
-    GetInput(Rc<RefCell<Option<(String, usize, bool)>>>),
     AutoComplete(String, usize),
     ResetCompletion,
     Completed(String, usize),
-    AddWindow(String, Option<Box<dyn ViewTrait<Event>>>),
     ChangeWindow(String),
 }
 
@@ -483,33 +481,49 @@ impl Aparte {
         };
 
         let aparte = Arc::new(Mutex::new(self));
+        let (mut tx, mut rx) = mpsc::channel(32);
 
-        //let aparte_for_signals = aparte.clone();
-        //let signals = Signals::new(&[signal_hook::SIGWINCH]).unwrap().into_async().unwrap().for_each(move |sig| {
-        //    debug!("Signal: {:?}", sig);
-        //    Aparte::ex_schedule(aparte_for_signals.clone(), Event::Signal(sig));
-        //    Aparte::event_loop(aparte_for_signals.clone());
-        //    Ok(())
-        //}).map_err(|e| panic!("{}", e));
-
-        //rt.spawn(signals);
+        let mut tx_for_signal = tx.clone();
+        rt.spawn(async move {
+            let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
+            loop {
+                sigwinch.recv().await;
+                tx_for_signal.send(Event::WindowChange).await;
+            }
+        });
 
         Aparte::ex_schedule(aparte.clone(), Event::Start);
-        Aparte::event_loop(aparte.clone());
+        Aparte::event_loop(aparte.clone()).unwrap();
 
-        let aparte_for_event = aparte.clone();
-        rt.block_on(async move {
+        let mut tx_for_event = tx.clone();
+        rt.spawn(async move {
             loop {
                 match event_stream.read_event().await {
                     Ok(event) => {
-                        debug!("Event: {:?}", event);
-                        Aparte::ex_schedule(aparte_for_event.clone(), event);
-                        Aparte::event_loop(aparte_for_event.clone());
+                        tx_for_event.send(event).await;
                     },
                     Err(err) => {
                         error!("Input error: {}", err);
+                        tx_for_event.send(Event::Quit).await;
                         break;
                     }
+                }
+            }
+        });
+
+        let aparte_for_event = aparte.clone();
+
+        rt.block_on(async move {
+            while let Some(event) = rx.recv().await {
+
+                let quit = match event {
+                    Event::Quit => true,
+                    _  => false,
+                };
+
+                Aparte::ex_schedule(aparte_for_event.clone(), event);
+                if Aparte::event_loop(aparte_for_event.clone()).is_err() {
+                    break;
                 }
             }
         });
@@ -602,9 +616,10 @@ impl Aparte {
         //TokioHandle::current().spawn(client);
     }
 
-    pub fn event_loop(this: Arc<Mutex<Self>>) {
+    pub fn event_loop(this: Arc<Mutex<Self>>) -> Result<(), ()> {
         while this.lock().unwrap().event_queue.len() > 0 {
             let event = this.lock().unwrap().event_queue.remove(0);
+            debug!("Event: {:?}", event);
             {
                 let mut aparte = this.lock().unwrap();
                 let plugins = Rc::clone(&aparte.plugins);
@@ -635,9 +650,14 @@ impl Aparte {
                 Event::Connect(jid, password) => {
                     Aparte::connect(this.clone(), jid, password);
                 },
+                Event::Quit => {
+                    return Err(());
+                }
                 _ => {},
             }
         }
+
+        Ok(())
     }
 
     pub fn schedule(&mut self, event: Event) {

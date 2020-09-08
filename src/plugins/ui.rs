@@ -43,11 +43,18 @@ struct Conversation {
     kind: ConversationKind,
 }
 
+enum UIEvent {
+    Core(Event),
+    Validate(Rc<RefCell<Option<(String, bool)>>>),
+    GetInput(Rc<RefCell<Option<(String, usize, bool)>>>),
+    AddWindow(String, Option<Box<dyn ViewTrait<UIEvent>>>),
+}
+
 struct TitleBar {
     window_name: Option<String>,
 }
 
-impl View<'_, TitleBar, Event> {
+impl View<'_, TitleBar, UIEvent> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -76,7 +83,7 @@ impl View<'_, TitleBar, Event> {
     }
 }
 
-impl ViewTrait<Event> for View<'_, TitleBar, Event> {
+impl ViewTrait<UIEvent> for View<'_, TitleBar, UIEvent> {
     fn redraw(&mut self) {
         self.save_cursor();
 
@@ -101,9 +108,9 @@ impl ViewTrait<Event> for View<'_, TitleBar, Event> {
         while let Err(_) = self.screen.borrow_mut().flush() {};
     }
 
-    fn event(&mut self, event: &mut Event) {
+    fn event(&mut self, event: &mut UIEvent) {
         match event {
-            Event::ChangeWindow(name) => {
+            UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_name(name);
             },
             _ => {},
@@ -118,7 +125,7 @@ struct WinBar {
     highlighted: Vec<String>,
 }
 
-impl View<'_, WinBar, Event> {
+impl View<'_, WinBar, UIEvent> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -164,7 +171,7 @@ impl View<'_, WinBar, Event> {
     }
 }
 
-impl ViewTrait<Event> for View<'_, WinBar, Event> {
+impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
     fn redraw(&mut self) {
         self.save_cursor();
 
@@ -225,19 +232,19 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
         while let Err(_) = self.screen.borrow_mut().flush() {};
     }
 
-    fn event(&mut self, event: &mut Event) {
+    fn event(&mut self, event: &mut UIEvent) {
         match event {
-            Event::ChangeWindow(name) => {
+            UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_current_window(name);
             },
-            Event::AddWindow(name, _) => {
+            UIEvent::AddWindow(name, _) => {
                 self.add_window(name);
             },
-            Event::Connected(jid) => {
+            UIEvent::Core(Event::Connected(jid)) => {
                 self.content.connection = Some(jid.to_string());
                 self.redraw();
             },
-            Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
+            UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Chat(message)))) => {
                 let mut highlighted = None;
                 for window in &self.content.windows {
                     if &message.from.to_string() == window && Some(window) != self.content.current_window.as_ref() {
@@ -249,7 +256,7 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
                     self.redraw();
                 }
             },
-            Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
+            UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Groupchat(message)))) => {
                 let mut highlighted = None;
                 for window in &self.content.windows {
                     if &message.from.to_string() == window && Some(window) != self.content.current_window.as_ref() {
@@ -371,82 +378,81 @@ pub struct UIPlugin {
     current_window: Option<String>,
     unread_windows: Vec<String>,
     conversations: HashMap<String, Conversation>,
-    root: Box<dyn ViewTrait<Event>>,
+    root: Box<dyn ViewTrait<UIEvent>>,
     password_command: Option<Command>,
-    running: Rc<AtomicBool>,
 }
 
 impl UIPlugin {
     pub fn event_stream(&self) -> EventStream {
-        EventStream::new(Rc::clone(&self.running))
+        EventStream::new()
     }
 
     fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
         let jid = conversation.jid.clone();
         match conversation.kind {
             ConversationKind::Chat => {
-                let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(move |view, event| {
+                let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone()).with_event(move |view, event| {
                     match event {
-                        Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
+                        UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Chat(message)))) => {
                             // TODO check to == us
                             if message.from == jid {
                                 view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())));
                                 view.bell();
                             }
                         },
-                        Event::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
+                        UIEvent::Core(Event::Message(Message::Outgoing(XmppMessage::Chat(message)))) => {
                             // TODO check from == us
                             if message.to == jid {
                                 view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())));
                             }
                         },
-                        Event::Key(Key::PageUp) => {
+                        UIEvent::Core(Event::Key(Key::PageUp)) => {
                             //aparte.schedule(Event::LoadHistory(jid.clone()));
                             view.page_up();
                         },
-                        Event::Key(Key::PageDown) => view.page_down(),
+                        UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
                         _ => {},
                     }
                 });
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut Event::AddWindow(conversation.jid.to_string(), Some(Box::new(chat))));
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(Box::new(chat))));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             },
             ConversationKind::Group => {
-                let mut layout = View::<LinearLayout::<Event>, Event>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+                let mut layout = View::<LinearLayout::<UIEvent>, UIEvent>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
                     for child in layout.content.children.iter_mut() {
                         child.event(event);
                     }
                 });
 
                 let chat_jid = jid.clone();
-                let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(move |view, event| {
+                let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone()).with_event(move |view, event| {
                     match event {
-                        Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
+                        UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Groupchat(message)))) => {
                             // TODO check to == us
                             if message.from == chat_jid {
                                 view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())));
                                 view.bell();
                             }
                         },
-                        Event::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
+                        UIEvent::Core(Event::Message(Message::Outgoing(XmppMessage::Groupchat(message)))) => {
                             // TODO check from == us
                             if message.to == chat_jid {
                                 view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())));
                             }
                         },
-                        Event::Key(Key::PageUp) => view.page_up(),
-                        Event::Key(Key::PageDown) => view.page_down(),
+                        UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
+                        UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
                         _ => {},
                     }
                 });
                 layout.push(chat);
 
                 let roster_jid = jid.clone();
-                let roster = View::<ListView<conversation::Role, conversation::Occupant>, Event>::new(self.screen.clone()).with_none_group().with_event(move |view, event| {
+                let roster = View::<ListView<conversation::Role, conversation::Occupant>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(move |view, event| {
                     match event {
-                        Event::Occupant{conversation, occupant} => {
+                        UIEvent::Core(Event::Occupant{conversation, occupant}) => {
                             if roster_jid == *conversation {
                                 view.insert(occupant.clone(), Some(occupant.role));
                             }
@@ -457,14 +463,14 @@ impl UIPlugin {
                 layout.push(roster);
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut Event::AddWindow(conversation.jid.to_string(), Some(Box::new(layout))));
+                self.root.event(&mut UIEvent::AddWindow(conversation.jid.to_string(), Some(Box::new(layout))));
                 self.conversations.insert(conversation.jid.to_string(), conversation);
             }
         }
     }
 
     pub fn change_window(&mut self, window: &str) {
-        self.root.event(&mut Event::ChangeWindow(window.to_string()));
+        self.root.event(&mut UIEvent::Core(Event::ChangeWindow(window.to_string())));
         self.current_window = Some(window.to_string());
     }
 
@@ -501,7 +507,7 @@ impl Plugin for UIPlugin {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
-        let mut layout = View::<LinearLayout::<Event>, Event>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+        let mut layout = View::<LinearLayout::<UIEvent>, UIEvent>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
             for child in layout.content.children.iter_mut() {
                 child.event(event);
             }
@@ -514,13 +520,13 @@ impl Plugin for UIPlugin {
         });
 
 
-        let title_bar = View::<TitleBar, Event>::new(screen.clone());
-        let frame = View::<FrameLayout::<String, Event>, Event>::new(screen.clone()).with_event(|frame, event| {
+        let title_bar = View::<TitleBar, UIEvent>::new(screen.clone());
+        let frame = View::<FrameLayout::<String, UIEvent>, UIEvent>::new(screen.clone()).with_event(|frame, event| {
             match event {
-                Event::ChangeWindow(name) => {
+                UIEvent::Core(Event::ChangeWindow(name)) => {
                     frame.current(name.to_string());
                 },
-                Event::AddWindow(name, view) => {
+                UIEvent::AddWindow(name, view) => {
                     let view = view.take().unwrap();
                     frame.insert(name.to_string(), view);
                 },
@@ -531,40 +537,40 @@ impl Plugin for UIPlugin {
                 },
             }
         });
-        let win_bar = View::<WinBar, Event>::new(screen.clone());
-        let input = View::<Input, Event>::new(screen.clone()).with_event(|input, event| {
+        let win_bar = View::<WinBar, UIEvent>::new(screen.clone());
+        let input = View::<Input, UIEvent>::new(screen.clone()).with_event(|input, event| {
             match event {
-                Event::Key(Key::Char(c)) => input.key(*c),
-                Event::Key(Key::Backspace) => input.backspace(),
-                Event::Key(Key::Delete) => input.delete(),
-                Event::Key(Key::Home) => input.home(),
-                Event::Key(Key::End) => input.end(),
-                Event::Key(Key::Up) => input.previous(),
-                Event::Key(Key::Down) => input.next(),
-                Event::Key(Key::Left) => input.left(),
-                Event::Key(Key::Right) => input.right(),
-                Event::Key(Key::Ctrl('a')) => input.home(),
-                Event::Key(Key::Ctrl('b')) => input.left(),
-                Event::Key(Key::Ctrl('e')) => input.end(),
-                Event::Key(Key::Ctrl('f')) => input.right(),
-                Event::Key(Key::Ctrl('h')) => input.backspace(),
-                Event::Key(Key::Ctrl('w')) => input.backward_delete_word(),
-                Event::Key(Key::Ctrl('u')) => input.delete_from_cursor_to_start(),
-                Event::Key(Key::Ctrl('k')) => input.delete_from_cursor_to_end(),
-                Event::Validate(result) => {
+                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
+                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
+                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
+                UIEvent::Core(Event::Key(Key::End)) => input.end(),
+                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
+                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
+                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
+                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
+                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
+                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
+                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
+                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
+                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
+                UIEvent::Validate(result) => {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
                 },
-                Event::GetInput(result) => {
+                UIEvent::GetInput(result) => {
                     let mut result = result.borrow_mut();
                     result.replace((input.content.buf.clone(), input.content.cursor, input.content.password));
                 },
-                Event::Completed(raw_buf, cursor) => {
+                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
                     input.content.buf = raw_buf.clone();
                     input.content.cursor = cursor.clone();
                     input.redraw();
                 },
-                Event::ReadPassword(_) => input.password(),
+                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 _ => {}
             }
         });
@@ -582,7 +588,6 @@ impl Plugin for UIPlugin {
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
-            running: Rc::new(AtomicBool::new(true)),
         }
     }
 
@@ -597,24 +602,24 @@ impl Plugin for UIPlugin {
         self.root.layout(1, 1);
         self.root.redraw();
 
-        let mut console = View::<LinearLayout::<Event>, Event>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+        let mut console = View::<LinearLayout::<UIEvent>, UIEvent>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
             for child in layout.content.children.iter_mut() {
                 child.event(event);
             }
         });
-        console.push(View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(|view, event| {
+        console.push(View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone()).with_event(|view, event| {
             match event {
-                Event::Message(Message::Log(message)) => {
+                UIEvent::Core(Event::Message(Message::Log(message))) => {
                     view.recv_message(&Message::Log(message.clone()));
                 },
-                Event::Key(Key::PageUp) => view.page_up(),
-                Event::Key(Key::PageDown) => view.page_down(),
+                UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
+                UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
                 _ => {},
             }
         }));
-        let roster = View::<ListView<contact::Group, contact::Contact>, Event>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+        let roster = View::<ListView<contact::Group, contact::Contact>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
-                Event::Contact(contact) | Event::ContactUpdate(contact) => {
+                UIEvent::Core(Event::Contact(contact)) | UIEvent::Core(Event::ContactUpdate(contact)) => {
                     if contact.groups.len() > 0 {
                         for group in &contact.groups {
                             view.insert(contact.clone(), Some(group.clone()));
@@ -629,7 +634,7 @@ impl Plugin for UIPlugin {
         console.push(roster);
 
         self.windows.push("console".to_string());
-        self.root.event(&mut Event::AddWindow("console".to_string(), Some(Box::new(console))));
+        self.root.event(&mut UIEvent::AddWindow("console".to_string(), Some(Box::new(console))));
         self.change_window("console");
 
         Ok(())
@@ -639,10 +644,10 @@ impl Plugin for UIPlugin {
         match event {
             Event::ReadPassword(command) => {
                 self.password_command = Some(command.clone());
-                self.root.event(&mut Event::ReadPassword(command.clone()));
+                self.root.event(&mut UIEvent::Core(Event::ReadPassword(command.clone())));
             },
             Event::Connected(jid) => {
-                self.root.event(&mut Event::Connected(jid.clone()));
+                self.root.event(&mut UIEvent::Core(Event::Connected(jid.clone())));
             },
             Event::Message(message) => {
                 match message {
@@ -705,7 +710,7 @@ impl Plugin for UIPlugin {
                     Message::Log(_message) => {}
                 };
 
-                self.root.event(&mut Event::Message(message.clone()));
+                self.root.event(&mut UIEvent::Core(Event::Message(message.clone())));
             },
             Event::Chat(jid) => {
                 let win_name = jid.to_string();
@@ -736,27 +741,27 @@ impl Plugin for UIPlugin {
                 }
             },
             Event::Contact(contact) => {
-                self.root.event(&mut Event::Contact(contact.clone()));
+                self.root.event(&mut UIEvent::Core(Event::Contact(contact.clone())));
             },
             Event::ContactUpdate(contact) => {
-                self.root.event(&mut Event::ContactUpdate(contact.clone()));
+                self.root.event(&mut UIEvent::Core(Event::ContactUpdate(contact.clone())));
             },
             Event::Occupant{conversation, occupant} => {
-                self.root.event(&mut Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()});
+                self.root.event(&mut UIEvent::Core(Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()}));
             },
-            //Event::Signal(signal_hook::SIGWINCH) => {
-            //    let (width, height) = termion::terminal_size().unwrap();
-            //    self.root.measure(Some(width), Some(height));
-            //    self.root.layout(1, 1);
-            //    self.root.redraw();
-            //},
+            Event::WindowChange => {
+                let (width, height) = termion::terminal_size().unwrap();
+                self.root.measure(Some(width), Some(height));
+                self.root.layout(1, 1);
+                self.root.redraw();
+            },
             Event::Key(key) => {
                 match key {
                     Key::Char('\t') => {
                         let result = Rc::new(RefCell::new(None));
 
                         let (raw_buf, cursor, password) = {
-                            self.root.event(&mut Event::GetInput(Rc::clone(&result)));
+                            self.root.event(&mut UIEvent::GetInput(Rc::clone(&result)));
 
                             let result = result.borrow_mut();
                             result.as_ref().unwrap().clone()
@@ -771,7 +776,7 @@ impl Plugin for UIPlugin {
                     Key::Char('\n') => {
                         let result = Rc::new(RefCell::new(None));
                         // TODO avoid direct send to root, should go back to main event loop
-                        self.root.event(&mut Event::Validate(Rc::clone(&result)));
+                        self.root.event(&mut UIEvent::Validate(Rc::clone(&result)));
 
                         let result = result.borrow_mut();
                         let (raw_buf, password) = result.as_ref().unwrap();
@@ -822,15 +827,12 @@ impl Plugin for UIPlugin {
                     },
                     _ => {
                         aparte.schedule(Event::ResetCompletion);
-                        self.root.event(&mut Event::Key(key.clone()));
+                        self.root.event(&mut UIEvent::Core(Event::Key(key.clone())));
                     }
                 }
             },
-            Event::Quit => {
-                self.running.swap(false, Ordering::Relaxed);
-            },
             Event::Completed(raw_buf, cursor) => {
-                self.root.event(&mut Event::Completed(raw_buf.clone(), cursor.clone()));
+                self.root.event(&mut UIEvent::Core(Event::Completed(raw_buf.clone(), cursor.clone())));
             },
             _ => {},
         }
@@ -847,23 +849,21 @@ pub struct EventStream {
     inner: Stdin,
     buffer: BytesMut,
     queue: VecDeque<Result<Event, IoError>>,
-    running: Rc<AtomicBool>,
 }
 
 impl EventStream {
-    pub fn new(running: Rc<AtomicBool>) -> Self {
+    pub fn new() -> Self {
         Self {
             inner: stdin(),
             buffer: BytesMut::with_capacity(1024),
             queue: VecDeque::new(),
-            running: running,
         }
     }
 
     pub async fn read_event(&mut self) -> Result<Event, IoError> {
-        while self.running.load(Ordering::Relaxed) {
+        loop {
             if 0 == self.inner.read_buf(&mut self.buffer).await? {
-                return Err(IoError::new(ErrorKind::BrokenPipe, "eof"));
+                return Err(IoError::new(ErrorKind::BrokenPipe, "EOF"));
             }
 
             let mut keys = self.buffer.keys();
@@ -915,7 +915,5 @@ impl EventStream {
                 None => {} // Need more input
             }
         }
-
-        return Err(IoError::new(ErrorKind::BrokenPipe, "quit"));
     }
 }
