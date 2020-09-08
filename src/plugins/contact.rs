@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
-use std::rc::Rc;
 use std::collections::HashMap;
 use uuid::Uuid;
 use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
@@ -54,11 +53,11 @@ impl Plugin for ContactPlugin {
         }
     }
 
-    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
+    fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(_jid) => aparte.send(self.request()),
             Event::Iq(iq) => {
@@ -68,7 +67,7 @@ impl Plugin for ContactPlugin {
                             for item in roster.items {
                                 let contact: contact::Contact = item.clone().into();
                                 self.contacts.insert(contact.jid.clone(), contact.clone());
-                                Rc::clone(&aparte).event(Event::Contact(contact.clone()));
+                                aparte.schedule(Event::Contact(contact.clone()));
                             }
                         }
                     }
@@ -88,7 +87,7 @@ impl Plugin for ContactPlugin {
                             Some(presence::Show::Xa) => contact::Presence::Xa,
                             None => contact::Presence::Available,
                         };
-                        Rc::clone(&aparte).event(Event::ContactUpdate(contact.clone()));
+                        aparte.schedule(Event::ContactUpdate(contact.clone()));
                     }
                 }
             },

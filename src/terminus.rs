@@ -1124,6 +1124,7 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         self
     }
 
+    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn add_group(&mut self, group: G) {
         if let Entry::Vacant(vacant) = self.content.items.entry(Some(group)) {
             vacant.insert(HashSet::new());

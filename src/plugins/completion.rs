@@ -13,9 +13,9 @@ pub struct CompletionPlugin {
 }
 
 impl CompletionPlugin {
-    pub fn autocomplete(&mut self, aparte: Rc<Aparte>, raw_buf: String, cursor: usize) {
+    pub fn autocomplete(&mut self, aparte: &mut Aparte, raw_buf: String, cursor: usize) {
         if self.completions.is_none() {
-            self.build_completions(Rc::clone(&aparte), raw_buf.clone(), cursor);
+            self.build_completions(aparte, raw_buf.clone(), cursor);
         }
 
         if let Some(completions) = &self.completions {
@@ -36,22 +36,23 @@ impl CompletionPlugin {
                 self.current_completion += 1;
                 self.current_completion %= completions.len();
 
-                Rc::clone(&aparte).event(Event::Completed(completed_buf.clone(), completed_buf.len()));
+                aparte.schedule(Event::Completed(completed_buf.clone(), completed_buf.len()));
             }
         }
     }
 
-    pub fn build_completions(&mut self, aparte: Rc<Aparte>, raw_buf: String, cursor: usize) {
+    pub fn build_completions(&mut self, aparte: &mut Aparte, raw_buf: String, cursor: usize) {
         if raw_buf.starts_with("/") {
             let mut completions = Vec::new();
             if let Ok(command) = Command::parse_with_cursor(&raw_buf, cursor) {
                 if command.cursor == 0 {
-                    completions = Rc::clone(&aparte).commands.borrow().iter().map(|c| c.0.to_string()).collect()
+                    completions = aparte.command_parsers.iter().map(|c| c.0.to_string()).collect()
                 } else {
-                    if let Some(parser) = Rc::clone(&aparte).commands.borrow().get(&command.args[0]) {
+                    let command_parsers = Rc::clone(&aparte.command_parsers);
+                    if let Some(parser) = command_parsers.get(&command.args[0]) {
                         if command.cursor - 1 < parser.autocompletions.len() {
                             if let Some(completion) = &parser.autocompletions[command.cursor - 1] {
-                                completions = completion(Rc::clone(&aparte), command.clone())
+                                completions = completion(aparte, command.clone())
                             }
                         }
                     }
@@ -87,11 +88,11 @@ impl Plugin for CompletionPlugin {
         }
     }
 
-    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
+    fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::AutoComplete(raw_buf, cursor) => self.autocomplete(aparte, raw_buf.clone(), cursor.clone()),
             Event::ResetCompletion => self.reset_completion(),

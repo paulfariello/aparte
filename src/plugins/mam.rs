@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
-use std::rc::Rc;
 use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::Jid;
@@ -57,11 +56,11 @@ impl Plugin for MamPlugin {
         MamPlugin { }
     }
 
-    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
+    fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Join(jid) => aparte.send(self.query(Jid::Bare(jid.clone().into()))),
             Event::Chat(jid) => aparte.send(self.query(jid.clone().into())),

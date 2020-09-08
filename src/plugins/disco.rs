@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
-use std::rc::Rc;
 
 use crate::core::{Plugin, Aparte, Event};
 
@@ -25,11 +24,11 @@ impl<'a> Plugin for Disco<'a> {
         Disco { features: Vec::new() }
     }
 
-    fn init(&mut self, _aparte: &Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
 
-    fn on_event(&mut self, _aparte: Rc<Aparte>, _event: &Event) {
+    fn on_event(&mut self, _aparte: &mut Aparte, _event: &Event) {
     }
 }
 

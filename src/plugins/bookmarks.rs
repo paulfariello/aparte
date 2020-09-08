@@ -4,7 +4,6 @@
 use std::fmt;
 use std::str::FromStr;
 use std::collections::HashMap;
-use std::rc::Rc;
 use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::pubsub::{PubSub, pubsub::Items, NodeName};
@@ -31,11 +30,11 @@ Examples:
     /bookmark add aparte aparte@conference.fariello.eu/mynick autojoin=on
 "#,
 {
-    name: String,
-    conference: String,
-    autojoin: Option<String>
+    _name: String,
+    _conference: String,
+    _autojoin: Option<String>
 },
-|aparte, _command| {
+|_aparte, _command| {
     // TODO
     Ok(())
 });
@@ -52,9 +51,9 @@ Examples:
     /bookmark del aparte
 "#,
 {
-    name: String
+    _name: String
 },
-|aparte, _command| {
+|_aparte, _command| {
     Ok(())
 });
 
@@ -74,9 +73,9 @@ Examples:
     /bookmark edit aparte aparte@conference.fariello.eu autojoin=off
 "#,
 {
-    name: String
+    _name: String
 },
-|aparte, _command| {
+|_aparte, _command| {
     Ok(())
 });
 
@@ -85,7 +84,9 @@ r#"/bookmark add|del|edit"#,
 {
     action: Command = {
         children: {
-            "add": bookmark_add
+            "add": bookmark_add,
+            "del": bookmark_del,
+            "edit": bookmark_edit,
         }
     },
 });
@@ -113,13 +114,13 @@ impl Plugin for BookmarksPlugin {
         BookmarksPlugin { }
     }
 
-    fn init(&mut self, aparte: &Aparte) -> Result<(), ()> {
-        aparte.add_command(bookmark());
+    fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
+        aparte.add_command(bookmark::new());
         let mut disco = aparte.get_plugin_mut::<disco::Disco>().unwrap();
         disco.add_feature(ns::BOOKMARKS2)
     }
 
-    fn on_event(&mut self, aparte: Rc<Aparte>, event: &Event) {
+    fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(_jid) => {
                 aparte.send(self.retreive())
