@@ -14,19 +14,16 @@ no-cursor-save = []
 log = "0.4"
 flexi_logger = "0.15"
 futures = "0.1"
-tokio = "0.1"
-tokio-xmpp = "1.0"
-xmpp-parsers = "0.16"
+tokio = { version = "0.2", features = ["full"] }
+tokio-xmpp = {path = "../xmpp-rs/tokio-xmpp"}
+xmpp-parsers = {path = "../xmpp-rs/xmpp-parsers"}
 rpassword = "3.0"
 uuid = { version = "0.7", features = ["v4"]  }
 termion = "1.5"
 derive-error = "0.0.4"
-bytes = "0.4"
-tokio-codec = "0.1"
-tokio-file-unix = "0.5"
+bytes = "^0.5"
 dirs = "2.0"
 chrono = "0.4"
-signal-hook = { version = "0.1", features = ["tokio-support"] }
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "^1.0", features = ["derive"] }
 toml = "0.5"
 unicode-segmentation = "1.6.0"

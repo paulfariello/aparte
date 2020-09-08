@@ -18,8 +18,8 @@ use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
-use tokio::codec::FramedRead;
-use tokio_codec::{Decoder};
+//use tokio_codec::{Decoder, FramedRead};
+use tokio::io::{stdin, Stdin, AsyncReadExt};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -29,7 +29,6 @@ use crate::message::{Message, XmppMessage};
 use crate::command::{Command};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
 
-pub type EventStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 #[derive(Debug, Clone)]
@@ -379,11 +378,7 @@ pub struct UIPlugin {
 
 impl UIPlugin {
     pub fn event_stream(&self) -> EventStream {
-        let file = tokio_file_unix::raw_stdin().unwrap();
-        let file = tokio_file_unix::File::new_nb(file).unwrap();
-        let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
-
-        FramedRead::new(file, KeyCodec::new(Rc::clone(&self.running)))
+        EventStream::new(Rc::clone(&self.running))
     }
 
     fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
@@ -749,12 +744,12 @@ impl Plugin for UIPlugin {
             Event::Occupant{conversation, occupant} => {
                 self.root.event(&mut Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()});
             },
-            Event::Signal(signal_hook::SIGWINCH) => {
-                let (width, height) = termion::terminal_size().unwrap();
-                self.root.measure(Some(width), Some(height));
-                self.root.layout(1, 1);
-                self.root.redraw();
-            },
+            //Event::Signal(signal_hook::SIGWINCH) => {
+            //    let (width, height) = termion::terminal_size().unwrap();
+            //    self.root.measure(Some(width), Some(height));
+            //    self.root.layout(1, 1);
+            //    self.root.redraw();
+            //},
             Event::Key(key) => {
                 match key {
                     Key::Char('\t') => {
@@ -848,27 +843,30 @@ impl fmt::Display for UIPlugin {
     }
 }
 
-pub struct KeyCodec {
+pub struct EventStream {
+    inner: Stdin,
+    buffer: BytesMut,
     queue: VecDeque<Result<Event, IoError>>,
     running: Rc<AtomicBool>,
 }
 
-impl KeyCodec {
+impl EventStream {
     pub fn new(running: Rc<AtomicBool>) -> Self {
         Self {
+            inner: stdin(),
+            buffer: BytesMut::with_capacity(1024),
             queue: VecDeque::new(),
             running: running,
         }
     }
-}
 
-impl Decoder for KeyCodec {
-    type Item = Event;
-    type Error = IoError;
+    pub async fn read_event(&mut self) -> Result<Event, IoError> {
+        while self.running.load(Ordering::Relaxed) {
+            if 0 == self.inner.read_buf(&mut self.buffer).await? {
+                return Err(IoError::new(ErrorKind::BrokenPipe, "eof"));
+            }
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if self.running.load(Ordering::Relaxed) {
-            let mut keys = buf.keys();
+            let mut keys = self.buffer.keys();
             while let Some(key) = keys.next() {
                 match key {
                     Ok(Key::Alt('\x1b')) => {
@@ -909,15 +907,15 @@ impl Decoder for KeyCodec {
                 };
             }
 
-            buf.clear();
-        } else {
-            self.queue.push_back(Err(IoError::new(ErrorKind::BrokenPipe, "quit")));
+            self.buffer.clear();
+
+            match self.queue.pop_front() {
+                Some(Ok(command)) => return Ok(command),
+                Some(Err(err)) => return Err(err),
+                None => {} // Need more input
+            }
         }
 
-        match self.queue.pop_front() {
-            Some(Ok(command)) => Ok(Some(command)),
-            Some(Err(err)) => Err(err),
-            None => Ok(None),
-        }
+        return Err(IoError::new(ErrorKind::BrokenPipe, "quit"));
     }
 }

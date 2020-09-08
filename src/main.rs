@@ -15,9 +15,7 @@ extern crate xmpp_parsers;
 extern crate rpassword;
 extern crate futures;
 extern crate derive_error;
-extern crate tokio_file_unix;
 extern crate dirs;
-extern crate signal_hook;
 
 mod core;
 mod config;
