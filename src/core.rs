@@ -4,6 +4,7 @@
 use chrono::Utc;
 use core::fmt::Debug;
 use futures::stream::StreamExt;
+use futures::sink::SinkExt;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::{HashMap, VecDeque};
@@ -18,9 +19,10 @@ use std::sync::{Arc, Mutex};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::task;
+use tokio::io as TokioIo;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
-use tokio_xmpp::{AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent};
+use tokio_xmpp::{AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket};
 use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
@@ -572,12 +574,11 @@ impl Aparte {
         self.add_connection(jid.clone(), connection_channel);
 
         // XXX could avoid Arc<Mutex<>> if client was exposing ::split method
-        let client = Arc::new(TokioMutex::new(client));
-        let client_for_send = client.clone();
+        let (mut writer, mut reader) = client.split();
         // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
             while let Some(element) = rx.recv().await {
-                client_for_send.lock().await.send_stanza(element).await;
+                writer.send(XmppPacket::Stanza(element)).await;
             }
         });
 
@@ -586,9 +587,8 @@ impl Aparte {
             None => unreachable!(),
         };
 
-        let client_for_recv = client.clone();
         task::spawn_local(async move {
-            while let Some(event) = client_for_recv.lock().await.next().await {
+            while let Some(event) = reader.next().await {
                 debug!("XMPP Event: {:?}", event);
                 match event {
                     XmppEvent::Disconnected(XmppError::Auth(_)) => return, // TODO event
