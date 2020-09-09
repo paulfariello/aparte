@@ -3,11 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use chrono::Utc;
 use core::fmt::Debug;
-use futures::unsync::mpsc::UnboundedSender;
-use futures::{future, Future, Sink, Stream};
+use futures::stream::StreamExt;
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::fmt;
 use std::fs::OpenOptions;
@@ -17,11 +16,11 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use termion::event::Key;
-use tokio::runtime::{Runtime as TokioRuntime, Handle as TokioHandle};
-use tokio::io;
+use tokio::runtime::Runtime as TokioRuntime;
+use tokio::task;
 use tokio::signal::unix;
-use tokio::sync::mpsc;
-use tokio_xmpp::{AsyncClient as Client, Error as XmppError, Packet};
+use tokio::sync::{mpsc, Mutex as TokioMutex};
+use tokio_xmpp::{AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent};
 use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
@@ -42,9 +41,10 @@ use crate::{contact, conversation};
 pub enum Event {
     Start,
     Connect(FullJid, Password<String>),
-    Connected(FullJid),
+    Connected(Jid),
     #[allow(dead_code)]
     Disconnected(FullJid),
+    Stanza(FullJid, Element),
     Command(Command),
     CommandError(String),
     SendMessage(Message),
@@ -116,7 +116,7 @@ impl<T: FromStr> FromStr for Password<T> {
 }
 
 pub struct Connection {
-    pub sink: UnboundedSender<Packet>,
+    pub sink: mpsc::Sender<Element>,
     pub account: FullJid,
 }
 
@@ -126,6 +126,8 @@ pub struct Aparte {
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
     event_queue: Vec<Event>,
+    send_queue: VecDeque<Element>,
+    event_channel: Option<mpsc::Sender<Event>>,
     pub config: Config,
 
 }
@@ -373,6 +375,8 @@ impl Aparte {
             connections: RefCell::new(HashMap::new()),
             current_connection: RefCell::new(None),
             event_queue: Vec::new(),
+            send_queue: VecDeque::new(),
+            event_channel: None,
             config: config,
         }
     }
@@ -421,7 +425,7 @@ impl Aparte {
         Some(RefMut::map(any_plugin, |p| p.as_any_mut().downcast_mut::<T>().unwrap()))
     }
 
-    pub fn add_connection(&self, account: FullJid, sink: UnboundedSender<Packet>) {
+    pub fn add_connection(&self, account: FullJid, sink: mpsc::Sender<Element>) {
         let connection = Connection {
             account: account,
             sink: sink,
@@ -474,16 +478,18 @@ impl Aparte {
 "#.to_string());
         self.log(format!("Version: {}", VERSION));
 
-        let mut rt = TokioRuntime::new().unwrap();
         let mut event_stream = {
             let ui = self.get_plugin::<plugins::ui::UIPlugin>().unwrap();
             ui.event_stream()
         };
 
-        let aparte = Arc::new(Mutex::new(self));
         let (mut tx, mut rx) = mpsc::channel(32);
-
         let mut tx_for_signal = tx.clone();
+        let mut tx_for_event = tx.clone();
+        self.event_channel = Some(tx);
+
+        let mut rt = TokioRuntime::new().unwrap();
+
         rt.spawn(async move {
             let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
             loop {
@@ -492,10 +498,7 @@ impl Aparte {
             }
         });
 
-        Aparte::ex_schedule(aparte.clone(), Event::Start);
-        Aparte::event_loop(aparte.clone()).unwrap();
 
-        let mut tx_for_event = tx.clone();
         rt.spawn(async move {
             loop {
                 match event_stream.read_event().await {
@@ -511,9 +514,10 @@ impl Aparte {
             }
         });
 
-        let aparte_for_event = aparte.clone();
+        let local_set = tokio::task::LocalSet::new();
+        local_set.block_on(&mut rt, async move {
+            self.schedule(Event::Start);
 
-        rt.block_on(async move {
             while let Some(event) = rx.recv().await {
 
                 let quit = match event {
@@ -521,8 +525,8 @@ impl Aparte {
                     _  => false,
                 };
 
-                Aparte::ex_schedule(aparte_for_event.clone(), event);
-                if Aparte::event_loop(aparte_for_event.clone()).is_err() {
+                self.schedule(event);
+                if self.event_loop().await.is_err() {
                     break;
                 }
             }
@@ -540,115 +544,111 @@ impl Aparte {
         }
     }
 
-    pub fn send(&self, element: Element) {
-        let mut raw = Vec::<u8>::new();
-        element.write_to(&mut raw).unwrap();
-        debug!("SEND: {}", String::from_utf8(raw).unwrap());
-        let packet = Packet::Stanza(element);
-        // TODO use correct connection
-        let mut connections = self.connections.borrow_mut();
-        let current_connection = connections.iter_mut().next().unwrap().1;
-        let mut sink = &current_connection.sink;
-        if let Err(e) = sink.start_send(packet) {
-            warn!("Cannot send packet: {}", e);
+    pub fn send(&mut self, stanza: Element) {
+        self.send_queue.push_back(stanza);
+    }
+
+    async fn send_loop(&mut self) {
+        for stanza in self.send_queue.drain(..) {
+            let mut raw = Vec::<u8>::new();
+            stanza.write_to(&mut raw).unwrap();
+            debug!("SEND: {}", String::from_utf8(raw).unwrap());
+            // TODO use correct connection
+            let mut connections = self.connections.borrow_mut();
+            let current_connection = connections.iter_mut().next().unwrap().1;
+            if let Err(e) = current_connection.sink.send(stanza).await {
+                warn!("Cannot send stanza: {}", e);
+            }
         }
     }
 
-    pub fn connect(this: Arc<Mutex<Self>>, jid: FullJid, password: Password<String>) {
-        //let mut aparte = this.lock().unwrap();
-        //aparte.log(format!("Connecting as {}", jid));
-        //let client = Client::new(&jid.to_string(), &password.0).unwrap();
+    pub async fn connect(&mut self, jid: FullJid, password: Password<String>) {
+        self.log(format!("Connecting as {}", jid));
+        let mut client = TokioXmppClient::new(&jid.to_string(), &password.0).unwrap();
+        client.set_reconnect(true);
 
-        //let (sink, stream) = io::split(client);
-        //let (tx, rx) = futures::unsync::mpsc::unbounded();
+        let (mut connection_channel, mut rx) = mpsc::channel(32);
 
-        //aparte.add_connection(jid.clone(), tx);
+        self.add_connection(jid.clone(), connection_channel);
 
-        //TokioHandle::current().spawn(
-        //    rx.forward(
-        //        sink.sink_map_err(|_| panic!("Pipe"))
-        //        ).map(|(rx, mut sink)| {
-        //        drop(rx);
-        //        let _ = sink.close();
-        //    }).map_err(|e| {
-        //            panic!("Send error: {:?}", e);
-        //        })
-        //    );
+        // XXX could avoid Arc<Mutex<>> if client was exposing ::split method
+        let client = Arc::new(TokioMutex::new(client));
+        let client_for_send = client.clone();
+        // XXX could use self.rt.spawn if client was impl Send
+        task::spawn_local(async move {
+            while let Some(element) = rx.recv().await {
+                client_for_send.lock().await.send_stanza(element).await;
+            }
+        });
 
-        //let aparte_for_event = this.clone();
-        //let client = stream.for_each(move |event| {
-        //    debug!("XMPP Event: {:?}", event);
-        //    if event.is_online() {
-        //        Aparte::ex_log(aparte_for_event.clone(), format!("Connected as {}", jid));
-        //        Aparte::ex_schedule(aparte_for_event.clone(), Event::Connected(jid.clone()));
+        let mut event_channel = match &self.event_channel {
+            Some(event_channel) => event_channel.clone(),
+            None => unreachable!(),
+        };
 
-        //        {
-        //            let aparte = aparte_for_event.lock().unwrap();
-        //            let mut presence = Presence::new(PresenceType::None);
-        //            presence.show = Some(PresenceShow::Chat);
-
-        //            aparte.send(presence.into());
-        //        }
-        //    } else if let Some(stanza) = event.into_stanza() {
-        //        debug!("RECV: {}", String::from(&stanza));
-
-        //        let mut aparte = aparte_for_event.lock().unwrap();
-        //        aparte.handle_stanza(stanza);
-        //    }
-
-        //    Aparte::event_loop(aparte_for_event.clone());
-        //    future::ok(())
-        //});
-
-        //let aparte_for_error = this.clone();
-        //let client = client.map_err(move |error| {
-        //    match error {
-        //        XmppError::Auth(auth) => {
-        //            Aparte::ex_log(aparte_for_error.clone(), format!("Authentication failed {}", auth));
-        //        },
-        //        error => {
-        //            Aparte::ex_log(aparte_for_error.clone(), format!("Connection error {:?}", error));
-        //        },
-        //    }
-        //    Aparte::event_loop(aparte_for_error.clone());
-        //});
-
-        //TokioHandle::current().spawn(client);
+        let client_for_recv = client.clone();
+        task::spawn_local(async move {
+            while let Some(event) = client_for_recv.lock().await.next().await {
+                debug!("XMPP Event: {:?}", event);
+                match event {
+                    XmppEvent::Disconnected(XmppError::Auth(_)) => return, // TODO event
+                    XmppEvent::Online{bound_jid: jid, resumed: true} => {
+                        debug!("Reconnected to {}", jid);
+                    },
+                    XmppEvent::Online{bound_jid: jid, resumed: false} => {
+                        event_channel.send(Event::Connected(jid.clone())).await;
+                    }
+                    XmppEvent::Stanza(stanza) => {
+                        debug!("RECV: {}", String::from(&stanza));
+                        event_channel.send(Event::Stanza(jid.clone(), stanza)).await;
+                    },
+                    _ => {},
+                }
+            }
+        });
     }
 
-    pub fn event_loop(this: Arc<Mutex<Self>>) -> Result<(), ()> {
-        while this.lock().unwrap().event_queue.len() > 0 {
-            let event = this.lock().unwrap().event_queue.remove(0);
+    pub async fn event_loop(&mut self) -> Result<(), ()> {
+        while self.event_queue.len() > 0 {
+            let event = self.event_queue.remove(0);
             debug!("Event: {:?}", event);
             {
-                let mut aparte = this.lock().unwrap();
-                let plugins = Rc::clone(&aparte.plugins);
+                let plugins = Rc::clone(&self.plugins);
                 for (_, plugin) in plugins.iter() {
-                    plugin.borrow_mut().as_plugin().on_event(&mut aparte, &event);
+                    plugin.borrow_mut().as_plugin().on_event(self, &event);
                 }
+                self.send_loop().await;
             }
 
             match event {
                 Event::Start => {
-                    let mut aparte = this.lock().unwrap();
-                    aparte.start();
+                    self.start();
                 }
                 Event::Command(command) => {
-                    let mut aparte = this.lock().unwrap();
-                    match aparte.parse_command(command) {
-                        Err(err) => aparte.log(err),
+                    match self.parse_command(command) {
+                        Err(err) => self.log(err),
                         Ok(()) => {},
                     }
                 },
                 Event::SendMessage(message) => {
-                    let mut aparte = this.lock().unwrap();
-                    aparte.schedule(Event::Message(message.clone()));
+                    self.schedule(Event::Message(message.clone()));
                     if let Ok(xmpp_message) = Element::try_from(message) {
-                        aparte.send(xmpp_message);
+                        self.send(xmpp_message);
                     }
                 },
                 Event::Connect(jid, password) => {
-                    Aparte::connect(this.clone(), jid, password);
+                    self.connect(jid, password).await;
+                },
+                Event::Connected(jid) => {
+                    self.log(format!("Connected as {}", jid));
+                    let mut presence = Presence::new(PresenceType::None);
+                    presence.show = Some(PresenceShow::Chat);
+
+                    self.send(presence.into());
+                },
+                Event::Stanza(_jid, stanza) => {
+                    // TODO propagate jid?
+                    self.handle_stanza(stanza);
                 },
                 Event::Quit => {
                     return Err(());
@@ -664,19 +664,10 @@ impl Aparte {
         self.event_queue.push(event);
     }
 
-    fn ex_schedule(this: Arc<Mutex<Self>>, event: Event) {
-        let mut aparte = this.lock().unwrap();
-        aparte.schedule(event);
-    }
-
     pub fn log(&mut self, message: String) {
+        debug!("{}", message);
         let message = Message::log(message);
         self.schedule(Event::Message(message));
-    }
-
-    fn ex_log(this: Arc<Mutex<Self>>, message: String) {
-        let mut aparte = this.lock().unwrap();
-        aparte.log(message);
     }
 
     pub fn handle_stanza(&mut self, stanza: Element) {
