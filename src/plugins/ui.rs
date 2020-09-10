@@ -1,25 +1,28 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use bytes::BytesMut;
+//use tokio_codec::{Decoder, FramedRead};
 use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
+use futures::{Stream};
+use futures::task::{Context, Poll, AtomicWaker};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::{Error as IoError, ErrorKind};
-use std::io::{Write, Stdout};
+use std::io::{Error as IoError};
+use std::io::{Read, Write, Stdout};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc};
+use std::thread;
 use termion::color;
-use termion::event::Key;
-use termion::input::TermRead;
+use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
+use termion::get_tty;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
-//use tokio_codec::{Decoder, FramedRead};
-use tokio::io::{stdin, Stdin, AsyncReadExt};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -845,74 +848,133 @@ impl fmt::Display for UIPlugin {
     }
 }
 
+struct TermionEventStream {
+    channel: mpsc::Receiver<Result<u8, IoError>>,
+    waker: Arc<AtomicWaker>,
+}
+
+impl TermionEventStream {
+    pub fn new() -> Self {
+        let (mut send, mut recv) = mpsc::channel();
+        let waker = Arc::new(AtomicWaker::new());
+
+        let waker_for_tty = waker.clone();
+        thread::spawn(move || for i in get_tty().unwrap().bytes() {
+            waker_for_tty.wake();
+            if send.send(i).is_err() {
+                return;
+            }
+        });
+
+        Self {
+            channel: recv,
+            waker: waker,
+        }
+    }
+}
+
+struct IterWrapper<'a, T> {
+    inner: &'a mut mpsc::Receiver<T>,
+}
+
+impl<'a, T> IterWrapper<'a, T> {
+    fn new(inner: &'a mut mpsc::Receiver<T>) -> Self {
+        Self {
+            inner: inner,
+        }
+    }
+}
+
+impl<'a, T> Iterator for IterWrapper<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.inner.try_recv() {
+            Ok(e) => Some(e),
+            Err(_) => None,
+        }
+    }
+}
+
+impl Stream for TermionEventStream {
+    type Item = TermionEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let byte = match self.channel.try_recv() {
+            Ok(Ok(byte)) => byte,
+            Ok(Err(_)) => return Poll::Ready(None),
+            Err(mpsc::TryRecvError::Empty) => {
+                self.waker.register(cx.waker());
+                return Poll::Pending;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => return Poll::Ready(None),
+        };
+
+        let mut iter = IterWrapper::new(&mut self.channel);
+        if let Ok(event) = termion_parse_event(byte, &mut iter) {
+            Poll::Ready(Some(event))
+        } else {
+            self.waker.register(cx.waker());
+            Poll::Pending
+        }
+    }
+}
+
 pub struct EventStream {
-    inner: Stdin,
-    buffer: BytesMut,
-    queue: VecDeque<Result<Event, IoError>>,
+    inner: TermionEventStream,
+    buf: VecDeque<Event>,
 }
 
 impl EventStream {
     pub fn new() -> Self {
         Self {
-            inner: stdin(),
-            buffer: BytesMut::with_capacity(1024),
-            queue: VecDeque::new(),
+            inner: TermionEventStream::new(),
+            buf: VecDeque::new(),
         }
     }
+}
 
-    pub async fn read_event(&mut self) -> Result<Event, IoError> {
-        loop {
-            if 0 == self.inner.read_buf(&mut self.buffer).await? {
-                return Err(IoError::new(ErrorKind::BrokenPipe, "EOF"));
-            }
+impl Stream for EventStream {
+    type Item = Event;
 
-            let mut keys = self.buffer.keys();
-            while let Some(key) = keys.next() {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(TermionEvent::Key(key))) => {
                 match key {
-                    Ok(Key::Alt('\x1b')) => {
-                        match keys.next() {
-                            Some(Ok(Key::Char('['))) => {
-                                match keys.next() {
-                                    Some(Ok(Key::Char('C'))) => {
-                                        // TODO trigger a real event
-                                        //ui.next_window();
-                                    },
-                                    Some(Ok(Key::Char('D'))) => {
-                                        // TODO trigger a real event
-                                        //ui.prev_window();
-                                    },
-                                    Some(Ok(_)) => {},
-                                    Some(Err(_)) => {},
-                                    None => {},
-                                };
-                            },
-                            Some(Ok(_)) => {},
-                            Some(Err(_)) => {},
-                            None => {},
-                        };
-                    },
-                    Ok(Key::Char(c)) => self.queue.push_back(Ok(Event::Key(Key::Char(c)))),
-                    Ok(Key::Backspace) => self.queue.push_back(Ok(Event::Key(Key::Backspace))),
-                    Ok(Key::Delete) => self.queue.push_back(Ok(Event::Key(Key::Delete))),
-                    Ok(Key::Home) => self.queue.push_back(Ok(Event::Key(Key::Home))),
-                    Ok(Key::End) => self.queue.push_back(Ok(Event::Key(Key::End))),
-                    Ok(Key::Up) => self.queue.push_back(Ok(Event::Key(Key::Up))),
-                    Ok(Key::Down) => self.queue.push_back(Ok(Event::Key(Key::Down))),
-                    Ok(Key::Left) => self.queue.push_back(Ok(Event::Key(Key::Left))),
-                    Ok(Key::Right) => self.queue.push_back(Ok(Event::Key(Key::Right))),
-                    Ok(Key::Ctrl(c)) => self.queue.push_back(Ok(Event::Key(Key::Ctrl(c)))),
-                    Ok(Key::Alt(c)) => self.queue.push_back(Ok(Event::Key(Key::Alt(c)))),
-                    Ok(_) => {},
-                    Err(_) => {},
-                };
-            }
-
-            self.buffer.clear();
-
-            match self.queue.pop_front() {
-                Some(Ok(command)) => return Ok(command),
-                Some(Err(err)) => return Err(err),
-                None => {} // Need more input
+                    //Key::Alt('\x1b') => {
+                    //    match Pin::new(&mut self.inner).poll_next(cx) {
+                    //        Poll::Ready(Some(TermionEvent::Key(Key::Char('[')))) => {
+                    //            match Pin::new(&mut self.inner).poll_next(cx) {
+                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('C')))) => Poll::Pending,
+                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('D')))) => Poll::Pending,
+                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
+                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
+                    //                Poll::Ready(None) => Poll::Pending,
+                    //                Poll::Pending => Poll::Pending,
+                    //            }
+                    //        },
+                    //        _ => Poll::Pending,
+                    //    };
+                    //},
+                    Key::Char(c) => Poll::Ready(Some(Event::Key(Key::Char(c)))),
+                    Key::Backspace => Poll::Ready(Some(Event::Key(Key::Backspace))),
+                    Key::Delete => Poll::Ready(Some(Event::Key(Key::Delete))),
+                    Key::Home => Poll::Ready(Some(Event::Key(Key::Home))),
+                    Key::End => Poll::Ready(Some(Event::Key(Key::End))),
+                    Key::Up => Poll::Ready(Some(Event::Key(Key::Up))),
+                    Key::Down => Poll::Ready(Some(Event::Key(Key::Down))),
+                    Key::Left => Poll::Ready(Some(Event::Key(Key::Left))),
+                    Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
+                    Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
+                    Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
+                    _ => Poll::Pending,
+                }
+            },
+            Poll::Ready(Some(TermionEvent::Mouse(_))) => Poll::Pending,
+            Poll::Ready(Some(TermionEvent::Unsupported(_))) => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => {
+                self.inner.waker.wake();
+                Poll::Pending
             }
         }
     }

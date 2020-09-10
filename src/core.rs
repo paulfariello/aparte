@@ -39,6 +39,14 @@ use crate::plugins;
 use crate::terminus::ViewTrait;
 use crate::{contact, conversation};
 
+const WELCOME: &str = r#"
+▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
+▌▖▌▞▀▖▐ ▞▀▖▞▀▖▛▚▀▖▞▀▖ ▜▀ ▞▀▖ ▙▄▌▛▀▖▝▀▖▙▀▖▜▀ ▞▀▖
+▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
+▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
+"#;
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug)]
 pub enum Event {
     Start,
@@ -470,15 +478,6 @@ impl Aparte {
     }
 
     pub fn run(mut self) {
-        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
-        self.log(r#"
-▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
-▌▖▌▞▀▖▐ ▞▀▖▞▀▖▛▚▀▖▞▀▖ ▜▀ ▞▀▖ ▙▄▌▛▀▖▝▀▖▙▀▖▜▀ ▞▀▖
-▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
-▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
-"#.to_string());
-        self.log(format!("Version: {}", VERSION));
 
         let mut event_stream = {
             let ui = self.get_plugin::<plugins::ui::UIPlugin>().unwrap();
@@ -503,12 +502,11 @@ impl Aparte {
 
         rt.spawn(async move {
             loop {
-                match event_stream.read_event().await {
-                    Ok(event) => {
+                match event_stream.next().await {
+                    Some(event) => {
                         tx_for_event.send(event).await;
                     },
-                    Err(err) => {
-                        error!("Input error: {}", err);
+                    None => {
                         tx_for_event.send(Event::Quit).await;
                         break;
                     }
@@ -518,7 +516,9 @@ impl Aparte {
 
         let local_set = tokio::task::LocalSet::new();
         local_set.block_on(&mut rt, async move {
+            debug!("main loop");
             self.schedule(Event::Start);
+            self.event_loop().await;
 
             while let Some(event) = rx.recv().await {
 
@@ -536,6 +536,9 @@ impl Aparte {
     }
 
     pub fn start(&mut self) {
+        self.log(WELCOME.to_string());
+        self.log(format!("Version: {}", VERSION));
+
         for (_, account) in self.config.accounts.clone() {
             if account.autoconnect {
                 self.schedule(Event::Command(Command {
