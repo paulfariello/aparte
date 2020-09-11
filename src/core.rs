@@ -516,7 +516,6 @@ impl Aparte {
 
         let local_set = tokio::task::LocalSet::new();
         local_set.block_on(&mut rt, async move {
-            debug!("main loop");
             self.schedule(Event::Start);
             self.event_loop().await;
 
@@ -668,7 +667,6 @@ impl Aparte {
     }
 
     pub fn log(&mut self, message: String) {
-        debug!("{}", message);
         let message = Message::log(message);
         self.schedule(Event::Message(message));
     }
