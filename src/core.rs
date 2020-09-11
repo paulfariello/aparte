@@ -15,13 +15,11 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::task;
-use tokio::io as TokioIo;
 use tokio::signal::unix;
-use tokio::sync::{mpsc, Mutex as TokioMutex};
+use tokio::sync::mpsc;
 use tokio_xmpp::{AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket};
 use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
@@ -475,12 +473,12 @@ impl Aparte {
 
     pub fn run(mut self) {
 
-        let mut event_stream = {
+        let mut input_event_stream = {
             let ui = self.get_plugin::<plugins::ui::UIPlugin>().unwrap();
             ui.event_stream()
         };
 
-        let (mut tx, mut rx) = mpsc::channel(32);
+        let (tx, mut rx) = mpsc::channel(32);
         let mut tx_for_signal = tx.clone();
         let mut tx_for_event = tx.clone();
         self.event_channel = Some(tx);
@@ -491,19 +489,27 @@ impl Aparte {
             let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
             loop {
                 sigwinch.recv().await;
-                tx_for_signal.send(Event::WindowChange).await;
+                if let Err(err) = tx_for_signal.send(Event::WindowChange).await {
+                    error!("Cannot send signal to internal channel: {}", err);
+                    break;
+                }
             }
         });
 
 
         rt.spawn(async move {
             loop {
-                match event_stream.next().await {
+                match input_event_stream.next().await {
                     Some(event) => {
-                        tx_for_event.send(event).await;
+                        if let Err(err) = tx_for_event.send(event).await {
+                            error!("Cannot send event to internal channel: {}", err);
+                            break;
+                        }
                     },
                     None => {
-                        tx_for_event.send(Event::Quit).await;
+                        if let Err(err) = tx_for_event.send(Event::Quit).await {
+                            error!("Cannot send Quit event to internal channel: {}", err);
+                        }
                         break;
                     }
                 }
@@ -513,17 +519,15 @@ impl Aparte {
         let local_set = tokio::task::LocalSet::new();
         local_set.block_on(&mut rt, async move {
             self.schedule(Event::Start);
-            self.event_loop().await;
+            if self.event_loop().await.is_err() {
+                // Quit event return err
+                return;
+            }
 
             while let Some(event) = rx.recv().await {
-
-                let quit = match event {
-                    Event::Quit => true,
-                    _  => false,
-                };
-
                 self.schedule(event);
                 if self.event_loop().await.is_err() {
+                    // Quit event return err
                     break;
                 }
             }
@@ -582,7 +586,7 @@ impl Aparte {
 
         client.set_reconnect(true);
 
-        let (mut connection_channel, mut rx) = mpsc::channel(32);
+        let (connection_channel, mut rx) = mpsc::channel(32);
 
         self.add_connection(jid.clone(), connection_channel);
 
@@ -590,7 +594,10 @@ impl Aparte {
         // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
             while let Some(element) = rx.recv().await {
-                writer.send(XmppPacket::Stanza(element)).await;
+                if let Err(err) = writer.send(XmppPacket::Stanza(element)).await {
+                    error!("cannot send Stanza to internal channel: {}", err);
+                    break;
+                }
             }
         });
 
@@ -608,11 +615,17 @@ impl Aparte {
                         debug!("Reconnected to {}", jid);
                     },
                     XmppEvent::Online{bound_jid: jid, resumed: false} => {
-                        event_channel.send(Event::Connected(jid.clone())).await;
+                        if let Err(err) = event_channel.send(Event::Connected(jid.clone())).await {
+                            error!("Cannot send event to internal channel: {}", err);
+                            break;
+                        }
                     }
                     XmppEvent::Stanza(stanza) => {
                         debug!("RECV: {}", String::from(&stanza));
-                        event_channel.send(Event::Stanza(jid.clone(), stanza)).await;
+                        if let Err(err) = event_channel.send(Event::Stanza(jid.clone(), stanza)).await {
+                            error!("Cannot send stanza to internal channel: {}", err);
+                            break;
+                        }
                     },
                     _ => {},
                 }

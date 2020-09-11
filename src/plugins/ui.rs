@@ -7,7 +7,7 @@ use chrono::offset::{TimeZone, Local};
 use futures::{Stream};
 use futures::task::{Context, Poll, AtomicWaker};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{Error as IoError};
@@ -855,7 +855,7 @@ struct TermionEventStream {
 
 impl TermionEventStream {
     pub fn new() -> Self {
-        let (mut send, mut recv) = mpsc::channel();
+        let (send, recv) = mpsc::channel();
         let waker = Arc::new(AtomicWaker::new());
 
         let waker_for_tty = waker.clone();
@@ -921,14 +921,12 @@ impl Stream for TermionEventStream {
 
 pub struct EventStream {
     inner: TermionEventStream,
-    buf: VecDeque<Event>,
 }
 
 impl EventStream {
     pub fn new() -> Self {
         Self {
             inner: TermionEventStream::new(),
-            buf: VecDeque::new(),
         }
     }
 }
