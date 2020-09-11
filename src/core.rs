@@ -36,6 +36,7 @@ use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::message::Message;
 use crate::plugins;
+use crate::account::Account;
 use crate::terminus::ViewTrait;
 use crate::{contact, conversation};
 
@@ -50,7 +51,7 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 #[derive(Debug)]
 pub enum Event {
     Start,
-    Connect(FullJid, Password<String>),
+    Connect(Account, Password<String>),
     Connected(Jid),
     #[allow(dead_code)]
     Disconnected(FullJid),
@@ -157,7 +158,7 @@ Examples:
     /connect account@server.tld:5223
 "#,
 {
-    account: String = {
+    account_name: String = {
         completion: (|aparte, _command| {
             aparte.config.accounts.iter().map(|(name, _)| name.clone()).collect()
         })
@@ -165,27 +166,22 @@ Examples:
     password: Password<String>
 },
 |aparte, _command| {
-    let jid;
-
-    if let Some((_, config)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account) {
-        if let Ok(jid_config) = Jid::from_str(&config.jid) {
-            jid = jid_config;
+    let account = {
+        if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
+            account.clone()
+        } else if let Ok(jid) = Jid::from_str(&account_name) {
+            Account {
+                jid: jid.to_string(),
+                server: None,
+                port: None,
+                autoconnect: false,
+            }
         } else {
-            return Err(format!("Invalid account jid {}", config.jid));
+            return Err(format!("Unknown account or invalid jid {}", account_name));
         }
-    } else if let Ok(jid_param) = Jid::from_str(&account) {
-        jid = jid_param;
-    } else {
-        return Err(format!("Unknown account {}", account));
-    }
-
-    let full_jid = match jid {
-        Jid::Full(jid) => jid,
-        Jid::Bare(jid) => jid.with_resource("aparte"),
     };
 
-
-    aparte.schedule(Event::Connect(full_jid, password));
+    aparte.schedule(Event::Connect(account, password));
 
     Ok(())
 });
@@ -566,16 +562,30 @@ impl Aparte {
         }
     }
 
-    pub async fn connect(&mut self, jid: FullJid, password: Password<String>) {
-        self.log(format!("Connecting as {}", jid));
-        let mut client = TokioXmppClient::new(&jid.to_string(), &password.0).unwrap();
+    pub async fn connect(&mut self, account: &Account, password: Password<String>) {
+        let jid = match FullJid::from_str(&account.jid) {
+            Ok(jid) => jid,
+            Err(err) => {
+                self.log(format!("Cannot connect as {}: {}", account.jid, err));
+                return;
+            }
+        };
+
+        self.log(format!("Connecting as {}", account.jid));
+        let mut client = match TokioXmppClient::new(&account.jid, &password.0) {
+            Ok(client) => client,
+            Err(err) => {
+                self.log(format!("Cannot connect as {}: {}", account.jid, err));
+                return;
+            }
+        };
+
         client.set_reconnect(true);
 
         let (mut connection_channel, mut rx) = mpsc::channel(32);
 
         self.add_connection(jid.clone(), connection_channel);
 
-        // XXX could avoid Arc<Mutex<>> if client was exposing ::split method
         let (mut writer, mut reader) = client.split();
         // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
@@ -638,8 +648,8 @@ impl Aparte {
                         self.send(xmpp_message);
                     }
                 },
-                Event::Connect(jid, password) => {
-                    self.connect(jid, password).await;
+                Event::Connect(account, password) => {
+                    self.connect(&account, password).await;
                 },
                 Event::Connected(jid) => {
                     self.log(format!("Connected as {}", jid));
