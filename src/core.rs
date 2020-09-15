@@ -51,8 +51,8 @@ pub enum Event {
     Start,
     Connect(Account, Password<String>),
     Connected(Jid),
-    #[allow(dead_code)]
-    Disconnected(FullJid),
+    Disconnected(FullJid, String),
+    AuthError(FullJid, String),
     Stanza(FullJid, Element),
     Command(Command),
     CommandError(String),
@@ -606,11 +606,25 @@ impl Aparte {
             None => unreachable!(),
         };
 
+        let reconnect = true;
         task::spawn_local(async move {
             while let Some(event) = reader.next().await {
                 debug!("XMPP Event: {:?}", event);
                 match event {
-                    XmppEvent::Disconnected(XmppError::Auth(_)) => return, // TODO event
+                    XmppEvent::Disconnected(XmppError::Auth(e)) => {
+                        if let Err(err) = event_channel.send(Event::AuthError(jid.clone(), format!("{}", e))).await {
+                            error!("Cannot send event to internal channel: {}", err);
+                        };
+                        break;
+                    },
+                    XmppEvent::Disconnected(e) => {
+                        if let Err(err) = event_channel.send(Event::Disconnected(jid.clone(), format!("{}", e))).await {
+                            error!("Cannot send event to internal channel: {}", err);
+                        };
+                        if !reconnect {
+                            break;
+                        }
+                    },
                     XmppEvent::Online{bound_jid: jid, resumed: true} => {
                         debug!("Reconnected to {}", jid);
                     },
@@ -627,7 +641,6 @@ impl Aparte {
                             break;
                         }
                     },
-                    _ => {},
                 }
             }
         });
@@ -670,6 +683,12 @@ impl Aparte {
                     presence.show = Some(PresenceShow::Chat);
 
                     self.send(presence.into());
+                },
+                Event::Disconnected(jid, err) => {
+                    self.log(format!("Connection lost for {}: {}", jid, err));
+                },
+                Event::AuthError(jid, err) => {
+                    self.log(format!("Authentication error for {}: {}", jid, err));
                 },
                 Event::Stanza(_jid, stanza) => {
                     // TODO propagate jid?
