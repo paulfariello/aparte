@@ -706,6 +706,7 @@ impl Aparte {
                 }
                 _ => {},
             }
+            self.send_loop().await;
         }
 
         Ok(())
