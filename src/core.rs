@@ -5,6 +5,7 @@ use chrono::Utc;
 use core::fmt::Debug;
 use futures::stream::StreamExt;
 use futures::sink::SinkExt;
+use rand::{self, Rng};
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, RefMut, Ref};
 use std::collections::{HashMap, VecDeque};
@@ -567,19 +568,25 @@ impl Aparte {
     }
 
     pub async fn connect(&mut self, account: &Account, password: Password<String>) {
-        let jid = match FullJid::from_str(&account.jid) {
-            Ok(jid) => jid,
+        let jid = match Jid::from_str(&account.jid) {
+            Ok(Jid::Full(jid)) => jid,
+            Ok(Jid::Bare(jid)) => {
+                let rand_string: String = rand::thread_rng()
+                    .sample_iter(&rand::distributions::Alphanumeric)
+                    .take(5).collect();
+                jid.with_resource(format!("aparte_{}", rand_string))
+            },
             Err(err) => {
                 self.log(format!("Cannot connect as {}: {}", account.jid, err));
                 return;
             }
         };
 
-        self.log(format!("Connecting as {}", account.jid));
-        let mut client = match TokioXmppClient::new(&account.jid, &password.0) {
+        self.log(format!("Connecting as {}", jid));
+        let mut client = match TokioXmppClient::new(&jid.to_string(), &password.0) {
             Ok(client) => client,
             Err(err) => {
-                self.log(format!("Cannot connect as {}: {}", account.jid, err));
+                self.log(format!("Cannot connect as {}: {}", jid, err));
                 return;
             }
         };
