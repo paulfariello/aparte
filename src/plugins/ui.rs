@@ -964,14 +964,23 @@ impl Stream for EventStream {
                     Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
                     Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
                     Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
-                    _ => Poll::Pending,
+                    _ => {
+                        self.inner.waker.register(cx.waker());
+                        Poll::Pending
+                    }
                 }
             },
-            Poll::Ready(Some(TermionEvent::Mouse(_))) => Poll::Pending,
-            Poll::Ready(Some(TermionEvent::Unsupported(_))) => Poll::Pending,
+            Poll::Ready(Some(TermionEvent::Mouse(_))) => {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            },
+            Poll::Ready(Some(TermionEvent::Unsupported(_))) => {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            },
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => {
-                self.inner.waker.wake();
+                self.inner.waker.register(cx.waker());
                 Poll::Pending
             }
         }
