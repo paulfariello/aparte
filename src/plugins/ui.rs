@@ -1,11 +1,11 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-//use tokio_codec::{Decoder, FramedRead};
 use chrono::Utc;
 use chrono::offset::{TimeZone, Local};
-use futures::{Stream};
 use futures::task::{Context, Poll, AtomicWaker};
+use futures::{Stream};
+use linked_hash_set::LinkedHashSet;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -26,11 +26,11 @@ use termion::screen::AlternateScreen;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::core::{Plugin, Aparte, Event};
-use crate::{contact, conversation};
-use crate::message::{Message, XmppMessage};
 use crate::command::{Command};
+use crate::core::{Plugin, Aparte, Event};
+use crate::message::{Message, XmppMessage};
 use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
+use crate::{contact, conversation};
 
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
@@ -379,7 +379,7 @@ pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
     current_window: Option<String>,
-    unread_windows: Vec<String>,
+    unread_windows: LinkedHashSet<String>,
     conversations: HashMap<String, Conversation>,
     root: Box<dyn ViewTrait<UIEvent>>,
     password_command: Option<Command>,
@@ -587,7 +587,7 @@ impl Plugin for UIPlugin {
             screen: screen,
             root: Box::new(layout),
             windows: Vec::new(),
-            unread_windows: Vec::new(),
+            unread_windows: LinkedHashSet::new(),
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
@@ -670,7 +670,7 @@ impl Plugin for UIPlugin {
                             }
                         }
                         if unread.is_some() {
-                            self.unread_windows.push(unread.unwrap());
+                            self.unread_windows.insert(unread.unwrap());
                         }
                     },
                     Message::Outgoing(XmppMessage::Chat(message)) => {
@@ -698,7 +698,7 @@ impl Plugin for UIPlugin {
                             }
                         }
                         if unread.is_some() {
-                            self.unread_windows.push(unread.unwrap());
+                            self.unread_windows.insert(unread.unwrap());
                         }
                     },
                     Message::Outgoing(XmppMessage::Groupchat(message)) => {
@@ -824,7 +824,7 @@ impl Plugin for UIPlugin {
                         }
                     },
                     Key::Alt('a') => {
-                        if let Some(window) = self.unread_windows.pop() {
+                        if let Some(window) = self.unread_windows.pop_front() {
                             self.change_window(&window);
                         }
                     },
