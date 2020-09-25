@@ -60,13 +60,15 @@ pub enum Event {
     SendMessage(Message),
     Message(Message),
     Chat(BareJid),
-    Join(FullJid),
+    Join(Jid),
+    Joined(FullJid),
     Iq(iq::Iq),
     Presence(presence::Presence),
     ReadPassword(Command),
     Win(String),
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
+    Bookmark(contact::Bookmark),
     Occupant{conversation: BareJid, occupant: conversation::Occupant},
     WindowChange,
     #[allow(unused)]
@@ -277,35 +279,14 @@ Example:
     muc: String
 },
 |aparte, _command| {
-    match aparte.current_connection() {
-        Some(connection) => {
-            match Jid::from_str(&muc) {
-                Ok(jid) => {
-                    let to = match jid {
-                        Jid::Full(jid) => jid,
-                        Jid::Bare(jid) => {
-                            let node = connection.node.clone().unwrap();
-                            jid.with_resource(node)
-                        }
-                    };
-                    let from: Jid = connection.into();
+    match Jid::from_str(&muc) {
+        Ok(jid) => {
+            aparte.schedule(Event::Join(jid));
 
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence = presence.with_to(Jid::Full(to.clone()));
-                    presence = presence.with_from(from);
-                    presence.add_payload(Muc::new());
-                    aparte.send(presence.into());
-                    aparte.schedule(Event::Join(to.clone()));
-
-                    Ok(())
-                },
-                Err(err) => {
-                    Err(format!("Invalid JID {}: {}", muc, err))
-                }
-            }
+            Ok(())
         },
-        None => {
-            Err(format!("No connection found"))
+        Err(err) => {
+            Err(format!("Invalid JID {}: {}", muc, err))
         }
     }
 });
@@ -700,6 +681,30 @@ impl Aparte {
                 Event::Stanza(_jid, stanza) => {
                     // TODO propagate jid?
                     self.handle_stanza(stanza);
+                },
+                Event::Join(jid) => {
+                    match self.current_connection() {
+                        Some(connection) => {
+                            let to = match jid {
+                                Jid::Full(jid) => jid,
+                                Jid::Bare(jid) => {
+                                    let node = connection.node.clone().unwrap();
+                                    jid.with_resource(node)
+                                }
+                            };
+                            let from: Jid = connection.into();
+
+                            let mut presence = Presence::new(PresenceType::None);
+                            presence = presence.with_to(Jid::Full(to.clone()));
+                            presence = presence.with_from(from);
+                            presence.add_payload(Muc::new());
+                            self.send(presence.into());
+                            self.schedule(Event::Joined(to));
+                        },
+                        None => {
+                            self.log(format!("No connection found"));
+                        }
+                    }
                 },
                 Event::Quit => {
                     return Err(());

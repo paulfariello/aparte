@@ -4,10 +4,11 @@
 use std::fmt;
 use std::str::FromStr;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use uuid::Uuid;
 use xmpp_parsers::Element;
 use xmpp_parsers::pubsub::{PubSub, pubsub, pubsub::Items, Item, ItemId, pubsub::Publish, pubsub::PublishOptions, NodeName};
-use xmpp_parsers::iq::Iq;
+use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::ns;
 use xmpp_parsers::{Jid, BareJid};
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
@@ -15,6 +16,7 @@ use xmpp_parsers::bookmarks2::{Conference, Autojoin};
 
 use crate::core::{Plugin, Aparte, Event};
 use crate::command::{Command, CommandParser};
+use crate::contact;
 use crate::plugins::disco;
 
 command_def!(bookmark_add,
@@ -172,6 +174,42 @@ impl BookmarksPlugin {
         let iq = Iq::from_set(id, pubsub);
         iq.into()
     }
+
+    fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
+        for item in items.items {
+            if let Some(id) = item.id.clone() {
+                if let Ok(bare_jid) = BareJid::from_str(&id.0) {
+                    if let Some(el) = item.payload.clone() {
+                        if let Ok(conf) = Conference::try_from(el) {
+
+                            aparte.schedule(Event::Bookmark(contact::Bookmark {
+                                jid: bare_jid.clone(),
+                                name: conf.name.clone(),
+                                nick: conf.nick.clone(),
+                                password: conf.password.clone(),
+                                autojoin: conf.autojoin == Autojoin::True,
+                            }));
+
+                            if conf.autojoin == Autojoin::True {
+                                let jid = match conf.nick {
+                                    Some(nick) => Jid::Full(bare_jid.with_resource(nick)),
+                                    None => Jid::Bare(bare_jid.clone()),
+                                };
+                                info!("Autojoin {}", jid.to_string());
+                                aparte.schedule(Event::Join(jid));
+                            }
+                        }
+                    } else {
+                        warn!("Empty bookmark element {}", id.0);
+                    }
+                } else {
+                    warn!("Invalid bookmark jid {}", id.0);
+                }
+            } else {
+                warn!("Missing bookmark id");
+            }
+        }
+    }
 }
 
 impl Plugin for BookmarksPlugin {
@@ -189,6 +227,18 @@ impl Plugin for BookmarksPlugin {
         match event {
             Event::Connected(_jid) => {
                 aparte.send(self.retreive())
+            },
+            Event::Iq(iq) => {
+                match iq.payload.clone() {
+                    IqType::Result(Some(el)) => {
+                        if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
+                            if items.node.0 == ns::BOOKMARKS2 {
+                                self.handle_bookmarks(aparte, items.clone());
+                            }
+                        }
+                    },
+                    _ => {}
+                }
             },
             _ => {},
         }

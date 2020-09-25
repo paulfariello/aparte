@@ -358,6 +358,24 @@ impl fmt::Display for contact::Contact {
     }
 }
 
+impl fmt::Display for contact::Bookmark {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{} ({}){}", name, self.jid, color::Fg(color::White)),
+            None => write!(f, "{}{}", self.jid, color::Fg(color::White)),
+        }
+    }
+}
+
+impl fmt::Display for contact::ContactOrBookmark {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            Self::Contact(contact) => contact.fmt(f),
+            Self::Bookmark(bookmark) => bookmark.fmt(f),
+        }
+    }
+}
+
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}{}", color::Fg(color::Green), self.nick, color::Fg(color::White))
@@ -620,17 +638,22 @@ impl Plugin for UIPlugin {
                 _ => {},
             }
         }));
-        let roster = View::<ListView<contact::Group, contact::Contact>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+        let roster = View::<ListView<contact::Group, contact::ContactOrBookmark>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
                 UIEvent::Core(Event::Contact(contact)) | UIEvent::Core(Event::ContactUpdate(contact)) => {
                     if contact.groups.len() > 0 {
                         for group in &contact.groups {
-                            view.insert(contact.clone(), Some(group.clone()));
+                            view.insert(contact::ContactOrBookmark::Contact(contact.clone()), Some(group.clone()));
                         }
                     } else {
-                            view.insert(contact.clone(), None);
+                            view.insert(contact::ContactOrBookmark::Contact(contact.clone()), None);
                     }
                 }
+                UIEvent::Core(Event::Bookmark(bookmark)) => {
+                    debug!("Bookmark received in ui: {:?}", bookmark);
+                    let group = contact::Group(String::from("Bookmarks"));
+                    view.insert(contact::ContactOrBookmark::Bookmark(bookmark.clone()), Some(group));
+                },
                 _ => {},
             }
         });
@@ -725,7 +748,7 @@ impl Plugin for UIPlugin {
                 }
                 self.change_window(&win_name);
             },
-            Event::Join(jid) => {
+            Event::Joined(jid) => {
                 let bare: BareJid = jid.clone().into();
                 let win_name = bare.to_string();
                 if !self.conversations.contains_key(&win_name) {
@@ -748,6 +771,9 @@ impl Plugin for UIPlugin {
             },
             Event::ContactUpdate(contact) => {
                 self.root.event(&mut UIEvent::Core(Event::ContactUpdate(contact.clone())));
+            },
+            Event::Bookmark(bookmark) => {
+                self.root.event(&mut UIEvent::Core(Event::Bookmark(bookmark.clone())));
             },
             Event::Occupant{conversation, occupant} => {
                 self.root.event(&mut UIEvent::Core(Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()}));

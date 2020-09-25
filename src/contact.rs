@@ -54,3 +54,53 @@ impl PartialEq for Contact {
 }
 
 impl Eq for Contact {}
+
+#[derive(Clone, Debug)]
+pub struct Bookmark {
+    pub jid: BareJid,
+    pub name: Option<String>,
+    pub nick: Option<String>,
+    pub autojoin: bool,
+    pub password: Option<String>,
+}
+
+impl Hash for Bookmark {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.jid.hash(state);
+    }
+}
+
+impl PartialEq for Bookmark {
+    fn eq(&self, other: &Self) -> bool {
+        self.jid == other.jid
+    }
+}
+
+impl Eq for Bookmark {}
+
+#[derive(Clone, Debug)]
+pub enum ContactOrBookmark {
+    Contact(Contact),
+    Bookmark(Bookmark),
+}
+
+impl Hash for ContactOrBookmark {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Contact(contact) => contact.jid.hash(state),
+            Self::Bookmark(bookmark) => bookmark.jid.hash(state),
+        };
+    }
+}
+
+impl PartialEq for ContactOrBookmark {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Contact(a), Self::Contact(b)) => a.eq(b),
+            (Self::Bookmark(a), Self::Bookmark(b)) => a.eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ContactOrBookmark {}
