@@ -30,7 +30,7 @@ use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceTyp
 use xmpp_parsers::{Element, Jid, FullJid, BareJid, presence, iq};
 use xmpp_parsers;
 
-use crate::{command_def, parse_command_args, generate_command_autocompletions, generate_arg_autocompletion};
+use crate::{command_def, parse_command_args, generate_command_autocompletions, generate_arg_autocompletion, generate_help};
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::message::Message;

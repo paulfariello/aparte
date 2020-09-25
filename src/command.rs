@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
+use textwrap;
 
 use crate::core::Aparte;
 
@@ -221,7 +222,7 @@ impl TryFrom<&str> for Command {
 
 pub struct CommandParser {
     pub name: &'static str,
-    pub help: &'static str,
+    pub help: String,
     pub parser: fn(&mut Aparte, Command) -> Result<(), String>,
     pub autocompletions: Vec<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>,
 }
@@ -353,10 +354,47 @@ macro_rules! generate_arg_autocompletion(
 );
 
 #[macro_export]
+macro_rules! generate_sub_help(
+    ($help:ident, {}) => ();
+    ($help:ident, { $subname:tt: $sub:ident $(, $($tail:tt)*)? }) => (
+        $help.push(String::from("\n"));
+        let sub_help = $sub::help();
+        $help.push(textwrap::indent(&sub_help, "\t"));
+        generate_sub_help!($help, { $($($tail)*)? });
+    );
+);
+
+#[macro_export]
+macro_rules! generate_subs_help(
+    ($help:ident, { children: $subs:tt $(, $($tail:tt)*)? }) => (
+        generate_sub_help!($help, $subs);
+    );
+);
+
+#[macro_export]
+macro_rules! generate_help(
+    ($help:ident, {}) => ();
+    ($help:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
+        generate_subs_help!($help, $attr);
+        generate_help!($help, { $($($tail)*)? });
+    );
+    ($help:ident, { $arg:ident: $type:ty $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+        generate_help!($help, { $($($tail)*)? });
+    );
+);
+
+#[macro_export]
 macro_rules! command_def (
     ($name:ident, $help:tt, $args:tt) => (
         mod $name {
             use super::*;
+
+            pub fn help() -> String {
+                #[allow(unused_mut)]
+                let mut help = vec![String::from($help)];
+                generate_help!(help, $args);
+                return help.join("\n");
+            }
 
             fn parser(aparte: &mut Aparte, command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
@@ -366,12 +404,11 @@ macro_rules! command_def (
 
             pub fn new() -> CommandParser {
                 let mut autocompletions = Vec::<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>::new();
-
                 generate_command_autocompletions!(autocompletions, $args);
 
                 CommandParser {
                     name: stringify!($name),
-                    help: $help,
+                    help: help(),
                     parser: parser,
                     autocompletions: autocompletions,
                 }
@@ -381,6 +418,13 @@ macro_rules! command_def (
     ($name:ident, $help:tt, $args:tt, |$aparte:ident, $command:ident| $body:block) => (
         mod $name {
             use super::*;
+
+            pub fn help() -> String {
+                #[allow(unused_mut)]
+                let mut help = vec![String::from($help)];
+                generate_help!(help, $args);
+                return help.join("\n");
+            }
 
             fn parser($aparte: &mut Aparte, $command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
@@ -397,7 +441,7 @@ macro_rules! command_def (
 
                 CommandParser {
                     name: stringify!($name),
-                    help: $help,
+                    help: help(),
                     parser: parser,
                     autocompletions: autocompletions,
                 }
