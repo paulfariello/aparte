@@ -1,23 +1,26 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::fmt;
-use std::str::FromStr;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
-use xmpp_parsers::Element;
-use xmpp_parsers::pubsub::{PubSub, pubsub, pubsub::Items, Item, ItemId, pubsub::Publish, pubsub::PublishOptions, NodeName, pubsub::Retract};
-use xmpp_parsers::pubsub::{owner as pubsubowner, PubSubOwner};
+use xmpp_parsers::bookmarks2::{Autojoin, Conference};
+use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::ns;
-use xmpp_parsers::{Jid, BareJid};
-use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
-use xmpp_parsers::bookmarks2::{Conference, Autojoin};
+use xmpp_parsers::pubsub::{owner as pubsubowner, PubSubOwner};
+use xmpp_parsers::pubsub::{
+    pubsub, pubsub::Items, pubsub::Publish, pubsub::PublishOptions, pubsub::Retract, Item, ItemId,
+    NodeName, PubSub,
+};
+use xmpp_parsers::Element;
+use xmpp_parsers::{BareJid, Jid};
 
-use crate::core::{Plugin, Aparte, Event};
 use crate::command::{Command, CommandParser};
 use crate::contact;
+use crate::core::{Aparte, Event, Plugin};
 use crate::plugins::disco;
 
 command_def!(bookmark_add,
@@ -57,8 +60,9 @@ Examples:
     Ok(())
 });
 
-command_def!(bookmark_del,
-r#"/bookmark del <bookmark>
+command_def!(
+    bookmark_del,
+    r#"/bookmark del <bookmark>
 
     bookmark    The bookmark friendly name
 
@@ -68,17 +72,16 @@ Description:
 Examples:
     /bookmark del aparte
 "#,
-{
-    conference: Jid
-},
-|aparte, _command| {
-    let delete = {
-        let bookmarks = aparte.get_plugin::<BookmarksPlugin>().unwrap();
-        bookmarks.delete(conference)
-    };
-    aparte.send(delete);
-    Ok(())
-});
+    { conference: Jid },
+    |aparte, _command| {
+        let delete = {
+            let bookmarks = aparte.get_plugin::<BookmarksPlugin>().unwrap();
+            bookmarks.delete(conference)
+        };
+        aparte.send(delete);
+        Ok(())
+    }
+);
 
 command_def!(bookmark_edit,
 r#"/bookmark edit <bookmark> [<conference>] [autojoin=on|off]
@@ -130,11 +133,49 @@ r#"/bookmark add|del|edit"#,
     },
 });
 
-pub struct BookmarksPlugin {
+enum Backend {
+    Bookmarks(Bookmarks),
+    Bookmarks2(Bookmarks2),
 }
 
-impl BookmarksPlugin {
+struct Bookmarks {}
+
+impl Bookmarks {
     fn retreive(&self) -> Element {
+        todo!();
+    }
+
+    fn create_node(&self) -> Element {
+        todo!();
+    }
+
+    fn config_node(&self) -> Element {
+        todo!();
+    }
+
+    fn add(
+        &self,
+        name: String,
+        conference: BareJid,
+        nick: Option<String>,
+        autojoin: bool,
+    ) -> Element {
+        todo!();
+    }
+
+    fn delete(&self, conference: Jid) -> Element {
+        todo!();
+    }
+
+    fn init(&self) -> Vec<Element> {
+        todo!();
+    }
+}
+
+struct Bookmarks2 {}
+
+impl Bookmarks2 {
+    pub fn retreive(&self) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let items = Items {
             max_items: None,
@@ -150,95 +191,13 @@ impl BookmarksPlugin {
     fn config_node_form(&self) -> DataForm {
         DataForm {
             type_: DataFormType::Submit,
-            form_type: Some(String::from("http://jabber.org/protocol/pubsub#node_config")),
+            form_type: Some(String::from(
+                "http://jabber.org/protocol/pubsub#node_config",
+            )),
             title: None,
             instructions: None,
-            fields: vec![Field {
-                var: String::from("pubsub#persist_items"),
-                type_: FieldType::Boolean,
-                label: None,
-                required: false,
-                media: vec![],
-                options: vec![],
-                values: vec![String::from("true")],
-            },
-            Field {
-                var: String::from("pubsub#send_last_published_item"),
-                type_: FieldType::TextSingle,
-                label: None,
-                required: false,
-                media: vec![],
-                options: vec![],
-                values: vec![String::from("never")],
-            },
-            Field {
-                var: String::from("pubsub#access_model"),
-                type_: FieldType::TextSingle,
-                label: None,
-                required: false,
-                media: vec![],
-                options: vec![],
-                values: vec![String::from("whitelist")],
-            },
-            Field {
-                var: String::from("pubsub#max_items"),
-                type_: FieldType::TextSingle,
-                label: None,
-                required: false,
-                media: vec![],
-                options: vec![],
-                values: vec![String::from("10")],
-            }],
-        }
-    }
-
-    fn create_node(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
-        let create = pubsub::Create {
-            node: Some(NodeName(String::from(ns::BOOKMARKS2))),
-        };
-        let pubsub = PubSub::Create{create: create, configure: None};
-        let iq = Iq::from_set(id, pubsub);
-        iq.into()
-    }
-
-    fn config_node(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
-        let config = pubsubowner::Configure {
-            node: Some(NodeName(String::from(ns::BOOKMARKS2))),
-            form: Some(self.config_node_form())
-        };
-        let pubsub = PubSubOwner::Configure(config);
-        let iq = Iq::from_set(id, pubsub);
-        iq.into()
-    }
-
-    fn add(&self, name: String, conference: BareJid, nick: Option<String>, autojoin: bool) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
-        let item = Item {
-            id: Some(ItemId(conference.into())),
-            payload: Some(Conference {
-                autojoin: match autojoin {
-                    true => Autojoin::True,
-                    false => Autojoin::False,
-                },
-                name: Some(name),
-                nick: nick,
-                password: None
-            }.into()),
-            publisher: None,
-        };
-        let publish = Publish {
-            node: NodeName(String::from(ns::BOOKMARKS2)),
-            items: vec![pubsub::Item(item)],
-        };
-        let options = PublishOptions {
-            form: Some(DataForm {
-                type_: DataFormType::Submit,
-                form_type: Some(String::from("http://jabber.org/protocol/pubsub#publish-options")),
-                title: None,
-                instructions: None,
-                fields: vec![Field {
+            fields: vec![
+                Field {
                     var: String::from("pubsub#persist_items"),
                     type_: FieldType::Boolean,
                     label: None,
@@ -248,6 +207,15 @@ impl BookmarksPlugin {
                     values: vec![String::from("true")],
                 },
                 Field {
+                    var: String::from("pubsub#send_last_published_item"),
+                    type_: FieldType::TextSingle,
+                    label: None,
+                    required: false,
+                    media: vec![],
+                    options: vec![],
+                    values: vec![String::from("never")],
+                },
+                Field {
                     var: String::from("pubsub#access_model"),
                     type_: FieldType::TextSingle,
                     label: None,
@@ -255,10 +223,106 @@ impl BookmarksPlugin {
                     media: vec![],
                     options: vec![],
                     values: vec![String::from("whitelist")],
-                }],
-            })
+                },
+                Field {
+                    var: String::from("pubsub#max_items"),
+                    type_: FieldType::TextSingle,
+                    label: None,
+                    required: false,
+                    media: vec![],
+                    options: vec![],
+                    values: vec![String::from("10")],
+                },
+            ],
+        }
+    }
+
+    fn create_node(&self) -> Element {
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let create = pubsub::Create {
+            node: Some(NodeName(String::from(ns::BOOKMARKS2))),
         };
-        let pubsub = PubSub::Publish{publish: publish, publish_options: Some(options)};
+        let pubsub = PubSub::Create {
+            create: create,
+            configure: None,
+        };
+        let iq = Iq::from_set(id, pubsub);
+        iq.into()
+    }
+
+    fn config_node(&self) -> Element {
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let config = pubsubowner::Configure {
+            node: Some(NodeName(String::from(ns::BOOKMARKS2))),
+            form: Some(self.config_node_form()),
+        };
+        let pubsub = PubSubOwner::Configure(config);
+        let iq = Iq::from_set(id, pubsub);
+        iq.into()
+    }
+
+    fn add(
+        &self,
+        name: String,
+        conference: BareJid,
+        nick: Option<String>,
+        autojoin: bool,
+    ) -> Element {
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let item = Item {
+            id: Some(ItemId(conference.into())),
+            payload: Some(
+                Conference {
+                    autojoin: match autojoin {
+                        true => Autojoin::True,
+                        false => Autojoin::False,
+                    },
+                    name: Some(name),
+                    nick: nick,
+                    password: None,
+                }
+                .into(),
+            ),
+            publisher: None,
+        };
+        let publish = Publish {
+            node: NodeName(String::from(ns::BOOKMARKS2)),
+            items: vec![pubsub::Item(item)],
+        };
+        let options = PublishOptions {
+            form: Some(DataForm {
+                type_: DataFormType::Submit,
+                form_type: Some(String::from(
+                    "http://jabber.org/protocol/pubsub#publish-options",
+                )),
+                title: None,
+                instructions: None,
+                fields: vec![
+                    Field {
+                        var: String::from("pubsub#persist_items"),
+                        type_: FieldType::Boolean,
+                        label: None,
+                        required: false,
+                        media: vec![],
+                        options: vec![],
+                        values: vec![String::from("true")],
+                    },
+                    Field {
+                        var: String::from("pubsub#access_model"),
+                        type_: FieldType::TextSingle,
+                        label: None,
+                        required: false,
+                        media: vec![],
+                        options: vec![],
+                        values: vec![String::from("whitelist")],
+                    },
+                ],
+            }),
+        };
+        let pubsub = PubSub::Publish {
+            publish: publish,
+            publish_options: Some(options),
+        };
         let iq = Iq::from_set(id, pubsub);
         iq.into()
     }
@@ -280,13 +344,59 @@ impl BookmarksPlugin {
         iq.into()
     }
 
+    fn init(&self) -> Vec<Element> {
+        let mut elems = vec![];
+        elems.push(self.create_node());
+        elems.push(self.config_node());
+        elems
+    }
+}
+
+pub struct BookmarksPlugin {
+    backend: Backend,
+}
+
+impl BookmarksPlugin {
+    fn retreive(&self) -> Element {
+        match &self.backend {
+            Backend::Bookmarks(bookmarks) => bookmarks.retreive(),
+            Backend::Bookmarks2(bookmarks) => bookmarks.retreive(),
+        }
+    }
+
+    fn init_backend(&self) -> Vec<Element> {
+        match &self.backend {
+            Backend::Bookmarks(bookmarks) => bookmarks.init(),
+            Backend::Bookmarks2(bookmarks) => bookmarks.init(),
+        }
+    }
+
+    fn add(
+        &self,
+        name: String,
+        conference: BareJid,
+        nick: Option<String>,
+        autojoin: bool,
+    ) -> Element {
+        match &self.backend {
+            Backend::Bookmarks(bookmarks) => bookmarks.add(name, conference, nick, autojoin),
+            Backend::Bookmarks2(bookmarks) => bookmarks.add(name, conference, nick, autojoin),
+        }
+    }
+
+    fn delete(&self, conference: Jid) -> Element {
+        match &self.backend {
+            Backend::Bookmarks(bookmarks) => bookmarks.delete(conference),
+            Backend::Bookmarks2(bookmarks) => bookmarks.delete(conference),
+        }
+    }
+
     fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
         for item in items.items {
             if let Some(id) = item.id.clone() {
                 if let Ok(bare_jid) = BareJid::from_str(&id.0) {
                     if let Some(el) = item.payload.clone() {
                         if let Ok(conf) = Conference::try_from(el) {
-
                             aparte.schedule(Event::Bookmark(contact::Bookmark {
                                 jid: bare_jid.clone(),
                                 name: conf.name.clone(),
@@ -319,7 +429,9 @@ impl BookmarksPlugin {
 
 impl Plugin for BookmarksPlugin {
     fn new() -> BookmarksPlugin {
-        BookmarksPlugin { }
+        BookmarksPlugin {
+            backend: Backend::Bookmarks(Bookmarks {}),
+        }
     }
 
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
@@ -330,24 +442,30 @@ impl Plugin for BookmarksPlugin {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(_jid) => {
-                aparte.send(self.create_node());
-                aparte.send(self.config_node());
-                aparte.send(self.retreive());
-            },
-            Event::Iq(iq) => {
-                match iq.payload.clone() {
-                    IqType::Result(Some(el)) => {
-                        if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
-                            if items.node.0 == ns::BOOKMARKS2 {
-                                self.handle_bookmarks(aparte, items.clone());
-                            }
-                        }
-                    },
-                    _ => {}
+            Event::Disco => {
+                {
+                    let disco = aparte.get_plugin::<disco::Disco>().unwrap();
+                    if disco.has_feature(ns::BOOKMARKS2) {
+                        self.backend = Backend::Bookmarks2(Bookmarks2 {});
+                    }
                 }
+
+                for elem in self.init_backend().drain(..) {
+                    aparte.send(elem);
+                }
+                aparte.send(self.retreive());
+            }
+            Event::Iq(iq) => match iq.payload.clone() {
+                IqType::Result(Some(el)) => {
+                    if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
+                        if items.node.0 == ns::BOOKMARKS2 {
+                            self.handle_bookmarks(aparte, items.clone());
+                        }
+                    }
+                }
+                _ => {}
             },
-            _ => {},
+            _ => {}
         }
     }
 }

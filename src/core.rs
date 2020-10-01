@@ -63,6 +63,7 @@ pub enum Event {
     Join(Jid),
     Joined(FullJid),
     Iq(iq::Iq),
+    Disco,
     Presence(presence::Presence),
     ReadPassword(Command),
     Win(String),
