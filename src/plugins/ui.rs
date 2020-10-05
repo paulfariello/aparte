@@ -205,7 +205,7 @@ impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
 
             let mut first = true;
             for window in &self.content.highlighted {
-                if window.len() > self.w.unwrap() as usize - written {
+                if window.len() + written > self.w.unwrap() as usize {
                     if !first {
                         write!(screen, "…").unwrap();
                         written += 1;
