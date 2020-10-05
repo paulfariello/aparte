@@ -6,7 +6,8 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
-use xmpp_parsers::bookmarks2::{Autojoin, Conference};
+use xmpp_parsers::bookmarks2;
+use xmpp_parsers::bookmarks;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::ns;
@@ -142,7 +143,16 @@ struct Bookmarks {}
 
 impl Bookmarks {
     fn retreive(&self) -> Element {
-        todo!();
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let items = Items {
+            max_items: None,
+            node: NodeName(String::from(ns::BOOKMARKS)),
+            subid: None,
+            items: vec![],
+        };
+        let pubsub = PubSub::Items(items);
+        let iq = Iq::from_get(id, pubsub);
+        iq.into()
     }
 
     fn create_node(&self) -> Element {
@@ -167,8 +177,38 @@ impl Bookmarks {
         todo!();
     }
 
+    fn handle(&self, aparte: &mut Aparte, items: pubsub::Items) {
+        for item in items.items {
+            if let Some(el) = item.payload.clone() {
+                if let Ok(storage) = bookmarks::Storage::try_from(el) {
+                    for conf in storage.conferences {
+                        aparte.schedule(Event::Bookmark(contact::Bookmark {
+                            jid: conf.jid.clone(),
+                            name: Some(conf.name.clone()),
+                            nick: conf.nick.clone(),
+                            password: conf.password.clone(),
+                            autojoin: conf.autojoin == bookmarks::Autojoin::True,
+                        }));
+
+                        if conf.autojoin == bookmarks::Autojoin::True {
+                            let jid = match conf.nick {
+                                Some(nick) => Jid::Full(conf.jid.with_resource(nick)),
+                                None => Jid::Bare(conf.jid.clone()),
+                            };
+                            info!("Autojoin {}", jid.to_string());
+                            aparte.schedule(Event::Join(jid));
+                        }
+                    }
+                }
+            } else {
+                warn!("Missing storage element");
+            }
+        }
+    }
+
     fn init(&self) -> Vec<Element> {
-        todo!();
+        let mut elems = vec![];
+        elems
     }
 }
 
@@ -272,10 +312,10 @@ impl Bookmarks2 {
         let item = Item {
             id: Some(ItemId(conference.into())),
             payload: Some(
-                Conference {
+                bookmarks2::Conference {
                     autojoin: match autojoin {
-                        true => Autojoin::True,
-                        false => Autojoin::False,
+                        true => bookmarks2::Autojoin::True,
+                        false => bookmarks2::Autojoin::False,
                     },
                     name: Some(name),
                     nick: nick,
@@ -344,68 +384,21 @@ impl Bookmarks2 {
         iq.into()
     }
 
-    fn init(&self) -> Vec<Element> {
-        let mut elems = vec![];
-        elems.push(self.create_node());
-        elems.push(self.config_node());
-        elems
-    }
-}
-
-pub struct BookmarksPlugin {
-    backend: Backend,
-}
-
-impl BookmarksPlugin {
-    fn retreive(&self) -> Element {
-        match &self.backend {
-            Backend::Bookmarks(bookmarks) => bookmarks.retreive(),
-            Backend::Bookmarks2(bookmarks) => bookmarks.retreive(),
-        }
-    }
-
-    fn init_backend(&self) -> Vec<Element> {
-        match &self.backend {
-            Backend::Bookmarks(bookmarks) => bookmarks.init(),
-            Backend::Bookmarks2(bookmarks) => bookmarks.init(),
-        }
-    }
-
-    fn add(
-        &self,
-        name: String,
-        conference: BareJid,
-        nick: Option<String>,
-        autojoin: bool,
-    ) -> Element {
-        match &self.backend {
-            Backend::Bookmarks(bookmarks) => bookmarks.add(name, conference, nick, autojoin),
-            Backend::Bookmarks2(bookmarks) => bookmarks.add(name, conference, nick, autojoin),
-        }
-    }
-
-    fn delete(&self, conference: Jid) -> Element {
-        match &self.backend {
-            Backend::Bookmarks(bookmarks) => bookmarks.delete(conference),
-            Backend::Bookmarks2(bookmarks) => bookmarks.delete(conference),
-        }
-    }
-
-    fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
+    fn handle(&self, aparte: &mut Aparte, items: pubsub::Items) {
         for item in items.items {
             if let Some(id) = item.id.clone() {
                 if let Ok(bare_jid) = BareJid::from_str(&id.0) {
                     if let Some(el) = item.payload.clone() {
-                        if let Ok(conf) = Conference::try_from(el) {
+                        if let Ok(conf) = bookmarks2::Conference::try_from(el) {
                             aparte.schedule(Event::Bookmark(contact::Bookmark {
                                 jid: bare_jid.clone(),
                                 name: conf.name.clone(),
                                 nick: conf.nick.clone(),
                                 password: conf.password.clone(),
-                                autojoin: conf.autojoin == Autojoin::True,
+                                autojoin: conf.autojoin == bookmarks2::Autojoin::True,
                             }));
 
-                            if conf.autojoin == Autojoin::True {
+                            if conf.autojoin == bookmarks2::Autojoin::True {
                                 let jid = match conf.nick {
                                     Some(nick) => Jid::Full(bare_jid.with_resource(nick)),
                                     None => Jid::Bare(bare_jid.clone()),
@@ -423,6 +416,61 @@ impl BookmarksPlugin {
             } else {
                 warn!("Missing bookmark id");
             }
+        }
+    }
+
+    fn init(&self) -> Vec<Element> {
+        let mut elems = vec![];
+        elems.push(self.create_node());
+        elems.push(self.config_node());
+        elems
+    }
+}
+
+pub struct BookmarksPlugin {
+    backend: Backend,
+}
+
+impl BookmarksPlugin {
+    fn retreive(&self) -> Element {
+        match &self.backend {
+            Backend::Bookmarks(backend) => backend.retreive(),
+            Backend::Bookmarks2(backend) => backend.retreive(),
+        }
+    }
+
+    fn init_backend(&self) -> Vec<Element> {
+        match &self.backend {
+            Backend::Bookmarks(backend) => backend.init(),
+            Backend::Bookmarks2(backend) => backend.init(),
+        }
+    }
+
+    fn add(
+        &self,
+        name: String,
+        conference: BareJid,
+        nick: Option<String>,
+        autojoin: bool,
+    ) -> Element {
+        match &self.backend {
+            Backend::Bookmarks(backend) => backend.add(name, conference, nick, autojoin),
+            Backend::Bookmarks2(backend) => backend.add(name, conference, nick, autojoin),
+        }
+    }
+
+    fn delete(&self, conference: Jid) -> Element {
+        match &self.backend {
+            Backend::Bookmarks(backend) => backend.delete(conference),
+            Backend::Bookmarks2(backend) => backend.delete(conference),
+        }
+    }
+
+    fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
+        match (&items.node.0 as &str, &self.backend) {
+            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(aparte, items.clone()),
+            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(aparte, items.clone()),
+            _ => {}
         }
     }
 }
@@ -458,8 +506,9 @@ impl Plugin for BookmarksPlugin {
             Event::Iq(iq) => match iq.payload.clone() {
                 IqType::Result(Some(el)) => {
                     if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
-                        if items.node.0 == ns::BOOKMARKS2 {
-                            self.handle_bookmarks(aparte, items.clone());
+                        match &items.node.0 as &str {
+                            ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(aparte, items.clone()),
+                            _ => {},
                         }
                     }
                 }
