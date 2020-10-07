@@ -6,8 +6,8 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
-use xmpp_parsers::bookmarks2;
 use xmpp_parsers::bookmarks;
+use xmpp_parsers::bookmarks2;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::ns;
@@ -46,7 +46,7 @@ Examples:
 },
 |aparte, _command| {
     let add = {
-        let bookmarks = aparte.get_plugin::<BookmarksPlugin>().unwrap();
+        let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
         let nick = match conference.clone() {
             Jid::Bare(_room) => None,
             Jid::Full(room) => Some(room.resource),
@@ -55,7 +55,14 @@ Examples:
             None => false,
             Some(autojoin) => autojoin,
         };
-        bookmarks.add(name, conference.into(), nick, autojoin)
+        let bookmark = contact::Bookmark {
+            jid: conference.into(),
+            name: Some(name),
+            nick: nick,
+            password: None,
+            autojoin: autojoin,
+        };
+        bookmarks.add(bookmark)
     };
     aparte.send(add);
     Ok(())
@@ -76,7 +83,7 @@ Examples:
     { conference: Jid },
     |aparte, _command| {
         let delete = {
-            let bookmarks = aparte.get_plugin::<BookmarksPlugin>().unwrap();
+            let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
             bookmarks.delete(conference)
         };
         aparte.send(delete);
@@ -107,7 +114,7 @@ Examples:
 |aparte, _command| {
     // TODO download bookmark first to keep extensions elements
     let add = {
-        let bookmarks = aparte.get_plugin::<BookmarksPlugin>().unwrap();
+        let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
         let nick = match conference.clone() {
             Jid::Bare(_room) => None,
             Jid::Full(room) => Some(room.resource),
@@ -116,7 +123,14 @@ Examples:
             None => false,
             Some(autojoin) => autojoin,
         };
-        bookmarks.add(name, conference.into(), nick, autojoin)
+        let bookmark = contact::Bookmark {
+            jid: conference.into(),
+            name: Some(name),
+            nick: nick,
+            password: None,
+            autojoin: autojoin,
+        };
+        bookmarks.add(bookmark)
     };
     aparte.send(add);
     Ok(())
@@ -163,13 +177,7 @@ impl Bookmarks {
         todo!();
     }
 
-    fn add(
-        &self,
-        name: String,
-        conference: BareJid,
-        nick: Option<String>,
-        autojoin: bool,
-    ) -> Element {
+    fn add(&self, bookmark: contact::Bookmark) -> Element {
         todo!();
     }
 
@@ -177,37 +185,33 @@ impl Bookmarks {
         todo!();
     }
 
-    fn handle(&self, aparte: &mut Aparte, items: pubsub::Items) {
+    fn handle(&self, items: pubsub::Items) -> Vec<contact::Bookmark> {
+        let mut bookmarks = vec![];
         for item in items.items {
             if let Some(el) = item.payload.clone() {
                 if let Ok(storage) = bookmarks::Storage::try_from(el) {
                     for conf in storage.conferences {
-                        aparte.schedule(Event::Bookmark(contact::Bookmark {
+                        let bookmark = contact::Bookmark {
                             jid: conf.jid.clone(),
                             name: Some(conf.name.clone()),
                             nick: conf.nick.clone(),
                             password: conf.password.clone(),
                             autojoin: conf.autojoin == bookmarks::Autojoin::True,
-                        }));
+                        };
 
-                        if conf.autojoin == bookmarks::Autojoin::True {
-                            let jid = match conf.nick {
-                                Some(nick) => Jid::Full(conf.jid.with_resource(nick)),
-                                None => Jid::Bare(conf.jid.clone()),
-                            };
-                            info!("Autojoin {}", jid.to_string());
-                            aparte.schedule(Event::Join(jid));
-                        }
+                        bookmarks.push(bookmark);
                     }
                 }
             } else {
                 warn!("Missing storage element");
             }
         }
+
+        bookmarks
     }
 
     fn init(&self) -> Vec<Element> {
-        let mut elems = vec![];
+        let elems = vec![];
         elems
     }
 }
@@ -301,24 +305,18 @@ impl Bookmarks2 {
         iq.into()
     }
 
-    fn add(
-        &self,
-        name: String,
-        conference: BareJid,
-        nick: Option<String>,
-        autojoin: bool,
-    ) -> Element {
+    fn add(&self, bookmark: contact::Bookmark) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let item = Item {
-            id: Some(ItemId(conference.into())),
+            id: Some(ItemId(bookmark.jid.to_string())),
             payload: Some(
                 bookmarks2::Conference {
-                    autojoin: match autojoin {
+                    autojoin: match bookmark.autojoin {
                         true => bookmarks2::Autojoin::True,
                         false => bookmarks2::Autojoin::False,
                     },
-                    name: Some(name),
-                    nick: nick,
+                    name: bookmark.name,
+                    nick: bookmark.nick,
                     password: None,
                 }
                 .into(),
@@ -384,28 +382,22 @@ impl Bookmarks2 {
         iq.into()
     }
 
-    fn handle(&self, aparte: &mut Aparte, items: pubsub::Items) {
+    fn handle(&self, items: pubsub::Items) -> Vec<contact::Bookmark> {
+        let mut bookmarks = vec![];
         for item in items.items {
             if let Some(id) = item.id.clone() {
                 if let Ok(bare_jid) = BareJid::from_str(&id.0) {
                     if let Some(el) = item.payload.clone() {
                         if let Ok(conf) = bookmarks2::Conference::try_from(el) {
-                            aparte.schedule(Event::Bookmark(contact::Bookmark {
+                            let bookmark = contact::Bookmark {
                                 jid: bare_jid.clone(),
                                 name: conf.name.clone(),
                                 nick: conf.nick.clone(),
                                 password: conf.password.clone(),
                                 autojoin: conf.autojoin == bookmarks2::Autojoin::True,
-                            }));
+                            };
 
-                            if conf.autojoin == bookmarks2::Autojoin::True {
-                                let jid = match conf.nick {
-                                    Some(nick) => Jid::Full(bare_jid.with_resource(nick)),
-                                    None => Jid::Bare(bare_jid.clone()),
-                                };
-                                info!("Autojoin {}", jid.to_string());
-                                aparte.schedule(Event::Join(jid));
-                            }
+                            bookmarks.push(bookmark);
                         }
                     } else {
                         warn!("Empty bookmark element {}", id.0);
@@ -417,6 +409,8 @@ impl Bookmarks2 {
                 warn!("Missing bookmark id");
             }
         }
+
+        bookmarks
     }
 
     fn init(&self) -> Vec<Element> {
@@ -429,6 +423,9 @@ impl Bookmarks2 {
 
 pub struct BookmarksPlugin {
     backend: Backend,
+    pub bookmarks: Vec<contact::Bookmark>,
+    pub bookmarks_by_name: HashMap<String, usize>,
+    pub bookmarks_by_jid: HashMap<Jid, usize>,
 }
 
 impl BookmarksPlugin {
@@ -446,20 +443,18 @@ impl BookmarksPlugin {
         }
     }
 
-    fn add(
-        &self,
-        name: String,
-        conference: BareJid,
-        nick: Option<String>,
-        autojoin: bool,
-    ) -> Element {
+    fn add(&mut self, bookmark: contact::Bookmark) -> Element {
+        self.bookmarks.push(bookmark.clone());
+
         match &self.backend {
-            Backend::Bookmarks(backend) => backend.add(name, conference, nick, autojoin),
-            Backend::Bookmarks2(backend) => backend.add(name, conference, nick, autojoin),
+            Backend::Bookmarks(backend) => backend.add(bookmark),
+            Backend::Bookmarks2(backend) => backend.add(bookmark),
         }
     }
 
-    fn delete(&self, conference: Jid) -> Element {
+    fn delete(&mut self, conference: Jid) -> Element {
+        // TODO remove from local storage
+
         match &self.backend {
             Backend::Bookmarks(backend) => backend.delete(conference),
             Backend::Bookmarks2(backend) => backend.delete(conference),
@@ -467,10 +462,43 @@ impl BookmarksPlugin {
     }
 
     fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
-        match (&items.node.0 as &str, &self.backend) {
-            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(aparte, items.clone()),
-            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(aparte, items.clone()),
-            _ => {}
+        self.bookmarks = match (&items.node.0 as &str, &self.backend) {
+            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items.clone()),
+            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items.clone()),
+            _ => return,
+        };
+
+        self.bookmarks_by_name = self
+            .bookmarks
+            .iter()
+            .enumerate()
+            .filter(|(_, bookmark)| bookmark.name.is_some())
+            .map(|(index, bookmark)| (bookmark.name.clone().unwrap(), index))
+            .collect();
+        self.bookmarks_by_jid = self
+            .bookmarks
+            .iter()
+            .enumerate()
+            .map(|(index, bookmark)| (bookmark.jid.clone().into(), index))
+            .collect();
+
+        for bookmark in self.bookmarks.iter() {
+            aparte.schedule(Event::Bookmark(bookmark.clone()));
+            if bookmark.autojoin {
+                let jid = match &bookmark.nick {
+                    Some(nick) => Jid::Full(bookmark.jid.clone().with_resource(nick)),
+                    None => Jid::Bare(bookmark.jid.clone()),
+                };
+                info!("Autojoin {}", jid.to_string());
+                aparte.schedule(Event::Join(jid, false));
+            }
+        }
+    }
+
+    pub fn get_by_name(&self, name: &str) -> Option<contact::Bookmark> {
+        match self.bookmarks_by_name.get(name) {
+            Some(index) => self.bookmarks.get(*index).cloned(),
+            None => None,
         }
     }
 }
@@ -479,6 +507,9 @@ impl Plugin for BookmarksPlugin {
     fn new() -> BookmarksPlugin {
         BookmarksPlugin {
             backend: Backend::Bookmarks(Bookmarks {}),
+            bookmarks: vec![],
+            bookmarks_by_name: HashMap::new(),
+            bookmarks_by_jid: HashMap::new(),
         }
     }
 
@@ -507,8 +538,10 @@ impl Plugin for BookmarksPlugin {
                 IqType::Result(Some(el)) => {
                     if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
                         match &items.node.0 as &str {
-                            ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(aparte, items.clone()),
-                            _ => {},
+                            ns::BOOKMARKS | ns::BOOKMARKS2 => {
+                                self.handle_bookmarks(aparte, items.clone())
+                            }
+                            _ => {}
                         }
                     }
                 }

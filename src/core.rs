@@ -277,7 +277,12 @@ Description:
 Example:
     /join channel@conference.server.tld"#,
 {
-    muc: String
+    muc: String = {
+        completion: (|aparte, _command| {
+            let bookmarks = aparte.get_plugin::<plugins::bookmarks::BookmarksPlugin>().unwrap();
+            bookmarks.bookmarks_by_name.iter().map(|(a, _)| a.clone()).chain(bookmarks.bookmarks_by_jid.iter().map(|(a, _)| a.to_string())).collect()
+        })
+    },
 },
 |aparte, _command| {
     match Jid::from_str(&muc) {
@@ -285,8 +290,30 @@ Example:
             aparte.schedule(Event::Join(jid, true));
             Ok(())
         },
-        Err(err) => {
-            Err(format!("Invalid JID {}: {}", muc, err))
+        Err(_) => {
+            let jid = {
+                let bookmarks = aparte.get_plugin::<plugins::bookmarks::BookmarksPlugin>().unwrap();
+                match bookmarks.get_by_name(&muc) {
+                    Some(bookmark) => {
+                        match bookmark.nick {
+                            Some(nick) => Ok(Jid::Full(bookmark.jid.with_resource(nick))),
+                            None => Ok(Jid::Bare(bookmark.jid.clone())),
+                        }
+                    },
+                    None => match Jid::from_str(&muc) {
+                        Ok(jid) => Ok(jid),
+                        Err(e) => Err(e.to_string()),
+                    }
+                }
+            };
+
+            match jid {
+                Ok(jid) => {
+                    aparte.schedule(Event::Join(jid, true));
+                    Ok(())
+                },
+                Err(e) => Err(e),
+            }
         }
     }
 });
