@@ -748,7 +748,7 @@ impl Plugin for UIPlugin {
                 }
                 self.change_window(&win_name);
             },
-            Event::Joined(jid) => {
+            Event::Joined(jid, change_window) => {
                 let bare: BareJid = jid.clone().into();
                 let win_name = bare.to_string();
                 if !self.conversations.contains_key(&win_name) {
@@ -757,7 +757,9 @@ impl Plugin for UIPlugin {
                         kind: ConversationKind::Group,
                     });
                 }
-                self.change_window(&win_name);
+                if *change_window {
+                    self.change_window(&win_name);
+                }
             },
             Event::Win(window) => {
                 if self.windows.contains(window) {

@@ -60,8 +60,8 @@ pub enum Event {
     SendMessage(Message),
     Message(Message),
     Chat(BareJid),
-    Join(Jid),
-    Joined(FullJid),
+    Join(Jid, bool),
+    Joined(FullJid, bool),
     Iq(iq::Iq),
     Disco,
     Presence(presence::Presence),
@@ -282,8 +282,7 @@ Example:
 |aparte, _command| {
     match Jid::from_str(&muc) {
         Ok(jid) => {
-            aparte.schedule(Event::Join(jid));
-
+            aparte.schedule(Event::Join(jid, true));
             Ok(())
         },
         Err(err) => {
@@ -683,10 +682,10 @@ impl Aparte {
                     // TODO propagate jid?
                     self.handle_stanza(stanza);
                 },
-                Event::Join(jid) => {
+                Event::Join(jid, change_window) => {
                     match self.current_connection() {
                         Some(connection) => {
-                            let to = match jid {
+                            let to = match jid.clone() {
                                 Jid::Full(jid) => jid,
                                 Jid::Bare(jid) => {
                                     let node = connection.node.clone().unwrap();
@@ -700,7 +699,9 @@ impl Aparte {
                             presence = presence.with_from(from);
                             presence.add_payload(Muc::new());
                             self.send(presence.into());
-                            self.schedule(Event::Joined(to));
+
+                            self.log(format!("Joined {}", jid));
+                            self.schedule(Event::Joined(to, change_window));
                         },
                         None => {
                             self.log(format!("No connection found"));

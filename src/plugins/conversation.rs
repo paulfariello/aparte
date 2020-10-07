@@ -58,7 +58,7 @@ impl Plugin for ConversationPlugin {
                 });
                 self.conversations.insert(jid.to_string(), conversation);
             },
-            Event::Joined(jid) => {
+            Event::Joined(jid, _) => {
                 let channel_jid: BareJid = jid.clone().into();
                 let conversation = conversation::Conversation::Channel(conversation::Channel {
                     jid: channel_jid.clone(),
