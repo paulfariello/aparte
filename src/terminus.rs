@@ -300,7 +300,6 @@ impl<K, E> ViewTrait<E> for View<'_, FrameLayout<'_, K, E>, E>
     }
 
     fn is_dirty(&self) -> bool {
-        let mut dirty = false;
         if let Some(current) = &self.content.current {
             let child = self.content.children.get(current).unwrap();
             child.is_dirty()
