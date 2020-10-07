@@ -205,11 +205,12 @@ impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
 
             let mut first = true;
             for window in &self.content.highlighted {
-                if window.len() + written > self.w.unwrap() as usize {
+                // Keep space for at least ", …]"
+                if window.len() + written + 4 > self.w.unwrap() as usize {
                     if !first {
-                        write!(screen, "…").unwrap();
-                        written += 1;
+                        write!(screen, ", …").unwrap();
                     }
+                    break;
                 }
 
                 if first {
