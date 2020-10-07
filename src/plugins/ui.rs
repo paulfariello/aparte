@@ -362,7 +362,7 @@ impl fmt::Display for contact::Contact {
 impl fmt::Display for contact::Bookmark {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.name {
-            Some(name) => write!(f, "{} ({}){}", name, self.jid, color::Fg(color::White)),
+            Some(name) => write!(f, "{}{}", name, color::Fg(color::White)),
             None => write!(f, "{}{}", self.jid, color::Fg(color::White)),
         }
     }
