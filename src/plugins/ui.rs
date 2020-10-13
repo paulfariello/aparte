@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::io::{Error as IoError};
 use std::io::{Read, Write, Stdout};
 use std::pin::Pin;
@@ -368,11 +369,42 @@ impl fmt::Display for contact::Bookmark {
     }
 }
 
-impl fmt::Display for contact::ContactOrBookmark {
+#[derive(Clone, Debug)]
+pub enum RosterItem {
+    Contact(contact::Contact),
+    Bookmark(contact::Bookmark),
+    Window(String),
+}
+
+impl Hash for RosterItem {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Contact(contact) => contact.jid.hash(state),
+            Self::Bookmark(bookmark) => bookmark.jid.hash(state),
+            Self::Window(window) => window.hash(state),
+        };
+    }
+}
+
+impl PartialEq for RosterItem {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Contact(a), Self::Contact(b)) => a.eq(b),
+            (Self::Bookmark(a), Self::Bookmark(b)) => a.eq(b),
+            (Self::Window(a), Self::Window(b)) => a.eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RosterItem {}
+
+impl fmt::Display for RosterItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             Self::Contact(contact) => contact.fmt(f),
             Self::Bookmark(bookmark) => bookmark.fmt(f),
+            Self::Window(window) => write!(f, "{}", window),
         }
     }
 }
@@ -552,11 +584,10 @@ impl Plugin for UIPlugin {
                     let view = view.take().unwrap();
                     frame.insert(name.to_string(), view);
                 },
-                event => {
-                    for (_, child) in frame.content.children.iter_mut() {
-                        child.event(event);
-                    }
-                },
+                _ => {}
+            }
+            for (_, child) in frame.content.children.iter_mut() {
+                child.event(event);
             }
         });
         let win_bar = View::<WinBar, UIEvent>::new(screen.clone());
@@ -639,21 +670,26 @@ impl Plugin for UIPlugin {
                 _ => {},
             }
         }));
-        let roster = View::<ListView<contact::Group, contact::ContactOrBookmark>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
+        let roster = View::<ListView<contact::Group, RosterItem>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
                 UIEvent::Core(Event::Contact(contact)) | UIEvent::Core(Event::ContactUpdate(contact)) => {
                     if contact.groups.len() > 0 {
                         for group in &contact.groups {
-                            view.insert(contact::ContactOrBookmark::Contact(contact.clone()), Some(group.clone()));
+                            view.insert(RosterItem::Contact(contact.clone()), Some(group.clone()));
                         }
                     } else {
-                            view.insert(contact::ContactOrBookmark::Contact(contact.clone()), None);
+                        let group = contact::Group(String::from("Contacts"));
+                        view.insert(RosterItem::Contact(contact.clone()), Some(group));
                     }
                 }
                 UIEvent::Core(Event::Bookmark(bookmark)) => {
-                    debug!("Bookmark received in ui: {:?}", bookmark);
                     let group = contact::Group(String::from("Bookmarks"));
-                    view.insert(contact::ContactOrBookmark::Bookmark(bookmark.clone()), Some(group));
+                    view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                },
+                UIEvent::AddWindow(name, _) => {
+                    debug!("test");
+                    let group = contact::Group(String::from("Windows"));
+                    view.insert(RosterItem::Window(name.clone()), Some(group));
                 },
                 _ => {},
             }
