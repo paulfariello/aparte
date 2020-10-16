@@ -45,25 +45,26 @@ Examples:
     autojoin: Option<bool>
 },
 |aparte, _command| {
+    let nick = match conference.clone() {
+        Jid::Bare(_room) => None,
+        Jid::Full(room) => Some(room.resource),
+    };
+    let autojoin = match autojoin {
+        None => false,
+        Some(autojoin) => autojoin,
+    };
+    let bookmark = contact::Bookmark {
+        jid: conference.into(),
+        name: Some(name),
+        nick: nick,
+        password: None,
+        autojoin: autojoin,
+    };
     let add = {
         let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
-        let nick = match conference.clone() {
-            Jid::Bare(_room) => None,
-            Jid::Full(room) => Some(room.resource),
-        };
-        let autojoin = match autojoin {
-            None => false,
-            Some(autojoin) => autojoin,
-        };
-        let bookmark = contact::Bookmark {
-            jid: conference.into(),
-            name: Some(name),
-            nick: nick,
-            password: None,
-            autojoin: autojoin,
-        };
-        bookmarks.add(bookmark)
+        bookmarks.add(bookmark.clone())
     };
+    aparte.schedule(Event::Bookmark(bookmark));
     aparte.send(add);
     Ok(())
 });
@@ -80,13 +81,15 @@ Description:
 Examples:
     /bookmark del aparte
 "#,
-    { conference: Jid },
+    { conference: BareJid },
     |aparte, _command| {
-        let delete = {
+        if let Some((bookmark, delete)) = {
             let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
-            bookmarks.delete(conference)
-        };
-        aparte.send(delete);
+            bookmarks.delete(conference.clone())
+        } {
+            aparte.schedule(Event::DeletedBookmark(bookmark.jid));
+            aparte.send(delete);
+        }
         Ok(())
     }
 );
@@ -177,12 +180,70 @@ impl Bookmarks {
         todo!();
     }
 
-    fn add(&self, bookmark: contact::Bookmark) -> Element {
-        todo!();
-    }
-
-    fn delete(&self, conference: Jid) -> Element {
-        todo!();
+    fn update(&self, bookmarks: &Vec<contact::Bookmark>) -> Element {
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let confs = bookmarks
+            .iter()
+            .map(|bookmark| bookmarks::Conference {
+                autojoin: match bookmark.autojoin {
+                    true => bookmarks::Autojoin::True,
+                    false => bookmarks::Autojoin::False,
+                },
+                jid: bookmark.jid.clone(),
+                name: bookmark.name.clone().unwrap_or(bookmark.jid.to_string()),
+                nick: bookmark.nick.clone(),
+                password: None,
+            })
+            .collect();
+        let storage = bookmarks::Storage {
+            conferences: confs,
+            urls: vec![],
+        };
+        let item = Item {
+            id: Some(ItemId(String::from("current"))),
+            payload: Some(storage.into()),
+            publisher: None,
+        };
+        let publish = Publish {
+            node: NodeName(String::from(ns::BOOKMARKS)),
+            items: vec![pubsub::Item(item)],
+        };
+        let options = PublishOptions {
+            form: Some(DataForm {
+                type_: DataFormType::Submit,
+                form_type: Some(String::from(
+                    "http://jabber.org/protocol/pubsub#publish-options",
+                )),
+                title: None,
+                instructions: None,
+                fields: vec![
+                    Field {
+                        var: String::from("pubsub#persist_items"),
+                        type_: FieldType::Boolean,
+                        label: None,
+                        required: false,
+                        media: vec![],
+                        options: vec![],
+                        values: vec![String::from("true")],
+                    },
+                    Field {
+                        var: String::from("pubsub#access_model"),
+                        type_: FieldType::TextSingle,
+                        label: None,
+                        required: false,
+                        media: vec![],
+                        options: vec![],
+                        values: vec![String::from("whitelist")],
+                    },
+                ],
+            }),
+        };
+        let pubsub = PubSub::Publish {
+            publish: publish,
+            publish_options: Some(options),
+        };
+        let iq = Iq::from_set(id, pubsub);
+        iq.into()
     }
 
     fn handle(&self, items: pubsub::Items) -> Vec<contact::Bookmark> {
@@ -365,7 +426,7 @@ impl Bookmarks2 {
         iq.into()
     }
 
-    fn delete(&self, conference: Jid) -> Element {
+    fn delete(&self, conference: BareJid) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let item = Item {
             id: Some(ItemId(conference.into())),
@@ -447,17 +508,27 @@ impl BookmarksPlugin {
         self.bookmarks.push(bookmark.clone());
 
         match &self.backend {
-            Backend::Bookmarks(backend) => backend.add(bookmark),
+            Backend::Bookmarks(backend) => backend.update(&self.bookmarks),
             Backend::Bookmarks2(backend) => backend.add(bookmark),
         }
     }
 
-    fn delete(&mut self, conference: Jid) -> Element {
-        // TODO remove from local storage
+    fn delete(&mut self, conference: BareJid) -> Option<(contact::Bookmark, Element)> {
+        if let Some(index) = self.bookmarks.iter().position(|b| {
+            (conference.node.is_none() && b.name == Some(conference.to_string()))
+                || (!conference.node.is_none() && b.jid == conference)
+        }) {
+            let bookmark = self.bookmarks.remove(index);
 
-        match &self.backend {
-            Backend::Bookmarks(backend) => backend.delete(conference),
-            Backend::Bookmarks2(backend) => backend.delete(conference),
+            Some((
+                bookmark,
+                match &self.backend {
+                    Backend::Bookmarks(backend) => backend.update(&self.bookmarks),
+                    Backend::Bookmarks2(backend) => backend.delete(conference),
+                },
+            ))
+        } else {
+            None
         }
     }
 

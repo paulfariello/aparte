@@ -70,6 +70,7 @@ pub enum Event {
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
     Bookmark(contact::Bookmark),
+    DeletedBookmark(BareJid),
     Occupant{conversation: BareJid, occupant: conversation::Occupant},
     WindowChange,
     #[allow(unused)]

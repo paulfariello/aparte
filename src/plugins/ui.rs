@@ -504,7 +504,7 @@ impl UIPlugin {
                 layout.push(chat);
 
                 let roster_jid = jid.clone();
-                let roster = View::<ListView<conversation::Role, conversation::Occupant>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(move |view, event| {
+                let roster = View::<ListView<conversation::Role, conversation::Occupant>, UIEvent>::new(self.screen.clone()).with_none_group().with_unique_item().with_event(move |view, event| {
                     match event {
                         UIEvent::Core(Event::Occupant{conversation, occupant}) => {
                             if roster_jid == *conversation {
@@ -672,6 +672,11 @@ impl Plugin for UIPlugin {
         }));
         let roster = View::<ListView<contact::Group, RosterItem>, UIEvent>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
             match event {
+                UIEvent::Core(Event::Connected(_)) => {
+                    view.add_group(contact::Group(String::from("Windows")));
+                    view.add_group(contact::Group(String::from("Contacts")));
+                    view.add_group(contact::Group(String::from("Bookmarks")));
+                },
                 UIEvent::Core(Event::Contact(contact)) | UIEvent::Core(Event::ContactUpdate(contact)) => {
                     if contact.groups.len() > 0 {
                         for group in &contact.groups {
@@ -685,6 +690,17 @@ impl Plugin for UIPlugin {
                 UIEvent::Core(Event::Bookmark(bookmark)) => {
                     let group = contact::Group(String::from("Bookmarks"));
                     view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                },
+                UIEvent::Core(Event::DeletedBookmark(jid)) => {
+                    let group = contact::Group(String::from("Bookmarks"));
+                    let bookmark = contact::Bookmark {
+                        jid: jid.clone(),
+                        name: None,
+                        nick: None,
+                        password: None,
+                        autojoin: false,
+                    };
+                    view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
                 },
                 UIEvent::AddWindow(name, _) => {
                     debug!("test");

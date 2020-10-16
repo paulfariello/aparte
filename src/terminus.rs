@@ -1082,10 +1082,14 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
     }
 }
 
+// TODO ensure group order is persisted
+// TODO provide a sort function for items in group
+// TODO provide a sort function for group
 pub struct ListView<G, V>
     where G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq
 {
     items: HashMap<Option<G>, HashSet<V>>,
+    unique: bool,
 }
 
 impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E> View<'a, ListView<G, V>, E> {
@@ -1106,6 +1110,7 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
             cursor_y: None,
             content: ListView {
                 items: HashMap::new(),
+                unique: false,
             },
             event_handler: None,
         }
@@ -1125,6 +1130,11 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         self
     }
 
+    pub fn with_unique_item(mut self) -> Self {
+        self.content.unique = true;
+        self
+    }
+
     #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn add_group(&mut self, group: G) {
         if let Entry::Vacant(vacant) = self.content.items.entry(Some(group)) {
@@ -1133,6 +1143,11 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
     }
 
     pub fn insert(&mut self, item: V, group: Option<G>) {
+        if self.content.unique {
+            for (_, items) in self.content.items.iter_mut() {
+                items.remove(&item);
+            }
+        }
         match self.content.items.entry(group) {
             Entry::Vacant(vacant) => {
                 let mut items = HashSet::new();
@@ -1144,6 +1159,16 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
             }
         }
         self.dirty = true
+    }
+
+    pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
+        match self.content.items.entry(group) {
+            Entry::Vacant(_) => Err(()),
+            Entry::Occupied(mut occupied) => {
+                self.dirty = occupied.get_mut().remove(&item);
+                Ok(())
+            }
+        }
     }
 }
 
