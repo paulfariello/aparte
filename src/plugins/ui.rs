@@ -699,8 +699,9 @@ impl Plugin for UIPlugin {
                         nick: None,
                         password: None,
                         autojoin: false,
+                        extensions: None,
                     };
-                    view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                    let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
                 },
                 UIEvent::AddWindow(name, _) => {
                     debug!("test");

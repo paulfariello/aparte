@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use xmpp_parsers::roster::Subscription;
 use std::hash::{Hash, Hasher};
-use xmpp_parsers::BareJid;
+use xmpp_parsers::{Element, BareJid};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum Presence {
@@ -62,6 +62,7 @@ pub struct Bookmark {
     pub nick: Option<String>,
     pub autojoin: bool,
     pub password: Option<String>,
+    pub extensions: Option<Element>,
 }
 
 impl Hash for Bookmark {

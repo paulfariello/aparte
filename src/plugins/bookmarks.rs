@@ -59,6 +59,7 @@ Examples:
         nick: nick,
         password: None,
         autojoin: autojoin,
+        extensions: None,
     };
     let add = {
         let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
@@ -115,7 +116,6 @@ Examples:
     autojoin: Option<bool>
 },
 |aparte, _command| {
-    // TODO download bookmark first to keep extensions elements
     let add = {
         let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
         let nick = match conference.clone() {
@@ -132,6 +132,7 @@ Examples:
             nick: nick,
             password: None,
             autojoin: autojoin,
+            extensions: None,
         };
         bookmarks.add(bookmark)
     };
@@ -170,14 +171,6 @@ impl Bookmarks {
         let pubsub = PubSub::Items(items);
         let iq = Iq::from_get(id, pubsub);
         iq.into()
-    }
-
-    fn create_node(&self) -> Element {
-        todo!();
-    }
-
-    fn config_node(&self) -> Element {
-        todo!();
     }
 
     fn update(&self, bookmarks: &Vec<contact::Bookmark>) -> Element {
@@ -258,6 +251,7 @@ impl Bookmarks {
                             nick: conf.nick.clone(),
                             password: conf.password.clone(),
                             autojoin: conf.autojoin == bookmarks::Autojoin::True,
+                            extensions: None,
                         };
 
                         bookmarks.push(bookmark);
@@ -456,6 +450,7 @@ impl Bookmarks2 {
                                 nick: conf.nick.clone(),
                                 password: conf.password.clone(),
                                 autojoin: conf.autojoin == bookmarks2::Autojoin::True,
+                                extensions: None,
                             };
 
                             bookmarks.push(bookmark);
