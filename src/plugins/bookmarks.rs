@@ -29,6 +29,7 @@ r#"/bookmark add <bookmark> <conference> [autojoin=on|off]
 
     bookmark    The bookmark friendly name
     conference  The conference room jid
+    nick        Your nick in the conference
     autojoin    Wether the conference room should be automatically joined on startup
 
 Description:
@@ -41,16 +42,13 @@ Examples:
 "#,
 {
     name: String,
-    conference: Jid,
-    autojoin: Option<bool>
+    conference: BareJid,
+    nick: Named<String>,
+    autojoin: Named<bool>
 },
 |aparte, _command| {
-    let nick = match conference.clone() {
-        Jid::Bare(_room) => None,
-        Jid::Full(room) => Some(room.resource),
-    };
     let autojoin = match autojoin {
-        None => false,
+        None => false, // Autojoin default to false
         Some(autojoin) => autojoin,
     };
     let bookmark = contact::Bookmark {
