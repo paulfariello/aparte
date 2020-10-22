@@ -108,36 +108,25 @@ Description:
 Examples:
     /bookmark edit aparte autojoin=on
     /bookmark edit aparte aparte@conference.fariello.eu
+    /bookmark edit aparte nick=needle
     /bookmark edit aparte aparte@conference.fariello.eu autojoin=off
 "#,
 {
     name: String,
-    conference: Jid,
+    conference: Option<BareJid>,
+    nick: Option<String>,
     autojoin: Option<bool>
 },
 |aparte, _command| {
-    let add = {
+    if let Some(edit) = {
         let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
-        let nick = match conference.clone() {
-            Jid::Bare(_room) => None,
-            Jid::Full(room) => Some(room.resource),
-        };
-        let autojoin = match autojoin {
-            None => false,
-            Some(autojoin) => autojoin,
-        };
-        let bookmark = contact::Bookmark {
-            jid: conference.into(),
-            name: Some(name),
-            nick: nick,
-            password: None,
-            autojoin: autojoin,
-            extensions: None,
-        };
-        bookmarks.add(bookmark)
-    };
-    aparte.send(add);
-    Ok(())
+        bookmarks.edit(name.clone(), conference, nick, autojoin)
+    } {
+        aparte.send(edit);
+        Ok(())
+    } else {
+        Err(format!("Unknown bookmark {}", name))
+    }
 });
 
 command_def!(bookmark,
@@ -508,6 +497,32 @@ impl BookmarksPlugin {
         }
     }
 
+    pub fn edit(&mut self, name: String, jid: Option<BareJid>, nick: Option<String>, autojoin: Option<bool>) -> Option<Element> {
+        if let Some(index) = self.bookmarks_by_name.get(&name) {
+            let mut bookmark = self.bookmarks.get_mut(*index).unwrap();
+            match jid {
+                Some(jid) => bookmark.jid = jid,
+                None => {},
+            }
+            match nick {
+                Some(nick) if nick == "" => bookmark.nick = None,
+                Some(nick) => bookmark.nick = Some(nick),
+                None => {},
+            }
+            match autojoin {
+                Some(autojoin) => bookmark.autojoin = autojoin,
+                None => {},
+            }
+
+            Some(match &self.backend {
+                Backend::Bookmarks(backend) => backend.update(&self.bookmarks),
+                Backend::Bookmarks2(backend) => backend.add(bookmark.clone()),
+            })
+        } else {
+            None
+        }
+    }
+
     fn delete(&mut self, conference: BareJid) -> Option<(contact::Bookmark, Element)> {
         if let Some(index) = self.bookmarks.iter().position(|b| {
             (conference.node.is_none() && b.name == Some(conference.to_string()))
@@ -527,13 +542,7 @@ impl BookmarksPlugin {
         }
     }
 
-    fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
-        self.bookmarks = match (&items.node.0 as &str, &self.backend) {
-            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items.clone()),
-            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items.clone()),
-            _ => return,
-        };
-
+    fn update_indexes(&mut self) {
         self.bookmarks_by_name = self
             .bookmarks
             .iter()
@@ -547,6 +556,16 @@ impl BookmarksPlugin {
             .enumerate()
             .map(|(index, bookmark)| (bookmark.jid.clone().into(), index))
             .collect();
+    }
+
+    fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
+        self.bookmarks = match (&items.node.0 as &str, &self.backend) {
+            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items.clone()),
+            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items.clone()),
+            _ => return,
+        };
+
+        self.update_indexes();
 
         for bookmark in self.bookmarks.iter() {
             aparte.schedule(Event::Bookmark(bookmark.clone()));
