@@ -106,16 +106,16 @@ Description:
     Edit a bookmark
 
 Examples:
-    /bookmark edit aparte autojoin=on
+    /bookmark edit aparte autojoin=true
     /bookmark edit aparte aparte@conference.fariello.eu
     /bookmark edit aparte nick=needle
-    /bookmark edit aparte aparte@conference.fariello.eu autojoin=off
+    /bookmark edit aparte aparte@conference.fariello.eu autojoin=false
 "#,
 {
     name: String,
+    nick: Named<String>,
+    autojoin: Named<bool>,
     conference: Option<BareJid>,
-    nick: Option<String>,
-    autojoin: Option<bool>
 },
 |aparte, _command| {
     if let Some(edit) = {

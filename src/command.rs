@@ -281,6 +281,24 @@ macro_rules! parse_command_args(
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Named<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+        let $arg: Option<$type> = {
+            let matching = $command.args.drain_filter(|a| a.starts_with(stringify!($arg))).collect::<Vec<String>>();
+            match matching.as_slice() {
+                [] => None,
+                [named] => {
+                    let arg = named.splitn(2, "=").collect::<Vec<&str>>()[1];
+                    match <$type>::from_str(&arg) {
+                        Ok(arg) => Some(arg),
+                        Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
+                    }
+                }
+                _ => return Err(format!("Multiple occurance of {} argument", stringify!($arg))),
+            }
+        };
+
+        parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
+    );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
             return Err(format!("Missing {} argument", stringify!($arg)))
@@ -427,7 +445,7 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
-            fn parser($aparte: &mut Aparte, $command: Command) -> Result<(), String> {
+            fn parser($aparte: &mut Aparte, mut $command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!($aparte, $command, index, $args);
