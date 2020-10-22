@@ -335,7 +335,7 @@ Example:
 });
 
 command_def!(help,
-r#"/help <command>
+r#"/help [command]
 
     command       Name of command
 
@@ -343,24 +343,27 @@ Description:
     Print help of a given command.
 
 Examples:
-    /help help
     /help win"#,
 {
-    cmd: String = {
+    cmd: Option<String> = {
         completion: (|aparte, _command| {
             aparte.command_parsers.iter().map(|c| c.0.to_string()).collect()
         })
     }
 },
 |aparte, _command| {
-    let log = match aparte.command_parsers.get(&cmd) {
-        Some(command) => command.help.to_string(),
-        None => format!("Unknown command {}", cmd),
-    };
-
-    aparte.log(log);
-
-    Ok(())
+    if let Some(cmd) = cmd {
+        match aparte.command_parsers.get(&cmd) {
+            Some(command) => {
+                aparte.log(command.help.to_string());
+                Ok(())
+            },
+            None => Err(format!("Unknown command {}", cmd)),
+        }
+    } else {
+        aparte.log(format!("Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.to_string()).collect::<Vec<String>>().join(", ")));
+        Ok(())
+    }
 });
 
 impl Aparte {

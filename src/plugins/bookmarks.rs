@@ -36,8 +36,8 @@ Description:
 
 Examples:
     /bookmark add aparte aparte@conference.fariello.eu
-    /bookmark add aparte aparte@conference.fariello.eu/mynick
-    /bookmark add aparte aparte@conference.fariello.eu/mynick autojoin=on
+    /bookmark add aparte aparte@conference.fariello.eu nick=needle
+    /bookmark add aparte aparte@conference.fariello.eu autojoin=on
 "#,
 {
     name: String,
