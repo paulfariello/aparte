@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::Utc;
+use chrono::Local as LocalTz;
 use core::fmt::Debug;
 use futures::stream::StreamExt;
 use futures::sink::SinkExt;
@@ -249,8 +249,8 @@ Example:
                     if message.is_some() {
                         let id = Uuid::new_v4().to_string();
                         let from: Jid = connection.into();
-                        let timestamp = Utc::now();
-                        let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
+                        let timestamp = LocalTz::now();
+                        let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &message.unwrap());
                         aparte.schedule(Event::Message(message.clone()));
 
                         aparte.send(Element::try_from(message).unwrap());
@@ -782,28 +782,38 @@ impl Aparte {
                     XmppParsersMessageType::Error => {},
                     XmppParsersMessageType::Chat => {
                         let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                        let timestamp = Utc::now();
-                        let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
+                        let mut timestamp = None;
+                        for payload in message.payloads.iter().cloned() {
+                            if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok() {
+                                timestamp = Some(delay.stamp.0);
+                            }
+                        }
+                        let message = Message::incoming_chat(id, timestamp.unwrap_or(LocalTz::now().into()), &from, &to, &body.0);
                         self.schedule(Event::Message(message));
                     },
                     XmppParsersMessageType::Groupchat => {
                         let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                        let timestamp = Utc::now();
-                        let message = Message::incoming_groupchat(id, timestamp, &from, &to, &body.0);
+                        let mut timestamp = None;
+                        for payload in message.payloads.iter().cloned() {
+                            if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok() {
+                                timestamp = Some(delay.stamp.0);
+                            }
+                        }
+                        let message = Message::incoming_groupchat(id, timestamp.unwrap_or(LocalTz::now().into()), &from, &to, &body.0);
                         self.schedule(Event::Message(message));
                     },
                     _ => {},
                 }
             }
 
-            for payload in message.payloads {
+            for payload in message.payloads.iter().cloned() {
                 if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
                     if let Some(ref original) = received.forwarded.stanza {
                         if original.type_ != XmppParsersMessageType::Error {
                             if let (Some(from), Some(to)) = (original.from.as_ref(), original.to.as_ref()) {
                                 if let Some(body) = original.bodies.get("") {
                                     let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-                                    let timestamp = Utc::now();
+                                    let timestamp = LocalTz::now().into();
                                     let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
                                     self.schedule(Event::Message(message));
                                 }

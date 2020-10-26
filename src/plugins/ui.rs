@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::Utc;
+use chrono::Local as LocalTz;
 use chrono::offset::{TimeZone, Local};
 use futures::task::{Context, Poll, AtomicWaker};
 use futures::{Stream};
@@ -888,7 +888,7 @@ impl Plugin for UIPlugin {
                                             let from: Jid = us;
                                             let to: Jid = conversation.jid.clone().into();
                                             let id = Uuid::new_v4();
-                                            let timestamp = Utc::now();
+                                            let timestamp = LocalTz::now().into();
                                             let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
                                             aparte.schedule(Event::SendMessage(message));
                                         },
@@ -896,7 +896,7 @@ impl Plugin for UIPlugin {
                                             let from: Jid = us;
                                             let to: Jid = conversation.jid.clone().into();
                                             let id = Uuid::new_v4();
-                                            let timestamp = Utc::now();
+                                            let timestamp = LocalTz::now().into();
                                             let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
                                             aparte.schedule(Event::SendMessage(message));
                                         },

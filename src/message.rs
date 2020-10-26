@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::{Utc, DateTime};
+use chrono::{Local, FixedOffset, DateTime};
 use std::convert::TryFrom;
 use std::hash;
 use uuid::Uuid;
@@ -10,7 +10,7 @@ use xmpp_parsers::{BareJid, Jid};
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub id: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: DateTime<FixedOffset>,
     pub from: BareJid,
     pub from_full: Jid,
     pub to: BareJid,
@@ -21,7 +21,7 @@ pub struct ChatMessage {
 #[derive(Debug, Clone)]
 pub struct GroupchatMessage {
     pub id: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: DateTime<FixedOffset>,
     pub from: BareJid,
     pub from_full: Jid,
     pub to: BareJid,
@@ -38,7 +38,7 @@ pub enum XmppMessage {
 #[derive(Debug, Clone)]
 pub struct LogMessage {
     pub id: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: DateTime<FixedOffset>,
     pub body: String,
 }
 
@@ -50,7 +50,7 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn incoming_chat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming_chat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -72,7 +72,7 @@ impl Message {
         }))
     }
 
-    pub fn outgoing_chat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing_chat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -94,7 +94,7 @@ impl Message {
         }))
     }
 
-    pub fn incoming_groupchat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming_groupchat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -116,7 +116,7 @@ impl Message {
         }))
     }
 
-    pub fn outgoing_groupchat<I: Into<String>>(id: I, timestamp: DateTime<Utc>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing_groupchat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -141,7 +141,7 @@ impl Message {
     pub fn log(msg: String) -> Self {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
-            timestamp: Utc::now(),
+            timestamp: Local::now().into(),
             body: msg
         })
     }
