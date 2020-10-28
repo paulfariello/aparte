@@ -252,8 +252,20 @@ impl Bookmarks {
         bookmarks
     }
 
-    fn init(&self) -> Vec<Element> {
-        let elems = vec![];
+    fn subscribe(&self, aparte: &mut Aparte) -> Element {
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let subscriber = aparte.current_connection().unwrap();
+        let pubsub = PubSub::Subscribe(pubsub::Subscribe {
+            node: Some(NodeName(String::from(ns::BOOKMARKS))),
+            jid: Jid::Full(subscriber),
+        });
+        let iq = Iq::from_set(id, pubsub);
+        iq.into()
+    }
+
+    fn init(&self, aparte: &mut Aparte) -> Vec<Element> {
+        let mut elems = vec![];
+        elems.push(self.subscribe(aparte));
         elems
     }
 }
@@ -456,10 +468,22 @@ impl Bookmarks2 {
         bookmarks
     }
 
-    fn init(&self) -> Vec<Element> {
+    fn subscribe(&self, aparte: &mut Aparte) -> Element {
+        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let subscriber = aparte.current_connection().unwrap();
+        let pubsub = PubSub::Subscribe(pubsub::Subscribe {
+            node: Some(NodeName(String::from(ns::BOOKMARKS2))),
+            jid: Jid::Full(subscriber),
+        });
+        let iq = Iq::from_set(id, pubsub);
+        iq.into()
+    }
+
+    fn init(&self, aparte: &mut Aparte) -> Vec<Element> {
         let mut elems = vec![];
         elems.push(self.create_node());
         elems.push(self.config_node());
+        elems.push(self.subscribe(aparte));
         elems
     }
 }
@@ -479,10 +503,10 @@ impl BookmarksPlugin {
         }
     }
 
-    fn init_backend(&self) -> Vec<Element> {
+    fn init_backend(&self, aparte: &mut Aparte) -> Vec<Element> {
         match &self.backend {
-            Backend::Bookmarks(backend) => backend.init(),
-            Backend::Bookmarks2(backend) => backend.init(),
+            Backend::Bookmarks(backend) => backend.init(aparte),
+            Backend::Bookmarks2(backend) => backend.init(aparte),
         }
     }
 
@@ -612,7 +636,7 @@ impl Plugin for BookmarksPlugin {
                     }
                 }
 
-                for elem in self.init_backend().drain(..) {
+                for elem in self.init_backend(aparte).drain(..) {
                     aparte.send(elem);
                 }
                 aparte.send(self.retreive());
