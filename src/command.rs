@@ -472,12 +472,13 @@ macro_rules! command_def (
 #[cfg(test)]
 mod tests_command_macro {
     use super::*;
+    use std::str::FromStr;
 
     command_def!(no_args, "help", {}, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_without_args() {
-        let cmd = no_args();
+        let cmd = no_args::new();
 
         assert_eq!(cmd.name, "no_args");
         assert_eq!(cmd.help, "help");
@@ -487,7 +488,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_one_arg() {
-        let cmd = one_arg();
+        let cmd = one_arg::new();
 
         assert_eq!(cmd.name, "one_arg");
         assert_eq!(cmd.help, "help");
@@ -503,7 +504,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_one_arg_with_completion() {
-        let cmd = one_arg_completion();
+        let cmd = one_arg_completion::new();
 
         assert_eq!(cmd.name, "one_arg_completion");
         assert_eq!(cmd.help, "help");
@@ -514,7 +515,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_two_args() {
-        let cmd = two_args();
+        let cmd = two_args::new();
 
         assert_eq!(cmd.name, "two_args");
         assert_eq!(cmd.help, "help");
@@ -532,7 +533,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_two_args_with_completion() {
-        let cmd = two_args_completion();
+        let cmd = two_args_completion::new();
 
         assert_eq!(cmd.name, "two_args_completion");
         assert_eq!(cmd.help, "help");

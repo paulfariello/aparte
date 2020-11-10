@@ -170,7 +170,7 @@ impl Bookmarks {
                     false => bookmarks::Autojoin::False,
                 },
                 jid: bookmark.jid.clone(),
-                name: bookmark.name.clone().unwrap_or(bookmark.jid.to_string()),
+                name: Some(bookmark.name.clone().unwrap_or(bookmark.jid.to_string())),
                 nick: bookmark.nick.clone(),
                 password: None,
             })
@@ -234,7 +234,7 @@ impl Bookmarks {
                     for conf in storage.conferences {
                         let bookmark = contact::Bookmark {
                             jid: conf.jid.clone(),
-                            name: Some(conf.name.clone()),
+                            name: conf.name.clone(),
                             nick: conf.nick.clone(),
                             password: conf.password.clone(),
                             autojoin: conf.autojoin == bookmarks::Autojoin::True,
@@ -255,10 +255,13 @@ impl Bookmarks {
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let subscriber = aparte.current_connection().unwrap();
-        let pubsub = PubSub::Subscribe(pubsub::Subscribe {
-            node: Some(NodeName(String::from(ns::BOOKMARKS))),
-            jid: Jid::Full(subscriber),
-        });
+        let pubsub = PubSub::Subscribe{
+            subscribe: Some(pubsub::Subscribe {
+                node: Some(NodeName(String::from(ns::BOOKMARKS))),
+                jid: Jid::Full(subscriber),
+            }),
+            options: None,
+        };
         let iq = Iq::from_set(id, pubsub);
         iq.into()
     }
@@ -372,6 +375,7 @@ impl Bookmarks2 {
                     name: bookmark.name,
                     nick: bookmark.nick,
                     password: None,
+                    extensions: vec![],
                 }
                 .into(),
             ),
@@ -471,10 +475,13 @@ impl Bookmarks2 {
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let subscriber = aparte.current_connection().unwrap();
-        let pubsub = PubSub::Subscribe(pubsub::Subscribe {
-            node: Some(NodeName(String::from(ns::BOOKMARKS2))),
-            jid: Jid::Full(subscriber),
-        });
+        let pubsub = PubSub::Subscribe {
+            subscribe: Some(pubsub::Subscribe {
+                node: Some(NodeName(String::from(ns::BOOKMARKS2))),
+                jid: Jid::Full(subscriber),
+            }),
+            options: None,
+        };
         let iq = Iq::from_set(id, pubsub);
         iq.into()
     }
