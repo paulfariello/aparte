@@ -3,17 +3,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
 use uuid::Uuid;
-use xmpp_parsers::Element;
-use xmpp_parsers::Jid;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::mam;
 use xmpp_parsers::ns;
+use xmpp_parsers::Element;
+use xmpp_parsers::Jid;
 
-use crate::core::{Plugin, Aparte, Event};
+use crate::core::{Aparte, Event, Plugin};
 
-pub struct MamPlugin {
-}
+pub struct MamPlugin {}
 
 impl MamPlugin {
     fn query(&self, with: Jid) -> Element {
@@ -43,7 +42,7 @@ impl MamPlugin {
             queryid: None,
             node: None,
             form: Some(form),
-            set: None
+            set: None,
         };
 
         let iq = Iq::from_set(id, query);
@@ -53,7 +52,7 @@ impl MamPlugin {
 
 impl Plugin for MamPlugin {
     fn new() -> MamPlugin {
-        MamPlugin { }
+        MamPlugin {}
     }
 
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
@@ -65,7 +64,7 @@ impl Plugin for MamPlugin {
             Event::Join(jid, _) => aparte.send(self.query(Jid::Bare(jid.clone().into()))),
             Event::Chat(jid) => aparte.send(self.query(jid.clone().into())),
             Event::LoadHistory(jid) => aparte.send(self.query(jid.clone().into())),
-            _ => {},
+            _ => {}
         }
     }
 }
@@ -75,4 +74,3 @@ impl fmt::Display for MamPlugin {
         write!(f, "XEP-0313: Message Archive Management")
     }
 }
-

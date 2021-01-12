@@ -1,9 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::convert::TryFrom;
 use std::fmt;
 use uuid::Uuid;
-use std::convert::TryFrom;
 use xmpp_parsers::disco;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::Element;
@@ -56,10 +56,11 @@ impl Plugin for Disco {
             Event::Iq(iq) => match iq.payload.clone() {
                 IqType::Result(Some(el)) => {
                     if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
-                        self.server_features.extend(disco.features.iter().map(|i| i.var.clone()));
+                        self.server_features
+                            .extend(disco.features.iter().map(|i| i.var.clone()));
                         aparte.schedule(Event::Disco);
                     }
-                },
+                }
                 _ => {}
             },
             _ => {}

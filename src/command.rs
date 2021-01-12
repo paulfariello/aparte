@@ -50,7 +50,7 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         Unquoted
-                    },
+                    }
                     None => {
                         break;
                     }
@@ -61,7 +61,7 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         SimplyQuoted
-                    },
+                    }
                     None => return Err("Missing closing quote"),
                 },
                 DoublyQuoted => match c {
@@ -70,7 +70,7 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         DoublyQuoted
-                    },
+                    }
                     None => return Err("Missing closing quote"),
                 },
                 Unquoted => match c {
@@ -81,11 +81,11 @@ impl Command {
                         tokens.push(token);
                         token = String::new();
                         Delimiter
-                    },
+                    }
                     Some(c) => {
                         token.push(c);
                         Unquoted
-                    },
+                    }
                     None => {
                         tokens.push(token);
                         break;
@@ -95,23 +95,23 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         Unquoted
-                    },
+                    }
                     None => return Err("Missing escaped char"),
                 },
                 SimplyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         SimplyQuoted
-                    },
+                    }
                     None => return Err("Missing escaped char"),
                 },
                 DoublyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         DoublyQuoted
-                    },
+                    }
                     None => return Err("Missing escaped char"),
-                }
+                },
             };
 
             if string_cursor == 0 {
@@ -150,38 +150,37 @@ impl Command {
         let mut quote = None;
         let mut escaped = String::with_capacity(arg.len());
         for c in arg.chars() {
-            escaped.extend(match c {
-                '\\' => "\\\\".to_string(),
-                ' ' => {
-                    if quote.is_none() {
-                        quote = Some(' ');
+            escaped.extend(
+                match c {
+                    '\\' => "\\\\".to_string(),
+                    ' ' => {
+                        if quote.is_none() {
+                            quote = Some(' ');
+                        }
+                        " ".to_string()
                     }
-                    " ".to_string()
-                },
-                '\'' => {
-                    match quote {
+                    '\'' => match quote {
                         Some('\'') => "\\'".to_string(),
                         Some('"') => "'".to_string(),
                         Some(' ') | None => {
                             quote = Some('"');
                             "'".to_string()
-                        },
+                        }
                         Some(_) => unreachable!(),
-                    }
-                }
-                '"' => {
-                    match quote {
+                    },
+                    '"' => match quote {
                         Some('\'') => "\"".to_string(),
                         Some('"') => "\\\"".to_string(),
                         Some(' ') | None => {
                             quote = Some('\'');
                             "\"".to_string()
-                        },
+                        }
                         Some(_) => unreachable!(),
-                    }
+                    },
+                    c => c.to_string(),
                 }
-                c => c.to_string(),
-            }.chars())
+                .chars(),
+            )
         }
 
         if quote == Some(' ') {
@@ -193,7 +192,6 @@ impl Command {
         } else {
             return format!("{}{}{}", quote.unwrap(), escaped, quote.unwrap());
         }
-
     }
 
     pub fn assemble(&self) -> String {
@@ -201,7 +199,7 @@ impl Command {
 
         let mut first = true;
         for arg in &self.args {
-            if ! first {
+            if !first {
                 command.push(' ');
             } else {
                 first = false;
@@ -347,7 +345,6 @@ macro_rules! generate_command_autocompletions(
     );
 );
 
-
 #[macro_export]
 macro_rules! generate_sub_autocompletion(
     ($completion:ident, {}) => ();
@@ -484,7 +481,12 @@ mod tests_command_macro {
         assert_eq!(cmd.help, "help");
     }
 
-    command_def!(one_arg, "help", { _first_arg: String }, |_aparte, _command| { Ok(()) });
+    command_def!(
+        one_arg,
+        "help",
+        { _first_arg: String },
+        |_aparte, _command| { Ok(()) }
+    );
 
     #[test]
     fn test_command_with_one_arg() {

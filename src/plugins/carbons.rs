@@ -3,16 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
 use uuid::Uuid;
-use xmpp_parsers::Element;
 use xmpp_parsers::carbons;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::ns;
+use xmpp_parsers::Element;
 
-use crate::core::{Plugin, Aparte, Event};
+use crate::core::{Aparte, Event, Plugin};
 use crate::plugins::disco;
 
-pub struct CarbonsPlugin {
-}
+pub struct CarbonsPlugin {}
 
 impl CarbonsPlugin {
     fn enable(&self) -> Element {
@@ -24,7 +23,7 @@ impl CarbonsPlugin {
 
 impl Plugin for CarbonsPlugin {
     fn new() -> CarbonsPlugin {
-        CarbonsPlugin { }
+        CarbonsPlugin {}
     }
 
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
@@ -35,7 +34,7 @@ impl Plugin for CarbonsPlugin {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(_jid) => aparte.send(self.enable()),
-            _ => {},
+            _ => {}
         }
     }
 }

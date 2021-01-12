@@ -4,17 +4,16 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use xmpp_parsers::{Jid, BareJid, muc};
+use xmpp_parsers::{muc, BareJid, Jid};
 
-use crate::core::{Plugin, Aparte, Event};
 use crate::conversation;
+use crate::core::{Aparte, Event, Plugin};
 
 pub struct ConversationPlugin {
     conversations: HashMap<String, conversation::Conversation>,
 }
 
-impl ConversationPlugin {
-}
+impl ConversationPlugin {}
 
 impl From<muc::user::Role> for conversation::Role {
     fn from(role: muc::user::Role) -> Self {
@@ -57,7 +56,7 @@ impl Plugin for ConversationPlugin {
                     contact: jid.clone(),
                 });
                 self.conversations.insert(jid.to_string(), conversation);
-            },
+            }
             Event::Joined(jid, _) => {
                 let channel_jid: BareJid = jid.clone().into();
                 let conversation = conversation::Conversation::Channel(conversation::Channel {
@@ -66,12 +65,15 @@ impl Plugin for ConversationPlugin {
                     name: None,
                     occupants: HashMap::new(),
                 });
-                self.conversations.insert(channel_jid.to_string(), conversation);
-            },
+                self.conversations
+                    .insert(channel_jid.to_string(), conversation);
+            }
             Event::Presence(presence) => {
                 if let Some(Jid::Full(from)) = &presence.from {
                     let channel_jid: BareJid = from.clone().into();
-                    if let Some(conversation::Conversation::Channel(channel)) = self.conversations.get_mut(&channel_jid.to_string()) {
+                    if let Some(conversation::Conversation::Channel(channel)) =
+                        self.conversations.get_mut(&channel_jid.to_string())
+                    {
                         for payload in presence.clone().payloads {
                             if let Some(muc_user) = muc::user::MucUser::try_from(payload).ok() {
                                 for item in muc_user.items {
@@ -85,15 +87,18 @@ impl Plugin for ConversationPlugin {
                                         affiliation: item.affiliation.into(),
                                         role: item.role.into(),
                                     };
-                                    aparte.schedule(Event::Occupant{conversation: channel_jid.clone(), occupant: occupant.clone()});
+                                    aparte.schedule(Event::Occupant {
+                                        conversation: channel_jid.clone(),
+                                        occupant: occupant.clone(),
+                                    });
                                     channel.occupants.insert(occupant.nick.clone(), occupant);
                                 }
                             }
                         }
                     }
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 }

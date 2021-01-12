@@ -4,8 +4,8 @@
 use std::fmt;
 use std::rc::Rc;
 
-use crate::core::{Plugin, Aparte, Event};
 use crate::command::Command;
+use crate::core::{Aparte, Event, Plugin};
 
 pub struct CompletionPlugin {
     completions: Option<Vec<String>>,
@@ -46,7 +46,11 @@ impl CompletionPlugin {
             let mut completions = Vec::new();
             if let Ok(command) = Command::parse_with_cursor(&raw_buf, cursor) {
                 if command.cursor == 0 {
-                    completions = aparte.command_parsers.iter().map(|c| c.0.to_string()).collect()
+                    completions = aparte
+                        .command_parsers
+                        .iter()
+                        .map(|c| c.0.to_string())
+                        .collect()
                 } else {
                     let command_parsers = Rc::clone(&aparte.command_parsers);
                     if let Some(parser) = command_parsers.get(&command.args[0]) {
@@ -58,15 +62,20 @@ impl CompletionPlugin {
                     }
                 }
 
-                self.completions = Some(completions.iter().filter_map(|c| {
-                    if command.args.len() == command.cursor {
-                        Some(c.to_string())
-                    } else if c.starts_with(&command.args[command.cursor]) {
-                        Some(c.to_string())
-                    } else {
-                        None
-                    }
-                }).collect());
+                self.completions = Some(
+                    completions
+                        .iter()
+                        .filter_map(|c| {
+                            if command.args.len() == command.cursor {
+                                Some(c.to_string())
+                            } else if c.starts_with(&command.args[command.cursor]) {
+                                Some(c.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                );
                 self.current_completion = 0;
             }
         } else {
@@ -94,9 +103,11 @@ impl Plugin for CompletionPlugin {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::AutoComplete(raw_buf, cursor) => self.autocomplete(aparte, raw_buf.clone(), cursor.clone()),
+            Event::AutoComplete(raw_buf, cursor) => {
+                self.autocomplete(aparte, raw_buf.clone(), cursor.clone())
+            }
             Event::ResetCompletion => self.reset_completion(),
-            _ => {},
+            _ => {}
         }
     }
 }

@@ -8,25 +8,25 @@
 #![feature(specialization)]
 #[macro_use]
 extern crate log;
+extern crate derive_error;
+extern crate dirs;
 extern crate flexi_logger;
+extern crate futures;
+extern crate rpassword;
 extern crate tokio;
 extern crate tokio_xmpp;
 extern crate xmpp_parsers;
-extern crate rpassword;
-extern crate futures;
-extern crate derive_error;
-extern crate dirs;
 
-mod core;
-mod config;
 mod account;
+mod config;
 mod contact;
 mod conversation;
+mod core;
 mod message;
 #[macro_use]
 mod command;
-mod terminus;
 mod plugins;
+mod terminus;
 
 use crate::core::{Aparte, Plugin};
 
@@ -38,11 +38,15 @@ fn main() {
         panic!("Cannot create aparté data dir: {}", e);
     }
 
-    let file_writer = flexi_logger::writers::FileLogWriter::builder().directory(aparte_data).suppress_timestamp().try_build().unwrap();
+    let file_writer = flexi_logger::writers::FileLogWriter::builder()
+        .directory(aparte_data)
+        .suppress_timestamp()
+        .try_build()
+        .unwrap();
     let log_target = flexi_logger::LogTarget::Writer(Box::new(file_writer));
     let logger = flexi_logger::Logger::with_env_or_str("info").log_target(log_target);
     if let Err(e) = logger.start() {
-      panic!("Cannot start logger: {}", e);
+        panic!("Cannot start logger: {}", e);
     }
 
     let conf_dir = dirs::config_dir().unwrap();
@@ -69,5 +73,4 @@ fn main() {
     aparte.init().unwrap();
 
     aparte.run();
-
 }

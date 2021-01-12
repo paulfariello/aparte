@@ -255,7 +255,7 @@ impl Bookmarks {
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let subscriber = aparte.current_connection().unwrap();
-        let pubsub = PubSub::Subscribe{
+        let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS))),
                 jid: Jid::Full(subscriber),
@@ -526,21 +526,27 @@ impl BookmarksPlugin {
         }
     }
 
-    pub fn edit(&mut self, name: String, jid: Option<BareJid>, nick: Option<String>, autojoin: Option<bool>) -> Option<Element> {
+    pub fn edit(
+        &mut self,
+        name: String,
+        jid: Option<BareJid>,
+        nick: Option<String>,
+        autojoin: Option<bool>,
+    ) -> Option<Element> {
         if let Some(index) = self.bookmarks_by_name.get(&name) {
             let mut bookmark = self.bookmarks.get_mut(*index).unwrap();
             match jid {
                 Some(jid) => bookmark.jid = jid,
-                None => {},
+                None => {}
             }
             match nick {
                 Some(nick) if nick == "" => bookmark.nick = None,
                 Some(nick) => bookmark.nick = Some(nick),
-                None => {},
+                None => {}
             }
             match autojoin {
                 Some(autojoin) => bookmark.autojoin = autojoin,
-                None => {},
+                None => {}
             }
 
             Some(match &self.backend {

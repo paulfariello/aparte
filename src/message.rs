@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::{Local, FixedOffset, DateTime};
+use chrono::{DateTime, FixedOffset, Local};
 use std::convert::TryFrom;
 use std::hash;
 use uuid::Uuid;
@@ -50,7 +50,13 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn incoming_chat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming_chat<I: Into<String>>(
+        id: I,
+        timestamp: DateTime<FixedOffset>,
+        from_full: &Jid,
+        to_full: &Jid,
+        body: &str,
+    ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -72,7 +78,13 @@ impl Message {
         }))
     }
 
-    pub fn outgoing_chat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing_chat<I: Into<String>>(
+        id: I,
+        timestamp: DateTime<FixedOffset>,
+        from_full: &Jid,
+        to_full: &Jid,
+        body: &str,
+    ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -94,7 +106,13 @@ impl Message {
         }))
     }
 
-    pub fn incoming_groupchat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn incoming_groupchat<I: Into<String>>(
+        id: I,
+        timestamp: DateTime<FixedOffset>,
+        from_full: &Jid,
+        to_full: &Jid,
+        body: &str,
+    ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -116,7 +134,13 @@ impl Message {
         }))
     }
 
-    pub fn outgoing_groupchat<I: Into<String>>(id: I, timestamp: DateTime<FixedOffset>, from_full: &Jid, to_full: &Jid, body: &str) -> Self {
+    pub fn outgoing_groupchat<I: Into<String>>(
+        id: I,
+        timestamp: DateTime<FixedOffset>,
+        from_full: &Jid,
+        to_full: &Jid,
+        body: &str,
+    ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
             Jid::Full(from_full) => from_full.clone().into(),
@@ -142,7 +166,7 @@ impl Message {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
             timestamp: Local::now().into(),
-            body: msg
+            body: msg,
         })
     }
 
@@ -150,10 +174,10 @@ impl Message {
     pub fn body(&self) -> &str {
         match self {
             Message::Outgoing(XmppMessage::Chat(ChatMessage { body, .. }))
-                | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
-                | Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
-                | Message::Incoming(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
-                | Message::Log(LogMessage { body, .. }) => &body,
+            | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
+            | Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
+            | Message::Incoming(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
+            | Message::Log(LogMessage { body, .. }) => &body,
         }
     }
 }
@@ -163,9 +187,9 @@ impl hash::Hash for Message {
         match self {
             Message::Log(message) => message.id.hash(state),
             Message::Incoming(XmppMessage::Chat(message))
-                | Message::Outgoing(XmppMessage::Chat(message)) => message.id.hash(state),
+            | Message::Outgoing(XmppMessage::Chat(message)) => message.id.hash(state),
             Message::Incoming(XmppMessage::Groupchat(message))
-                | Message::Outgoing(XmppMessage::Groupchat(message)) => message.id.hash(state),
+            | Message::Outgoing(XmppMessage::Groupchat(message)) => message.id.hash(state),
         }
     }
 }
@@ -175,49 +199,50 @@ impl PartialEq for Message {
         let my_id = match self {
             Message::Log(message) => &message.id,
             Message::Incoming(XmppMessage::Chat(message))
-                | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
+            | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
             Message::Incoming(XmppMessage::Groupchat(message))
-                | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
+            | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
         };
 
         let other_id = match other {
             Message::Log(message) => &message.id,
             Message::Incoming(XmppMessage::Chat(message))
-                | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
+            | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
             Message::Incoming(XmppMessage::Groupchat(message))
-                | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
+            | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
         };
 
         my_id == other_id
     }
 }
 
-impl std::cmp::Eq for Message {
-}
+impl std::cmp::Eq for Message {}
 
 impl TryFrom<Message> for xmpp_parsers::Element {
     type Error = ();
 
     fn try_from(message: Message) -> Result<Self, Self::Error> {
         match message {
-            Message::Log(_) => {
-                Err(())
-            },
-            Message::Incoming(_) => {
-                Err(())
-            },
+            Message::Log(_) => Err(()),
+            Message::Incoming(_) => Err(()),
             Message::Outgoing(XmppMessage::Chat(message)) => {
-                let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
+                let mut xmpp_message =
+                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
                 xmpp_message.id = Some(message.id);
                 xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
-                xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
+                xmpp_message
+                    .bodies
+                    .insert(String::new(), xmpp_parsers::message::Body(message.body));
                 Ok(xmpp_message.into())
-            },
+            }
             Message::Outgoing(XmppMessage::Groupchat(message)) => {
-                let mut xmpp_message = xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
+                let mut xmpp_message =
+                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
                 xmpp_message.id = Some(message.id);
                 xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
-                xmpp_message.bodies.insert(String::new(), xmpp_parsers::message::Body(message.body));
+                xmpp_message
+                    .bodies
+                    .insert(String::new(), xmpp_parsers::message::Body(message.body));
                 Ok(xmpp_message.into())
             }
         }
