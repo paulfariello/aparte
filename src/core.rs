@@ -776,12 +776,12 @@ impl Aparte {
     }
 
     fn handle_message(&mut self, message: XmppParsersMessage) {
-        if let (Some(from), Some(to)) = (message.from, message.to) {
-            if let Some(ref body) = message.bodies.get("") {
+        let id = message.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        if let (Some(from), Some(to)) = (message.from.clone(), message.to.clone()) {
+            if let Some((_, ref body)) = message.get_best_body(vec![]) {
                 match message.type_ {
                     XmppParsersMessageType::Error => {},
                     XmppParsersMessageType::Chat => {
-                        let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
                         let mut timestamp = None;
                         for payload in message.payloads.iter().cloned() {
                             if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok() {
@@ -792,7 +792,6 @@ impl Aparte {
                         self.schedule(Event::Message(message));
                     },
                     XmppParsersMessageType::Groupchat => {
-                        let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
                         let mut timestamp = None;
                         for payload in message.payloads.iter().cloned() {
                             if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok() {
