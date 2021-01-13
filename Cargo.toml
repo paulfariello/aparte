@@ -14,7 +14,7 @@ no-cursor-save = []
 log = "^0.4"
 flexi_logger = "^0.15"
 futures = "^0.3"
-tokio = { version = "0.2", features = ["full"] }
+tokio = { version = "^1.0", features = ["full"] }
 tokio-xmpp = {path = "../xmpp-rs/tokio-xmpp"}
 xmpp-parsers = {path = "../xmpp-rs/xmpp-parsers"}
 rpassword = "^3.0"
