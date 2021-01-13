@@ -367,13 +367,13 @@ Examples:
 },
 |aparte, _command| {
     if let Some(cmd) = cmd {
-        match aparte.command_parsers.get(&cmd) {
-            Some(command) => {
-                aparte.log(command.help.to_string());
-                Ok(())
-            },
+        let help = match aparte.command_parsers.get(&cmd) {
+            Some(command) => Ok(command.help.to_string()),
             None => Err(format!("Unknown command {}", cmd)),
-        }
+        }?;
+
+        aparte.log(help);
+        Ok(())
     } else {
         aparte.log(format!("Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.to_string()).collect::<Vec<String>>().join(", ")));
         Ok(())
