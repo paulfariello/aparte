@@ -518,8 +518,8 @@ impl Aparte {
         };
 
         let (tx, mut rx) = mpsc::channel(32);
-        let mut tx_for_signal = tx.clone();
-        let mut tx_for_event = tx.clone();
+        let tx_for_signal = tx.clone();
+        let tx_for_event = tx.clone();
         self.event_channel = Some(tx);
 
         let mut rt = TokioRuntime::new().unwrap();
@@ -646,7 +646,7 @@ impl Aparte {
             }
         });
 
-        let mut event_channel = match &self.event_channel {
+        let event_channel = match &self.event_channel {
             Some(event_channel) => event_channel.clone(),
             None => unreachable!(),
         };
