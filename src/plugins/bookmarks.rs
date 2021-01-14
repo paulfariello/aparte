@@ -11,10 +11,9 @@ use xmpp_parsers::bookmarks2;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::ns;
-use xmpp_parsers::pubsub::{owner as pubsubowner, PubSubOwner};
 use xmpp_parsers::pubsub::{
     pubsub, pubsub::Items, pubsub::Publish, pubsub::PublishOptions, pubsub::Retract, Item, ItemId,
-    NodeName, PubSub,
+    NodeName, PubSub, PubSubEvent, owner as pubsubowner, PubSubOwner
 };
 use xmpp_parsers::Element;
 use xmpp_parsers::{BareJid, Jid};
@@ -226,9 +225,9 @@ impl Bookmarks {
         iq.into()
     }
 
-    fn handle(&self, items: pubsub::Items) -> Vec<contact::Bookmark> {
+    fn handle(&self, items: Vec<Item>) -> Vec<contact::Bookmark> {
         let mut bookmarks = vec![];
-        for item in items.items {
+        for item in items {
             if let Some(el) = item.payload.clone() {
                 if let Ok(storage) = bookmarks::Storage::try_from(el) {
                     for conf in storage.conferences {
@@ -440,9 +439,9 @@ impl Bookmarks2 {
         iq.into()
     }
 
-    fn handle(&self, items: pubsub::Items) -> Vec<contact::Bookmark> {
+    fn handle(&self, items: Vec<Item>) -> Vec<contact::Bookmark> {
         let mut bookmarks = vec![];
-        for item in items.items {
+        for item in items {
             if let Some(id) = item.id.clone() {
                 if let Ok(bare_jid) = BareJid::from_str(&id.0) {
                     if let Some(el) = item.payload.clone() {
@@ -593,16 +592,21 @@ impl BookmarksPlugin {
             .collect();
     }
 
-    fn handle_bookmarks(&mut self, aparte: &mut Aparte, items: pubsub::Items) {
-        self.bookmarks = match (&items.node.0 as &str, &self.backend) {
+    fn handle_bookmarks(&mut self, aparte: &mut Aparte, node: &NodeName, items: Vec<Item>) {
+        let bookmarks = match (&node.0 as &str, &self.backend) {
             (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items.clone()),
             (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items.clone()),
             _ => return,
         };
 
+
+        let added: Vec<contact::Bookmark> = bookmarks.iter().filter(|bookmark| !self.bookmarks.contains(bookmark)).cloned().collect();
+        let removed: Vec<contact::Bookmark> = self.bookmarks.iter().filter(|bookmark| !bookmarks.contains(bookmark)).cloned().collect();
+
+        self.bookmarks = bookmarks;
         self.update_indexes();
 
-        for bookmark in self.bookmarks.iter() {
+        for bookmark in added.iter() {
             aparte.schedule(Event::Bookmark(bookmark.clone()));
             if bookmark.autojoin {
                 let jid = match &bookmark.nick {
@@ -612,6 +616,11 @@ impl BookmarksPlugin {
                 info!("Autojoin {}", jid.to_string());
                 aparte.schedule(Event::Join(jid, false));
             }
+        }
+
+        for bookmark in removed.iter() {
+            aparte.schedule(Event::DeletedBookmark(bookmark.jid.clone()));
+            // TODO leave channel?
         }
     }
 
@@ -659,7 +668,7 @@ impl Plugin for BookmarksPlugin {
                     if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
                         match &items.node.0 as &str {
                             ns::BOOKMARKS | ns::BOOKMARKS2 => {
-                                self.handle_bookmarks(aparte, items.clone())
+                                self.handle_bookmarks(aparte, &items.node, items.items.iter().cloned().map(|item| item.0).collect())
                             }
                             _ => {}
                         }
@@ -667,6 +676,17 @@ impl Plugin for BookmarksPlugin {
                 }
                 _ => {}
             },
+            Event::PubSub(pubsub_event) => match pubsub_event {
+                PubSubEvent::PublishedItems { node, items } => {
+                    match &node.0 as &str {
+                        ns::BOOKMARKS | ns::BOOKMARKS2 => {
+                            self.handle_bookmarks(aparte, &node, items.iter().cloned().map(|item| item.0).collect())
+                        }
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
             _ => {}
         }
     }

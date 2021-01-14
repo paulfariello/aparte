@@ -1045,6 +1045,10 @@ impl Plugin for UIPlugin {
                 self.root
                     .event(&mut UIEvent::Core(Event::Bookmark(bookmark.clone())));
             }
+            Event::DeletedBookmark(bookmark) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::DeletedBookmark(bookmark.clone())));
+            }
             Event::Occupant {
                 conversation,
                 occupant,
