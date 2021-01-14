@@ -1,14 +1,14 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::Utc;
+use chrono::Local as LocalTz;
 use core::fmt::Debug;
-use futures::unsync::mpsc::UnboundedSender;
-use futures::{future, Future, Sink, Stream};
-use signal_hook::iterator::Signals;
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
+use rand::{self, Rng};
 use std::any::{Any, TypeId};
-use std::cell::{RefCell, RefMut, Ref};
-use std::collections::HashMap;
+use std::cell::{Ref, RefCell, RefMut};
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::fmt;
 use std::fs::OpenOptions;
@@ -16,57 +16,80 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use termion::event::Key;
-use tokio::runtime::current_thread::Runtime;
-use tokio_xmpp::{Client, Error as XmppError, Packet};
+use tokio::runtime::Runtime as TokioRuntime;
+use tokio::signal::unix;
+use tokio::sync::mpsc;
+use tokio::task;
+use tokio_xmpp::{
+    AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket,
+};
 use uuid::Uuid;
+use xmpp_parsers;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
-use xmpp_parsers::{Element, Jid, FullJid, BareJid, presence, iq};
-use xmpp_parsers;
+use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
+use xmpp_parsers::pubsub::event::PubSubEvent;
 
-use crate::{command_def, parse_command_args, generate_command_autocompletions, generate_arg_autocompletion};
+use crate::account::Account;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::message::Message;
 use crate::plugins;
 use crate::terminus::ViewTrait;
+use crate::{
+    command_def, generate_arg_autocompletion, generate_command_autocompletions, generate_help,
+    parse_command_args,
+};
 use crate::{contact, conversation};
+
+const WELCOME: &str = r#"
+▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
+▌▖▌▞▀▖▐ ▞▀▖▞▀▖▛▚▀▖▞▀▖ ▜▀ ▞▀▖ ▙▄▌▛▀▖▝▀▖▙▀▖▜▀ ▞▀▖
+▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
+▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
+"#;
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug)]
 pub enum Event {
     Start,
-    Connect(FullJid, Password<String>),
-    Connected(FullJid),
-    #[allow(dead_code)]
-    Disconnected(FullJid),
+    Connect(Account, Password<String>),
+    Connected(Jid),
+    Disconnected(FullJid, String),
+    AuthError(FullJid, String),
+    Stanza(FullJid, Element),
     Command(Command),
     CommandError(String),
     SendMessage(Message),
     Message(Message),
     Chat(BareJid),
-    Join(FullJid),
+    Join(Jid, bool),
+    Joined(FullJid, bool),
     Iq(iq::Iq),
+    Disco,
+    PubSub(PubSubEvent),
     Presence(presence::Presence),
     ReadPassword(Command),
     Win(String),
     Contact(contact::Contact),
     ContactUpdate(contact::Contact),
-    Occupant{conversation: BareJid, occupant: conversation::Occupant},
-    Signal(i32),
+    Bookmark(contact::Bookmark),
+    DeletedBookmark(BareJid),
+    Occupant {
+        conversation: BareJid,
+        occupant: conversation::Occupant,
+    },
+    WindowChange,
     #[allow(unused)]
     LoadHistory(BareJid),
     Quit,
     Key(Key),
-    Validate(Rc<RefCell<Option<(String, bool)>>>),
-    GetInput(Rc<RefCell<Option<(String, usize, bool)>>>),
     AutoComplete(String, usize),
     ResetCompletion,
     Completed(String, usize),
-    AddWindow(String, Option<Box<dyn ViewTrait<Event>>>),
     ChangeWindow(String),
 }
 
@@ -77,7 +100,9 @@ impl Debug for dyn ViewTrait<Event> {
 }
 
 pub trait Plugin: fmt::Display {
-    fn new() -> Self where Self: Sized;
+    fn new() -> Self
+    where
+        Self: Sized;
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event);
 }
@@ -88,7 +113,10 @@ pub trait AnyPlugin: Any + Plugin {
     fn as_plugin(&mut self) -> &mut dyn Plugin;
 }
 
-impl<T> AnyPlugin for T where T: Any + Plugin {
+impl<T> AnyPlugin for T
+where
+    T: Any + Plugin,
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -117,7 +145,7 @@ impl<T: FromStr> FromStr for Password<T> {
 }
 
 pub struct Connection {
-    pub sink: UnboundedSender<Packet>,
+    pub sink: mpsc::Sender<Element>,
     pub account: FullJid,
 }
 
@@ -127,8 +155,9 @@ pub struct Aparte {
     connections: RefCell<HashMap<String, Connection>>,
     current_connection: RefCell<Option<String>>,
     event_queue: Vec<Event>,
+    send_queue: VecDeque<Element>,
+    event_channel: Option<mpsc::Sender<Event>>,
     pub config: Config,
-
 }
 
 command_def!(connect,
@@ -146,7 +175,7 @@ Examples:
     /connect account@server.tld:5223
 "#,
 {
-    account: String = {
+    account_name: String = {
         completion: (|aparte, _command| {
             aparte.config.accounts.iter().map(|(name, _)| name.clone()).collect()
         })
@@ -154,27 +183,22 @@ Examples:
     password: Password<String>
 },
 |aparte, _command| {
-    let jid;
-
-    if let Some((_, config)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account) {
-        if let Ok(jid_config) = Jid::from_str(&config.jid) {
-            jid = jid_config;
+    let account = {
+        if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
+            account.clone()
+        } else if let Ok(jid) = Jid::from_str(&account_name) {
+            Account {
+                jid: jid.to_string(),
+                server: None,
+                port: None,
+                autoconnect: false,
+            }
         } else {
-            return Err(format!("Invalid account jid {}", config.jid));
+            return Err(format!("Unknown account or invalid jid {}", account_name));
         }
-    } else if let Ok(jid_param) = Jid::from_str(&account) {
-        jid = jid_param;
-    } else {
-        return Err(format!("Unknown account {}", account));
-    }
-
-    let full_jid = match jid {
-        Jid::Full(jid) => jid,
-        Jid::Bare(jid) => jid.with_resource("aparte"),
     };
 
-
-    aparte.schedule(Event::Connect(full_jid, password));
+    aparte.schedule(Event::Connect(account, password));
 
     Ok(())
 });
@@ -239,8 +263,8 @@ Example:
                     if message.is_some() {
                         let id = Uuid::new_v4().to_string();
                         let from: Jid = connection.into();
-                        let timestamp = Utc::now();
-                        let message = Message::outgoing_chat(id, timestamp, &from, &jid, &message.unwrap());
+                        let timestamp = LocalTz::now();
+                        let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &message.unwrap());
                         aparte.schedule(Event::Message(message.clone()));
 
                         aparte.send(Element::try_from(message).unwrap());
@@ -268,59 +292,66 @@ Description:
 Example:
     /join channel@conference.server.tld"#,
 {
-    muc: String
+    muc: String = {
+        completion: (|aparte, _command| {
+            let bookmarks = aparte.get_plugin::<plugins::bookmarks::BookmarksPlugin>().unwrap();
+            bookmarks.bookmarks_by_name.iter().map(|(a, _)| a.clone()).chain(bookmarks.bookmarks_by_jid.iter().map(|(a, _)| a.to_string())).collect()
+        })
+    },
 },
 |aparte, _command| {
-    match aparte.current_connection() {
-        Some(connection) => {
-            match Jid::from_str(&muc) {
-                Ok(jid) => {
-                    let to = match jid {
-                        Jid::Full(jid) => jid,
-                        Jid::Bare(jid) => {
-                            let node = connection.node.clone().unwrap();
-                            jid.with_resource(node)
+    match Jid::from_str(&muc) {
+        Ok(jid) => {
+            aparte.schedule(Event::Join(jid, true));
+            Ok(())
+        },
+        Err(_) => {
+            let jid = {
+                let bookmarks = aparte.get_plugin::<plugins::bookmarks::BookmarksPlugin>().unwrap();
+                match bookmarks.get_by_name(&muc) {
+                    Some(bookmark) => {
+                        match bookmark.nick {
+                            Some(nick) => Ok(Jid::Full(bookmark.jid.with_resource(nick))),
+                            None => Ok(Jid::Bare(bookmark.jid.clone())),
                         }
-                    };
-                    let from: Jid = connection.into();
+                    },
+                    None => match Jid::from_str(&muc) {
+                        Ok(jid) => Ok(jid),
+                        Err(e) => Err(e.to_string()),
+                    }
+                }
+            };
 
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence = presence.with_to(Jid::Full(to.clone()));
-                    presence = presence.with_from(from);
-                    presence.add_payload(Muc::new());
-                    aparte.send(presence.into());
-                    aparte.schedule(Event::Join(to.clone()));
-
+            match jid {
+                Ok(jid) => {
+                    aparte.schedule(Event::Join(jid, true));
                     Ok(())
                 },
-                Err(err) => {
-                    Err(format!("Invalid JID {}: {}", muc, err))
-                }
+                Err(e) => Err(e),
             }
-        },
-        None => {
-            Err(format!("No connection found"))
         }
     }
 });
 
-command_def!(quit,
-r#"/quit
+command_def!(
+    quit,
+    r#"/quit
 
 Description:
     Quit Aparté.
 
 Example:
     /quit"#,
-{ },
-|aparte, _command| {
-    aparte.schedule(Event::Quit);
+    {},
+    |aparte, _command| {
+        aparte.schedule(Event::Quit);
 
-    Ok(())
-});
+        Ok(())
+    }
+);
 
 command_def!(help,
-r#"/help <command>
+r#"/help [command]
 
     command       Name of command
 
@@ -328,29 +359,37 @@ Description:
     Print help of a given command.
 
 Examples:
-    /help help
     /help win"#,
 {
-    cmd: String = {
+    cmd: Option<String> = {
         completion: (|aparte, _command| {
             aparte.command_parsers.iter().map(|c| c.0.to_string()).collect()
         })
     }
 },
 |aparte, _command| {
-    let log = match aparte.command_parsers.get(&cmd) {
-        Some(command) => command.help.to_string(),
-        None => format!("Unknown command {}", cmd),
-    };
+    if let Some(cmd) = cmd {
+        let help = match aparte.command_parsers.get(&cmd) {
+            Some(command) => Ok(command.help.to_string()),
+            None => Err(format!("Unknown command {}", cmd)),
+        }?;
 
-    aparte.log(log);
-
-    Ok(())
+        aparte.log(help);
+        Ok(())
+    } else {
+        aparte.log(format!("Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.to_string()).collect::<Vec<String>>().join(", ")));
+        Ok(())
+    }
 });
 
 impl Aparte {
     pub fn new(config_path: PathBuf) -> Self {
-        let mut config_file = match OpenOptions::new().read(true).write(true).create(true).open(config_path) {
+        let mut config_file = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(config_path)
+        {
             Err(err) => panic!("Cannot read config file {}", err),
             Ok(config_file) => config_file,
         };
@@ -361,7 +400,9 @@ impl Aparte {
         }
 
         let config = match config_str.len() {
-            0 => Config { accounts: HashMap::new() },
+            0 => Config {
+                accounts: HashMap::new(),
+            },
             _ => match toml::from_str(&config_str) {
                 Err(err) => panic!("Cannot read config file {}", err),
                 Ok(config) => config,
@@ -374,6 +415,8 @@ impl Aparte {
             connections: RefCell::new(HashMap::new()),
             current_connection: RefCell::new(None),
             event_queue: Vec::new(),
+            send_queue: VecDeque::new(),
+            event_channel: None,
             config: config,
         }
     }
@@ -408,7 +451,9 @@ impl Aparte {
 
         let any_plugin = plugin.borrow();
         /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
-        Some(Ref::map(any_plugin, |p| p.as_any().downcast_ref::<T>().unwrap()))
+        Some(Ref::map(any_plugin, |p| {
+            p.as_any().downcast_ref::<T>().unwrap()
+        }))
     }
 
     pub fn get_plugin_mut<T: 'static>(&self) -> Option<RefMut<T>> {
@@ -419,10 +464,12 @@ impl Aparte {
 
         let any_plugin = plugin.borrow_mut();
         /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
-        Some(RefMut::map(any_plugin, |p| p.as_any_mut().downcast_mut::<T>().unwrap()))
+        Some(RefMut::map(any_plugin, |p| {
+            p.as_any_mut().downcast_mut::<T>().unwrap()
+        }))
     }
 
-    pub fn add_connection(&self, account: FullJid, sink: UnboundedSender<Packet>) {
+    pub fn add_connection(&self, account: FullJid, sink: mpsc::Sender<Element>) {
         let connection = Connection {
             account: account,
             sink: sink,
@@ -430,7 +477,9 @@ impl Aparte {
 
         let account = connection.account.to_string();
 
-        self.connections.borrow_mut().insert(account.clone(), connection);
+        self.connections
+            .borrow_mut()
+            .insert(account.clone(), connection);
         self.current_connection.replace(Some(account.clone()));
     }
 
@@ -441,7 +490,7 @@ impl Aparte {
                 let connections = self.connections.borrow_mut();
                 let connection = connections.get(&current_connection.clone()).unwrap();
                 Some(connection.account.clone())
-            },
+            }
             None => None,
         }
     }
@@ -465,191 +514,287 @@ impl Aparte {
     }
 
     pub fn run(mut self) {
-        const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-
-        self.log(r#"
-▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
-▌▖▌▞▀▖▐ ▞▀▖▞▀▖▛▚▀▖▞▀▖ ▜▀ ▞▀▖ ▙▄▌▛▀▖▝▀▖▙▀▖▜▀ ▞▀▖
-▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
-▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
-"#.to_string());
-        self.log(format!("Version: {}", VERSION));
-
-        let mut rt = Runtime::new().unwrap();
-        let event_stream = {
+        let mut input_event_stream = {
             let ui = self.get_plugin::<plugins::ui::UIPlugin>().unwrap();
             ui.event_stream()
         };
 
-        let aparte = Arc::new(Mutex::new(self));
+        let (tx, mut rx) = mpsc::channel(32);
+        let tx_for_signal = tx.clone();
+        let tx_for_event = tx.clone();
+        self.event_channel = Some(tx);
 
-        let aparte_for_signals = aparte.clone();
-        let signals = Signals::new(&[signal_hook::SIGWINCH]).unwrap().into_async().unwrap().for_each(move |sig| {
-            debug!("Signal: {:?}", sig);
-            Aparte::ex_schedule(aparte_for_signals.clone(), Event::Signal(sig));
-            Aparte::event_loop(aparte_for_signals.clone());
-            Ok(())
-        }).map_err(|e| panic!("{}", e));
+        let mut rt = TokioRuntime::new().unwrap();
 
-        rt.spawn(signals);
+        rt.spawn(async move {
+            let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
+            loop {
+                sigwinch.recv().await;
+                if let Err(err) = tx_for_signal.send(Event::WindowChange).await {
+                    error!("Cannot send signal to internal channel: {}", err);
+                    break;
+                }
+            }
+        });
 
-        Aparte::ex_schedule(aparte.clone(), Event::Start);
-        Aparte::event_loop(aparte.clone());
+        rt.spawn(async move {
+            loop {
+                match input_event_stream.next().await {
+                    Some(event) => {
+                        if let Err(err) = tx_for_event.send(event).await {
+                            error!("Cannot send event to internal channel: {}", err);
+                            break;
+                        }
+                    }
+                    None => {
+                        if let Err(err) = tx_for_event.send(Event::Quit).await {
+                            error!("Cannot send Quit event to internal channel: {}", err);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
 
-        let aparte_for_event = aparte.clone();
-        if let Err(e) = rt.block_on(event_stream.for_each(move |event| {
-            debug!("Event: {:?}", event);
-            Aparte::ex_schedule(aparte_for_event.clone(), event);
-            Aparte::event_loop(aparte_for_event.clone());
+        let local_set = tokio::task::LocalSet::new();
+        local_set.block_on(&mut rt, async move {
+            self.schedule(Event::Start);
+            if self.event_loop().await.is_err() {
+                // Quit event return err
+                return;
+            }
 
-            Ok(())
-        })) {
-          info!("Error in event stream: {}", e);
-        }
+            while let Some(event) = rx.recv().await {
+                self.schedule(event);
+                if self.event_loop().await.is_err() {
+                    // Quit event return err
+                    break;
+                }
+            }
+        });
     }
 
     pub fn start(&mut self) {
+        self.log(WELCOME.to_string());
+        self.log(format!("Version: {}", VERSION));
+
         for (_, account) in self.config.accounts.clone() {
             if account.autoconnect {
                 self.schedule(Event::Command(Command {
                     args: vec!["connect".to_string(), account.jid.clone()],
-                    cursor: 0
+                    cursor: 0,
                 }));
             }
         }
     }
 
-    pub fn send(&self, element: Element) {
-        let mut raw = Vec::<u8>::new();
-        element.write_to(&mut raw).unwrap();
-        debug!("SEND: {}", String::from_utf8(raw).unwrap());
-        let packet = Packet::Stanza(element);
-        // TODO use correct connection
-        let mut connections = self.connections.borrow_mut();
-        let current_connection = connections.iter_mut().next().unwrap().1;
-        let mut sink = &current_connection.sink;
-        if let Err(e) = sink.start_send(packet) {
-            warn!("Cannot send packet: {}", e);
+    pub fn send(&mut self, stanza: Element) {
+        self.send_queue.push_back(stanza);
+    }
+
+    async fn send_loop(&mut self) {
+        for stanza in self.send_queue.drain(..) {
+            let mut raw = Vec::<u8>::new();
+            stanza.write_to(&mut raw).unwrap();
+            debug!("SEND: {}", String::from_utf8(raw).unwrap());
+            // TODO use correct connection
+            let mut connections = self.connections.borrow_mut();
+            let current_connection = connections.iter_mut().next().unwrap().1;
+            if let Err(e) = current_connection.sink.send(stanza).await {
+                warn!("Cannot send stanza: {}", e);
+            }
         }
     }
 
-    pub fn connect(this: Arc<Mutex<Self>>, jid: FullJid, password: Password<String>) {
-        let mut aparte = this.lock().unwrap();
-        aparte.log(format!("Connecting as {}", jid));
-        let client = Client::new(&jid.to_string(), &password.0).unwrap();
+    pub async fn connect(&mut self, account: &Account, password: Password<String>) {
+        let jid = match Jid::from_str(&account.jid) {
+            Ok(Jid::Full(jid)) => jid,
+            Ok(Jid::Bare(jid)) => {
+                let rand_string: String = rand::thread_rng()
+                    .sample_iter(&rand::distributions::Alphanumeric)
+                    .take(5)
+                    .collect();
+                jid.with_resource(format!("aparte_{}", rand_string))
+            }
+            Err(err) => {
+                self.log(format!("Cannot connect as {}: {}", account.jid, err));
+                return;
+            }
+        };
 
-        let (sink, stream) = client.split();
-        let (tx, rx) = futures::unsync::mpsc::unbounded();
+        self.log(format!("Connecting as {}", jid));
+        let mut client = match TokioXmppClient::new(&jid.to_string(), &password.0) {
+            Ok(client) => client,
+            Err(err) => {
+                self.log(format!("Cannot connect as {}: {}", jid, err));
+                return;
+            }
+        };
 
-        aparte.add_connection(jid.clone(), tx);
+        client.set_reconnect(true);
 
-        tokio::runtime::current_thread::spawn(
-            rx.forward(
-                sink.sink_map_err(|_| panic!("Pipe"))
-                ).map(|(rx, mut sink)| {
-                drop(rx);
-                let _ = sink.close();
-            }).map_err(|e| {
-                    panic!("Send error: {:?}", e);
-                })
-            );
+        let (connection_channel, mut rx) = mpsc::channel(32);
 
-        let aparte_for_event = this.clone();
-        let client = stream.for_each(move |event| {
-            debug!("XMPP Event: {:?}", event);
-            if event.is_online() {
-                Aparte::ex_log(aparte_for_event.clone(), format!("Connected as {}", jid));
-                Aparte::ex_schedule(aparte_for_event.clone(), Event::Connected(jid.clone()));
+        self.add_connection(jid.clone(), connection_channel);
 
-                {
-                    let aparte = aparte_for_event.lock().unwrap();
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence.show = Some(PresenceShow::Chat);
-
-                    aparte.send(presence.into());
+        let (mut writer, mut reader) = client.split();
+        // XXX could use self.rt.spawn if client was impl Send
+        task::spawn_local(async move {
+            while let Some(element) = rx.recv().await {
+                if let Err(err) = writer.send(XmppPacket::Stanza(element)).await {
+                    error!("cannot send Stanza to internal channel: {}", err);
+                    break;
                 }
-            } else if let Some(stanza) = event.into_stanza() {
-                debug!("RECV: {}", String::from(&stanza));
-
-                let mut aparte = aparte_for_event.lock().unwrap();
-                aparte.handle_stanza(stanza);
             }
-
-            Aparte::event_loop(aparte_for_event.clone());
-            future::ok(())
         });
 
-        let aparte_for_error = this.clone();
-        let client = client.map_err(move |error| {
-            match error {
-                XmppError::Auth(auth) => {
-                    Aparte::ex_log(aparte_for_error.clone(), format!("Authentication failed {}", auth));
-                },
-                error => {
-                    Aparte::ex_log(aparte_for_error.clone(), format!("Connection error {:?}", error));
-                },
-            }
-            Aparte::event_loop(aparte_for_error.clone());
-        });
+        let event_channel = match &self.event_channel {
+            Some(event_channel) => event_channel.clone(),
+            None => unreachable!(),
+        };
 
-        tokio::runtime::current_thread::spawn(client);
+        let reconnect = true;
+        task::spawn_local(async move {
+            while let Some(event) = reader.next().await {
+                debug!("XMPP Event: {:?}", event);
+                match event {
+                    XmppEvent::Disconnected(XmppError::Auth(e)) => {
+                        if let Err(err) = event_channel
+                            .send(Event::AuthError(jid.clone(), format!("{}", e)))
+                            .await
+                        {
+                            error!("Cannot send event to internal channel: {}", err);
+                        };
+                        break;
+                    }
+                    XmppEvent::Disconnected(e) => {
+                        if let Err(err) = event_channel
+                            .send(Event::Disconnected(jid.clone(), format!("{}", e)))
+                            .await
+                        {
+                            error!("Cannot send event to internal channel: {}", err);
+                        };
+                        if !reconnect {
+                            break;
+                        }
+                    }
+                    XmppEvent::Online {
+                        bound_jid: jid,
+                        resumed: true,
+                    } => {
+                        debug!("Reconnected to {}", jid);
+                    }
+                    XmppEvent::Online {
+                        bound_jid: jid,
+                        resumed: false,
+                    } => {
+                        if let Err(err) = event_channel.send(Event::Connected(jid.clone())).await {
+                            error!("Cannot send event to internal channel: {}", err);
+                            break;
+                        }
+                    }
+                    XmppEvent::Stanza(stanza) => {
+                        debug!("RECV: {}", String::from(&stanza));
+                        if let Err(err) =
+                            event_channel.send(Event::Stanza(jid.clone(), stanza)).await
+                        {
+                            error!("Cannot send stanza to internal channel: {}", err);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
     }
 
-    pub fn event_loop(this: Arc<Mutex<Self>>) {
-        while this.lock().unwrap().event_queue.len() > 0 {
-            let event = this.lock().unwrap().event_queue.remove(0);
+    pub async fn event_loop(&mut self) -> Result<(), ()> {
+        while self.event_queue.len() > 0 {
+            let event = self.event_queue.remove(0);
+            debug!("Event: {:?}", event);
             {
-                let mut aparte = this.lock().unwrap();
-                let plugins = Rc::clone(&aparte.plugins);
+                let plugins = Rc::clone(&self.plugins);
                 for (_, plugin) in plugins.iter() {
-                    plugin.borrow_mut().as_plugin().on_event(&mut aparte, &event);
+                    plugin.borrow_mut().as_plugin().on_event(self, &event);
                 }
+                self.send_loop().await;
             }
 
             match event {
                 Event::Start => {
-                    let mut aparte = this.lock().unwrap();
-                    aparte.start();
+                    self.start();
                 }
-                Event::Command(command) => {
-                    let mut aparte = this.lock().unwrap();
-                    match aparte.parse_command(command) {
-                        Err(err) => aparte.log(err),
-                        Ok(()) => {},
-                    }
+                Event::Command(command) => match self.parse_command(command) {
+                    Err(err) => self.log(err),
+                    Ok(()) => {}
                 },
                 Event::SendMessage(message) => {
-                    let mut aparte = this.lock().unwrap();
-                    aparte.schedule(Event::Message(message.clone()));
+                    self.schedule(Event::Message(message.clone()));
                     if let Ok(xmpp_message) = Element::try_from(message) {
-                        aparte.send(xmpp_message);
+                        self.send(xmpp_message);
+                    }
+                }
+                Event::Connect(account, password) => {
+                    self.connect(&account, password).await;
+                }
+                Event::Connected(jid) => {
+                    self.log(format!("Connected as {}", jid));
+                    let mut presence = Presence::new(PresenceType::None);
+                    presence.show = Some(PresenceShow::Chat);
+
+                    self.send(presence.into());
+                }
+                Event::Disconnected(jid, err) => {
+                    self.log(format!("Connection lost for {}: {}", jid, err));
+                }
+                Event::AuthError(jid, err) => {
+                    self.log(format!("Authentication error for {}: {}", jid, err));
+                }
+                Event::Stanza(_jid, stanza) => {
+                    // TODO propagate jid?
+                    self.handle_stanza(stanza);
+                }
+                Event::Join(jid, change_window) => match self.current_connection() {
+                    Some(connection) => {
+                        let to = match jid.clone() {
+                            Jid::Full(jid) => jid,
+                            Jid::Bare(jid) => {
+                                let node = connection.node.clone().unwrap();
+                                jid.with_resource(node)
+                            }
+                        };
+                        let from: Jid = connection.into();
+
+                        let mut presence = Presence::new(PresenceType::None);
+                        presence = presence.with_to(Jid::Full(to.clone()));
+                        presence = presence.with_from(from);
+                        presence.add_payload(Muc::new());
+                        self.send(presence.into());
+
+                        self.log(format!("Joined {}", jid));
+                        self.schedule(Event::Joined(to, change_window));
+                    }
+                    None => {
+                        self.log(format!("No connection found"));
                     }
                 },
-                Event::Connect(jid, password) => {
-                    Aparte::connect(this.clone(), jid, password);
-                },
-                _ => {},
+                Event::Quit => {
+                    return Err(());
+                }
+                _ => {}
             }
+            self.send_loop().await;
         }
+
+        Ok(())
     }
 
     pub fn schedule(&mut self, event: Event) {
         self.event_queue.push(event);
     }
 
-    fn ex_schedule(this: Arc<Mutex<Self>>, event: Event) {
-        let mut aparte = this.lock().unwrap();
-        aparte.schedule(event);
-    }
-
     pub fn log(&mut self, message: String) {
         let message = Message::log(message);
         self.schedule(Event::Message(message));
-    }
-
-    fn ex_log(this: Arc<Mutex<Self>>, message: String) {
-        let mut aparte = this.lock().unwrap();
-        aparte.log(message);
     }
 
     pub fn handle_stanza(&mut self, stanza: Element) {
@@ -658,8 +803,8 @@ impl Aparte {
         } else if let Some(iq) = Iq::try_from(stanza.clone()).ok() {
             if let IqType::Error(stanza) = iq.payload.clone() {
                 if let Some(text) = stanza.texts.get("en") {
-                  let message = Message::log(text.clone());
-                  self.schedule(Event::Message(message));
+                    let message = Message::log(text.clone());
+                    self.schedule(Event::Message(message));
                 }
             }
             self.schedule(Event::Iq(iq));
@@ -669,41 +814,98 @@ impl Aparte {
     }
 
     fn handle_message(&mut self, message: XmppParsersMessage) {
-        if let (Some(from), Some(to)) = (message.from, message.to) {
-            if let Some(ref body) = message.bodies.get("") {
-                match message.type_ {
-                    XmppParsersMessageType::Error => {},
-                    XmppParsersMessageType::Chat => {
-                        let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                        let timestamp = Utc::now();
-                        let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
-                        self.schedule(Event::Message(message));
-                    },
-                    XmppParsersMessageType::Groupchat => {
-                        let id = message.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                        let timestamp = Utc::now();
-                        let message = Message::incoming_groupchat(id, timestamp, &from, &to, &body.0);
-                        self.schedule(Event::Message(message));
-                    },
-                    _ => {},
-                }
-            }
+        match message.type_ {
+            XmppParsersMessageType::Chat => self.handle_chat_message(message),
+            XmppParsersMessageType::Groupchat => self.handle_groupchat_message(message),
+            XmppParsersMessageType::Headline => self.handle_headline_message(message),
+            XmppParsersMessageType::Error => {},
+            XmppParsersMessageType::Normal => {},
+        };
+    }
 
-            for payload in message.payloads {
-                if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
-                    if let Some(ref original) = received.forwarded.stanza {
-                        if original.type_ != XmppParsersMessageType::Error {
-                            if let (Some(from), Some(to)) = (original.from.as_ref(), original.to.as_ref()) {
-                                if let Some(body) = original.bodies.get("") {
-                                    let id = original.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-                                    let timestamp = Utc::now();
-                                    let message = Message::incoming_chat(id, timestamp, &from, &to, &body.0);
-                                    self.schedule(Event::Message(message));
-                                }
-                            }
-                        }
+    fn handle_chat_message(&mut self, message: XmppParsersMessage) {
+        let id = message
+            .id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        if let (Some(from), Some(to)) = (message.from.clone(), message.to.clone()) {
+            if let Some((_, ref body)) = message.get_best_body(vec![]) {
+                let mut timestamp = None;
+                for payload in message.payloads.iter().cloned() {
+                    if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok()
+                    {
+                        timestamp = Some(delay.stamp.0);
                     }
                 }
+                let message = Message::incoming_chat(
+                    id,
+                    timestamp.unwrap_or(LocalTz::now().into()),
+                    &from,
+                    &to,
+                    &body.0,
+                    );
+                self.schedule(Event::Message(message));
+            }
+        }
+
+        for payload in message.payloads.iter().cloned() {
+            if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
+                self.handle_message_carbons(received);
+            }
+        }
+    }
+
+    fn handle_groupchat_message(&mut self, message: XmppParsersMessage) {
+        let id = message
+            .id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        if let (Some(from), Some(to)) = (message.from.clone(), message.to.clone()) {
+            if let Some((_, ref body)) = message.get_best_body(vec![]) {
+                let mut timestamp = None;
+                for payload in message.payloads.iter().cloned() {
+                    if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok()
+                    {
+                        timestamp = Some(delay.stamp.0);
+                    }
+                }
+                let message = Message::incoming_groupchat(
+                    id,
+                    timestamp.unwrap_or(LocalTz::now().into()),
+                    &from,
+                    &to,
+                    &body.0,
+                    );
+                self.schedule(Event::Message(message));
+            }
+        }
+    }
+
+    fn handle_message_carbons(&mut self, received: xmpp_parsers::carbons::Received) {
+        if let Some(ref original) = received.forwarded.stanza {
+            if original.type_ != XmppParsersMessageType::Error {
+                if let (Some(from), Some(to)) =
+                    (original.from.as_ref(), original.to.as_ref())
+                    {
+                        if let Some(body) = original.bodies.get("") {
+                            let id = original
+                                .id
+                                .clone()
+                                .unwrap_or_else(|| Uuid::new_v4().to_string());
+                            let timestamp = LocalTz::now().into();
+                            let message =
+                                Message::incoming_chat(id, timestamp, &from, &to, &body.0);
+                            self.schedule(Event::Message(message));
+                        }
+                    }
+            }
+        }
+    }
+
+    fn handle_headline_message(&mut self, message: XmppParsersMessage) {
+        for payload in message.payloads.iter().cloned() {
+            if let Some(pubsub_event) = xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload).ok() {
+                self.schedule(Event::PubSub(pubsub_event));
             }
         }
     }

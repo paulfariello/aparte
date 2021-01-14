@@ -1,35 +1,41 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use bytes::BytesMut;
-use chrono::Utc;
-use chrono::offset::{TimeZone, Local};
+use chrono::offset::{Local, TimeZone};
+use chrono::Local as LocalTz;
+use futures::task::{AtomicWaker, Context, Poll};
+use futures::Stream;
+use linked_hash_set::LinkedHashSet;
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::{Error as IoError, ErrorKind};
-use std::io::{Write, Stdout};
+use std::hash::{Hash, Hasher};
+use std::io::Error as IoError;
+use std::io::{Read, Stdout, Write};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::thread;
 use termion::color;
-use termion::event::Key;
-use termion::input::TermRead;
+use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
+use termion::get_tty;
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
-use tokio::codec::FramedRead;
-use tokio_codec::{Decoder};
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::core::{Plugin, Aparte, Event};
-use crate::{contact, conversation};
+use crate::command::Command;
+use crate::core::{Aparte, Event, Plugin};
 use crate::message::{Message, XmppMessage};
-use crate::command::{Command};
-use crate::terminus::{View, ViewTrait, Dimension, LinearLayout, FrameLayout, Input, Orientation, BufferedWin, Window, ListView};
+use crate::terminus::{
+    BufferedWin, Dimension, FrameLayout, Input, LinearLayout, ListView, Orientation, View,
+    ViewTrait, Window,
+};
+use crate::{contact, conversation};
 
-pub type EventStream = FramedRead<tokio::reactor::PollEvented2<tokio_file_unix::File<std::fs::File>>, KeyCodec>;
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 #[derive(Debug, Clone)]
@@ -44,11 +50,18 @@ struct Conversation {
     kind: ConversationKind,
 }
 
+enum UIEvent {
+    Core(Event),
+    Validate(Rc<RefCell<Option<(String, bool)>>>),
+    GetInput(Rc<RefCell<Option<(String, usize, bool)>>>),
+    AddWindow(String, Option<Box<dyn ViewTrait<UIEvent>>>),
+}
+
 struct TitleBar {
     window_name: Option<String>,
 }
 
-impl View<'_, TitleBar, Event> {
+impl View<'_, TitleBar, UIEvent> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -64,9 +77,7 @@ impl View<'_, TitleBar, Event> {
             cursor_x: None,
             #[cfg(feature = "no-cursor-save")]
             cursor_y: None,
-            content: TitleBar {
-                window_name: None,
-            },
+            content: TitleBar { window_name: None },
             event_handler: None,
         }
     }
@@ -77,7 +88,7 @@ impl View<'_, TitleBar, Event> {
     }
 }
 
-impl ViewTrait<Event> for View<'_, TitleBar, Event> {
+impl ViewTrait<UIEvent> for View<'_, TitleBar, UIEvent> {
     fn redraw(&mut self) {
         self.save_cursor();
 
@@ -85,9 +96,15 @@ impl ViewTrait<Event> for View<'_, TitleBar, Event> {
             let mut screen = self.screen.borrow_mut();
 
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-            write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+            write!(
+                screen,
+                "{}{}",
+                color::Bg(color::Blue),
+                color::Fg(color::White)
+            )
+            .unwrap();
 
-            for _ in 0 .. self.w.unwrap() {
+            for _ in 0..self.w.unwrap() {
                 write!(screen, " ").unwrap();
             }
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
@@ -95,19 +112,25 @@ impl ViewTrait<Event> for View<'_, TitleBar, Event> {
                 write!(screen, " {}", window_name).unwrap();
             }
 
-            write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
+            write!(
+                screen,
+                "{}{}",
+                color::Bg(color::Reset),
+                color::Fg(color::Reset)
+            )
+            .unwrap();
         }
 
         self.restore_cursor();
-        while let Err(_) = self.screen.borrow_mut().flush() {};
+        while let Err(_) = self.screen.borrow_mut().flush() {}
     }
 
-    fn event(&mut self, event: &mut Event) {
+    fn event(&mut self, event: &mut UIEvent) {
         match event {
-            Event::ChangeWindow(name) => {
+            UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_name(name);
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 }
@@ -119,7 +142,7 @@ struct WinBar {
     highlighted: Vec<String>,
 }
 
-impl View<'_, WinBar, Event> {
+impl View<'_, WinBar, UIEvent> {
     fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -143,7 +166,6 @@ impl View<'_, WinBar, Event> {
             },
             event_handler: None,
         }
-
     }
 
     fn add_window(&mut self, window: &str) {
@@ -158,14 +180,20 @@ impl View<'_, WinBar, Event> {
     }
 
     fn highlight_window(&mut self, window: &str) {
-        if self.content.highlighted.iter().find(|w| w == &window).is_none() {
+        if self
+            .content
+            .highlighted
+            .iter()
+            .find(|w| w == &window)
+            .is_none()
+        {
             self.content.highlighted.push(window.to_string());
             self.redraw();
         }
     }
 }
 
-impl ViewTrait<Event> for View<'_, WinBar, Event> {
+impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
     fn redraw(&mut self) {
         self.save_cursor();
 
@@ -174,9 +202,15 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
             let mut written = 0;
 
             write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-            write!(screen, "{}{}", color::Bg(color::Blue), color::Fg(color::White)).unwrap();
+            write!(
+                screen,
+                "{}{}",
+                color::Bg(color::Blue),
+                color::Fg(color::White)
+            )
+            .unwrap();
 
-            for _ in 0 .. self.w.unwrap() {
+            for _ in 0..self.w.unwrap() {
                 write!(screen, " ").unwrap();
             }
 
@@ -187,7 +221,14 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
             }
 
             if let Some(current_window) = &self.content.current_window {
-                write!(screen, " [{}{}{}]", termion::style::Bold, current_window, termion::style::NoBold).unwrap();
+                write!(
+                    screen,
+                    " [{}{}{}]",
+                    termion::style::Bold,
+                    current_window,
+                    termion::style::NoBold
+                )
+                .unwrap();
                 written += 3 + current_window.len();
             } else {
                 write!(screen, " []").unwrap();
@@ -196,11 +237,12 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
 
             let mut first = true;
             for window in &self.content.highlighted {
-                if window.len() > self.w.unwrap() as usize - written {
+                // Keep space for at least ", …]"
+                if window.len() + written + 4 > self.w.unwrap() as usize {
                     if !first {
-                        write!(screen, "…").unwrap();
-                        written += 1;
+                        write!(screen, ", …").unwrap();
                     }
+                    break;
                 }
 
                 if first {
@@ -211,7 +253,14 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
                     write!(screen, ", ").unwrap();
                     written += 2;
                 }
-                write!(screen, "{}{}{}", termion::style::Bold, window, termion::style::NoBold).unwrap();
+                write!(
+                    screen,
+                    "{}{}{}",
+                    termion::style::Bold,
+                    window,
+                    termion::style::NoBold
+                )
+                .unwrap();
                 written += window.len();
             }
 
@@ -219,29 +268,37 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
                 write!(screen, "]").unwrap();
             }
 
-            write!(screen, "{}{}", color::Bg(color::Reset), color::Fg(color::Reset)).unwrap();
+            write!(
+                screen,
+                "{}{}",
+                color::Bg(color::Reset),
+                color::Fg(color::Reset)
+            )
+            .unwrap();
         }
 
         self.restore_cursor();
-        while let Err(_) = self.screen.borrow_mut().flush() {};
+        while let Err(_) = self.screen.borrow_mut().flush() {}
     }
 
-    fn event(&mut self, event: &mut Event) {
+    fn event(&mut self, event: &mut UIEvent) {
         match event {
-            Event::ChangeWindow(name) => {
+            UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_current_window(name);
-            },
-            Event::AddWindow(name, _) => {
+            }
+            UIEvent::AddWindow(name, _) => {
                 self.add_window(name);
-            },
-            Event::Connected(jid) => {
+            }
+            UIEvent::Core(Event::Connected(jid)) => {
                 self.content.connection = Some(jid.to_string());
                 self.redraw();
-            },
-            Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
+            }
+            UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Chat(message)))) => {
                 let mut highlighted = None;
                 for window in &self.content.windows {
-                    if &message.from.to_string() == window && Some(window) != self.content.current_window.as_ref() {
+                    if &message.from.to_string() == window
+                        && Some(window) != self.content.current_window.as_ref()
+                    {
                         highlighted = Some(window.clone());
                     }
                 }
@@ -249,11 +306,13 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
                     self.highlight_window(&highlighted.unwrap());
                     self.redraw();
                 }
-            },
-            Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
+            }
+            UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Groupchat(message)))) => {
                 let mut highlighted = None;
                 for window in &self.content.windows {
-                    if &message.from.to_string() == window && Some(window) != self.content.current_window.as_ref() {
+                    if &message.from.to_string() == window
+                        && Some(window) != self.content.current_window.as_ref()
+                    {
                         highlighted = Some(window.clone());
                     }
                 }
@@ -261,8 +320,8 @@ impl ViewTrait<Event> for View<'_, WinBar, Event> {
                     self.highlight_window(&highlighted.unwrap());
                     self.redraw();
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 }
@@ -273,18 +332,31 @@ impl fmt::Display for Message {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 for line in message.body.lines() {
-                    write!(f, "{}{} - {}\n", color::Fg(color::White), timestamp.format("%T"), line)?;
+                    write!(
+                        f,
+                        "{}{} - {}\n",
+                        color::Fg(color::White),
+                        timestamp.format("%T"),
+                        line
+                    )?;
                 }
 
                 Ok(())
-            },
+            }
             Message::Incoming(XmppMessage::Chat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 let padding_len = format!("{} - {}: ", timestamp.format("%T"), message.from).len();
                 let padding = " ".repeat(padding_len);
 
-                write!(f, "{}{} - {}{}:{} ", color::Fg(color::White), timestamp.format("%T"),
-                    color::Fg(color::Green), message.from, color::Fg(color::White))?;
+                write!(
+                    f,
+                    "{}{} - {}{}:{} ",
+                    color::Fg(color::White),
+                    timestamp.format("%T"),
+                    color::Fg(color::Green),
+                    message.from,
+                    color::Fg(color::White)
+                )?;
 
                 let mut iter = message.body.lines();
                 if let Some(line) = iter.next() {
@@ -295,20 +367,35 @@ impl fmt::Display for Message {
                 }
 
                 Ok(())
-            },
+            }
             Message::Outgoing(XmppMessage::Chat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                write!(f, "{}{} - {}me:{} {}", color::Fg(color::White), timestamp.format("%T"),
-                    color::Fg(color::Yellow), color::Fg(color::White), message.body)
+                write!(
+                    f,
+                    "{}{} - {}me:{} {}",
+                    color::Fg(color::White),
+                    timestamp.format("%T"),
+                    color::Fg(color::Yellow),
+                    color::Fg(color::White),
+                    message.body
+                )
             }
             Message::Incoming(XmppMessage::Groupchat(message)) => {
                 if let Jid::Full(from) = &message.from_full {
                     let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                    let padding_len = format!("{} - {}: ", timestamp.format("%T"), from.resource).len();
+                    let padding_len =
+                        format!("{} - {}: ", timestamp.format("%T"), from.resource).len();
                     let padding = " ".repeat(padding_len);
 
-                    write!(f, "{}{} - {}{}:{} ", color::Fg(color::White), timestamp.format("%T"),
-                        color::Fg(color::Green), from.resource, color::Fg(color::White))?;
+                    write!(
+                        f,
+                        "{}{} - {}{}:{} ",
+                        color::Fg(color::White),
+                        timestamp.format("%T"),
+                        color::Fg(color::Green),
+                        from.resource,
+                        color::Fg(color::White)
+                    )?;
 
                     let mut iter = message.body.lines();
                     if let Some(line) = iter.next() {
@@ -319,11 +406,18 @@ impl fmt::Display for Message {
                     }
                 }
                 Ok(())
-            },
+            }
             Message::Outgoing(XmppMessage::Groupchat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                write!(f, "{}{} - {}me:{} {}", color::Fg(color::White), timestamp.format("%T"),
-                    color::Fg(color::Yellow), color::Fg(color::White), message.body)
+                write!(
+                    f,
+                    "{}{} - {}me:{} {}",
+                    color::Fg(color::White),
+                    timestamp.format("%T"),
+                    color::Fg(color::Yellow),
+                    color::Fg(color::White),
+                    message.body
+                )
             }
         }
     }
@@ -331,15 +425,26 @@ impl fmt::Display for Message {
 
 impl fmt::Display for contact::Group {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}{}", color::Fg(color::Yellow), self.0, color::Fg(color::White))
+        write!(
+            f,
+            "{}{}{}",
+            color::Fg(color::Yellow),
+            self.0,
+            color::Fg(color::White)
+        )
     }
 }
 
 impl fmt::Display for contact::Contact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.presence {
-            contact::Presence::Available | contact::Presence::Chat => write!(f, "{}", color::Fg(color::Green))?,
-            contact::Presence::Away | contact::Presence::Dnd | contact::Presence::Xa | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
+            contact::Presence::Available | contact::Presence::Chat => {
+                write!(f, "{}", color::Fg(color::Green))?
+            }
+            contact::Presence::Away
+            | contact::Presence::Dnd
+            | contact::Presence::Xa
+            | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
         };
 
         match &self.name {
@@ -349,19 +454,94 @@ impl fmt::Display for contact::Contact {
     }
 }
 
+impl fmt::Display for contact::Bookmark {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "{}{}", name, color::Fg(color::White)),
+            None => write!(f, "{}{}", self.jid, color::Fg(color::White)),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum RosterItem {
+    Contact(contact::Contact),
+    Bookmark(contact::Bookmark),
+    Window(String),
+}
+
+impl Hash for RosterItem {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Contact(contact) => contact.jid.hash(state),
+            Self::Bookmark(bookmark) => bookmark.jid.hash(state),
+            Self::Window(window) => window.hash(state),
+        };
+    }
+}
+
+impl PartialEq for RosterItem {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Contact(a), Self::Contact(b)) => a.eq(b),
+            (Self::Bookmark(a), Self::Bookmark(b)) => a.eq(b),
+            (Self::Window(a), Self::Window(b)) => a.eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RosterItem {}
+
+impl fmt::Display for RosterItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self {
+            Self::Contact(contact) => contact.fmt(f),
+            Self::Bookmark(bookmark) => bookmark.fmt(f),
+            Self::Window(window) => write!(f, "{}", window),
+        }
+    }
+}
+
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}{}", color::Fg(color::Green), self.nick, color::Fg(color::White))
+        write!(
+            f,
+            "{}{}{}",
+            color::Fg(color::Green),
+            self.nick,
+            color::Fg(color::White)
+        )
     }
 }
 
 impl fmt::Display for conversation::Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            conversation::Role::Moderator => write!(f, "{}Moderators{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
-            conversation::Role::Participant => write!(f, "{}Participants{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
-            conversation::Role::Visitor => write!(f, "{}Visitors{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
-            conversation::Role::None => write!(f, "{}Others{}", color::Fg(color::Yellow), color::Fg(color::Yellow)),
+            conversation::Role::Moderator => write!(
+                f,
+                "{}Moderators{}",
+                color::Fg(color::Yellow),
+                color::Fg(color::Yellow)
+            ),
+            conversation::Role::Participant => write!(
+                f,
+                "{}Participants{}",
+                color::Fg(color::Yellow),
+                color::Fg(color::Yellow)
+            ),
+            conversation::Role::Visitor => write!(
+                f,
+                "{}Visitors{}",
+                color::Fg(color::Yellow),
+                color::Fg(color::Yellow)
+            ),
+            conversation::Role::None => write!(
+                f,
+                "{}Others{}",
+                color::Fg(color::Yellow),
+                color::Fg(color::Yellow)
+            ),
         }
     }
 }
@@ -370,106 +550,141 @@ pub struct UIPlugin {
     screen: Rc<RefCell<Screen>>,
     windows: Vec<String>,
     current_window: Option<String>,
-    unread_windows: Vec<String>,
+    unread_windows: LinkedHashSet<String>,
     conversations: HashMap<String, Conversation>,
-    root: Box<dyn ViewTrait<Event>>,
+    root: Box<dyn ViewTrait<UIEvent>>,
     password_command: Option<Command>,
-    running: Rc<AtomicBool>,
 }
 
 impl UIPlugin {
     pub fn event_stream(&self) -> EventStream {
-        let file = tokio_file_unix::raw_stdin().unwrap();
-        let file = tokio_file_unix::File::new_nb(file).unwrap();
-        let file = file.into_io(&tokio::reactor::Handle::default()).unwrap();
-
-        FramedRead::new(file, KeyCodec::new(Rc::clone(&self.running)))
+        EventStream::new()
     }
 
     fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
         let jid = conversation.jid.clone();
         match conversation.kind {
             ConversationKind::Chat => {
-                let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(move |view, event| {
-                    match event {
-                        Event::Message(Message::Incoming(XmppMessage::Chat(message))) => {
-                            // TODO check to == us
-                            if message.from == jid {
-                                view.recv_message(&Message::Incoming(XmppMessage::Chat(message.clone())));
-                                view.bell();
+                let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone())
+                    .with_event(move |view, event| {
+                        match event {
+                            UIEvent::Core(Event::Message(Message::Incoming(
+                                XmppMessage::Chat(message),
+                            ))) => {
+                                // TODO check to == us
+                                if message.from == jid {
+                                    view.recv_message(&Message::Incoming(XmppMessage::Chat(
+                                        message.clone(),
+                                    )));
+                                    view.bell();
+                                }
                             }
-                        },
-                        Event::Message(Message::Outgoing(XmppMessage::Chat(message))) => {
-                            // TODO check from == us
-                            if message.to == jid {
-                                view.recv_message(&Message::Outgoing(XmppMessage::Chat(message.clone())));
+                            UIEvent::Core(Event::Message(Message::Outgoing(
+                                XmppMessage::Chat(message),
+                            ))) => {
+                                // TODO check from == us
+                                if message.to == jid {
+                                    view.recv_message(&Message::Outgoing(XmppMessage::Chat(
+                                        message.clone(),
+                                    )));
+                                }
                             }
-                        },
-                        Event::Key(Key::PageUp) => {
-                            //aparte.schedule(Event::LoadHistory(jid.clone()));
-                            view.page_up();
-                        },
-                        Event::Key(Key::PageDown) => view.page_down(),
-                        _ => {},
-                    }
-                });
+                            UIEvent::Core(Event::Key(Key::PageUp)) => {
+                                //aparte.schedule(Event::LoadHistory(jid.clone()));
+                                view.page_up();
+                            }
+                            UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                            _ => {}
+                        }
+                    });
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut Event::AddWindow(conversation.jid.to_string(), Some(Box::new(chat))));
-                self.conversations.insert(conversation.jid.to_string(), conversation);
-            },
+                self.root.event(&mut UIEvent::AddWindow(
+                    conversation.jid.to_string(),
+                    Some(Box::new(chat)),
+                ));
+                self.conversations
+                    .insert(conversation.jid.to_string(), conversation);
+            }
             ConversationKind::Group => {
-                let mut layout = View::<LinearLayout::<Event>, Event>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+                let mut layout = View::<LinearLayout<UIEvent>, UIEvent>::new(
+                    self.screen.clone(),
+                    Orientation::Horizontal,
+                    Dimension::MatchParent,
+                    Dimension::MatchParent,
+                )
+                .with_event(|layout, event| {
                     for child in layout.content.children.iter_mut() {
                         child.event(event);
                     }
                 });
 
                 let chat_jid = jid.clone();
-                let chat = View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(move |view, event| {
-                    match event {
-                        Event::Message(Message::Incoming(XmppMessage::Groupchat(message))) => {
-                            // TODO check to == us
-                            if message.from == chat_jid {
-                                view.recv_message(&Message::Incoming(XmppMessage::Groupchat(message.clone())));
-                                view.bell();
+                let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone())
+                    .with_event(move |view, event| {
+                        match event {
+                            UIEvent::Core(Event::Message(Message::Incoming(
+                                XmppMessage::Groupchat(message),
+                            ))) => {
+                                // TODO check to == us
+                                if message.from == chat_jid {
+                                    view.recv_message(&Message::Incoming(XmppMessage::Groupchat(
+                                        message.clone(),
+                                    )));
+                                    view.bell();
+                                }
                             }
-                        },
-                        Event::Message(Message::Outgoing(XmppMessage::Groupchat(message))) => {
-                            // TODO check from == us
-                            if message.to == chat_jid {
-                                view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(message.clone())));
+                            UIEvent::Core(Event::Message(Message::Outgoing(
+                                XmppMessage::Groupchat(message),
+                            ))) => {
+                                // TODO check from == us
+                                if message.to == chat_jid {
+                                    view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(
+                                        message.clone(),
+                                    )));
+                                }
                             }
-                        },
-                        Event::Key(Key::PageUp) => view.page_up(),
-                        Event::Key(Key::PageDown) => view.page_down(),
-                        _ => {},
-                    }
-                });
+                            UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
+                            UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                            _ => {}
+                        }
+                    });
                 layout.push(chat);
 
                 let roster_jid = jid.clone();
-                let roster = View::<ListView<conversation::Role, conversation::Occupant>, Event>::new(self.screen.clone()).with_none_group().with_event(move |view, event| {
-                    match event {
-                        Event::Occupant{conversation, occupant} => {
+                let roster =
+                    View::<ListView<conversation::Role, conversation::Occupant>, UIEvent>::new(
+                        self.screen.clone(),
+                    )
+                    .with_none_group()
+                    .with_unique_item()
+                    .with_event(move |view, event| match event {
+                        UIEvent::Core(Event::Occupant {
+                            conversation,
+                            occupant,
+                        }) => {
                             if roster_jid == *conversation {
                                 view.insert(occupant.clone(), Some(occupant.role));
                             }
-                        },
-                        _ => {},
-                    }
-                });
+                        }
+                        _ => {}
+                    });
                 layout.push(roster);
 
                 self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut Event::AddWindow(conversation.jid.to_string(), Some(Box::new(layout))));
-                self.conversations.insert(conversation.jid.to_string(), conversation);
+                self.root.event(&mut UIEvent::AddWindow(
+                    conversation.jid.to_string(),
+                    Some(Box::new(layout)),
+                ));
+                self.conversations
+                    .insert(conversation.jid.to_string(), conversation);
             }
         }
     }
 
     pub fn change_window(&mut self, window: &str) {
-        self.root.event(&mut Event::ChangeWindow(window.to_string()));
+        self.root
+            .event(&mut UIEvent::Core(Event::ChangeWindow(window.to_string())));
         self.current_window = Some(window.to_string());
     }
 
@@ -506,7 +721,13 @@ impl Plugin for UIPlugin {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
-        let mut layout = View::<LinearLayout::<Event>, Event>::new(screen.clone(), Orientation::Vertical, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+        let mut layout = View::<LinearLayout<UIEvent>, UIEvent>::new(
+            screen.clone(),
+            Orientation::Vertical,
+            Dimension::MatchParent,
+            Dimension::MatchParent,
+        )
+        .with_event(|layout, event| {
             for child in layout.content.children.iter_mut() {
                 child.event(event);
             }
@@ -518,61 +739,64 @@ impl Plugin for UIPlugin {
             }
         });
 
-
-        let title_bar = View::<TitleBar, Event>::new(screen.clone());
-        let frame = View::<FrameLayout::<String, Event>, Event>::new(screen.clone()).with_event(|frame, event| {
-            match event {
-                Event::ChangeWindow(name) => {
-                    frame.current(name.to_string());
-                },
-                Event::AddWindow(name, view) => {
-                    let view = view.take().unwrap();
-                    frame.insert(name.to_string(), view);
-                },
-                event => {
-                    for (_, child) in frame.content.children.iter_mut() {
-                        child.event(event);
+        let title_bar = View::<TitleBar, UIEvent>::new(screen.clone());
+        let frame = View::<FrameLayout<String, UIEvent>, UIEvent>::new(screen.clone()).with_event(
+            |frame, event| {
+                match event {
+                    UIEvent::Core(Event::ChangeWindow(name)) => {
+                        frame.current(name.to_string());
                     }
-                },
-            }
-        });
-        let win_bar = View::<WinBar, Event>::new(screen.clone());
-        let input = View::<Input, Event>::new(screen.clone()).with_event(|input, event| {
-            match event {
-                Event::Key(Key::Char(c)) => input.key(*c),
-                Event::Key(Key::Backspace) => input.backspace(),
-                Event::Key(Key::Delete) => input.delete(),
-                Event::Key(Key::Home) => input.home(),
-                Event::Key(Key::End) => input.end(),
-                Event::Key(Key::Up) => input.previous(),
-                Event::Key(Key::Down) => input.next(),
-                Event::Key(Key::Left) => input.left(),
-                Event::Key(Key::Right) => input.right(),
-                Event::Key(Key::Ctrl('a')) => input.home(),
-                Event::Key(Key::Ctrl('b')) => input.left(),
-                Event::Key(Key::Ctrl('e')) => input.end(),
-                Event::Key(Key::Ctrl('f')) => input.right(),
-                Event::Key(Key::Ctrl('h')) => input.backspace(),
-                Event::Key(Key::Ctrl('w')) => input.backward_delete_word(),
-                Event::Key(Key::Ctrl('u')) => input.delete_from_cursor_to_start(),
-                Event::Key(Key::Ctrl('k')) => input.delete_from_cursor_to_end(),
-                Event::Validate(result) => {
+                    UIEvent::AddWindow(name, view) => {
+                        let view = view.take().unwrap();
+                        frame.insert(name.to_string(), view);
+                    }
+                    _ => {}
+                }
+                for (_, child) in frame.content.children.iter_mut() {
+                    child.event(event);
+                }
+            },
+        );
+        let win_bar = View::<WinBar, UIEvent>::new(screen.clone());
+        let input =
+            View::<Input, UIEvent>::new(screen.clone()).with_event(|input, event| match event {
+                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
+                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
+                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
+                UIEvent::Core(Event::Key(Key::End)) => input.end(),
+                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
+                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
+                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
+                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
+                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
+                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
+                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
+                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
+                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
+                UIEvent::Validate(result) => {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
-                },
-                Event::GetInput(result) => {
+                }
+                UIEvent::GetInput(result) => {
                     let mut result = result.borrow_mut();
-                    result.replace((input.content.buf.clone(), input.content.cursor, input.content.password));
-                },
-                Event::Completed(raw_buf, cursor) => {
+                    result.replace((
+                        input.content.buf.clone(),
+                        input.content.cursor,
+                        input.content.password,
+                    ));
+                }
+                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
                     input.content.buf = raw_buf.clone();
                     input.content.cursor = cursor.clone();
                     input.redraw();
-                },
-                Event::ReadPassword(_) => input.password(),
+                }
+                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 _ => {}
-            }
-        });
+            });
 
         layout.push(title_bar);
         layout.push(frame);
@@ -583,11 +807,10 @@ impl Plugin for UIPlugin {
             screen: screen,
             root: Box::new(layout),
             windows: Vec::new(),
-            unread_windows: Vec::new(),
+            unread_windows: LinkedHashSet::new(),
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
-            running: Rc::new(AtomicBool::new(true)),
         }
     }
 
@@ -602,39 +825,82 @@ impl Plugin for UIPlugin {
         self.root.layout(1, 1);
         self.root.redraw();
 
-        let mut console = View::<LinearLayout::<Event>, Event>::new(self.screen.clone(), Orientation::Horizontal, Dimension::MatchParent, Dimension::MatchParent).with_event(|layout, event| {
+        let mut console = View::<LinearLayout<UIEvent>, UIEvent>::new(
+            self.screen.clone(),
+            Orientation::Horizontal,
+            Dimension::MatchParent,
+            Dimension::MatchParent,
+        )
+        .with_event(|layout, event| {
             for child in layout.content.children.iter_mut() {
                 child.event(event);
             }
         });
-        console.push(View::<BufferedWin<Message>, Event>::new(self.screen.clone()).with_event(|view, event| {
-            match event {
-                Event::Message(Message::Log(message)) => {
-                    view.recv_message(&Message::Log(message.clone()));
-                },
-                Event::Key(Key::PageUp) => view.page_up(),
-                Event::Key(Key::PageDown) => view.page_down(),
-                _ => {},
-            }
-        }));
-        let roster = View::<ListView<contact::Group, contact::Contact>, Event>::new(self.screen.clone()).with_none_group().with_event(|view, event| {
-            match event {
-                Event::Contact(contact) | Event::ContactUpdate(contact) => {
-                    if contact.groups.len() > 0 {
-                        for group in &contact.groups {
-                            view.insert(contact.clone(), Some(group.clone()));
-                        }
-                    } else {
-                            view.insert(contact.clone(), None);
+        console.push(
+            View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone()).with_event(
+                |view, event| match event {
+                    UIEvent::Core(Event::Message(Message::Log(message))) => {
+                        view.recv_message(&Message::Log(message.clone()));
                     }
-                }
-                _ => {},
-            }
-        });
+                    UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
+                    UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                    _ => {}
+                },
+            ),
+        );
+        let roster =
+            View::<ListView<contact::Group, RosterItem>, UIEvent>::new(self.screen.clone())
+                .with_none_group()
+                .with_event(|view, event| match event {
+                    UIEvent::Core(Event::Connected(_)) => {
+                        view.add_group(contact::Group(String::from("Windows")));
+                        view.add_group(contact::Group(String::from("Contacts")));
+                        view.add_group(contact::Group(String::from("Bookmarks")));
+                    }
+                    UIEvent::Core(Event::Contact(contact))
+                    | UIEvent::Core(Event::ContactUpdate(contact)) => {
+                        if contact.groups.len() > 0 {
+                            for group in &contact.groups {
+                                view.insert(
+                                    RosterItem::Contact(contact.clone()),
+                                    Some(group.clone()),
+                                );
+                            }
+                        } else {
+                            let group = contact::Group(String::from("Contacts"));
+                            view.insert(RosterItem::Contact(contact.clone()), Some(group));
+                        }
+                    }
+                    UIEvent::Core(Event::Bookmark(bookmark)) => {
+                        let group = contact::Group(String::from("Bookmarks"));
+                        view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                    }
+                    UIEvent::Core(Event::DeletedBookmark(jid)) => {
+                        let group = contact::Group(String::from("Bookmarks"));
+                        let bookmark = contact::Bookmark {
+                            jid: jid.clone(),
+                            name: None,
+                            nick: None,
+                            password: None,
+                            autojoin: false,
+                            extensions: None,
+                        };
+                        let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                    }
+                    UIEvent::AddWindow(name, _) => {
+                        debug!("test");
+                        let group = contact::Group(String::from("Windows"));
+                        view.insert(RosterItem::Window(name.clone()), Some(group));
+                    }
+                    _ => {}
+                });
         console.push(roster);
 
         self.windows.push("console".to_string());
-        self.root.event(&mut Event::AddWindow("console".to_string(), Some(Box::new(console))));
+        self.root.event(&mut UIEvent::AddWindow(
+            "console".to_string(),
+            Some(Box::new(console)),
+        ));
         self.change_window("console");
 
         Ok(())
@@ -644,124 +910,167 @@ impl Plugin for UIPlugin {
         match event {
             Event::ReadPassword(command) => {
                 self.password_command = Some(command.clone());
-                self.root.event(&mut Event::ReadPassword(command.clone()));
-            },
+                self.root
+                    .event(&mut UIEvent::Core(Event::ReadPassword(command.clone())));
+            }
             Event::Connected(jid) => {
-                self.root.event(&mut Event::Connected(jid.clone()));
-            },
+                self.root
+                    .event(&mut UIEvent::Core(Event::Connected(jid.clone())));
+            }
             Event::Message(message) => {
                 match message {
                     Message::Incoming(XmppMessage::Chat(message)) => {
                         let window_name = message.from.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(aparte, Conversation {
-                                jid: BareJid::from_str(&window_name).unwrap(),
-                                kind: ConversationKind::Chat,
-                            });
+                            self.add_conversation(
+                                aparte,
+                                Conversation {
+                                    jid: BareJid::from_str(&window_name).unwrap(),
+                                    kind: ConversationKind::Chat,
+                                },
+                            );
                         }
 
                         let mut unread = None;
                         for window in &self.windows {
-                            if &message.from.to_string() == window && Some(window) != self.current_window.as_ref() {
+                            if &message.from.to_string() == window
+                                && Some(window) != self.current_window.as_ref()
+                            {
                                 unread = Some(window.clone());
                             }
                         }
                         if unread.is_some() {
-                            self.unread_windows.push(unread.unwrap());
+                            self.unread_windows.insert(unread.unwrap());
                         }
-                    },
+                    }
                     Message::Outgoing(XmppMessage::Chat(message)) => {
                         let window_name = message.to.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(aparte, Conversation {
-                                jid: BareJid::from_str(&window_name).unwrap(),
-                                kind: ConversationKind::Chat,
-                            });
+                            self.add_conversation(
+                                aparte,
+                                Conversation {
+                                    jid: BareJid::from_str(&window_name).unwrap(),
+                                    kind: ConversationKind::Chat,
+                                },
+                            );
                         }
-                    },
+                    }
                     Message::Incoming(XmppMessage::Groupchat(message)) => {
                         let window_name = message.from.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(aparte, Conversation {
-                                jid: BareJid::from_str(&window_name).unwrap(),
-                                kind: ConversationKind::Group,
-                            });
+                            self.add_conversation(
+                                aparte,
+                                Conversation {
+                                    jid: BareJid::from_str(&window_name).unwrap(),
+                                    kind: ConversationKind::Group,
+                                },
+                            );
                         }
 
                         let mut unread = None;
                         for window in &self.windows {
-                            if &message.from.to_string() == window && Some(window) != self.current_window.as_ref() {
+                            if &message.from.to_string() == window
+                                && Some(window) != self.current_window.as_ref()
+                            {
                                 unread = Some(window.clone());
                             }
                         }
                         if unread.is_some() {
-                            self.unread_windows.push(unread.unwrap());
+                            self.unread_windows.insert(unread.unwrap());
                         }
-                    },
+                    }
                     Message::Outgoing(XmppMessage::Groupchat(message)) => {
                         let window_name = message.to.to_string();
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(aparte, Conversation {
-                                jid: BareJid::from_str(&window_name).unwrap(),
-                                kind: ConversationKind::Group,
-                            });
+                            self.add_conversation(
+                                aparte,
+                                Conversation {
+                                    jid: BareJid::from_str(&window_name).unwrap(),
+                                    kind: ConversationKind::Group,
+                                },
+                            );
                         }
                     }
                     Message::Log(_message) => {}
                 };
 
-                self.root.event(&mut Event::Message(message.clone()));
-            },
+                self.root
+                    .event(&mut UIEvent::Core(Event::Message(message.clone())));
+            }
             Event::Chat(jid) => {
                 let win_name = jid.to_string();
                 if !self.conversations.contains_key(&win_name) {
-                    self.add_conversation(aparte, Conversation {
-                        jid: BareJid::from_str(&win_name).unwrap(),
-                        kind: ConversationKind::Chat,
-                    });
+                    self.add_conversation(
+                        aparte,
+                        Conversation {
+                            jid: BareJid::from_str(&win_name).unwrap(),
+                            kind: ConversationKind::Chat,
+                        },
+                    );
                 }
                 self.change_window(&win_name);
-            },
-            Event::Join(jid) => {
+            }
+            Event::Joined(jid, change_window) => {
                 let bare: BareJid = jid.clone().into();
                 let win_name = bare.to_string();
                 if !self.conversations.contains_key(&win_name) {
-                    self.add_conversation(aparte, Conversation {
-                        jid: BareJid::from_str(&win_name).unwrap(),
-                        kind: ConversationKind::Group,
-                    });
+                    self.add_conversation(
+                        aparte,
+                        Conversation {
+                            jid: BareJid::from_str(&win_name).unwrap(),
+                            kind: ConversationKind::Group,
+                        },
+                    );
                 }
-                self.change_window(&win_name);
-            },
+                if *change_window {
+                    self.change_window(&win_name);
+                }
+            }
             Event::Win(window) => {
                 if self.windows.contains(window) {
                     self.change_window(&window);
                 } else {
                     aparte.log(format!("Unknown window {}", window));
                 }
-            },
+            }
             Event::Contact(contact) => {
-                self.root.event(&mut Event::Contact(contact.clone()));
-            },
+                self.root
+                    .event(&mut UIEvent::Core(Event::Contact(contact.clone())));
+            }
             Event::ContactUpdate(contact) => {
-                self.root.event(&mut Event::ContactUpdate(contact.clone()));
-            },
-            Event::Occupant{conversation, occupant} => {
-                self.root.event(&mut Event::Occupant{conversation: conversation.clone(), occupant: occupant.clone()});
-            },
-            Event::Signal(signal_hook::SIGWINCH) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::ContactUpdate(contact.clone())));
+            }
+            Event::Bookmark(bookmark) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::Bookmark(bookmark.clone())));
+            }
+            Event::DeletedBookmark(bookmark) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::DeletedBookmark(bookmark.clone())));
+            }
+            Event::Occupant {
+                conversation,
+                occupant,
+            } => {
+                self.root.event(&mut UIEvent::Core(Event::Occupant {
+                    conversation: conversation.clone(),
+                    occupant: occupant.clone(),
+                }));
+            }
+            Event::WindowChange => {
                 let (width, height) = termion::terminal_size().unwrap();
                 self.root.measure(Some(width), Some(height));
                 self.root.layout(1, 1);
                 self.root.redraw();
-            },
+            }
             Event::Key(key) => {
                 match key {
                     Key::Char('\t') => {
                         let result = Rc::new(RefCell::new(None));
 
                         let (raw_buf, cursor, password) = {
-                            self.root.event(&mut Event::GetInput(Rc::clone(&result)));
+                            self.root.event(&mut UIEvent::GetInput(Rc::clone(&result)));
 
                             let result = result.borrow_mut();
                             result.as_ref().unwrap().clone()
@@ -772,11 +1081,11 @@ impl Plugin for UIPlugin {
                         } else {
                             aparte.schedule(Event::AutoComplete(raw_buf, cursor));
                         }
-                    },
+                    }
                     Key::Char('\n') => {
                         let result = Rc::new(RefCell::new(None));
                         // TODO avoid direct send to root, should go back to main event loop
-                        self.root.event(&mut Event::Validate(Rc::clone(&result)));
+                        self.root.event(&mut UIEvent::Validate(Rc::clone(&result)));
 
                         let result = result.borrow_mut();
                         let (raw_buf, password) = result.as_ref().unwrap();
@@ -789,55 +1098,68 @@ impl Plugin for UIPlugin {
                             match Command::try_from(&*raw_buf) {
                                 Ok(command) => {
                                     aparte.schedule(Event::Command(command));
-                                },
+                                }
                                 Err(error) => {
                                     aparte.schedule(Event::CommandError(error.to_string()));
                                 }
                             }
                         } else if raw_buf.len() > 0 {
                             if let Some(current_window) = self.current_window.clone() {
-                                if let Some(conversation) = self.conversations.get(&current_window) {
+                                if let Some(conversation) = self.conversations.get(&current_window)
+                                {
                                     let us = aparte.current_connection().unwrap().clone().into();
                                     match conversation.kind {
                                         ConversationKind::Chat => {
                                             let from: Jid = us;
                                             let to: Jid = conversation.jid.clone().into();
                                             let id = Uuid::new_v4();
-                                            let timestamp = Utc::now();
-                                            let message = Message::outgoing_chat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                            let timestamp = LocalTz::now().into();
+                                            let message = Message::outgoing_chat(
+                                                id.to_string(),
+                                                timestamp,
+                                                &from,
+                                                &to,
+                                                &raw_buf,
+                                            );
                                             aparte.schedule(Event::SendMessage(message));
-                                        },
+                                        }
                                         ConversationKind::Group => {
                                             let from: Jid = us;
                                             let to: Jid = conversation.jid.clone().into();
                                             let id = Uuid::new_v4();
-                                            let timestamp = Utc::now();
-                                            let message = Message::outgoing_groupchat(id.to_string(), timestamp, &from, &to, &raw_buf);
+                                            let timestamp = LocalTz::now().into();
+                                            let message = Message::outgoing_groupchat(
+                                                id.to_string(),
+                                                timestamp,
+                                                &from,
+                                                &to,
+                                                &raw_buf,
+                                            );
                                             aparte.schedule(Event::SendMessage(message));
-                                        },
+                                        }
                                     }
                                 }
                             }
                         }
-                    },
+                    }
                     Key::Alt('a') => {
-                        if let Some(window) = self.unread_windows.pop() {
+                        if let Some(window) = self.unread_windows.pop_front() {
                             self.change_window(&window);
                         }
-                    },
+                    }
                     _ => {
                         aparte.schedule(Event::ResetCompletion);
-                        self.root.event(&mut Event::Key(key.clone()));
+                        self.root.event(&mut UIEvent::Core(Event::Key(key.clone())));
                     }
                 }
-            },
-            Event::Quit => {
-                self.running.swap(false, Ordering::Relaxed);
-            },
+            }
             Event::Completed(raw_buf, cursor) => {
-                self.root.event(&mut Event::Completed(raw_buf.clone(), cursor.clone()));
-            },
-            _ => {},
+                self.root.event(&mut UIEvent::Core(Event::Completed(
+                    raw_buf.clone(),
+                    cursor.clone(),
+                )));
+            }
+            _ => {}
         }
     }
 }
@@ -848,76 +1170,141 @@ impl fmt::Display for UIPlugin {
     }
 }
 
-pub struct KeyCodec {
-    queue: VecDeque<Result<Event, IoError>>,
-    running: Rc<AtomicBool>,
+struct TermionEventStream {
+    channel: mpsc::Receiver<Result<u8, IoError>>,
+    waker: Arc<AtomicWaker>,
 }
 
-impl KeyCodec {
-    pub fn new(running: Rc<AtomicBool>) -> Self {
+impl TermionEventStream {
+    pub fn new() -> Self {
+        let (send, recv) = mpsc::channel();
+        let waker = Arc::new(AtomicWaker::new());
+
+        let waker_for_tty = waker.clone();
+        thread::spawn(move || {
+            for i in get_tty().unwrap().bytes() {
+                waker_for_tty.wake();
+                if send.send(i).is_err() {
+                    return;
+                }
+            }
+        });
+
         Self {
-            queue: VecDeque::new(),
-            running: running,
+            channel: recv,
+            waker: waker,
         }
     }
 }
 
-impl Decoder for KeyCodec {
-    type Item = Event;
-    type Error = IoError;
+struct IterWrapper<'a, T> {
+    inner: &'a mut mpsc::Receiver<T>,
+}
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if self.running.load(Ordering::Relaxed) {
-            let mut keys = buf.keys();
-            while let Some(key) = keys.next() {
-                match key {
-                    Ok(Key::Alt('\x1b')) => {
-                        match keys.next() {
-                            Some(Ok(Key::Char('['))) => {
-                                match keys.next() {
-                                    Some(Ok(Key::Char('C'))) => {
-                                        // TODO trigger a real event
-                                        //ui.next_window();
-                                    },
-                                    Some(Ok(Key::Char('D'))) => {
-                                        // TODO trigger a real event
-                                        //ui.prev_window();
-                                    },
-                                    Some(Ok(_)) => {},
-                                    Some(Err(_)) => {},
-                                    None => {},
-                                };
-                            },
-                            Some(Ok(_)) => {},
-                            Some(Err(_)) => {},
-                            None => {},
-                        };
-                    },
-                    Ok(Key::Char(c)) => self.queue.push_back(Ok(Event::Key(Key::Char(c)))),
-                    Ok(Key::Backspace) => self.queue.push_back(Ok(Event::Key(Key::Backspace))),
-                    Ok(Key::Delete) => self.queue.push_back(Ok(Event::Key(Key::Delete))),
-                    Ok(Key::Home) => self.queue.push_back(Ok(Event::Key(Key::Home))),
-                    Ok(Key::End) => self.queue.push_back(Ok(Event::Key(Key::End))),
-                    Ok(Key::Up) => self.queue.push_back(Ok(Event::Key(Key::Up))),
-                    Ok(Key::Down) => self.queue.push_back(Ok(Event::Key(Key::Down))),
-                    Ok(Key::Left) => self.queue.push_back(Ok(Event::Key(Key::Left))),
-                    Ok(Key::Right) => self.queue.push_back(Ok(Event::Key(Key::Right))),
-                    Ok(Key::Ctrl(c)) => self.queue.push_back(Ok(Event::Key(Key::Ctrl(c)))),
-                    Ok(Key::Alt(c)) => self.queue.push_back(Ok(Event::Key(Key::Alt(c)))),
-                    Ok(_) => {},
-                    Err(_) => {},
-                };
-            }
+impl<'a, T> IterWrapper<'a, T> {
+    fn new(inner: &'a mut mpsc::Receiver<T>) -> Self {
+        Self { inner: inner }
+    }
+}
 
-            buf.clear();
-        } else {
-            self.queue.push_back(Err(IoError::new(ErrorKind::BrokenPipe, "quit")));
+impl<'a, T> Iterator for IterWrapper<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.inner.try_recv() {
+            Ok(e) => Some(e),
+            Err(_) => None,
         }
+    }
+}
 
-        match self.queue.pop_front() {
-            Some(Ok(command)) => Ok(Some(command)),
-            Some(Err(err)) => Err(err),
-            None => Ok(None),
+impl Stream for TermionEventStream {
+    type Item = TermionEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let byte = match self.channel.try_recv() {
+            Ok(Ok(byte)) => byte,
+            Ok(Err(_)) => return Poll::Ready(None),
+            Err(mpsc::TryRecvError::Empty) => {
+                self.waker.register(cx.waker());
+                return Poll::Pending;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => return Poll::Ready(None),
+        };
+
+        let mut iter = IterWrapper::new(&mut self.channel);
+        if let Ok(event) = termion_parse_event(byte, &mut iter) {
+            Poll::Ready(Some(event))
+        } else {
+            self.waker.register(cx.waker());
+            Poll::Pending
+        }
+    }
+}
+
+pub struct EventStream {
+    inner: TermionEventStream,
+}
+
+impl EventStream {
+    pub fn new() -> Self {
+        Self {
+            inner: TermionEventStream::new(),
+        }
+    }
+}
+
+impl Stream for EventStream {
+    type Item = Event;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(TermionEvent::Key(key))) => {
+                match key {
+                    //Key::Alt('\x1b') => {
+                    //    match Pin::new(&mut self.inner).poll_next(cx) {
+                    //        Poll::Ready(Some(TermionEvent::Key(Key::Char('[')))) => {
+                    //            match Pin::new(&mut self.inner).poll_next(cx) {
+                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('C')))) => Poll::Pending,
+                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('D')))) => Poll::Pending,
+                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
+                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
+                    //                Poll::Ready(None) => Poll::Pending,
+                    //                Poll::Pending => Poll::Pending,
+                    //            }
+                    //        },
+                    //        _ => Poll::Pending,
+                    //    };
+                    //},
+                    Key::Char(c) => Poll::Ready(Some(Event::Key(Key::Char(c)))),
+                    Key::Backspace => Poll::Ready(Some(Event::Key(Key::Backspace))),
+                    Key::Delete => Poll::Ready(Some(Event::Key(Key::Delete))),
+                    Key::Home => Poll::Ready(Some(Event::Key(Key::Home))),
+                    Key::End => Poll::Ready(Some(Event::Key(Key::End))),
+                    Key::Up => Poll::Ready(Some(Event::Key(Key::Up))),
+                    Key::Down => Poll::Ready(Some(Event::Key(Key::Down))),
+                    Key::Left => Poll::Ready(Some(Event::Key(Key::Left))),
+                    Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
+                    Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
+                    Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
+                    _ => {
+                        self.inner.waker.register(cx.waker());
+                        Poll::Pending
+                    }
+                }
+            }
+            Poll::Ready(Some(TermionEvent::Mouse(_))) => {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            }
+            Poll::Ready(Some(TermionEvent::Unsupported(_))) => {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            }
         }
     }
 }

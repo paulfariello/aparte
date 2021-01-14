@@ -1,15 +1,15 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::fmt;
 use std::collections::HashMap;
-use uuid::Uuid;
-use xmpp_parsers::{Element, roster, ns, Jid, BareJid, presence};
-use xmpp_parsers::iq::{Iq, IqType};
 use std::convert::TryFrom;
+use std::fmt;
+use uuid::Uuid;
+use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::{ns, presence, roster, BareJid, Element, Jid};
 
-use crate::core::{Plugin, Aparte, Event};
 use crate::contact;
+use crate::core::{Aparte, Event, Plugin};
 
 impl From<roster::Group> for contact::Group {
     fn from(item: roster::Group) -> Self {
@@ -41,7 +41,13 @@ pub struct ContactPlugin {
 impl ContactPlugin {
     fn request(&self) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
-        let iq = Iq::from_get(id, roster::Roster { ver: None, items: Vec::new() });
+        let iq = Iq::from_get(
+            id,
+            roster::Roster {
+                ver: None,
+                items: Vec::new(),
+            },
+        );
         iq.into()
     }
 }
@@ -72,7 +78,7 @@ impl Plugin for ContactPlugin {
                         }
                     }
                 }
-            },
+            }
             Event::Presence(presence) => {
                 if let Some(from) = &presence.from {
                     let jid = match from {
@@ -90,8 +96,8 @@ impl Plugin for ContactPlugin {
                         aparte.schedule(Event::ContactUpdate(contact.clone()));
                     }
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 }

@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
+#[allow(unused_imports)]
+use textwrap;
 
 use crate::core::Aparte;
 
@@ -48,7 +50,7 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         Unquoted
-                    },
+                    }
                     None => {
                         break;
                     }
@@ -59,7 +61,7 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         SimplyQuoted
-                    },
+                    }
                     None => return Err("Missing closing quote"),
                 },
                 DoublyQuoted => match c {
@@ -68,7 +70,7 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         DoublyQuoted
-                    },
+                    }
                     None => return Err("Missing closing quote"),
                 },
                 Unquoted => match c {
@@ -79,11 +81,11 @@ impl Command {
                         tokens.push(token);
                         token = String::new();
                         Delimiter
-                    },
+                    }
                     Some(c) => {
                         token.push(c);
                         Unquoted
-                    },
+                    }
                     None => {
                         tokens.push(token);
                         break;
@@ -93,23 +95,23 @@ impl Command {
                     Some(c) => {
                         token.push(c);
                         Unquoted
-                    },
+                    }
                     None => return Err("Missing escaped char"),
                 },
                 SimplyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         SimplyQuoted
-                    },
+                    }
                     None => return Err("Missing escaped char"),
                 },
                 DoublyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         DoublyQuoted
-                    },
+                    }
                     None => return Err("Missing escaped char"),
-                }
+                },
             };
 
             if string_cursor == 0 {
@@ -148,38 +150,37 @@ impl Command {
         let mut quote = None;
         let mut escaped = String::with_capacity(arg.len());
         for c in arg.chars() {
-            escaped.extend(match c {
-                '\\' => "\\\\".to_string(),
-                ' ' => {
-                    if quote.is_none() {
-                        quote = Some(' ');
+            escaped.extend(
+                match c {
+                    '\\' => "\\\\".to_string(),
+                    ' ' => {
+                        if quote.is_none() {
+                            quote = Some(' ');
+                        }
+                        " ".to_string()
                     }
-                    " ".to_string()
-                },
-                '\'' => {
-                    match quote {
+                    '\'' => match quote {
                         Some('\'') => "\\'".to_string(),
                         Some('"') => "'".to_string(),
                         Some(' ') | None => {
                             quote = Some('"');
                             "'".to_string()
-                        },
+                        }
                         Some(_) => unreachable!(),
-                    }
-                }
-                '"' => {
-                    match quote {
+                    },
+                    '"' => match quote {
                         Some('\'') => "\"".to_string(),
                         Some('"') => "\\\"".to_string(),
                         Some(' ') | None => {
                             quote = Some('\'');
                             "\"".to_string()
-                        },
+                        }
                         Some(_) => unreachable!(),
-                    }
+                    },
+                    c => c.to_string(),
                 }
-                c => c.to_string(),
-            }.chars())
+                .chars(),
+            )
         }
 
         if quote == Some(' ') {
@@ -191,7 +192,6 @@ impl Command {
         } else {
             return format!("{}{}{}", quote.unwrap(), escaped, quote.unwrap());
         }
-
     }
 
     pub fn assemble(&self) -> String {
@@ -199,7 +199,7 @@ impl Command {
 
         let mut first = true;
         for arg in &self.args {
-            if ! first {
+            if !first {
                 command.push(' ');
             } else {
                 first = false;
@@ -221,7 +221,7 @@ impl TryFrom<&str> for Command {
 
 pub struct CommandParser {
     pub name: &'static str,
-    pub help: &'static str,
+    pub help: String,
     pub parser: fn(&mut Aparte, Command) -> Result<(), String>,
     pub autocompletions: Vec<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>,
 }
@@ -279,6 +279,24 @@ macro_rules! parse_command_args(
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Named<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+        let $arg: Option<$type> = {
+            let matching = $command.args.drain_filter(|a| a.starts_with(stringify!($arg))).collect::<Vec<String>>();
+            match matching.as_slice() {
+                [] => None,
+                [named] => {
+                    let arg = named.splitn(2, "=").collect::<Vec<&str>>()[1];
+                    match <$type>::from_str(&arg) {
+                        Ok(arg) => Some(arg),
+                        Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
+                    }
+                }
+                _ => return Err(format!("Multiple occurance of {} argument", stringify!($arg))),
+            }
+        };
+
+        parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
+    );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
             return Err(format!("Missing {} argument", stringify!($arg)))
@@ -327,7 +345,6 @@ macro_rules! generate_command_autocompletions(
     );
 );
 
-
 #[macro_export]
 macro_rules! generate_sub_autocompletion(
     ($completion:ident, {}) => ();
@@ -353,10 +370,47 @@ macro_rules! generate_arg_autocompletion(
 );
 
 #[macro_export]
+macro_rules! generate_sub_help(
+    ($help:ident, {}) => ();
+    ($help:ident, { $subname:tt: $sub:ident $(, $($tail:tt)*)? }) => (
+        $help.push(String::from("\n"));
+        let sub_help = $sub::help();
+        $help.push(textwrap::indent(&sub_help, "\t"));
+        generate_sub_help!($help, { $($($tail)*)? });
+    );
+);
+
+#[macro_export]
+macro_rules! generate_subs_help(
+    ($help:ident, { children: $subs:tt $(, $($tail:tt)*)? }) => (
+        generate_sub_help!($help, $subs);
+    );
+);
+
+#[macro_export]
+macro_rules! generate_help(
+    ($help:ident, {}) => ();
+    ($help:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
+        generate_subs_help!($help, $attr);
+        generate_help!($help, { $($($tail)*)? });
+    );
+    ($help:ident, { $arg:ident: $type:ty $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+        generate_help!($help, { $($($tail)*)? });
+    );
+);
+
+#[macro_export]
 macro_rules! command_def (
     ($name:ident, $help:tt, $args:tt) => (
         mod $name {
             use super::*;
+
+            pub fn help() -> String {
+                #[allow(unused_mut)]
+                let mut help = vec![String::from($help)];
+                generate_help!(help, $args);
+                return help.join("\n");
+            }
 
             fn parser(aparte: &mut Aparte, command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
@@ -366,12 +420,11 @@ macro_rules! command_def (
 
             pub fn new() -> CommandParser {
                 let mut autocompletions = Vec::<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>::new();
-
                 generate_command_autocompletions!(autocompletions, $args);
 
                 CommandParser {
                     name: stringify!($name),
-                    help: $help,
+                    help: help(),
                     parser: parser,
                     autocompletions: autocompletions,
                 }
@@ -382,7 +435,14 @@ macro_rules! command_def (
         mod $name {
             use super::*;
 
-            fn parser($aparte: &mut Aparte, $command: Command) -> Result<(), String> {
+            pub fn help() -> String {
+                #[allow(unused_mut)]
+                let mut help = vec![String::from($help)];
+                generate_help!(help, $args);
+                return help.join("\n");
+            }
+
+            fn parser($aparte: &mut Aparte, mut $command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!($aparte, $command, index, $args);
@@ -397,7 +457,7 @@ macro_rules! command_def (
 
                 CommandParser {
                     name: stringify!($name),
-                    help: $help,
+                    help: help(),
                     parser: parser,
                     autocompletions: autocompletions,
                 }
@@ -409,22 +469,28 @@ macro_rules! command_def (
 #[cfg(test)]
 mod tests_command_macro {
     use super::*;
+    use std::str::FromStr;
 
     command_def!(no_args, "help", {}, |_aparte, _command| { Ok(()) });
 
     #[test]
     fn test_command_without_args() {
-        let cmd = no_args();
+        let cmd = no_args::new();
 
         assert_eq!(cmd.name, "no_args");
         assert_eq!(cmd.help, "help");
     }
 
-    command_def!(one_arg, "help", { _first_arg: String }, |_aparte, _command| { Ok(()) });
+    command_def!(
+        one_arg,
+        "help",
+        { _first_arg: String },
+        |_aparte, _command| { Ok(()) }
+    );
 
     #[test]
     fn test_command_with_one_arg() {
-        let cmd = one_arg();
+        let cmd = one_arg::new();
 
         assert_eq!(cmd.name, "one_arg");
         assert_eq!(cmd.help, "help");
@@ -440,7 +506,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_one_arg_with_completion() {
-        let cmd = one_arg_completion();
+        let cmd = one_arg_completion::new();
 
         assert_eq!(cmd.name, "one_arg_completion");
         assert_eq!(cmd.help, "help");
@@ -451,7 +517,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_two_args() {
-        let cmd = two_args();
+        let cmd = two_args::new();
 
         assert_eq!(cmd.name, "two_args");
         assert_eq!(cmd.help, "help");
@@ -469,7 +535,7 @@ mod tests_command_macro {
 
     #[test]
     fn test_command_with_two_args_with_completion() {
-        let cmd = two_args_completion();
+        let cmd = two_args_completion::new();
 
         assert_eq!(cmd.name, "two_args_completion");
         assert_eq!(cmd.help, "help");
