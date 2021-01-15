@@ -849,8 +849,10 @@ impl Aparte {
         }
 
         for payload in message.payloads.iter().cloned() {
-            if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload).ok() {
-                self.handle_message_carbons(received);
+            if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload.clone()).ok() {
+                self.handle_message_carbons(received.forwarded, true);
+            } else if let Some(sent) = xmpp_parsers::carbons::Sent::try_from(payload.clone()).ok() {
+                self.handle_message_carbons(sent.forwarded, false);
             }
         }
     }
@@ -881,8 +883,8 @@ impl Aparte {
         }
     }
 
-    fn handle_message_carbons(&mut self, received: xmpp_parsers::carbons::Received) {
-        if let Some(ref original) = received.forwarded.stanza {
+    fn handle_message_carbons(&mut self, forwarded: xmpp_parsers::forwarding::Forwarded, received: bool) {
+        if let Some(ref original) = forwarded.stanza {
             if original.type_ != XmppParsersMessageType::Error {
                 if let (Some(from), Some(to)) =
                     (original.from.as_ref(), original.to.as_ref())
@@ -893,8 +895,10 @@ impl Aparte {
                                 .clone()
                                 .unwrap_or_else(|| Uuid::new_v4().to_string());
                             let timestamp = LocalTz::now().into();
-                            let message =
-                                Message::incoming_chat(id, timestamp, &from, &to, &body.0);
+                            let message = match received {
+                                true => Message::incoming_chat(id, timestamp, &from, &to, &body.0),
+                                false => Message::outgoing_chat(id, timestamp, &from, &to, &body.0),
+                            };
                             self.schedule(Event::Message(message));
                         }
                     }
