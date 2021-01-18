@@ -12,8 +12,8 @@ use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub::{
-    pubsub, pubsub::Items, pubsub::Publish, pubsub::PublishOptions, pubsub::Retract, Item, ItemId,
-    NodeName, PubSub, PubSubEvent, owner as pubsubowner, PubSubOwner
+    owner as pubsubowner, pubsub, pubsub::Items, pubsub::Publish, pubsub::PublishOptions,
+    pubsub::Retract, Item, ItemId, NodeName, PubSub, PubSubEvent, PubSubOwner,
 };
 use xmpp_parsers::Element;
 use xmpp_parsers::{BareJid, Jid};
@@ -599,9 +599,17 @@ impl BookmarksPlugin {
             _ => return,
         };
 
-
-        let added: Vec<contact::Bookmark> = bookmarks.iter().filter(|bookmark| !self.bookmarks.contains(bookmark)).cloned().collect();
-        let removed: Vec<contact::Bookmark> = self.bookmarks.iter().filter(|bookmark| !bookmarks.contains(bookmark)).cloned().collect();
+        let added: Vec<contact::Bookmark> = bookmarks
+            .iter()
+            .filter(|bookmark| !self.bookmarks.contains(bookmark))
+            .cloned()
+            .collect();
+        let removed: Vec<contact::Bookmark> = self
+            .bookmarks
+            .iter()
+            .filter(|bookmark| !bookmarks.contains(bookmark))
+            .cloned()
+            .collect();
 
         self.bookmarks = bookmarks;
         self.update_indexes();
@@ -667,9 +675,11 @@ impl Plugin for BookmarksPlugin {
                 IqType::Result(Some(el)) => {
                     if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
                         match &items.node.0 as &str {
-                            ns::BOOKMARKS | ns::BOOKMARKS2 => {
-                                self.handle_bookmarks(aparte, &items.node, items.items.iter().cloned().map(|item| item.0).collect())
-                            }
+                            ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(
+                                aparte,
+                                &items.node,
+                                items.items.iter().cloned().map(|item| item.0).collect(),
+                            ),
                             _ => {}
                         }
                     }
@@ -677,16 +687,16 @@ impl Plugin for BookmarksPlugin {
                 _ => {}
             },
             Event::PubSub(pubsub_event) => match pubsub_event {
-                PubSubEvent::PublishedItems { node, items } => {
-                    match &node.0 as &str {
-                        ns::BOOKMARKS | ns::BOOKMARKS2 => {
-                            self.handle_bookmarks(aparte, &node, items.iter().cloned().map(|item| item.0).collect())
-                        }
-                        _ => {}
-                    }
+                PubSubEvent::PublishedItems { node, items } => match &node.0 as &str {
+                    ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(
+                        aparte,
+                        &node,
+                        items.iter().cloned().map(|item| item.0).collect(),
+                    ),
+                    _ => {}
                 },
                 _ => {}
-            }
+            },
             _ => {}
         }
     }

@@ -30,8 +30,8 @@ use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
-use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 use xmpp_parsers::pubsub::event::PubSubEvent;
+use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
 use crate::account::Account;
 use crate::command::{Command, CommandParser};
@@ -470,10 +470,7 @@ impl Aparte {
     }
 
     pub fn add_connection(&self, account: FullJid, sink: mpsc::Sender<Element>) {
-        let connection = Connection {
-            account: account,
-            sink: sink,
-        };
+        let connection = Connection { account, sink };
 
         let account = connection.account.to_string();
 
@@ -818,8 +815,8 @@ impl Aparte {
             XmppParsersMessageType::Chat => self.handle_chat_message(message),
             XmppParsersMessageType::Groupchat => self.handle_groupchat_message(message),
             XmppParsersMessageType::Headline => self.handle_headline_message(message),
-            XmppParsersMessageType::Error => {},
-            XmppParsersMessageType::Normal => {},
+            XmppParsersMessageType::Error => {}
+            XmppParsersMessageType::Normal => {}
         };
     }
 
@@ -832,8 +829,7 @@ impl Aparte {
             if let Some((_, ref body)) = message.get_best_body(vec![]) {
                 let mut timestamp = None;
                 for payload in message.payloads.iter().cloned() {
-                    if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok()
-                    {
+                    if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok() {
                         timestamp = Some(delay.stamp.0);
                     }
                 }
@@ -843,13 +839,14 @@ impl Aparte {
                     &from,
                     &to,
                     &body.0,
-                    );
+                );
                 self.schedule(Event::Message(message));
             }
         }
 
         for payload in message.payloads.iter().cloned() {
-            if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload.clone()).ok() {
+            if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload.clone()).ok()
+            {
                 self.handle_message_carbons(received.forwarded, true);
             } else if let Some(sent) = xmpp_parsers::carbons::Sent::try_from(payload.clone()).ok() {
                 self.handle_message_carbons(sent.forwarded, false);
@@ -866,8 +863,7 @@ impl Aparte {
             if let Some((_, ref body)) = message.get_best_body(vec![]) {
                 let mut timestamp = None;
                 for payload in message.payloads.iter().cloned() {
-                    if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok()
-                    {
+                    if let Some(delay) = xmpp_parsers::delay::Delay::try_from(payload).ok() {
                         timestamp = Some(delay.stamp.0);
                     }
                 }
@@ -877,38 +873,42 @@ impl Aparte {
                     &from,
                     &to,
                     &body.0,
-                    );
+                );
                 self.schedule(Event::Message(message));
             }
         }
     }
 
-    fn handle_message_carbons(&mut self, forwarded: xmpp_parsers::forwarding::Forwarded, received: bool) {
+    fn handle_message_carbons(
+        &mut self,
+        forwarded: xmpp_parsers::forwarding::Forwarded,
+        received: bool,
+    ) {
         if let Some(ref original) = forwarded.stanza {
             if original.type_ != XmppParsersMessageType::Error {
-                if let (Some(from), Some(to)) =
-                    (original.from.as_ref(), original.to.as_ref())
-                    {
-                        if let Some(body) = original.bodies.get("") {
-                            let id = original
-                                .id
-                                .clone()
-                                .unwrap_or_else(|| Uuid::new_v4().to_string());
-                            let timestamp = LocalTz::now().into();
-                            let message = match received {
-                                true => Message::incoming_chat(id, timestamp, &from, &to, &body.0),
-                                false => Message::outgoing_chat(id, timestamp, &from, &to, &body.0),
-                            };
-                            self.schedule(Event::Message(message));
-                        }
+                if let (Some(from), Some(to)) = (original.from.as_ref(), original.to.as_ref()) {
+                    if let Some(body) = original.bodies.get("") {
+                        let id = original
+                            .id
+                            .clone()
+                            .unwrap_or_else(|| Uuid::new_v4().to_string());
+                        let timestamp = LocalTz::now().into();
+                        let message = match received {
+                            true => Message::incoming_chat(id, timestamp, &from, &to, &body.0),
+                            false => Message::outgoing_chat(id, timestamp, &from, &to, &body.0),
+                        };
+                        self.schedule(Event::Message(message));
                     }
+                }
             }
         }
     }
 
     fn handle_headline_message(&mut self, message: XmppParsersMessage) {
         for payload in message.payloads.iter().cloned() {
-            if let Some(pubsub_event) = xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload).ok() {
+            if let Some(pubsub_event) =
+                xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload).ok()
+            {
                 self.schedule(Event::PubSub(pubsub_event));
             }
         }

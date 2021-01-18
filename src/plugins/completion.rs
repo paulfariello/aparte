@@ -8,7 +8,9 @@ use crate::command::Command;
 use crate::core::{Aparte, Event, Plugin};
 
 pub struct CompletionPlugin {
+    /// List of possible completions for current raw_buf
     completions: Option<Vec<String>>,
+    /// Index of currently displayed completion
     current_completion: usize,
 }
 
