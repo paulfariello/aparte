@@ -33,7 +33,7 @@ impl Plugin for CarbonsPlugin {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(_jid) => aparte.send(self.enable()),
+            Event::Connected(account, _jid) => aparte.send(account, self.enable()),
             _ => {}
         }
     }

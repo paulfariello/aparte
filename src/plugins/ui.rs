@@ -289,11 +289,11 @@ impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
             UIEvent::AddWindow(name, _) => {
                 self.add_window(name);
             }
-            UIEvent::Core(Event::Connected(jid)) => {
-                self.content.connection = Some(jid.to_string());
+            UIEvent::Core(Event::Connected(account, _)) => {
+                self.content.connection = Some(account.to_string());
                 self.redraw();
             }
-            UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Chat(message)))) => {
+            UIEvent::Core(Event::Message(_, Message::Incoming(XmppMessage::Chat(message)))) => {
                 let mut highlighted = None;
                 for window in &self.content.windows {
                     if &message.from.to_string() == window
@@ -307,7 +307,10 @@ impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
                     self.redraw();
                 }
             }
-            UIEvent::Core(Event::Message(Message::Incoming(XmppMessage::Groupchat(message)))) => {
+            UIEvent::Core(Event::Message(
+                _,
+                Message::Incoming(XmppMessage::Groupchat(message)),
+            )) => {
                 let mut highlighted = None;
                 for window in &self.content.windows {
                     if &message.from.to_string() == window
@@ -568,9 +571,10 @@ impl UIPlugin {
                 let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone())
                     .with_event(move |view, event| {
                         match event {
-                            UIEvent::Core(Event::Message(Message::Incoming(
-                                XmppMessage::Chat(message),
-                            ))) => {
+                            UIEvent::Core(Event::Message(
+                                _,
+                                Message::Incoming(XmppMessage::Chat(message)),
+                            )) => {
                                 // TODO check to == us
                                 if message.from == jid {
                                     view.recv_message(&Message::Incoming(XmppMessage::Chat(
@@ -579,9 +583,10 @@ impl UIPlugin {
                                     view.bell();
                                 }
                             }
-                            UIEvent::Core(Event::Message(Message::Outgoing(
-                                XmppMessage::Chat(message),
-                            ))) => {
+                            UIEvent::Core(Event::Message(
+                                _,
+                                Message::Outgoing(XmppMessage::Chat(message)),
+                            )) => {
                                 // TODO check from == us
                                 if message.to == jid {
                                     view.recv_message(&Message::Outgoing(XmppMessage::Chat(
@@ -623,9 +628,10 @@ impl UIPlugin {
                 let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone())
                     .with_event(move |view, event| {
                         match event {
-                            UIEvent::Core(Event::Message(Message::Incoming(
-                                XmppMessage::Groupchat(message),
-                            ))) => {
+                            UIEvent::Core(Event::Message(
+                                _,
+                                Message::Incoming(XmppMessage::Groupchat(message)),
+                            )) => {
                                 // TODO check to == us
                                 if message.from == chat_jid {
                                     view.recv_message(&Message::Incoming(XmppMessage::Groupchat(
@@ -634,9 +640,10 @@ impl UIPlugin {
                                     view.bell();
                                 }
                             }
-                            UIEvent::Core(Event::Message(Message::Outgoing(
-                                XmppMessage::Groupchat(message),
-                            ))) => {
+                            UIEvent::Core(Event::Message(
+                                _,
+                                Message::Outgoing(XmppMessage::Groupchat(message)),
+                            )) => {
                                 // TODO check from == us
                                 if message.to == chat_jid {
                                     view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(
@@ -662,6 +669,7 @@ impl UIPlugin {
                         UIEvent::Core(Event::Occupant {
                             conversation,
                             occupant,
+                            ..
                         }) => {
                             if roster_jid == *conversation {
                                 view.insert(occupant.clone(), Some(occupant.role));
@@ -839,7 +847,7 @@ impl Plugin for UIPlugin {
         console.push(
             View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone()).with_event(
                 |view, event| match event {
-                    UIEvent::Core(Event::Message(Message::Log(message))) => {
+                    UIEvent::Core(Event::Message(_, Message::Log(message))) => {
                         view.recv_message(&Message::Log(message.clone()));
                     }
                     UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
@@ -852,13 +860,13 @@ impl Plugin for UIPlugin {
             View::<ListView<contact::Group, RosterItem>, UIEvent>::new(self.screen.clone())
                 .with_none_group()
                 .with_event(|view, event| match event {
-                    UIEvent::Core(Event::Connected(_)) => {
+                    UIEvent::Core(Event::Connected(_, _)) => {
                         view.add_group(contact::Group(String::from("Windows")));
                         view.add_group(contact::Group(String::from("Contacts")));
                         view.add_group(contact::Group(String::from("Bookmarks")));
                     }
-                    UIEvent::Core(Event::Contact(contact))
-                    | UIEvent::Core(Event::ContactUpdate(contact)) => {
+                    UIEvent::Core(Event::Contact(_, contact))
+                    | UIEvent::Core(Event::ContactUpdate(_, contact)) => {
                         if contact.groups.len() > 0 {
                             for group in &contact.groups {
                                 view.insert(
@@ -913,11 +921,13 @@ impl Plugin for UIPlugin {
                 self.root
                     .event(&mut UIEvent::Core(Event::ReadPassword(command.clone())));
             }
-            Event::Connected(jid) => {
-                self.root
-                    .event(&mut UIEvent::Core(Event::Connected(jid.clone())));
+            Event::Connected(account, jid) => {
+                self.root.event(&mut UIEvent::Core(Event::Connected(
+                    account.clone(),
+                    jid.clone(),
+                )));
             }
-            Event::Message(message) => {
+            Event::Message(account, message) => {
                 match message {
                     Message::Incoming(XmppMessage::Chat(message)) => {
                         let window_name = message.from.to_string();
@@ -994,11 +1004,14 @@ impl Plugin for UIPlugin {
                     Message::Log(_message) => {}
                 };
 
-                self.root
-                    .event(&mut UIEvent::Core(Event::Message(message.clone())));
+                self.root.event(&mut UIEvent::Core(Event::Message(
+                    account.clone(),
+                    message.clone(),
+                )));
             }
-            Event::Chat(jid) => {
-                let win_name = jid.to_string();
+            Event::Chat { contact, .. } => {
+                // Should we store account association?
+                let win_name = contact.to_string();
                 if !self.conversations.contains_key(&win_name) {
                     self.add_conversation(
                         aparte,
@@ -1010,8 +1023,12 @@ impl Plugin for UIPlugin {
                 }
                 self.change_window(&win_name);
             }
-            Event::Joined(jid, change_window) => {
-                let bare: BareJid = jid.clone().into();
+            Event::Joined {
+                channel,
+                user_request,
+                ..
+            } => {
+                let bare: BareJid = channel.clone().into();
                 let win_name = bare.to_string();
                 if !self.conversations.contains_key(&win_name) {
                     self.add_conversation(
@@ -1022,7 +1039,7 @@ impl Plugin for UIPlugin {
                         },
                     );
                 }
-                if *change_window {
+                if *user_request {
                     self.change_window(&win_name);
                 }
             }
@@ -1032,31 +1049,6 @@ impl Plugin for UIPlugin {
                 } else {
                     aparte.log(format!("Unknown window {}", window));
                 }
-            }
-            Event::Contact(contact) => {
-                self.root
-                    .event(&mut UIEvent::Core(Event::Contact(contact.clone())));
-            }
-            Event::ContactUpdate(contact) => {
-                self.root
-                    .event(&mut UIEvent::Core(Event::ContactUpdate(contact.clone())));
-            }
-            Event::Bookmark(bookmark) => {
-                self.root
-                    .event(&mut UIEvent::Core(Event::Bookmark(bookmark.clone())));
-            }
-            Event::DeletedBookmark(bookmark) => {
-                self.root
-                    .event(&mut UIEvent::Core(Event::DeletedBookmark(bookmark.clone())));
-            }
-            Event::Occupant {
-                conversation,
-                occupant,
-            } => {
-                self.root.event(&mut UIEvent::Core(Event::Occupant {
-                    conversation: conversation.clone(),
-                    occupant: occupant.clone(),
-                }));
             }
             Event::WindowChange => {
                 let (width, height) = termion::terminal_size().unwrap();
@@ -1107,7 +1099,9 @@ impl Plugin for UIPlugin {
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
-                                    let us = aparte.current_connection().unwrap().clone().into();
+                                    // TODO use current windows attached account
+                                    let account = aparte.current_account().unwrap();
+                                    let us = account.clone().into();
                                     match conversation.kind {
                                         ConversationKind::Chat => {
                                             let from: Jid = us;
@@ -1121,7 +1115,10 @@ impl Plugin for UIPlugin {
                                                 &to,
                                                 &raw_buf,
                                             );
-                                            aparte.schedule(Event::SendMessage(message));
+                                            aparte.schedule(Event::SendMessage(
+                                                account.clone(),
+                                                message,
+                                            ));
                                         }
                                         ConversationKind::Group => {
                                             let from: Jid = us;
@@ -1135,7 +1132,10 @@ impl Plugin for UIPlugin {
                                                 &to,
                                                 &raw_buf,
                                             );
-                                            aparte.schedule(Event::SendMessage(message));
+                                            aparte.schedule(Event::SendMessage(
+                                                account.clone(),
+                                                message,
+                                            ));
                                         }
                                     }
                                 }
@@ -1159,7 +1159,8 @@ impl Plugin for UIPlugin {
                     cursor.clone(),
                 )));
             }
-            _ => {}
+            // Forward all unknown events
+            event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
     }
 }

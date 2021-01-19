@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use uuid::Uuid;
@@ -8,11 +9,12 @@ use xmpp_parsers::disco;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::Element;
 
+use crate::account::Account;
 use crate::core::{Aparte, Event, Plugin};
 
 pub struct Disco {
     client_features: Vec<String>,
-    server_features: Vec<String>,
+    server_features: HashMap<Account, Vec<String>>,
 }
 
 impl Disco {
@@ -23,9 +25,12 @@ impl Disco {
         Ok(())
     }
 
-    pub fn has_feature(&self, feature: &str) -> bool {
-        debug!("Adding `{}` feature", feature);
-        self.server_features.iter().any(|i| i == feature)
+    pub fn has_feature(&self, account: &Account, feature: &str) -> bool {
+        self.server_features
+            .get(account)
+            .unwrap()
+            .iter()
+            .any(|i| i == feature)
     }
 
     pub fn disco(&mut self) -> Element {
@@ -40,7 +45,7 @@ impl Plugin for Disco {
     fn new() -> Disco {
         Disco {
             client_features: Vec::new(),
-            server_features: Vec::new(),
+            server_features: HashMap::new(),
         }
     }
 
@@ -50,15 +55,17 @@ impl Plugin for Disco {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(_jid) => {
-                aparte.send(self.disco());
+            Event::Connected(account, _jid) => {
+                self.server_features.insert(account.clone(), Vec::new());
+                aparte.send(account, self.disco());
             }
-            Event::Iq(iq) => match iq.payload.clone() {
+            Event::Iq(account, iq) => match iq.payload.clone() {
                 IqType::Result(Some(el)) => {
                     if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
-                        self.server_features
-                            .extend(disco.features.iter().map(|i| i.var.clone()));
-                        aparte.schedule(Event::Disco);
+                        if let Some(features) = self.server_features.get_mut(account) {
+                            features.extend(disco.features.iter().map(|i| i.var.clone()));
+                            aparte.schedule(Event::Disco(account.clone()));
+                        }
                     }
                 }
                 _ => {}

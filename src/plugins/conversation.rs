@@ -6,11 +6,19 @@ use std::convert::TryFrom;
 use std::fmt;
 use xmpp_parsers::{muc, BareJid, Jid};
 
+use crate::account::Account;
 use crate::conversation;
 use crate::core::{Aparte, Event, Plugin};
 
+#[derive(Eq, PartialEq, Hash)]
+pub struct ConversationIndex {
+    account: Account,
+    jid: BareJid,
+}
+
 pub struct ConversationPlugin {
-    conversations: HashMap<String, conversation::Conversation>,
+    /// Collections of currently opened conversations.
+    pub conversations: HashMap<ConversationIndex, conversation::Conversation>,
 }
 
 impl ConversationPlugin {}
@@ -51,28 +59,44 @@ impl Plugin for ConversationPlugin {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Chat(jid) => {
+            Event::Chat { account, contact } => {
                 let conversation = conversation::Conversation::Chat(conversation::Chat {
-                    contact: jid.clone(),
+                    account: account.clone(),
+                    contact: contact.clone(),
                 });
-                self.conversations.insert(jid.to_string(), conversation);
+
+                let index = ConversationIndex {
+                    account: account.clone(),
+                    jid: contact.clone(),
+                };
+                self.conversations.insert(index, conversation);
             }
-            Event::Joined(jid, _) => {
-                let channel_jid: BareJid = jid.clone().into();
+            Event::Joined {
+                account, channel, ..
+            } => {
+                let channel_jid: BareJid = channel.clone().into();
                 let conversation = conversation::Conversation::Channel(conversation::Channel {
+                    account: account.clone(),
                     jid: channel_jid.clone(),
-                    nick: jid.resource.clone(),
+                    nick: channel.resource.clone(),
                     name: None,
                     occupants: HashMap::new(),
                 });
-                self.conversations
-                    .insert(channel_jid.to_string(), conversation);
+
+                let index = ConversationIndex {
+                    account: account.clone(),
+                    jid: channel_jid,
+                };
+                self.conversations.insert(index, conversation);
             }
-            Event::Presence(presence) => {
+            Event::Presence(account, presence) => {
                 if let Some(Jid::Full(from)) = &presence.from {
-                    let channel_jid: BareJid = from.clone().into();
+                    let index = ConversationIndex {
+                        account: account.clone(),
+                        jid: from.clone().into(),
+                    };
                     if let Some(conversation::Conversation::Channel(channel)) =
-                        self.conversations.get_mut(&channel_jid.to_string())
+                        self.conversations.get_mut(&index)
                     {
                         for payload in presence.clone().payloads {
                             if let Some(muc_user) = muc::user::MucUser::try_from(payload).ok() {
@@ -88,7 +112,8 @@ impl Plugin for ConversationPlugin {
                                         role: item.role.into(),
                                     };
                                     aparte.schedule(Event::Occupant {
-                                        conversation: channel_jid.clone(),
+                                        account: index.account.clone(),
+                                        conversation: index.jid.clone(),
                                         occupant: occupant.clone(),
                                     });
                                     channel.occupants.insert(occupant.nick.clone(), occupant);

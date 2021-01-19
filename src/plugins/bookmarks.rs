@@ -18,6 +18,7 @@ use xmpp_parsers::pubsub::{
 use xmpp_parsers::Element;
 use xmpp_parsers::{BareJid, Jid};
 
+use crate::account::Account;
 use crate::command::{Command, CommandParser};
 use crate::contact;
 use crate::core::{Aparte, Event, Plugin};
@@ -46,6 +47,7 @@ Examples:
     autojoin: Named<bool>
 },
 |aparte, _command| {
+    let account = aparte.current_account().ok_or(format!("No connection found"))?;
     let autojoin = match autojoin {
         None => false, // Autojoin default to false
         Some(autojoin) => autojoin,
@@ -63,7 +65,7 @@ Examples:
         bookmarks.add(bookmark.clone())
     };
     aparte.schedule(Event::Bookmark(bookmark));
-    aparte.send(add);
+    aparte.send(&account, add);
     Ok(())
 });
 
@@ -81,12 +83,15 @@ Examples:
 "#,
     { conference: BareJid },
     |aparte, _command| {
+        let account = aparte
+            .current_account()
+            .ok_or(format!("No connection found"))?;
         if let Some((bookmark, delete)) = {
             let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
             bookmarks.delete(conference.clone())
         } {
             aparte.schedule(Event::DeletedBookmark(bookmark.jid));
-            aparte.send(delete);
+            aparte.send(&account, delete);
         }
         Ok(())
     }
@@ -115,11 +120,12 @@ Examples:
     conference: Option<BareJid>,
 },
 |aparte, _command| {
+    let account = aparte.current_account().ok_or(format!("No connection found"))?;
     if let Some(edit) = {
         let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
         bookmarks.edit(name.clone(), conference, nick, autojoin)
     } {
-        aparte.send(edit);
+        aparte.send(&account, edit);
         Ok(())
     } else {
         Err(format!("Unknown bookmark {}", name))
@@ -253,7 +259,7 @@ impl Bookmarks {
 
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
-        let subscriber = aparte.current_connection().unwrap();
+        let subscriber = aparte.current_account().unwrap();
         let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS))),
@@ -473,7 +479,7 @@ impl Bookmarks2 {
 
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
-        let subscriber = aparte.current_connection().unwrap();
+        let subscriber = aparte.current_account().unwrap();
         let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS2))),
@@ -592,7 +598,13 @@ impl BookmarksPlugin {
             .collect();
     }
 
-    fn handle_bookmarks(&mut self, aparte: &mut Aparte, node: &NodeName, items: Vec<Item>) {
+    fn handle_bookmarks(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        node: &NodeName,
+        items: Vec<Item>,
+    ) {
         let bookmarks = match (&node.0 as &str, &self.backend) {
             (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items.clone()),
             (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items.clone()),
@@ -622,7 +634,11 @@ impl BookmarksPlugin {
                     None => Jid::Bare(bookmark.jid.clone()),
                 };
                 info!("Autojoin {}", jid.to_string());
-                aparte.schedule(Event::Join(jid, false));
+                aparte.schedule(Event::Join {
+                    account: account.clone(),
+                    channel: jid,
+                    user_request: false,
+                });
             }
         }
 
@@ -658,25 +674,26 @@ impl Plugin for BookmarksPlugin {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Disco => {
+            Event::Disco(account) => {
                 {
                     let disco = aparte.get_plugin::<disco::Disco>().unwrap();
-                    if disco.has_feature(ns::BOOKMARKS2) {
+                    if disco.has_feature(account, ns::BOOKMARKS2) {
                         self.backend = Backend::Bookmarks2(Bookmarks2 {});
                     }
                 }
 
                 for elem in self.init_backend(aparte).drain(..) {
-                    aparte.send(elem);
+                    aparte.send(account, elem);
                 }
-                aparte.send(self.retreive());
+                aparte.send(account, self.retreive());
             }
-            Event::Iq(iq) => match iq.payload.clone() {
+            Event::Iq(account, iq) => match iq.payload.clone() {
                 IqType::Result(Some(el)) => {
                     if let Ok(PubSub::Items(items)) = PubSub::try_from(el) {
                         match &items.node.0 as &str {
                             ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(
                                 aparte,
+                                account,
                                 &items.node,
                                 items.items.iter().cloned().map(|item| item.0).collect(),
                             ),
@@ -686,10 +703,11 @@ impl Plugin for BookmarksPlugin {
                 }
                 _ => {}
             },
-            Event::PubSub(pubsub_event) => match pubsub_event {
+            Event::PubSub(account, pubsub_event) => match pubsub_event {
                 PubSubEvent::PublishedItems { node, items } => match &node.0 as &str {
                     ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(
                         aparte,
+                        account,
                         &node,
                         items.iter().cloned().map(|item| item.0).collect(),
                     ),

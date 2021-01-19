@@ -8,6 +8,7 @@ use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::{ns, presence, roster, BareJid, Element, Jid};
 
+use crate::account::Account;
 use crate::contact;
 use crate::core::{Aparte, Event, Plugin};
 
@@ -34,8 +35,14 @@ impl From<roster::Item> for contact::Contact {
     }
 }
 
+#[derive(Eq, PartialEq, Hash)]
+pub struct ContactIndex {
+    account: Account,
+    jid: BareJid,
+}
+
 pub struct ContactPlugin {
-    pub contacts: HashMap<BareJid, contact::Contact>,
+    pub contacts: HashMap<ContactIndex, contact::Contact>,
 }
 
 impl ContactPlugin {
@@ -65,27 +72,35 @@ impl Plugin for ContactPlugin {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(_jid) => aparte.send(self.request()),
-            Event::Iq(iq) => {
+            Event::Connected(account, _jid) => aparte.send(account, self.request()),
+            Event::Iq(account, iq) => {
                 if let IqType::Result(Some(payload)) = iq.payload.clone() {
                     if payload.is("query", ns::ROSTER) {
                         if let Ok(roster) = roster::Roster::try_from(payload.clone()) {
                             for item in roster.items {
                                 let contact: contact::Contact = item.clone().into();
-                                self.contacts.insert(contact.jid.clone(), contact.clone());
-                                aparte.schedule(Event::Contact(contact.clone()));
+                                let index = ContactIndex {
+                                    account: account.clone(),
+                                    jid: contact.jid.clone(),
+                                };
+                                self.contacts.insert(index, contact.clone());
+                                aparte.schedule(Event::Contact(account.clone(), contact.clone()));
                             }
                         }
                     }
                 }
             }
-            Event::Presence(presence) => {
+            Event::Presence(account, presence) => {
                 if let Some(from) = &presence.from {
                     let jid = match from {
                         Jid::Bare(jid) => jid.clone(),
                         Jid::Full(jid) => jid.clone().into(),
                     };
-                    if let Some(contact) = self.contacts.get_mut(&jid) {
+                    let index = ContactIndex {
+                        account: account.clone(),
+                        jid,
+                    };
+                    if let Some(contact) = self.contacts.get_mut(&index) {
                         contact.presence = match presence.show {
                             Some(presence::Show::Away) => contact::Presence::Away,
                             Some(presence::Show::Chat) => contact::Presence::Chat,
@@ -93,7 +108,7 @@ impl Plugin for ContactPlugin {
                             Some(presence::Show::Xa) => contact::Presence::Xa,
                             None => contact::Presence::Available,
                         };
-                        aparte.schedule(Event::ContactUpdate(contact.clone()));
+                        aparte.schedule(Event::ContactUpdate(account.clone(), contact.clone()));
                     }
                 }
             }

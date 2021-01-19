@@ -33,7 +33,7 @@ use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceTyp
 use xmpp_parsers::pubsub::event::PubSubEvent;
 use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
-use crate::account::Account;
+use crate::account::{Account, ConnectionInfo};
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::message::Message;
@@ -53,38 +53,50 @@ const WELCOME: &str = r#"
 "#;
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event {
     Start,
-    Connect(Account, Password<String>),
-    Connected(Jid),
-    Disconnected(FullJid, String),
-    AuthError(FullJid, String),
-    Stanza(FullJid, Element),
+    Connect(ConnectionInfo, Password<String>),
+    Connected(Account, Jid),
+    Disconnected(Account, String),
+    AuthError(Account, String),
+    Stanza(Account, Element),
     Command(Command),
     CommandError(String),
-    SendMessage(Message),
-    Message(Message),
-    Chat(BareJid),
-    Join(Jid, bool),
-    Joined(FullJid, bool),
-    Iq(iq::Iq),
-    Disco,
-    PubSub(PubSubEvent),
-    Presence(presence::Presence),
+    SendMessage(Account, Message),
+    Message(Option<Account>, Message),
+    Chat {
+        account: Account,
+        contact: BareJid,
+    },
+    Join {
+        account: FullJid,
+        channel: Jid,
+        user_request: bool,
+    },
+    Joined {
+        account: FullJid,
+        channel: FullJid,
+        user_request: bool,
+    },
+    Iq(FullJid, iq::Iq),
+    Disco(Account),
+    PubSub(Account, PubSubEvent),
+    Presence(Account, presence::Presence),
     ReadPassword(Command),
     Win(String),
-    Contact(contact::Contact),
-    ContactUpdate(contact::Contact),
+    Contact(Account, contact::Contact),
+    ContactUpdate(Account, contact::Contact),
     Bookmark(contact::Bookmark),
     DeletedBookmark(BareJid),
     Occupant {
+        account: Account,
         conversation: BareJid,
         occupant: conversation::Occupant,
     },
     WindowChange,
     #[allow(unused)]
-    LoadHistory(BareJid),
+    LoadHistory(Account, BareJid),
     Quit,
     Key(Key),
     AutoComplete(String, usize),
@@ -130,7 +142,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Password<T: FromStr>(pub T);
 
 impl<T: FromStr> FromStr for Password<T> {
@@ -152,11 +164,12 @@ pub struct Connection {
 pub struct Aparte {
     pub command_parsers: Rc<HashMap<String, CommandParser>>,
     plugins: Rc<HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>>,
-    connections: RefCell<HashMap<String, Connection>>,
-    current_connection: RefCell<Option<String>>,
+    connections: HashMap<Account, Connection>,
+    current_connection: Option<Account>,
     event_queue: Vec<Event>,
-    send_queue: VecDeque<Element>,
+    send_queue: VecDeque<(Account, Element)>,
     event_channel: Option<mpsc::Sender<Event>>,
+    /// Aparté main configuration
     pub config: Config,
 }
 
@@ -187,7 +200,7 @@ Examples:
         if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
             account.clone()
         } else if let Ok(jid) = Jid::from_str(&account_name) {
-            Account {
+            ConnectionInfo {
                 jid: jid.to_string(),
                 server: None,
                 port: None,
@@ -245,39 +258,33 @@ Example:
     contact: String = {
         completion: (|aparte, _command| {
             let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
-            contact.contacts.iter().map(|c| c.0.to_string()).collect()
+            contact.contacts.iter().map(|(_, contact)| contact.jid.to_string()).collect()
         })
     },
     message: Option<String>
 },
 |aparte, _command| {
-    match aparte.current_connection() {
-        Some(connection) => {
-            match Jid::from_str(&contact.clone()) {
-                Ok(jid) => {
-                    let to = match jid.clone() {
-                        Jid::Bare(jid) => jid,
-                        Jid::Full(jid) => jid.into(),
-                    };
-                    aparte.schedule(Event::Chat(to));
-                    if message.is_some() {
-                        let id = Uuid::new_v4().to_string();
-                        let from: Jid = connection.into();
-                        let timestamp = LocalTz::now();
-                        let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &message.unwrap());
-                        aparte.schedule(Event::Message(message.clone()));
+    let account = aparte.current_account().ok_or(format!("No connection found"))?;
+    match Jid::from_str(&contact.clone()) {
+        Ok(jid) => {
+            let to = match jid.clone() {
+                Jid::Bare(jid) => jid,
+                Jid::Full(jid) => jid.into(),
+            };
+            aparte.schedule(Event::Chat { account: account.clone(), contact: to });
+            if message.is_some() {
+                let id = Uuid::new_v4().to_string();
+                let from: Jid = account.clone().into();
+                let timestamp = LocalTz::now();
+                let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &message.unwrap());
+                aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
-                        aparte.send(Element::try_from(message).unwrap());
-                    }
-                    Ok(())
-                },
-                Err(err) => {
-                    Err(format!("Invalid JID {}: {}", contact, err))
-                }
+                aparte.send(&account, Element::try_from(message).unwrap());
             }
+            Ok(())
         },
-        None => {
-            Err(format!("No connection found"))
+        Err(err) => {
+            Err(format!("Invalid JID {}: {}", contact, err))
         }
     }
 });
@@ -300,9 +307,14 @@ Example:
     },
 },
 |aparte, _command| {
+    let account = aparte.current_account().ok_or(format!("No connection found"))?;
     match Jid::from_str(&muc) {
         Ok(jid) => {
-            aparte.schedule(Event::Join(jid, true));
+            aparte.schedule(Event::Join {
+                account,
+                channel: jid,
+                user_request: true
+            });
             Ok(())
         },
         Err(_) => {
@@ -324,7 +336,11 @@ Example:
 
             match jid {
                 Ok(jid) => {
-                    aparte.schedule(Event::Join(jid, true));
+                    aparte.schedule(Event::Join {
+                        account,
+                        channel: jid,
+                        user_request: true
+                    });
                     Ok(())
                 },
                 Err(e) => Err(e),
@@ -412,8 +428,8 @@ impl Aparte {
         Self {
             command_parsers: Rc::new(HashMap::new()),
             plugins: Rc::new(HashMap::new()),
-            connections: RefCell::new(HashMap::new()),
-            current_connection: RefCell::new(None),
+            connections: HashMap::new(),
+            current_connection: None,
             event_queue: Vec::new(),
             send_queue: VecDeque::new(),
             event_channel: None,
@@ -469,27 +485,18 @@ impl Aparte {
         }))
     }
 
-    pub fn add_connection(&self, account: FullJid, sink: mpsc::Sender<Element>) {
-        let connection = Connection { account, sink };
+    pub fn add_connection(&mut self, account: Account, sink: mpsc::Sender<Element>) {
+        let connection = Connection {
+            account: account.clone(),
+            sink,
+        };
 
-        let account = connection.account.to_string();
-
-        self.connections
-            .borrow_mut()
-            .insert(account.clone(), connection);
-        self.current_connection.replace(Some(account.clone()));
+        self.connections.insert(account.clone(), connection);
+        self.current_connection = Some(account.clone());
     }
 
-    pub fn current_connection(&self) -> Option<FullJid> {
-        let current_connection = self.current_connection.borrow();
-        match &*current_connection {
-            Some(current_connection) => {
-                let connections = self.connections.borrow_mut();
-                let connection = connections.get(&current_connection.clone()).unwrap();
-                Some(connection.account.clone())
-            }
-            None => None,
-        }
+    pub fn current_account(&self) -> Option<Account> {
+        self.current_connection.clone()
     }
 
     pub fn init(&mut self) -> Result<(), ()> {
@@ -585,26 +592,30 @@ impl Aparte {
         }
     }
 
-    pub fn send(&mut self, stanza: Element) {
-        self.send_queue.push_back(stanza);
+    pub fn send(&mut self, account: &Account, stanza: Element) {
+        self.send_queue.push_back((account.clone(), stanza));
     }
 
     async fn send_loop(&mut self) {
-        for stanza in self.send_queue.drain(..) {
+        for (account, stanza) in self.send_queue.drain(..) {
             let mut raw = Vec::<u8>::new();
             stanza.write_to(&mut raw).unwrap();
             debug!("SEND: {}", String::from_utf8(raw).unwrap());
-            // TODO use correct connection
-            let mut connections = self.connections.borrow_mut();
-            let current_connection = connections.iter_mut().next().unwrap().1;
-            if let Err(e) = current_connection.sink.send(stanza).await {
-                warn!("Cannot send stanza: {}", e);
+            match self.connections.get_mut(&account) {
+                Some(connection) => {
+                    if let Err(e) = connection.sink.send(stanza).await {
+                        warn!("Cannot send stanza: {}", e);
+                    }
+                }
+                None => {
+                    warn!("No connection found for {}", account);
+                }
             }
         }
     }
 
-    pub async fn connect(&mut self, account: &Account, password: Password<String>) {
-        let jid = match Jid::from_str(&account.jid) {
+    pub async fn connect(&mut self, connection_info: &ConnectionInfo, password: Password<String>) {
+        let account: Account = match Jid::from_str(&connection_info.jid) {
             Ok(Jid::Full(jid)) => jid,
             Ok(Jid::Bare(jid)) => {
                 let rand_string: String = rand::thread_rng()
@@ -614,16 +625,19 @@ impl Aparte {
                 jid.with_resource(format!("aparte_{}", rand_string))
             }
             Err(err) => {
-                self.log(format!("Cannot connect as {}: {}", account.jid, err));
+                self.log(format!(
+                    "Cannot connect as {}: {}",
+                    connection_info.jid, err
+                ));
                 return;
             }
         };
 
-        self.log(format!("Connecting as {}", jid));
-        let mut client = match TokioXmppClient::new(&jid.to_string(), &password.0) {
+        self.log(format!("Connecting as {}", account));
+        let mut client = match TokioXmppClient::new(&account.to_string(), &password.0) {
             Ok(client) => client,
             Err(err) => {
-                self.log(format!("Cannot connect as {}: {}", jid, err));
+                self.log(format!("Cannot connect as {}: {}", account, err));
                 return;
             }
         };
@@ -632,7 +646,7 @@ impl Aparte {
 
         let (connection_channel, mut rx) = mpsc::channel(32);
 
-        self.add_connection(jid.clone(), connection_channel);
+        self.add_connection(account.clone(), connection_channel);
 
         let (mut writer, mut reader) = client.split();
         // XXX could use self.rt.spawn if client was impl Send
@@ -657,7 +671,7 @@ impl Aparte {
                 match event {
                     XmppEvent::Disconnected(XmppError::Auth(e)) => {
                         if let Err(err) = event_channel
-                            .send(Event::AuthError(jid.clone(), format!("{}", e)))
+                            .send(Event::AuthError(account.clone(), format!("{}", e)))
                             .await
                         {
                             error!("Cannot send event to internal channel: {}", err);
@@ -666,7 +680,7 @@ impl Aparte {
                     }
                     XmppEvent::Disconnected(e) => {
                         if let Err(err) = event_channel
-                            .send(Event::Disconnected(jid.clone(), format!("{}", e)))
+                            .send(Event::Disconnected(account.clone(), format!("{}", e)))
                             .await
                         {
                             error!("Cannot send event to internal channel: {}", err);
@@ -685,15 +699,19 @@ impl Aparte {
                         bound_jid: jid,
                         resumed: false,
                     } => {
-                        if let Err(err) = event_channel.send(Event::Connected(jid.clone())).await {
+                        if let Err(err) = event_channel
+                            .send(Event::Connected(account.clone(), jid))
+                            .await
+                        {
                             error!("Cannot send event to internal channel: {}", err);
                             break;
                         }
                     }
                     XmppEvent::Stanza(stanza) => {
                         debug!("RECV: {}", String::from(&stanza));
-                        if let Err(err) =
-                            event_channel.send(Event::Stanza(jid.clone(), stanza)).await
+                        if let Err(err) = event_channel
+                            .send(Event::Stanza(account.clone(), stanza))
+                            .await
                         {
                             error!("Cannot send stanza to internal channel: {}", err);
                             break;
@@ -724,56 +742,60 @@ impl Aparte {
                     Err(err) => self.log(err),
                     Ok(()) => {}
                 },
-                Event::SendMessage(message) => {
-                    self.schedule(Event::Message(message.clone()));
+                Event::SendMessage(account, message) => {
+                    self.schedule(Event::Message(Some(account.clone()), message.clone()));
                     if let Ok(xmpp_message) = Element::try_from(message) {
-                        self.send(xmpp_message);
+                        self.send(&account, xmpp_message);
                     }
                 }
                 Event::Connect(account, password) => {
                     self.connect(&account, password).await;
                 }
-                Event::Connected(jid) => {
-                    self.log(format!("Connected as {}", jid));
+                Event::Connected(account, _) => {
+                    self.log(format!("Connected as {}", account));
                     let mut presence = Presence::new(PresenceType::None);
                     presence.show = Some(PresenceShow::Chat);
 
-                    self.send(presence.into());
+                    self.send(&account, presence.into());
                 }
-                Event::Disconnected(jid, err) => {
-                    self.log(format!("Connection lost for {}: {}", jid, err));
+                Event::Disconnected(account, err) => {
+                    self.log(format!("Connection lost for {}: {}", account, err));
                 }
-                Event::AuthError(jid, err) => {
-                    self.log(format!("Authentication error for {}: {}", jid, err));
+                Event::AuthError(account, err) => {
+                    self.log(format!("Authentication error for {}: {}", account, err));
                 }
-                Event::Stanza(_jid, stanza) => {
-                    // TODO propagate jid?
-                    self.handle_stanza(stanza);
+                Event::Stanza(account, stanza) => {
+                    self.handle_stanza(account, stanza);
                 }
-                Event::Join(jid, change_window) => match self.current_connection() {
-                    Some(connection) => {
-                        let to = match jid.clone() {
-                            Jid::Full(jid) => jid,
-                            Jid::Bare(jid) => {
-                                let node = connection.node.clone().unwrap();
-                                jid.with_resource(node)
-                            }
-                        };
-                        let from: Jid = connection.into();
+                Event::Join {
+                    account,
+                    channel,
+                    user_request,
+                } => {
+                    let to = match channel.clone() {
+                        Jid::Full(jid) => jid,
+                        Jid::Bare(jid) => {
+                            let node = account.node.clone().unwrap();
+                            jid.with_resource(node)
+                        }
+                    };
+                    let from: Jid = account.clone().into();
 
-                        let mut presence = Presence::new(PresenceType::None);
-                        presence = presence.with_to(Jid::Full(to.clone()));
-                        presence = presence.with_from(from);
-                        presence.add_payload(Muc::new());
-                        self.send(presence.into());
+                    // Send presence in the channel
+                    let mut presence = Presence::new(PresenceType::None);
+                    presence = presence.with_to(Jid::Full(to.clone()));
+                    presence = presence.with_from(from);
+                    presence.add_payload(Muc::new());
+                    self.send(&account, presence.into());
 
-                        self.log(format!("Joined {}", jid));
-                        self.schedule(Event::Joined(to, change_window));
-                    }
-                    None => {
-                        self.log(format!("No connection found"));
-                    }
-                },
+                    // Successful join
+                    self.log(format!("Joined {}", channel));
+                    self.schedule(Event::Joined {
+                        account: account.clone(),
+                        channel: to,
+                        user_request,
+                    });
+                }
                 Event::Quit => {
                     return Err(());
                 }
@@ -791,36 +813,36 @@ impl Aparte {
 
     pub fn log(&mut self, message: String) {
         let message = Message::log(message);
-        self.schedule(Event::Message(message));
+        self.schedule(Event::Message(None, message));
     }
 
-    pub fn handle_stanza(&mut self, stanza: Element) {
+    pub fn handle_stanza(&mut self, account: Account, stanza: Element) {
         if let Some(message) = XmppParsersMessage::try_from(stanza.clone()).ok() {
-            self.handle_message(message);
+            self.handle_message(account, message);
         } else if let Some(iq) = Iq::try_from(stanza.clone()).ok() {
             if let IqType::Error(stanza) = iq.payload.clone() {
                 if let Some(text) = stanza.texts.get("en") {
                     let message = Message::log(text.clone());
-                    self.schedule(Event::Message(message));
+                    self.schedule(Event::Message(Some(account.clone()), message));
                 }
             }
-            self.schedule(Event::Iq(iq));
+            self.schedule(Event::Iq(account, iq));
         } else if let Some(presence) = Presence::try_from(stanza.clone()).ok() {
-            self.schedule(Event::Presence(presence));
+            self.schedule(Event::Presence(account, presence));
         }
     }
 
-    fn handle_message(&mut self, message: XmppParsersMessage) {
+    fn handle_message(&mut self, account: Account, message: XmppParsersMessage) {
         match message.type_ {
-            XmppParsersMessageType::Chat => self.handle_chat_message(message),
-            XmppParsersMessageType::Groupchat => self.handle_groupchat_message(message),
-            XmppParsersMessageType::Headline => self.handle_headline_message(message),
+            XmppParsersMessageType::Chat => self.handle_chat_message(account, message),
+            XmppParsersMessageType::Groupchat => self.handle_groupchat_message(account, message),
+            XmppParsersMessageType::Headline => self.handle_headline_message(account, message),
             XmppParsersMessageType::Error => {}
             XmppParsersMessageType::Normal => {}
         };
     }
 
-    fn handle_chat_message(&mut self, message: XmppParsersMessage) {
+    fn handle_chat_message(&mut self, account: Account, message: XmppParsersMessage) {
         let id = message
             .id
             .clone()
@@ -840,21 +862,21 @@ impl Aparte {
                     &to,
                     &body.0,
                 );
-                self.schedule(Event::Message(message));
+                self.schedule(Event::Message(Some(account.clone()), message));
             }
         }
 
         for payload in message.payloads.iter().cloned() {
             if let Some(received) = xmpp_parsers::carbons::Received::try_from(payload.clone()).ok()
             {
-                self.handle_message_carbons(received.forwarded, true);
+                self.handle_message_carbons(account.clone(), received.forwarded, true);
             } else if let Some(sent) = xmpp_parsers::carbons::Sent::try_from(payload.clone()).ok() {
-                self.handle_message_carbons(sent.forwarded, false);
+                self.handle_message_carbons(account.clone(), sent.forwarded, false);
             }
         }
     }
 
-    fn handle_groupchat_message(&mut self, message: XmppParsersMessage) {
+    fn handle_groupchat_message(&mut self, account: Account, message: XmppParsersMessage) {
         let id = message
             .id
             .clone()
@@ -874,13 +896,14 @@ impl Aparte {
                     &to,
                     &body.0,
                 );
-                self.schedule(Event::Message(message));
+                self.schedule(Event::Message(Some(account), message));
             }
         }
     }
 
     fn handle_message_carbons(
         &mut self,
+        account: Account,
         forwarded: xmpp_parsers::forwarding::Forwarded,
         received: bool,
     ) {
@@ -897,19 +920,19 @@ impl Aparte {
                             true => Message::incoming_chat(id, timestamp, &from, &to, &body.0),
                             false => Message::outgoing_chat(id, timestamp, &from, &to, &body.0),
                         };
-                        self.schedule(Event::Message(message));
+                        self.schedule(Event::Message(Some(account), message));
                     }
                 }
             }
         }
     }
 
-    fn handle_headline_message(&mut self, message: XmppParsersMessage) {
+    fn handle_headline_message(&mut self, account: Account, message: XmppParsersMessage) {
         for payload in message.payloads.iter().cloned() {
             if let Some(pubsub_event) =
                 xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload).ok()
             {
-                self.schedule(Event::PubSub(pubsub_event));
+                self.schedule(Event::PubSub(account.clone(), pubsub_event));
             }
         }
     }

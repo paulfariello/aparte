@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use xmpp_parsers::BareJid;
+use xmpp_parsers::{BareJid, FullJid};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
 pub enum Affiliation {
@@ -32,13 +32,16 @@ pub struct Occupant {
 
 #[derive(Clone, Debug)]
 pub struct Channel {
+    pub account: FullJid,
     pub jid: BareJid,
     pub nick: String,
     pub name: Option<String>,
+    /// Collections of occupants of this channel, key is occupant.nick
     pub occupants: HashMap<String, Occupant>,
 }
 
 pub struct Chat {
+    pub account: FullJid,
     pub contact: BareJid,
 }
 
