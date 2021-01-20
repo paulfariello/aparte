@@ -27,6 +27,7 @@ mod message;
 mod command;
 mod plugins;
 mod terminus;
+mod word;
 
 use crate::core::{Aparte, Plugin};
 

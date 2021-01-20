@@ -27,12 +27,13 @@ use termion::screen::AlternateScreen;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
+use crate::account::Account;
 use crate::command::Command;
 use crate::core::{Aparte, Event, Plugin};
 use crate::message::{Message, XmppMessage};
 use crate::terminus::{
     BufferedWin, Dimension, FrameLayout, Input, LinearLayout, ListView, Orientation, View,
-    ViewTrait, Window,
+    ViewTrait, Window as _,
 };
 use crate::{contact, conversation};
 
@@ -46,6 +47,7 @@ enum ConversationKind {
 
 #[derive(Debug, Clone)]
 struct Conversation {
+    account: Account,
     jid: BareJid,
     kind: ConversationKind,
 }
@@ -935,6 +937,7 @@ impl Plugin for UIPlugin {
                             self.add_conversation(
                                 aparte,
                                 Conversation {
+                                    account: account.clone().unwrap(),
                                     jid: BareJid::from_str(&window_name).unwrap(),
                                     kind: ConversationKind::Chat,
                                 },
@@ -959,6 +962,7 @@ impl Plugin for UIPlugin {
                             self.add_conversation(
                                 aparte,
                                 Conversation {
+                                    account: account.clone().unwrap(),
                                     jid: BareJid::from_str(&window_name).unwrap(),
                                     kind: ConversationKind::Chat,
                                 },
@@ -971,6 +975,7 @@ impl Plugin for UIPlugin {
                             self.add_conversation(
                                 aparte,
                                 Conversation {
+                                    account: account.clone().unwrap(),
                                     jid: BareJid::from_str(&window_name).unwrap(),
                                     kind: ConversationKind::Group,
                                 },
@@ -995,6 +1000,7 @@ impl Plugin for UIPlugin {
                             self.add_conversation(
                                 aparte,
                                 Conversation {
+                                    account: account.clone().unwrap(),
                                     jid: BareJid::from_str(&window_name).unwrap(),
                                     kind: ConversationKind::Group,
                                 },
@@ -1009,13 +1015,14 @@ impl Plugin for UIPlugin {
                     message.clone(),
                 )));
             }
-            Event::Chat { contact, .. } => {
+            Event::Chat { account, contact } => {
                 // Should we store account association?
                 let win_name = contact.to_string();
                 if !self.conversations.contains_key(&win_name) {
                     self.add_conversation(
                         aparte,
                         Conversation {
+                            account: account.clone(),
                             jid: BareJid::from_str(&win_name).unwrap(),
                             kind: ConversationKind::Chat,
                         },
@@ -1024,9 +1031,9 @@ impl Plugin for UIPlugin {
                 self.change_window(&win_name);
             }
             Event::Joined {
+                account,
                 channel,
                 user_request,
-                ..
             } => {
                 let bare: BareJid = channel.clone().into();
                 let win_name = bare.to_string();
@@ -1034,6 +1041,7 @@ impl Plugin for UIPlugin {
                     self.add_conversation(
                         aparte,
                         Conversation {
+                            account: account.clone(),
                             jid: BareJid::from_str(&win_name).unwrap(),
                             kind: ConversationKind::Group,
                         },
@@ -1071,7 +1079,24 @@ impl Plugin for UIPlugin {
                         if password {
                             aparte.schedule(Event::Key(Key::Char('\t')));
                         } else {
-                            aparte.schedule(Event::AutoComplete(raw_buf, cursor));
+                            let (account, conversation) = match &self.current_window {
+                                Some(current_window) => {
+                                    match self.conversations.get(current_window) {
+                                        Some(conversation) => (
+                                            Some(conversation.account.clone()),
+                                            Some(conversation.jid.clone()),
+                                        ),
+                                        _ => (None, None),
+                                    }
+                                }
+                                _ => (None, None),
+                            };
+                            aparte.schedule(Event::AutoComplete {
+                                account,
+                                conversation,
+                                raw_buf,
+                                cursor,
+                            });
                         }
                     }
                     Key::Char('\n') => {

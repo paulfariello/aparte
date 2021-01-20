@@ -11,17 +11,29 @@ use crate::conversation;
 use crate::core::{Aparte, Event, Plugin};
 
 #[derive(Eq, PartialEq, Hash)]
-pub struct ConversationIndex {
+struct ConversationIndex {
     account: Account,
     jid: BareJid,
 }
 
 pub struct ConversationPlugin {
     /// Collections of currently opened conversations.
-    pub conversations: HashMap<ConversationIndex, conversation::Conversation>,
+    conversations: HashMap<ConversationIndex, conversation::Conversation>,
 }
 
-impl ConversationPlugin {}
+impl ConversationPlugin {
+    pub fn get<'a>(
+        &'a self,
+        account: &Account,
+        jid: &BareJid,
+    ) -> Option<&'a conversation::Conversation> {
+        let index = ConversationIndex {
+            account: account.clone(),
+            jid: jid.clone(),
+        };
+        self.conversations.get(&index)
+    }
+}
 
 impl From<muc::user::Role> for conversation::Role {
     fn from(role: muc::user::Role) -> Self {

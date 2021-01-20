@@ -99,7 +99,12 @@ pub enum Event {
     LoadHistory(Account, BareJid),
     Quit,
     Key(Key),
-    AutoComplete(String, usize),
+    AutoComplete {
+        account: Option<Account>,
+        conversation: Option<BareJid>,
+        raw_buf: String,
+        cursor: usize,
+    },
     ResetCompletion,
     Completed(String, usize),
     ChangeWindow(String),
