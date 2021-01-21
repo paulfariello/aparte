@@ -133,8 +133,15 @@ impl CompletionPlugin {
                         if let Some(Conversation::Channel(channel)) =
                             conversation_plugin.get(account, conversation)
                         {
-                            let words = Words::new(&raw_buf[..byte_index(&raw_buf, cursor)]);
-                            let current_word = words.last().unwrap_or("");
+                            let words = Words::new(&raw_buf[..byte_index(&raw_buf, cursor)]).collect::<Vec<_>>();
+                            let current_word = *words.last().unwrap_or(&"");
+
+                            let append = if words.len() <= 1 {
+                                ": "
+                            } else {
+                                " "
+                            };
+
 
                             // Collect completion candidates
                             self.completions = Some(
@@ -143,7 +150,7 @@ impl CompletionPlugin {
                                     .iter()
                                     .filter_map(|(_, occupant)| {
                                         if occupant.nick.starts_with(current_word) {
-                                            Some(occupant.nick.clone())
+                                            Some(occupant.nick.clone() + append)
                                         } else {
                                             None
                                         }
