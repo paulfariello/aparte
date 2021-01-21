@@ -36,6 +36,7 @@ use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 use crate::account::{Account, ConnectionInfo};
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
+use crate::cursor::Cursor;
 use crate::message::Message;
 use crate::plugins;
 use crate::terminus::ViewTrait;
@@ -103,10 +104,10 @@ pub enum Event {
         account: Option<Account>,
         conversation: Option<BareJid>,
         raw_buf: String,
-        cursor: usize,
+        cursor: Cursor,
     },
     ResetCompletion,
-    Completed(String, usize),
+    Completed(String, Cursor),
     ChangeWindow(String),
 }
 

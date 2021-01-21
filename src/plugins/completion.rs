@@ -9,20 +9,9 @@ use crate::account::Account;
 use crate::command::Command;
 use crate::conversation::Conversation;
 use crate::core::{Aparte, Event, Plugin};
+use crate::cursor::Cursor;
 use crate::plugins::conversation::ConversationPlugin;
 use crate::word::Words;
-
-// Hard copy from terminus
-fn byte_index(buf: &str, mut cursor: usize) -> usize {
-    let mut byte_index = 0;
-    while cursor > 0 && byte_index < buf.len() {
-        byte_index += 1;
-        if buf.is_char_boundary(byte_index) {
-            cursor -= 1;
-        }
-    }
-    byte_index
-}
 
 pub struct CompletionPlugin {
     /// List of possible completions for current raw_buf
@@ -38,35 +27,40 @@ impl CompletionPlugin {
         account: &Option<Account>,
         conversation: &Option<BareJid>,
         raw_buf: String,
-        cursor: usize,
+        cursor: Cursor,
     ) {
         if self.completions.is_none() {
-            self.build_completions(aparte, account, conversation, raw_buf.clone(), cursor);
+            self.build_completions(aparte, account, conversation, raw_buf.clone(), &cursor);
         }
 
         if let Some(completions) = &self.completions {
             if completions.len() > 0 {
                 let mut completed_buf = String::new();
+                let mut new_index = 0;
                 let completion = completions[self.current_completion].clone();
                 if raw_buf.starts_with("/") {
-                    if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, cursor) {
+                    if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, &cursor) {
                         if command.cursor < command.args.len() {
                             command.args[command.cursor] = completion;
                         } else {
                             command.args.push(completion);
                         }
                         completed_buf = command.assemble();
+                        // TODO handle in place completion, cursor shouldn't move to end of input
+                        new_index = completed_buf.len();
                     }
                 } else {
                     let words = Words::new(&raw_buf);
-                    let mut index = 0;
+                    let old_index = cursor.index(&raw_buf);
+                    let mut iter_index = 0;
                     completed_buf = words
                         .map(|word| {
-                            if index < cursor && cursor <= index + word.len() {
-                                index += word.len();
+                            if iter_index < old_index && old_index <= iter_index + word.len() {
+                                iter_index += completion.len();
+                                new_index = iter_index;
                                 &completion
                             } else {
-                                index += word.len();
+                                iter_index += word.len();
                                 word
                             }
                         })
@@ -77,7 +71,10 @@ impl CompletionPlugin {
                 self.current_completion += 1;
                 self.current_completion %= completions.len();
 
-                aparte.schedule(Event::Completed(completed_buf.clone(), completed_buf.len()));
+                aparte.schedule(Event::Completed(
+                    completed_buf.clone(),
+                    Cursor::from_index(&completed_buf, new_index).unwrap(),
+                ));
             }
         }
     }
@@ -88,7 +85,7 @@ impl CompletionPlugin {
         account: &Option<Account>,
         conversation: &Option<BareJid>,
         raw_buf: String,
-        cursor: usize,
+        cursor: &Cursor,
     ) {
         if raw_buf.starts_with("/") {
             let mut completions = Vec::new();
@@ -133,15 +130,11 @@ impl CompletionPlugin {
                         if let Some(Conversation::Channel(channel)) =
                             conversation_plugin.get(account, conversation)
                         {
-                            let words = Words::new(&raw_buf[..byte_index(&raw_buf, cursor)]).collect::<Vec<_>>();
+                            let words =
+                                Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
                             let current_word = *words.last().unwrap_or(&"");
 
-                            let append = if words.len() <= 1 {
-                                ": "
-                            } else {
-                                " "
-                            };
-
+                            let append = if words.len() <= 1 { ": " } else { " " };
 
                             // Collect completion candidates
                             self.completions = Some(

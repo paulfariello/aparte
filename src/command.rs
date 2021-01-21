@@ -4,8 +4,10 @@
 use std::convert::TryFrom;
 #[allow(unused_imports)]
 use textwrap;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::core::Aparte;
+use crate::cursor::Cursor;
 
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -14,7 +16,7 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn parse_with_cursor(string: &str, cursor: usize) -> Result<Self, &'static str> {
+    pub fn parse_with_cursor(string: &str, cursor: &Cursor) -> Result<Self, &'static str> {
         enum State {
             Initial,
             Delimiter,
@@ -28,7 +30,7 @@ impl Command {
 
         use State::*;
 
-        let mut string_cursor = cursor;
+        let mut string_cursor = cursor.try_index(string).map_err(|_| "invalid cursor")?;
         let mut tokens: Vec<String> = Vec::new();
         let mut token = String::new();
         let mut state = Initial;
@@ -215,7 +217,11 @@ impl TryFrom<&str> for Command {
     type Error = &'static str;
 
     fn try_from(string: &str) -> Result<Self, Self::Error> {
-        Command::parse_with_cursor(string, string.len())
+        Command::parse_with_cursor(
+            string,
+            &Cursor::from_index(string, string.graphemes(true).count() - 1)
+                .map_err(|_| "invalid cursor")?,
+        )
     }
 }
 
@@ -613,7 +619,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_args_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/test command with args", 10);
+        let command = Command::parse_with_cursor("/test command with args", &Cursor::new(10));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 4);
@@ -626,7 +632,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/te", 3);
+        let command = Command::parse_with_cursor("/te", &Cursor::new(3));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -636,7 +642,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_end_with_space_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/test ", 6);
+        let command = Command::parse_with_cursor("/test ", &Cursor::new(6));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -646,7 +652,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_no_command_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/", 1);
+        let command = Command::parse_with_cursor("/", &Cursor::new(1));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);

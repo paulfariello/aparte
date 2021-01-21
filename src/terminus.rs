@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use crate::cursor::Cursor;
 use linked_hash_map::{Entry, LinkedHashMap};
 use std::cell::RefCell;
 use std::cmp;
@@ -569,7 +570,7 @@ pub struct Input {
     pub history: Vec<String>,
     pub history_index: usize,
     // Used to index code points in buf (don't use it to directly index buf)
-    pub cursor: usize,
+    pub cursor: Cursor,
     // start index (in code points) of the view inside the buffer
     // |-----------------------|
     // | buffer text           |
@@ -577,20 +578,7 @@ pub struct Input {
     //     |-----------|
     //     | view      |
     //     |-----------|
-    pub view: usize,
-}
-
-impl Input {
-    pub fn byte_index(&self, mut cursor: usize) -> usize {
-        let mut byte_index = 0;
-        while cursor > 0 && byte_index < self.buf.len() {
-            byte_index += 1;
-            if self.buf.is_char_boundary(byte_index) {
-                cursor -= 1;
-            }
-        }
-        byte_index
-    }
+    pub view: Cursor,
 }
 
 impl<'a, E> View<'a, Input, E> {
@@ -615,8 +603,8 @@ impl<'a, E> View<'a, Input, E> {
                 password: false,
                 history: Vec::new(),
                 history_index: 0,
-                cursor: 0,
-                view: 0,
+                cursor: Cursor::new(0),
+                view: Cursor::new(0),
             },
             event_handler: None,
         }
@@ -632,7 +620,7 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn key(&mut self, c: char) {
-        let byte_index = self.content.byte_index(self.content.cursor);
+        let byte_index = self.content.cursor.index(&self.content.buf);
         self.content.buf.insert(byte_index, c);
         self.content.cursor += 1;
 
@@ -642,13 +630,17 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn backspace(&mut self) {
-        if self.content.cursor > 0 {
-            let byte_index = self.content.byte_index(self.content.cursor - 1);
+        if self.content.cursor > Cursor::new(0) {
+            self.content.cursor -= 1;
+            let mut byte_index = self.content.cursor.index(&self.content.buf);
+            if byte_index == self.content.buf.len() {
+                byte_index -= 1;
+            }
             self.content.buf.remove(byte_index);
+            // TODO work on grapheme
             while !self.content.buf.is_char_boundary(byte_index) {
                 self.content.buf.remove(byte_index);
             }
-            self.content.cursor -= 1;
         }
         if !self.content.password {
             self.redraw();
@@ -665,11 +657,11 @@ impl<'a, E> View<'a, Input, E> {
 
         use WordParserState::*;
 
-        let mut iter = self.content.buf[..self.content.byte_index(self.content.cursor)]
+        let mut iter = self.content.buf[..self.content.cursor.index(&self.content.buf)]
             .chars()
             .rev();
         let mut state = Init;
-        let mut word_start = self.content.cursor;
+        let mut word_start = self.content.cursor.clone();
 
         while let Some(c) = iter.next() {
             state = match state {
@@ -699,8 +691,9 @@ impl<'a, E> View<'a, Input, E> {
 
             word_start -= 1;
         }
+
         self.content.buf.replace_range(
-            self.content.byte_index(word_start)..self.content.byte_index(self.content.cursor),
+            word_start.index(&self.content.buf)..self.content.cursor.index(&self.content.buf),
             "",
         );
         self.content.cursor = word_start;
@@ -712,9 +705,9 @@ impl<'a, E> View<'a, Input, E> {
     pub fn delete_from_cursor_to_start(&mut self) {
         self.content
             .buf
-            .replace_range(0..self.content.byte_index(self.content.cursor), "");
-        self.content.cursor = 0;
-        self.content.view = 0;
+            .replace_range(0..self.content.cursor.index(&self.content.buf), "");
+        self.content.cursor = Cursor::new(0);
+        self.content.view = Cursor::new(0);
         if !self.content.password {
             self.redraw();
         }
@@ -723,15 +716,15 @@ impl<'a, E> View<'a, Input, E> {
     pub fn delete_from_cursor_to_end(&mut self) {
         self.content
             .buf
-            .replace_range(self.content.byte_index(self.content.cursor).., "");
+            .replace_range(self.content.cursor.index(&self.content.buf).., "");
         if !self.content.password {
             self.redraw();
         }
     }
 
     pub fn delete(&mut self) {
-        if self.content.cursor < self.content.buf.len() {
-            let byte_index = self.content.byte_index(self.content.cursor);
+        if self.content.cursor < self.content.buf.graphemes(true).count() {
+            let byte_index = self.content.cursor.index(&self.content.buf);
 
             self.content.buf.remove(byte_index);
             while !self.content.buf.is_char_boundary(byte_index) {
@@ -744,19 +737,19 @@ impl<'a, E> View<'a, Input, E> {
     }
 
     pub fn home(&mut self) {
-        self.content.cursor = 0;
-        self.content.view = 0;
+        self.content.cursor = Cursor::new(0);
+        self.content.view = Cursor::new(0);
         if !self.content.password {
             self.redraw();
         }
     }
 
     pub fn end(&mut self) {
-        self.content.cursor = term_string_visible_len(&self.content.buf);
+        self.content.cursor = Cursor::new(self.content.buf.graphemes(true).count());
         if self.content.cursor > self.w.unwrap() as usize - 1 {
-            self.content.view = self.content.cursor - (self.w.unwrap() as usize - 1);
+            self.content.view = &self.content.cursor - (self.w.unwrap() as usize - 1);
         } else {
-            self.content.view = 0;
+            self.content.view = Cursor::new(0);
         }
         if !self.content.password {
             self.redraw();
@@ -765,8 +758,8 @@ impl<'a, E> View<'a, Input, E> {
 
     pub fn clear(&mut self) {
         self.content.buf.clear();
-        self.content.cursor = 0;
-        self.content.view = 0;
+        self.content.cursor = Cursor::new(0);
+        self.content.view = Cursor::new(0);
         let _ = self.content.tmp_buf.take();
         self.content.password = false;
         goto!(self, self.x, self.y);
@@ -853,20 +846,20 @@ impl<E> ViewTrait<E> for View<'_, Input, E> {
         // cursor must always be inside the view
         if self.content.cursor < self.content.view {
             if self.content.cursor < max_size {
-                self.content.view = 0;
+                self.content.view = Cursor::new(0);
             } else {
-                self.content.view = self.content.cursor - (self.w.unwrap() as usize - 1);
+                self.content.view = &self.content.cursor - (self.w.unwrap() as usize - 1);
             }
-        } else if self.content.cursor > self.content.view + self.w.unwrap() as usize - 1 {
-            self.content.view = self.content.cursor - (self.w.unwrap() as usize - 1);
+        } else if self.content.cursor > &self.content.view + (self.w.unwrap() as usize - 1) {
+            self.content.view = &self.content.cursor - (self.w.unwrap() as usize - 1);
         }
         assert!(self.content.cursor >= self.content.view);
-        assert!(self.content.cursor <= self.content.view + max_size + 1);
+        assert!(self.content.cursor <= &self.content.view + (max_size + 1));
 
-        let start_index = self.content.byte_index(self.content.view);
-        let end_index = self.content.byte_index(self.content.view + max_size);
+        let start_index = self.content.view.index(&self.content.buf);
+        let end_index = (&self.content.view + max_size).index(&self.content.buf);
         let buf = &self.content.buf[start_index..end_index];
-        let cursor = self.content.cursor - self.content.view;
+        let cursor = &self.content.cursor - &self.content.view;
 
         goto!(self, self.x, self.y);
         for _ in 0..max_size {
@@ -875,7 +868,7 @@ impl<E> ViewTrait<E> for View<'_, Input, E> {
 
         goto!(self, self.x, self.y);
         vprint!(self, "{}", buf);
-        goto!(self, self.x + cursor as u16, self.y);
+        goto!(self, self.x + cursor.get() as u16, self.y);
 
         flush!(self);
     }
@@ -1011,7 +1004,7 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
                         continue;
                     }
 
-                    let grapheme_count = visible_word.graphemes(true).collect::<Vec<_>>().len();
+                    let grapheme_count = visible_word.graphemes(true).count();
 
                     if line_len + grapheme_count > max_len {
                         // Wrap line
@@ -1404,20 +1397,16 @@ mod tests {
     }
 
     #[test]
-    fn test_input_byte_index_for_cursor() {
-        let input = Input {
-            buf: "aça".to_string(),
-            tmp_buf: None,
-            password: true,
-            history: Vec::new(),
-            history_index: 0,
-            cursor: 1,
-            view: 0,
-        };
+    #[ignore]
+    fn test_input_backspace() {
+        // Given
+        let screen = Mock;
+        let input = View::<Input, ()>::new(screen.clone());
 
-        assert_eq!(input.buf.len(), 4);
-        assert_eq!(input.byte_index(0), 0);
-        assert_eq!(input.byte_index(1), 1);
-        assert_eq!(input.byte_index(2), 3);
+        // When
+        input.backspace();
+
+        // Then
+        assert_eq!(input.content.buf, "abc".to_string());
     }
 }

@@ -26,6 +26,7 @@ mod message;
 #[macro_use]
 mod command;
 mod color;
+mod cursor;
 mod plugins;
 mod terminus;
 mod word;

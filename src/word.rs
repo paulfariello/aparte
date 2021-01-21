@@ -165,13 +165,16 @@ mod tests {
     #[test]
     fn test_split_multibyte_codepoint() {
         // Given
-        let input = "I love 🍺";
+        let input = "I love 🍺 more than 🐈";
 
         // When
         let words = Words::new(input);
 
         // Then
-        assert_eq!(words.collect::<Vec<&str>>(), vec!["I ", "love ", "🍺"]);
+        assert_eq!(
+            words.collect::<Vec<&str>>(),
+            vec!["I ", "love ", "🍺 ", "more ", "than ", "🐈"]
+        );
     }
 
     #[test]

@@ -31,6 +31,7 @@ use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::core::{Aparte, Event, Plugin};
+use crate::cursor::Cursor;
 use crate::message::{Message, XmppMessage};
 use crate::terminus::{
     BufferedWin, Dimension, FrameLayout, Input, LinearLayout, ListView, Orientation, View,
@@ -56,7 +57,7 @@ struct Conversation {
 enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
-    GetInput(Rc<RefCell<Option<(String, usize, bool)>>>),
+    GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
     AddWindow(String, Option<Box<dyn ViewTrait<UIEvent>>>),
 }
 
@@ -800,7 +801,7 @@ impl Plugin for UIPlugin {
                     let mut result = result.borrow_mut();
                     result.replace((
                         input.content.buf.clone(),
-                        input.content.cursor,
+                        input.content.cursor.clone(),
                         input.content.password,
                     ));
                 }
@@ -1101,7 +1102,7 @@ impl Plugin for UIPlugin {
                                 account,
                                 conversation,
                                 raw_buf,
-                                cursor,
+                                cursor: cursor,
                             });
                         }
                     }
