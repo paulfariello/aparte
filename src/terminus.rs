@@ -1327,7 +1327,12 @@ impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
         }
 
         for (group, items) in &self.content.items {
+            if y > self.y + self.h.unwrap() {
+                break;
+            }
+
             goto!(self, self.x, y);
+
             if group.is_some() {
                 vprint!(self, "{}", group.as_ref().unwrap());
                 y += 1;
@@ -1338,8 +1343,14 @@ impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
                 items.sort_by(|a, b| sort(*a, *b));
             }
 
+            let mut count = 0;
             for item in items {
+                if y > self.y + self.h.unwrap() {
+                    break;
+                }
+
                 goto!(self, self.x, y);
+
                 match group {
                     Some(_) => vprint!(self, "  {}", item),
                     None => vprint!(self, "{}", item),
