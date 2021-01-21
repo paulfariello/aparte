@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use linked_hash_map::{Entry, LinkedHashMap};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +12,6 @@ use std::rc::Rc;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
-use linked_hash_map::{LinkedHashMap, Entry};
 
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
@@ -1128,9 +1128,7 @@ where
     sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
 }
 
-impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E>
-    View<'a, ListView<G, V>, E>
-{
+impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, ListView<G, V>, E> {
     pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
         Self {
             screen: screen,
@@ -1188,7 +1186,7 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E>
     #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn with_sort_item_by<F>(mut self, compare: F) -> Self
     where
-        F: FnMut(&V, &V) -> cmp::Ordering + 'static
+        F: FnMut(&V, &V) -> cmp::Ordering + 'static,
     {
         self.content.sort_item = Some(Box::new(compare));
         self
@@ -1206,7 +1204,7 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E>
     #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn with_sort_group_by<F>(mut self, compare: F) -> Self
     where
-        F: FnMut(&G, &G) -> cmp::Ordering + 'static
+        F: FnMut(&G, &G) -> cmp::Ordering + 'static,
     {
         self.content.sort_group = Some(Box::new(compare));
         self
@@ -1343,7 +1341,6 @@ impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
                 items.sort_by(|a, b| sort(*a, *b));
             }
 
-            let mut count = 0;
             for item in items {
                 if y > self.y + self.h.unwrap() {
                     break;

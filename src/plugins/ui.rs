@@ -28,6 +28,7 @@ use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
+use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::core::{Aparte, Event, Plugin};
 use crate::message::{Message, XmppMessage};
@@ -353,12 +354,13 @@ impl fmt::Display for Message {
                 let padding_len = format!("{} - {}: ", timestamp.format("%T"), message.from).len();
                 let padding = " ".repeat(padding_len);
 
+                let (r, g, b) = id_to_rgb(&message.from.to_string());
                 write!(
                     f,
                     "{}{} - {}{}:{} ",
                     color::Fg(color::White),
                     timestamp.format("%T"),
-                    color::Fg(color::Green),
+                    color::Fg(color::Rgb(r, g, b)),
                     message.from,
                     color::Fg(color::White)
                 )?;
@@ -392,12 +394,13 @@ impl fmt::Display for Message {
                         format!("{} - {}: ", timestamp.format("%T"), from.resource).len();
                     let padding = " ".repeat(padding_len);
 
+                    let (r, g, b) = id_to_rgb(&from.resource);
                     write!(
                         f,
                         "{}{} - {}{}:{} ",
                         color::Fg(color::White),
                         timestamp.format("%T"),
-                        color::Fg(color::Green),
+                        color::Fg(color::Rgb(r, g, b)),
                         from.resource,
                         color::Fg(color::White)
                     )?;
@@ -510,10 +513,11 @@ impl fmt::Display for RosterItem {
 
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (r, g, b) = id_to_rgb(&self.nick);
         write!(
             f,
             "{}{}{}",
-            color::Fg(color::Green),
+            color::Fg(color::Rgb(r, g, b)),
             self.nick,
             color::Fg(color::White)
         )
