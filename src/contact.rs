@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::hash::{Hash, Hasher};
+use std::cmp;
 use xmpp_parsers::roster::Subscription;
 use xmpp_parsers::{BareJid, Element};
 
@@ -55,6 +56,18 @@ impl PartialEq for Contact {
 
 impl Eq for Contact {}
 
+impl Ord for Contact {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.jid.to_string().cmp(&other.jid.to_string())
+    }
+}
+
+impl PartialOrd for Contact {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Bookmark {
     pub jid: BareJid,
@@ -78,3 +91,15 @@ impl PartialEq for Bookmark {
 }
 
 impl Eq for Bookmark {}
+
+impl Ord for Bookmark {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.jid.to_string().cmp(&other.jid.to_string())
+    }
+}
+
+impl PartialOrd for Bookmark {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}

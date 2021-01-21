@@ -468,7 +468,7 @@ impl fmt::Display for contact::Bookmark {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Ord, PartialOrd)]
 pub enum RosterItem {
     Contact(contact::Contact),
     Bookmark(contact::Bookmark),
@@ -667,6 +667,7 @@ impl UIPlugin {
                     )
                     .with_none_group()
                     .with_unique_item()
+                    .with_sort_item()
                     .with_event(move |view, event| match event {
                         UIEvent::Core(Event::Occupant {
                             conversation,
@@ -861,6 +862,7 @@ impl Plugin for UIPlugin {
         let roster =
             View::<ListView<contact::Group, RosterItem>, UIEvent>::new(self.screen.clone())
                 .with_none_group()
+                .with_sort_item()
                 .with_event(|view, event| match event {
                     UIEvent::Core(Event::Connected(_, _)) => {
                         view.add_group(contact::Group(String::from("Windows")));

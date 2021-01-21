@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::cmp;
 use xmpp_parsers::{BareJid, FullJid};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
@@ -28,6 +29,18 @@ pub struct Occupant {
     pub jid: Option<BareJid>,
     pub affiliation: Affiliation,
     pub role: Role,
+}
+
+impl Ord for Occupant {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.nick.cmp(&other.nick.to_string())
+    }
+}
+
+impl PartialOrd for Occupant {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Clone, Debug)]

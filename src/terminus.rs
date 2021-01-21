@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::io::{Stdout, Write};
@@ -11,6 +11,7 @@ use std::rc::Rc;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
+use linked_hash_map::{LinkedHashMap, Entry};
 
 type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
@@ -880,7 +881,7 @@ impl<E> ViewTrait<E> for View<'_, Input, E> {
     }
 }
 
-pub trait BufferedMessage = fmt::Display + Hash + std::cmp::Eq + std::clone::Clone;
+pub trait BufferedMessage = fmt::Display + Hash + Eq + std::clone::Clone;
 
 pub trait Window<T: BufferedMessage, E>: ViewTrait<E> {
     fn recv_message(&mut self, message: &T);
@@ -1114,19 +1115,20 @@ impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
     }
 }
 
-// TODO ensure group order is persisted
 // TODO provide a sort function for items in group
 // TODO provide a sort function for group
 pub struct ListView<G, V>
 where
-    G: fmt::Display + Hash + std::cmp::Eq,
-    V: fmt::Display + Hash + std::cmp::Eq,
+    G: fmt::Display + Hash + Eq,
+    V: fmt::Display + Hash + Eq,
 {
-    items: HashMap<Option<G>, HashSet<V>>,
+    items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
+    sort_item: Option<Box<dyn FnMut(&V, &V) -> cmp::Ordering>>,
+    sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
 }
 
-impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E>
+impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E>
     View<'a, ListView<G, V>, E>
 {
     pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
@@ -1145,8 +1147,10 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
             #[cfg(feature = "no-cursor-save")]
             cursor_y: None,
             content: ListView {
-                items: HashMap::new(),
+                items: LinkedHashMap::new(),
                 unique: false,
+                sort_item: None,
+                sort_group: None,
             },
             event_handler: None,
         }
@@ -1173,11 +1177,48 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
         self
     }
 
+    pub fn with_sort_item(mut self) -> Self
+    where
+        V: Ord,
+    {
+        self.content.sort_item = Some(Box::new(|a, b| a.cmp(b)));
+        self
+    }
+
+    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
+    pub fn with_sort_item_by<F>(mut self, compare: F) -> Self
+    where
+        F: FnMut(&V, &V) -> cmp::Ordering + 'static
+    {
+        self.content.sort_item = Some(Box::new(compare));
+        self
+    }
+
+    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
+    pub fn with_sort_group(mut self) -> Self
+    where
+        G: Ord,
+    {
+        self.content.sort_group = Some(Box::new(|a, b| a.cmp(b)));
+        self
+    }
+
+    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
+    pub fn with_sort_group_by<F>(mut self, compare: F) -> Self
+    where
+        F: FnMut(&G, &G) -> cmp::Ordering + 'static
+    {
+        self.content.sort_group = Some(Box::new(compare));
+        self
+    }
+
     #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn add_group(&mut self, group: G) {
         if let Entry::Vacant(vacant) = self.content.items.entry(Some(group)) {
             vacant.insert(HashSet::new());
         }
+
+        self.dirty = true;
     }
 
     pub fn insert(&mut self, item: V, group: Option<G>) {
@@ -1196,7 +1237,8 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
                 occupied.get_mut().replace(item);
             }
         }
-        self.dirty = true
+
+        self.dirty = true;
     }
 
     pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
@@ -1210,7 +1252,7 @@ impl<'a, G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cm
     }
 }
 
-impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::Eq, E> ViewTrait<E>
+impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
     for View<'_, ListView<G, V>, E>
 {
     fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
@@ -1289,6 +1331,11 @@ impl<G: fmt::Display + Hash + std::cmp::Eq, V: fmt::Display + Hash + std::cmp::E
             if group.is_some() {
                 vprint!(self, "{}", group.as_ref().unwrap());
                 y += 1;
+            }
+
+            let mut items = items.iter().collect::<Vec<&V>>();
+            if let Some(sort) = &mut self.content.sort_item {
+                items.sort_by(|a, b| sort(*a, *b));
             }
 
             for item in items {
