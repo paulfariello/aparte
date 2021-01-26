@@ -1114,8 +1114,7 @@ impl Plugin for UIPlugin {
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
-                                    // TODO use current windows attached account
-                                    let account = aparte.current_account().unwrap();
+                                    let account = &conversation.account;
                                     let us = account.clone().into();
                                     match conversation.kind {
                                         ConversationKind::Chat => {
