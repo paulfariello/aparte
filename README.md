@@ -14,3 +14,12 @@ Features
   - [x] Channel
   - [x] Roster
   - [x] Auto completion
+  - [x] Bookmarks
+  - [x] Consistent color generation
+
+Install
+-------
+
+```
+cargo install --git https://github.com/paulfariello/aparte --branch develop
+```
