@@ -17,6 +17,8 @@ extern crate tokio;
 extern crate tokio_xmpp;
 extern crate xmpp_parsers;
 
+#[macro_use]
+mod terminus;
 mod account;
 mod config;
 mod contact;
@@ -28,7 +30,6 @@ mod command;
 mod color;
 mod cursor;
 mod plugins;
-mod terminus;
 mod word;
 
 use crate::core::{Aparte, Plugin};

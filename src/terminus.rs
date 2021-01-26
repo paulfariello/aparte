@@ -8,13 +8,13 @@ use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
-use std::io::{Stdout, Write};
+use std::io::Write;
 use std::rc::Rc;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
 
-type Screen = AlternateScreen<RawTerminal<Stdout>>;
+pub type Screen<W> = AlternateScreen<RawTerminal<W>>;
 
 fn term_string_visible_len(string: &str) -> usize {
     // Count each grapheme on a given struct but ignore invisible chars sequences like '\x1b[…'
@@ -52,147 +52,316 @@ fn term_string_visible_len(string: &str) -> usize {
     len
 }
 
-#[derive(Clone)]
-pub enum Dimension {
+#[derive(Debug, Clone)]
+pub enum Layout {
     MatchParent,
-    #[allow(dead_code)]
     WrapContent,
     Absolute(u16),
 }
 
-pub trait ViewTrait<E> {
-    fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>);
-    fn layout(&mut self, top: u16, left: u16);
-    fn is_dirty(&self) -> bool;
-    fn show(&mut self);
-    fn hide(&mut self);
-    fn bell(&mut self);
-    fn get_measured_width(&self) -> Option<u16>;
-    fn get_measured_height(&self) -> Option<u16>;
-    fn redraw(&mut self);
-    fn event(&mut self, event: &mut E);
+#[derive(Debug, Clone)]
+pub struct Layouts {
+    pub width: Layout,
+    pub height: Layout,
 }
 
-pub struct View<'a, T, E> {
-    pub screen: Rc<RefCell<Screen>>,
-    pub width: Dimension,
-    pub height: Dimension,
+#[derive(Debug, Clone, PartialEq)]
+pub enum Orientation {
+    Vertical,
+    Horizontal,
+}
+
+#[derive(Debug, Clone)]
+pub struct Dimension {
     pub x: u16,
     pub y: u16,
     pub w: Option<u16>,
     pub h: Option<u16>,
-    pub dirty: bool,
-    pub visible: bool,
-    pub content: T,
-    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E) + 'a>>>>,
-    #[cfg(feature = "no-cursor-save")]
-    pub cursor_x: Option<u16>,
-    #[cfg(feature = "no-cursor-save")]
-    pub cursor_y: Option<u16>,
 }
 
-macro_rules! vprint {
-    ($view:expr, $fmt:expr) => {
-        {
-            let mut screen = $view.screen.borrow_mut();
-            while let Err(_) = write!(screen, $fmt) { };
+impl Dimension {
+    pub fn new() -> Self {
+        Self {
+            x: 1,
+            y: 1,
+            w: None,
+            h: None,
         }
-    };
-    ($view:expr, $fmt:expr, $($arg:tt)*) => {
-        {
-            let mut screen = $view.screen.borrow_mut();
-            while let Err(_) = write!(screen, $fmt, $($arg)*) { };
-        }
-    };
-}
-
-macro_rules! goto {
-    ($view:expr, $x:expr, $y:expr) => {
-        vprint!($view, "{}", termion::cursor::Goto($x, $y));
-    };
-}
-
-macro_rules! flush {
-    ($view:expr) => {
-        while let Err(_) = $view.screen.borrow_mut().flush() {}
-    };
-}
-
-impl<'a, T, E> View<'a, T, E> {
-    #[cfg(not(feature = "no-cursor-save"))]
-    pub fn save_cursor(&mut self) {
-        vprint!(self, "{}", termion::cursor::Save);
-    }
-
-    #[cfg(feature = "no-cursor-save")]
-    pub fn save_cursor(&mut self) {
-        let mut screen = self.screen.borrow_mut();
-        let (x, y) = screen.cursor_pos().unwrap();
-        self.cursor_x = Some(x);
-        self.cursor_y = Some(y);
-    }
-
-    #[cfg(not(feature = "no-cursor-save"))]
-    pub fn restore_cursor(&mut self) {
-        vprint!(self, "{}", termion::cursor::Restore);
-    }
-
-    #[cfg(feature = "no-cursor-save")]
-    pub fn restore_cursor(&mut self) {
-        goto!(self, self.cursor_x.unwrap(), self.cursor_y.unwrap());
     }
 }
 
-default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
-    fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
-        self.w = match self.width {
-            Dimension::MatchParent => width_spec,
-            Dimension::WrapContent => unreachable!(),
-            Dimension::Absolute(width) => match width_spec {
+pub trait View<E, W>
+where
+    W: Write,
+{
+    /// Compute the wanted dimension given passed width and height
+    fn measure(
+        &mut self,
+        dimension: &mut Dimension,
+        width_spec: Option<u16>,
+        height_spec: Option<u16>,
+    ) {
+        let layout = self.get_layouts();
+        dimension.w = match layout.width {
+            Layout::MatchParent => width_spec,
+            Layout::WrapContent => unreachable!(),
+            Layout::Absolute(width) => match width_spec {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        self.h = match self.height {
-            Dimension::MatchParent => height_spec,
-            Dimension::WrapContent => unreachable!(),
-            Dimension::Absolute(height) => match height_spec {
+        dimension.h = match layout.height {
+            Layout::MatchParent => height_spec,
+            Layout::WrapContent => unreachable!(),
+            Layout::Absolute(height) => match height_spec {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
         };
     }
 
-    fn layout(&mut self, top: u16, left: u16) {
-        self.x = left;
-        self.y = top;
+    /// Apply the definitive dimension given the top and left position
+    fn layout(&mut self, dimension: &mut Dimension, top: u16, left: u16) {
+        dimension.x = left;
+        dimension.y = top;
+    }
+
+    /// If the layout of the current view is dirty. Meaning its content requires that its dimension
+    /// changes
+    fn is_layout_dirty(&self) -> bool {
+        match self.get_layouts() {
+            Layouts {
+                width: Layout::WrapContent,
+                ..
+            } => self.is_dirty(),
+            Layouts {
+                height: Layout::WrapContent,
+                ..
+            } => self.is_dirty(),
+            _ => false,
+        }
+    }
+
+    /// If this view requires to be rendered
+    fn is_dirty(&self) -> bool;
+
+    /// Render the view with the given dimensions inside the given screen
+    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>);
+
+    /// Handle an event
+    fn event(&mut self, event: &mut E);
+
+    /// Get the desired layout
+    fn get_layouts(&self) -> Layouts;
+}
+
+#[macro_export]
+macro_rules! vprint {
+    ($screen:expr, $fmt:expr) => {
+        {
+            while let Err(_) = write!($screen, $fmt) { };
+        }
+    };
+    ($screen:expr, $fmt:expr, $($arg:tt)*) => {
+        {
+            while let Err(_) = write!($screen, $fmt, $($arg)*) { };
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! goto {
+    ($screen:expr, $x:expr, $y:expr) => {
+        vprint!($screen, "{}", termion::cursor::Goto($x, $y));
+    };
+}
+
+#[macro_export]
+macro_rules! flush {
+    ($screen:expr) => {
+        while let Err(_) = $screen.flush() {}
+    };
+}
+
+#[cfg(not(feature = "no-cursor-save"))]
+#[macro_export]
+macro_rules! save_cursor {
+    ($screen:expr) => {
+        vprint!($screen, "{}", termion::cursor::Save);
+    };
+}
+
+#[cfg(feature = "no-cursor-save")]
+#[macro_export]
+macro_rules! save_cursor {
+    ($screen:expr) => {
+        let (cursor_x, cursor_y) = $screen.cursor_pos().unwrap();
+    };
+}
+
+#[cfg(not(feature = "no-cursor-save"))]
+#[macro_export]
+macro_rules! restore_cursor {
+    ($screen:expr) => {
+        vprint!($screen, "{}", termion::cursor::Restore);
+    };
+}
+
+#[cfg(feature = "no-cursor-save")]
+#[macro_export]
+macro_rules! restore_cursor {
+    ($screen:expr) => {
+        goto!($screen, cursor_x, cursor_y);
+    };
+}
+
+impl<E, W> dyn View<E, W> where W: Write {}
+
+pub struct FrameLayout<E, W, K>
+where
+    K: Hash + Eq,
+    W: Write,
+{
+    children: HashMap<K, (Dimension, Box<dyn View<E, W>>)>,
+    current: Option<K>,
+    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    dirty: bool,
+    layouts: Layouts,
+}
+
+impl<E, W, K> FrameLayout<E, W, K>
+where
+    K: Hash + Eq,
+    W: Write,
+{
+    pub fn new() -> Self {
+        Self {
+            children: HashMap::new(),
+            current: None,
+            event_handler: None,
+            dirty: true,
+            layouts: Layouts {
+                width: Layout::MatchParent,
+                height: Layout::MatchParent,
+            },
+        }
+    }
+
+    pub fn with_event<F>(mut self, event_handler: F) -> Self
+    where
+        F: FnMut(&mut Self, &mut E) + 'static,
+    {
+        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
+        self
+    }
+
+    #[allow(unused)]
+    pub fn with_layouts(mut self, layouts: Layouts) -> Self {
+        self.layouts = layouts;
+        self
+    }
+
+    pub fn current(&mut self, key: K) {
+        self.current = Some(key);
+        self.dirty = true;
+    }
+
+    #[allow(unused)]
+    pub fn insert<T>(&mut self, key: K, view: T)
+    where
+        T: View<E, W> + 'static,
+    {
+        let child_dimension = Dimension::new();
+        self.children.insert(key, (child_dimension, Box::new(view)));
+    }
+
+    pub fn insert_boxed(&mut self, key: K, view: Box<dyn View<E, W> + 'static>) {
+        let child_dimension = Dimension::new();
+        self.children.insert(key, (child_dimension, view));
+    }
+
+    pub fn iter_children_mut<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = &'a mut Box<dyn View<E, W>>> {
+        self.children
+            .iter_mut()
+            .map(|(_, (_, child_view))| child_view)
+    }
+
+    #[allow(unused)]
+    pub fn iter_children<'a>(&'a self) -> impl Iterator<Item = &'a Box<dyn View<E, W>>> {
+        self.children.iter().map(|(_, (_, child_view))| child_view)
+    }
+}
+
+impl<E, W, K> View<E, W> for FrameLayout<E, W, K>
+where
+    K: Hash + Eq,
+    W: Write,
+{
+    fn measure(
+        &mut self,
+        dimension: &mut Dimension,
+        width_spec: Option<u16>,
+        height_spec: Option<u16>,
+    ) {
+        dimension.w = width_spec;
+        dimension.h = height_spec;
+
+        for (_, (child_dimension, child_view)) in self.children.iter_mut() {
+            child_view.measure(child_dimension, dimension.w, dimension.h);
+        }
+    }
+
+    fn layout(&mut self, dimension: &mut Dimension, top: u16, left: u16) {
+        dimension.x = left;
+        dimension.y = top;
+
+        for (_, (child_dimension, child_view)) in self.children.iter_mut() {
+            child_view.layout(child_dimension, top, left);
+        }
+
+        // Set dirty to ensure all children are rendered on next render
+        self.dirty = true;
+    }
+
+    fn render(&mut self, _dimension: &Dimension, screen: &mut Screen<W>) {
+        if let Some(current) = &self.current {
+            let (child_dimension, child_view) = self.children.get_mut(current).unwrap();
+            if self.dirty || child_view.is_dirty() {
+                child_view.render(child_dimension, screen);
+            }
+        }
         self.dirty = false;
     }
 
-    fn get_measured_width(&self) -> Option<u16> {
-        self.w
-    }
-
-    fn get_measured_height(&self) -> Option<u16> {
-        self.h
+    fn is_layout_dirty(&self) -> bool {
+        match self.dirty {
+            true => true,
+            _ => {
+                if let Some(current) = &self.current {
+                    let (_, child_view) = self.children.get(current).unwrap();
+                    child_view.is_layout_dirty()
+                } else {
+                    false
+                }
+            }
+        }
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
-    fn show(&mut self) {
-        self.visible = true;
-    }
-
-    fn hide(&mut self) {
-        self.visible = false;
-    }
-
-    fn bell(&mut self) {
-        vprint!(self, "\x07");
-        flush!(self);
+        match self.dirty {
+            true => true,
+            _ => {
+                if let Some(current) = &self.current {
+                    let (_, child_view) = self.children.get(current).unwrap();
+                    child_view.is_dirty()
+                } else {
+                    false
+                }
+            }
+        }
     }
 
     fn event(&mut self, event: &mut E) {
@@ -200,192 +369,87 @@ default impl<'a, T, E> ViewTrait<E> for View<'a, T, E> {
             let handler = Rc::clone(handler);
             let handler = &mut *handler.borrow_mut();
             handler(self, event);
-        }
-    }
-}
-
-pub struct FrameLayout<'a, K, E>
-where
-    K: Hash + Eq,
-{
-    pub children: HashMap<K, Box<dyn ViewTrait<E> + 'a>>,
-    pub current: Option<K>,
-}
-
-impl<'a, K, E> View<'a, FrameLayout<'a, K, E>, E>
-where
-    K: Hash + Eq,
-{
-    pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
-        Self {
-            screen: screen,
-            width: Dimension::MatchParent,
-            height: Dimension::MatchParent,
-            x: 1,
-            y: 1,
-            w: None,
-            h: None,
-            dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: FrameLayout {
-                children: HashMap::new(),
-                current: None,
-            },
-            event_handler: None,
-        }
-    }
-
-    pub fn with_event<F>(mut self, event_handler: F) -> Self
-    where
-        F: FnMut(&mut Self, &mut E),
-        F: 'a,
-    {
-        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
-        self
-    }
-
-    pub fn current(&mut self, key: K) {
-        if let Some(current) = &self.content.current {
-            let child = self.content.children.get_mut(current).unwrap();
-            child.hide();
-        }
-
-        self.content.current = Some(key);
-
-        if let Some(current) = &self.content.current {
-            let child = self.content.children.get_mut(current).unwrap();
-            child.show();
-        }
-
-        self.redraw();
-    }
-
-    pub fn insert(&mut self, key: K, mut widget: Box<dyn ViewTrait<E> + 'a>) {
-        widget.hide();
-        widget.measure(self.w, self.h);
-        widget.layout(self.y, self.x);
-        self.content.children.insert(key, widget);
-    }
-}
-
-impl<K, E> ViewTrait<E> for View<'_, FrameLayout<'_, K, E>, E>
-where
-    K: Hash + Eq,
-{
-    fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
-        self.w = width_spec;
-        self.h = height_spec;
-
-        for (_, child) in self.content.children.iter_mut() {
-            child.measure(self.w, self.h);
-        }
-    }
-
-    fn layout(&mut self, top: u16, left: u16) {
-        self.x = left;
-        self.y = top;
-        self.dirty = false;
-
-        for (_, child) in self.content.children.iter_mut() {
-            child.layout(top, left);
-        }
-    }
-
-    fn redraw(&mut self) {
-        if let Some(current) = &self.content.current {
-            let child = self.content.children.get_mut(current).unwrap();
-            child.redraw();
-        }
-    }
-
-    fn is_dirty(&self) -> bool {
-        if let Some(current) = &self.content.current {
-            let child = self.content.children.get(current).unwrap();
-            child.is_dirty()
         } else {
-            false
+            for child in self.iter_children_mut() {
+                child.event(event);
+            }
         }
     }
 
-    fn show(&mut self) {
-        self.visible = true;
-        for (_, child) in self.content.children.iter_mut() {
-            child.show();
-        }
-    }
-
-    fn hide(&mut self) {
-        self.visible = false;
-        for (_, child) in self.content.children.iter_mut() {
-            child.hide();
-        }
+    fn get_layouts(&self) -> Layouts {
+        self.layouts.clone()
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub enum Orientation {
-    Vertical,
-    Horizontal,
-}
-
-pub struct LinearLayout<'a, E> {
+pub struct LinearLayout<E, W> {
     pub orientation: Orientation,
-    pub children: Vec<Box<dyn ViewTrait<E> + 'a>>,
+    pub children: Vec<(Dimension, Box<dyn View<E, W>>)>,
+    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    pub dirty: bool,
+    layouts: Layouts,
 }
 
-impl<'a, E> View<'a, LinearLayout<'a, E>, E> {
-    pub fn new(
-        screen: Rc<RefCell<Screen>>,
-        orientation: Orientation,
-        width: Dimension,
-        height: Dimension,
-    ) -> Self {
+impl<E, W> LinearLayout<E, W>
+where
+    W: Write,
+{
+    pub fn new(orientation: Orientation) -> Self {
         Self {
-            screen: screen,
-            width: width,
-            height: height,
-            x: 0,
-            y: 0,
-            w: None,
-            h: None,
-            dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: LinearLayout {
-                orientation: orientation,
-                children: Vec::new(),
-            },
+            orientation: orientation,
+            children: Vec::new(),
             event_handler: None,
+            dirty: true,
+            layouts: Layouts {
+                width: Layout::MatchParent,
+                height: Layout::MatchParent,
+            },
         }
     }
 
-    pub fn push<T>(&mut self, widget: T)
+    pub fn push<T>(&mut self, view: T)
     where
-        T: ViewTrait<E>,
-        T: 'a,
+        T: View<E, W> + 'static,
     {
-        self.content.children.push(Box::new(widget));
+        let dimension = Dimension::new();
+        self.children.push((dimension, Box::new(view)));
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
-        F: FnMut(&mut Self, &mut E),
-        F: 'a,
+        F: FnMut(&mut Self, &mut E) + 'static,
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
+
+    #[allow(unused)]
+    pub fn with_layouts(mut self, layouts: Layouts) -> Self {
+        self.layouts = layouts;
+        self
+    }
+
+    pub fn iter_children_mut<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = &'a mut Box<dyn View<E, W>>> {
+        self.children.iter_mut().map(|(_, child_view)| child_view)
+    }
+
+    #[allow(unused)]
+    pub fn iter_children<'a>(&'a self) -> impl Iterator<Item = &'a Box<dyn View<E, W>>> {
+        self.children.iter().map(|(_, child_view)| child_view)
+    }
 }
 
-impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
-    fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
+impl<E, W> View<E, W> for LinearLayout<E, W>
+where
+    W: Write,
+{
+    fn measure(
+        &mut self,
+        dimension: &mut Dimension,
+        width_spec: Option<u16>,
+        height_spec: Option<u16>,
+    ) {
         /* Measure dimension of this layout with the following stpes:
          *
          *  - Compute max dimension from parent
@@ -394,19 +458,20 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
          *    (answered 0 to first measure pass)
          *  - Set dimension for each children
          */
-        let max_width = match self.width {
-            Dimension::MatchParent => width_spec,
-            Dimension::WrapContent => width_spec,
-            Dimension::Absolute(width) => match width_spec {
+        let layouts = self.get_layouts();
+        let max_width = match layouts.width {
+            Layout::MatchParent => width_spec,
+            Layout::WrapContent => width_spec,
+            Layout::Absolute(width) => match width_spec {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        let max_height = match self.height {
-            Dimension::MatchParent => height_spec,
-            Dimension::WrapContent => height_spec,
-            Dimension::Absolute(height) => match height_spec {
+        let max_height = match layouts.height {
+            Layout::MatchParent => height_spec,
+            Layout::WrapContent => height_spec,
+            Layout::Absolute(height) => match height_spec {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
@@ -414,16 +479,16 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
 
         let mut min_width = 0;
         let mut min_height = 0;
-        for child in self.content.children.iter_mut() {
-            child.measure(None, None);
-            match self.content.orientation {
+        for (child_dimension, child_view) in self.children.iter_mut() {
+            child_view.measure(child_dimension, None, None);
+            match self.orientation {
                 Orientation::Vertical => {
-                    min_width = cmp::max(min_width, child.get_measured_width().unwrap_or(0));
-                    min_height += child.get_measured_height().unwrap_or(0);
+                    min_width = cmp::max(min_width, child_dimension.w.unwrap_or(0));
+                    min_height += child_dimension.h.unwrap_or(0);
                 }
                 Orientation::Horizontal => {
-                    min_width += child.get_measured_width().unwrap_or(0);
-                    min_height = cmp::max(min_height, child.get_measured_height().unwrap_or(0));
+                    min_width += child_dimension.w.unwrap_or(0);
+                    min_height = cmp::max(min_height, child_dimension.h.unwrap_or(0));
                 }
             }
         }
@@ -439,28 +504,26 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
         };
 
         // Split remaining space to children that don't know their size
-        let splitted_width = match self.content.orientation {
+        let splitted_width = match self.orientation {
             Orientation::Vertical => max_width,
             Orientation::Horizontal => {
                 let unsized_children = self
-                    .content
                     .children
                     .iter()
-                    .filter(|child| child.get_measured_width().is_none());
-                Some(match unsized_children.collect::<Vec<_>>().len() {
+                    .filter(|(dimension, _)| dimension.w.is_none());
+                Some(match unsized_children.count() {
                     0 => 0,
                     count => remaining_width / count as u16,
                 })
             }
         };
-        let splitted_height = match self.content.orientation {
+        let splitted_height = match self.orientation {
             Orientation::Vertical => {
                 let unsized_children = self
-                    .content
                     .children
                     .iter()
-                    .filter(|child| child.get_measured_height().is_none());
-                Some(match unsized_children.collect::<Vec<_>>().len() {
+                    .filter(|(dimension, _)| dimension.h.is_none());
+                Some(match unsized_children.count() {
                     0 => 0,
                     count => remaining_height / count as u16,
                 })
@@ -468,102 +531,127 @@ impl<E> ViewTrait<E> for View<'_, LinearLayout<'_, E>, E> {
             Orientation::Horizontal => max_height,
         };
 
-        self.w = Some(0);
-        self.h = Some(0);
+        dimension.w = Some(0);
+        dimension.h = Some(0);
 
-        for child in self.content.children.iter_mut() {
-            let mut width_spec = match child.get_measured_width() {
+        for (child_dimension, child_view) in self.children.iter_mut() {
+            let mut width_spec = match child_dimension.w {
                 Some(w) => Some(w),
                 None => splitted_width,
             };
 
-            let mut height_spec = match child.get_measured_height() {
+            let mut height_spec = match child_dimension.h {
                 Some(h) => Some(h),
                 None => splitted_height,
             };
 
-            if self.content.orientation == Orientation::Horizontal && max_width.is_some() {
+            if self.orientation == Orientation::Horizontal && max_width.is_some() {
                 width_spec = Some(cmp::min(
                     width_spec.unwrap(),
-                    max_width.unwrap() - self.w.unwrap(),
+                    max_width.unwrap() - dimension.w.unwrap(),
                 ));
             }
 
-            if self.content.orientation == Orientation::Vertical && max_height.is_some() {
+            if self.orientation == Orientation::Vertical && max_height.is_some() {
                 height_spec = Some(cmp::min(
                     height_spec.unwrap(),
-                    max_height.unwrap() - self.h.unwrap(),
+                    max_height.unwrap() - dimension.h.unwrap(),
                 ));
             }
 
-            child.measure(width_spec, height_spec);
+            child_view.measure(child_dimension, width_spec, height_spec);
 
-            match self.content.orientation {
+            match self.orientation {
                 Orientation::Vertical => {
-                    self.w = Some(cmp::max(
-                        self.w.unwrap(),
-                        child.get_measured_width().unwrap_or(0),
+                    dimension.w = Some(cmp::max(
+                        dimension.w.unwrap(),
+                        child_dimension.w.unwrap_or(0),
                     ));
-                    self.h = Some(self.h.unwrap() + child.get_measured_height().unwrap_or(0));
+                    dimension.h = Some(dimension.h.unwrap() + child_dimension.h.unwrap_or(0));
                 }
                 Orientation::Horizontal => {
-                    self.w = Some(self.w.unwrap() + child.get_measured_width().unwrap_or(0));
-                    self.h = Some(cmp::max(
-                        self.h.unwrap(),
-                        child.get_measured_height().unwrap_or(0),
+                    dimension.w = Some(dimension.w.unwrap() + child_dimension.w.unwrap_or(0));
+                    dimension.h = Some(cmp::max(
+                        dimension.h.unwrap(),
+                        child_dimension.h.unwrap_or(0),
                     ));
                 }
             }
         }
     }
 
-    fn layout(&mut self, top: u16, left: u16) {
-        self.x = left;
-        self.y = top;
-        self.dirty = false;
+    fn layout(&mut self, dimension: &mut Dimension, top: u16, left: u16) {
+        dimension.x = left;
+        dimension.y = top;
 
-        let mut x = self.x;
-        let mut y = self.y;
+        let mut x = dimension.x;
+        let mut y = dimension.y;
 
-        for child in self.content.children.iter_mut() {
-            child.layout(y, x);
-            match self.content.orientation {
-                Orientation::Vertical => y += child.get_measured_height().unwrap(),
-                Orientation::Horizontal => x += child.get_measured_width().unwrap(),
+        for (child_dimension, child_view) in self.children.iter_mut() {
+            child_view.layout(child_dimension, y, x);
+            match self.orientation {
+                Orientation::Vertical => y += child_dimension.h.unwrap(),
+                Orientation::Horizontal => x += child_dimension.w.unwrap(),
             }
         }
+
+        // Set dirty to ensure all children are rendered on next render
+        self.dirty = true;
     }
 
-    fn redraw(&mut self) {
-        for child in self.content.children.iter_mut() {
-            child.redraw();
+    fn render(&mut self, _dimension: &Dimension, screen: &mut Screen<W>) {
+        for (child_dimension, child_view) in self.children.iter_mut() {
+            if self.dirty || child_view.is_dirty() {
+                child_view.render(child_dimension, screen);
+            }
+        }
+        self.dirty = false;
+    }
+
+    fn is_layout_dirty(&self) -> bool {
+        match self.dirty {
+            true => true,
+            _ => {
+                let mut dirty = false;
+                for (_, child_view) in self.children.iter() {
+                    dirty |= child_view.is_layout_dirty()
+                }
+                dirty
+            }
         }
     }
 
     fn is_dirty(&self) -> bool {
-        let mut dirty = false;
-        for child in self.content.children.iter() {
-            dirty |= child.is_dirty()
-        }
-        dirty
-    }
-
-    fn show(&mut self) {
-        self.visible = true;
-        for child in self.content.children.iter_mut() {
-            child.show();
+        match self.dirty {
+            true => true,
+            _ => {
+                let mut dirty = false;
+                for (_, child_view) in self.children.iter() {
+                    dirty |= child_view.is_dirty()
+                }
+                dirty
+            }
         }
     }
 
-    fn hide(&mut self) {
-        self.visible = false;
-        for child in self.content.children.iter_mut() {
-            child.hide();
+    fn event(&mut self, event: &mut E) {
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
+        } else {
+            for child in self.iter_children_mut() {
+                child.event(event);
+            }
         }
+    }
+
+    fn get_layouts(&self) -> Layouts {
+        self.layouts.clone()
     }
 }
 
-pub struct Input {
+pub struct Input<E> {
     pub buf: String,
     pub tmp_buf: Option<String>,
     pub password: bool,
@@ -579,71 +667,60 @@ pub struct Input {
     //     | view      |
     //     |-----------|
     pub view: Cursor,
+    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    pub dirty: bool,
+    width: usize,
 }
 
-impl<'a, E> View<'a, Input, E> {
-    pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
+impl<E> Input<E> {
+    pub fn new() -> Self {
         Self {
-            screen: screen,
-            width: Dimension::MatchParent,
-            height: Dimension::Absolute(1),
-            x: 0,
-            y: 0,
-            w: None,
-            h: None,
-            dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: Input {
-                buf: String::new(),
-                tmp_buf: None,
-                password: false,
-                history: Vec::new(),
-                history_index: 0,
-                cursor: Cursor::new(0),
-                view: Cursor::new(0),
-            },
+            buf: String::new(),
+            tmp_buf: None,
+            password: false,
+            history: Vec::new(),
+            history_index: 0,
+            cursor: Cursor::new(0),
+            view: Cursor::new(0),
             event_handler: None,
+            dirty: true,
+            width: 0,
         }
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
-        F: FnMut(&mut Self, &mut E),
-        F: 'a,
+        F: FnMut(&mut Self, &mut E) + 'static,
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
 
     pub fn key(&mut self, c: char) {
-        let byte_index = self.content.cursor.index(&self.content.buf);
-        self.content.buf.insert(byte_index, c);
-        self.content.cursor += 1;
+        let byte_index = self.cursor.index(&self.buf);
+        self.buf.insert(byte_index, c);
+        self.cursor += 1;
 
-        if !self.content.password {
-            self.redraw();
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn backspace(&mut self) {
-        if self.content.cursor > Cursor::new(0) {
-            self.content.cursor -= 1;
-            let mut byte_index = self.content.cursor.index(&self.content.buf);
-            if byte_index == self.content.buf.len() {
+        if self.cursor > Cursor::new(0) {
+            self.cursor -= 1;
+            let mut byte_index = self.cursor.index(&self.buf);
+            if byte_index == self.buf.len() {
                 byte_index -= 1;
             }
-            self.content.buf.remove(byte_index);
+            self.buf.remove(byte_index);
             // TODO work on grapheme
-            while !self.content.buf.is_char_boundary(byte_index) {
-                self.content.buf.remove(byte_index);
+            while !self.buf.is_char_boundary(byte_index) {
+                self.buf.remove(byte_index);
             }
         }
-        if !self.content.password {
-            self.redraw();
+        if !self.password {
+            self.dirty = true;
         }
     }
 
@@ -657,11 +734,9 @@ impl<'a, E> View<'a, Input, E> {
 
         use WordParserState::*;
 
-        let mut iter = self.content.buf[..self.content.cursor.index(&self.content.buf)]
-            .chars()
-            .rev();
+        let mut iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
         let mut state = Init;
-        let mut word_start = self.content.cursor.clone();
+        let mut word_start = self.cursor.clone();
 
         while let Some(c) = iter.next() {
             state = match state {
@@ -692,244 +767,283 @@ impl<'a, E> View<'a, Input, E> {
             word_start -= 1;
         }
 
-        self.content.buf.replace_range(
-            word_start.index(&self.content.buf)..self.content.cursor.index(&self.content.buf),
+        self.buf.replace_range(
+            word_start.index(&self.buf)..self.cursor.index(&self.buf),
             "",
         );
-        self.content.cursor = word_start;
-        if !self.content.password {
-            self.redraw();
+        self.cursor = word_start;
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn delete_from_cursor_to_start(&mut self) {
-        self.content
-            .buf
-            .replace_range(0..self.content.cursor.index(&self.content.buf), "");
-        self.content.cursor = Cursor::new(0);
-        self.content.view = Cursor::new(0);
-        if !self.content.password {
-            self.redraw();
+        self.buf.replace_range(0..self.cursor.index(&self.buf), "");
+        self.cursor = Cursor::new(0);
+        self.view = Cursor::new(0);
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn delete_from_cursor_to_end(&mut self) {
-        self.content
-            .buf
-            .replace_range(self.content.cursor.index(&self.content.buf).., "");
-        if !self.content.password {
-            self.redraw();
+        self.buf.replace_range(self.cursor.index(&self.buf).., "");
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn delete(&mut self) {
-        if self.content.cursor < self.content.buf.graphemes(true).count() {
-            let byte_index = self.content.cursor.index(&self.content.buf);
+        if self.cursor < self.buf.graphemes(true).count() {
+            let byte_index = self.cursor.index(&self.buf);
 
-            self.content.buf.remove(byte_index);
-            while !self.content.buf.is_char_boundary(byte_index) {
-                self.content.buf.remove(byte_index);
+            self.buf.remove(byte_index);
+            while !self.buf.is_char_boundary(byte_index) {
+                self.buf.remove(byte_index);
             }
         }
-        if !self.content.password {
-            self.redraw();
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn home(&mut self) {
-        self.content.cursor = Cursor::new(0);
-        self.content.view = Cursor::new(0);
-        if !self.content.password {
-            self.redraw();
+        self.cursor = Cursor::new(0);
+        self.view = Cursor::new(0);
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn end(&mut self) {
-        self.content.cursor = Cursor::new(self.content.buf.graphemes(true).count());
-        if self.content.cursor > self.w.unwrap() as usize - 1 {
-            self.content.view = &self.content.cursor - (self.w.unwrap() as usize - 1);
+        self.cursor = Cursor::new(self.buf.graphemes(true).count());
+        if self.cursor > self.width - 1 {
+            self.view = &self.cursor - (self.width - 1);
         } else {
-            self.content.view = Cursor::new(0);
+            self.view = Cursor::new(0);
         }
-        if !self.content.password {
-            self.redraw();
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn clear(&mut self) {
-        self.content.buf.clear();
-        self.content.cursor = Cursor::new(0);
-        self.content.view = Cursor::new(0);
-        let _ = self.content.tmp_buf.take();
-        self.content.password = false;
-        goto!(self, self.x, self.y);
-        for _ in 0..self.w.unwrap() {
-            vprint!(self, " ");
-        }
-        goto!(self, self.x, self.y);
-        flush!(self);
+        self.buf.clear();
+        self.cursor = Cursor::new(0);
+        self.view = Cursor::new(0);
+        let _ = self.tmp_buf.take();
+        self.password = false;
+        self.dirty = true;
     }
 
     pub fn left(&mut self) {
-        if self.content.cursor > 0 {
-            self.content.cursor -= 1;
+        if self.cursor > 0 {
+            self.cursor -= 1;
         }
-        if !self.content.password {
-            self.redraw();
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn right(&mut self) {
-        if self.content.cursor < term_string_visible_len(&self.content.buf) {
-            self.content.cursor += 1;
+        if self.cursor < term_string_visible_len(&self.buf) {
+            self.cursor += 1;
         }
-        if !self.content.password {
-            self.redraw()
+        if !self.password {
+            self.dirty = true;
         }
     }
 
     pub fn password(&mut self) {
-        self.clear();
-        self.content.password = true;
-        vprint!(self, "password: ");
-        flush!(self);
+        self.password = true;
+        self.dirty = true;
     }
 
     pub fn validate(&mut self) -> (String, bool) {
-        if !self.content.password {
-            self.content.history.push(self.content.buf.clone());
-            self.content.history_index = self.content.history.len();
+        if !self.password {
+            self.history.push(self.buf.clone());
+            self.history_index = self.history.len();
         }
-        let buf = self.content.buf.clone();
-        let password = self.content.password;
+        let buf = self.buf.clone();
+        let password = self.password;
         self.clear();
         (buf, password)
     }
 
     pub fn previous(&mut self) {
-        if self.content.history_index == 0 {
+        if self.history_index == 0 {
             return;
         }
 
-        if self.content.tmp_buf.is_none() {
-            self.content.tmp_buf = Some(self.content.buf.clone());
+        if self.tmp_buf.is_none() {
+            self.tmp_buf = Some(self.buf.clone());
         }
 
-        self.content.history_index -= 1;
-        self.content.buf = self.content.history[self.content.history_index].clone();
+        self.history_index -= 1;
+        self.buf = self.history[self.history_index].clone();
         self.end();
-        self.redraw();
+        self.dirty = true;
     }
 
     pub fn next(&mut self) {
-        if self.content.history_index == self.content.history.len() {
+        if self.history_index == self.history.len() {
             return;
         }
 
-        self.content.history_index += 1;
-        if self.content.history_index == self.content.history.len() {
-            self.content.buf = self.content.tmp_buf.take().unwrap();
+        self.history_index += 1;
+        if self.history_index == self.history.len() {
+            self.buf = self.tmp_buf.take().unwrap();
         } else {
-            self.content.buf = self.content.history[self.content.history_index].clone();
+            self.buf = self.history[self.history_index].clone();
         }
         self.end();
-
-        self.redraw();
+        self.dirty = true;
     }
 }
 
-impl<E> ViewTrait<E> for View<'_, Input, E> {
-    fn redraw(&mut self) {
-        // Max displayable size is view width less 1 for cursor
-        let max_size = (self.w.unwrap() - 1) as usize;
+impl<E, W> View<E, W> for Input<E>
+where
+    W: Write,
+{
+    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+        self.width = dimension.w.unwrap() as usize;
+        match self.password {
+            true => {
+                goto!(screen, dimension.x, dimension.y);
+                vprint!(screen, "password: ");
+                flush!(screen);
 
-        // cursor must always be inside the view
-        if self.content.cursor < self.content.view {
-            if self.content.cursor < max_size {
-                self.content.view = Cursor::new(0);
-            } else {
-                self.content.view = &self.content.cursor - (self.w.unwrap() as usize - 1);
+                self.dirty = false;
             }
-        } else if self.content.cursor > &self.content.view + (self.w.unwrap() as usize - 1) {
-            self.content.view = &self.content.cursor - (self.w.unwrap() as usize - 1);
+            false => {
+                // Max displayable size is view width less 1 for cursor
+                let max_size = (dimension.w.unwrap() - 1) as usize;
+
+                // cursor must always be inside the view
+                if self.cursor < self.view {
+                    if self.cursor < max_size {
+                        self.view = Cursor::new(0);
+                    } else {
+                        self.view = &self.cursor - (dimension.w.unwrap() as usize - 1);
+                    }
+                } else if self.cursor > &self.view + (dimension.w.unwrap() as usize - 1) {
+                    self.view = &self.cursor - (dimension.w.unwrap() as usize - 1);
+                }
+                assert!(self.cursor >= self.view);
+                assert!(self.cursor <= &self.view + (max_size + 1));
+
+                let start_index = self.view.index(&self.buf);
+                let end_index = (&self.view + max_size).index(&self.buf);
+                let buf = &self.buf[start_index..end_index];
+                let cursor = &self.cursor - &self.view;
+
+                goto!(screen, dimension.x, dimension.y);
+                for _ in 0..max_size {
+                    vprint!(screen, " ");
+                }
+
+                goto!(screen, dimension.x, dimension.y);
+                vprint!(screen, "{}", buf);
+                goto!(screen, dimension.x + cursor.get() as u16, dimension.y);
+
+                flush!(screen);
+
+                self.dirty = false;
+            }
         }
-        assert!(self.content.cursor >= self.content.view);
-        assert!(self.content.cursor <= &self.content.view + (max_size + 1));
+    }
 
-        let start_index = self.content.view.index(&self.content.buf);
-        let end_index = (&self.content.view + max_size).index(&self.content.buf);
-        let buf = &self.content.buf[start_index..end_index];
-        let cursor = &self.content.cursor - &self.content.view;
+    fn is_layout_dirty(&self) -> bool {
+        // Content can never change Input dimension
+        false
+    }
 
-        goto!(self, self.x, self.y);
-        for _ in 0..max_size {
-            vprint!(self, " ");
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn event(&mut self, event: &mut E) {
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
         }
+    }
 
-        goto!(self, self.x, self.y);
-        vprint!(self, "{}", buf);
-        goto!(self, self.x + cursor.get() as u16, self.y);
-
-        flush!(self);
+    fn get_layouts(&self) -> Layouts {
+        Layouts {
+            width: Layout::MatchParent,
+            height: Layout::Absolute(1),
+        }
     }
 }
 
-pub trait BufferedMessage = fmt::Display + Hash + Eq + std::clone::Clone;
-
-pub trait Window<T: BufferedMessage, E>: ViewTrait<E> {
+pub trait Window<E, W, T>: View<E, W>
+where
+    W: Write,
+    T: fmt::Display + Hash + Eq + std::clone::Clone,
+{
     fn recv_message(&mut self, message: &T);
     fn send_message(&self);
     fn page_up(&mut self);
     fn page_down(&mut self);
 }
 
-pub struct BufferedWin<T: BufferedMessage> {
+pub struct BufferedWin<E, W, T>
+where
+    T: fmt::Display + Hash + Eq + std::clone::Clone,
+{
     pub next_line: u16,
     pub buf: Vec<T>,
     pub history: HashMap<T, usize>,
     pub view: usize,
+    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    pub dirty: bool,
+    width: usize,
+    height: usize,
+    layouts: Layouts,
 }
 
-impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
-    pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
+impl<E, W, T> BufferedWin<E, W, T>
+where
+    T: fmt::Display + Hash + Eq + std::clone::Clone,
+{
+    pub fn new() -> Self {
         Self {
-            screen: screen,
-            width: Dimension::MatchParent,
-            height: Dimension::MatchParent,
-            x: 0,
-            y: 0,
-            w: None,
-            h: None,
-            dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: BufferedWin {
-                next_line: 0,
-                buf: Vec::new(),
-                history: HashMap::new(),
-                view: 0,
-            },
+            next_line: 0,
+            buf: Vec::new(),
+            history: HashMap::new(),
+            view: 0,
             event_handler: None,
+            dirty: true,
+            width: 0,
+            height: 0,
+            layouts: Layouts {
+                width: Layout::MatchParent,
+                height: Layout::MatchParent,
+            },
         }
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
-        F: FnMut(&mut Self, &mut E),
-        F: 'a,
+        F: FnMut(&mut Self, &mut E) + 'static,
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
 
+    #[allow(unused)]
+    pub fn with_layouts(mut self, layouts: Layouts) -> Self {
+        self.layouts = layouts;
+        self
+    }
+
     fn get_rendered_buffers(&self) -> Vec<String> {
-        let max_len = self.w.unwrap() as usize;
+        let max_len = self.width;
         let mut buffers: Vec<String> = Vec::new();
 
-        for buf in &self.content.buf {
+        for buf in &self.buf {
             let formatted = format!("{}", buf);
             for line in formatted.lines() {
                 let mut words = line.split_word_bounds();
@@ -1025,92 +1139,114 @@ impl<'a, T: BufferedMessage, E> View<'a, BufferedWin<T>, E> {
     }
 }
 
-impl<T: BufferedMessage, E> Window<T, E> for View<'_, BufferedWin<T>, E> {
+impl<E, W, T> Window<E, W, T> for BufferedWin<E, W, T>
+where
+    W: Write,
+    T: fmt::Display + Hash + Eq + std::clone::Clone,
+{
     fn recv_message(&mut self, message: &T) {
-        if self.content.history.contains_key(message) {
+        if self.history.contains_key(message) {
             return;
         }
 
-        self.content
-            .history
-            .insert(message.clone(), self.content.buf.len());
-        self.content.buf.push(message.clone());
+        self.history.insert(message.clone(), self.buf.len());
+        self.buf.push(message.clone());
 
-        if self.visible {
-            self.redraw();
-        }
+        self.dirty = true;
     }
 
     fn page_up(&mut self) {
         let buffers = self.get_rendered_buffers();
         let count = buffers.len();
 
-        if count < self.h.unwrap() as usize {
+        if count < self.height {
             return;
         }
 
-        let max = count - self.h.unwrap() as usize;
+        let max = count - self.height;
 
-        if self.content.view + (self.h.unwrap() as usize) < max {
-            self.content.view += self.h.unwrap() as usize;
+        if self.view + self.height < max {
+            self.view += self.height;
         } else {
-            self.content.view = max;
+            self.view = max;
         }
 
-        self.redraw();
+        self.dirty = true;
     }
 
     fn page_down(&mut self) {
-        if self.content.view > self.h.unwrap() as usize {
-            self.content.view -= self.h.unwrap() as usize;
+        if self.view > self.height {
+            self.view -= self.height;
         } else {
-            self.content.view = 0;
+            self.view = 0;
         }
-        self.redraw();
+        self.dirty = true;
     }
 
     fn send_message(&self) {}
 }
 
-impl<T: BufferedMessage, E> ViewTrait<E> for View<'_, BufferedWin<T>, E> {
-    fn redraw(&mut self) {
-        self.save_cursor();
+impl<E, W, T> View<E, W> for BufferedWin<E, W, T>
+where
+    W: Write,
+    T: fmt::Display + Hash + Eq + std::clone::Clone,
+{
+    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+        save_cursor!(screen);
+        self.width = dimension.w.unwrap() as usize;
+        self.height = dimension.h.unwrap() as usize;
 
-        self.content.next_line = 0;
+        self.next_line = 0;
 
         let buffers = self.get_rendered_buffers();
         let count = buffers.len();
         let mut iter = buffers.iter();
 
-        if count > self.h.unwrap() as usize {
-            for _ in 0..count - self.h.unwrap() as usize - self.content.view {
+        if count > dimension.h.unwrap() as usize {
+            for _ in 0..count - dimension.h.unwrap() as usize - self.view {
                 if iter.next().is_none() {
                     break;
                 }
             }
         }
 
-        for y in self.y..self.y + self.h.unwrap() {
-            goto!(self, self.x, y);
-            for _ in self.x..self.x + self.w.unwrap() {
-                vprint!(self, " ");
+        for y in dimension.y..dimension.y + dimension.h.unwrap() {
+            goto!(screen, dimension.x, y);
+            for _ in dimension.x..dimension.x + dimension.w.unwrap() {
+                vprint!(screen, " ");
             }
 
-            goto!(self, self.x, y);
+            goto!(screen, dimension.x, y);
             if let Some(buf) = iter.next() {
-                vprint!(self, "{}", buf);
-                self.content.next_line += 1;
+                vprint!(screen, "{}", buf);
+                self.next_line += 1;
             }
         }
 
-        self.restore_cursor();
-        flush!(self);
+        restore_cursor!(screen);
+        flush!(screen);
+
+        self.dirty = false;
+    }
+
+    fn event(&mut self, event: &mut E) {
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
+        }
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn get_layouts(&self) -> Layouts {
+        self.layouts.clone()
     }
 }
 
-// TODO provide a sort function for items in group
-// TODO provide a sort function for group
-pub struct ListView<G, V>
+pub struct ListView<E, W, G, V>
 where
     G: fmt::Display + Hash + Eq,
     V: fmt::Display + Hash + Eq,
@@ -1119,52 +1255,53 @@ where
     unique: bool,
     sort_item: Option<Box<dyn FnMut(&V, &V) -> cmp::Ordering>>,
     sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
+    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    dirty: bool,
+    layouts: Layouts,
 }
 
-impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, ListView<G, V>, E> {
-    pub fn new(screen: Rc<RefCell<Screen>>) -> Self {
+impl<E, W, G, V> ListView<E, W, G, V>
+where
+    G: fmt::Display + Hash + Eq,
+    V: fmt::Display + Hash + Eq,
+{
+    pub fn new() -> Self {
         Self {
-            screen: screen,
-            width: Dimension::WrapContent,
-            height: Dimension::MatchParent,
-            x: 0,
-            y: 0,
-            w: None,
-            h: None,
-            dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: ListView {
-                items: LinkedHashMap::new(),
-                unique: false,
-                sort_item: None,
-                sort_group: None,
-            },
+            items: LinkedHashMap::new(),
+            unique: false,
+            sort_item: None,
+            sort_group: None,
             event_handler: None,
+            dirty: true,
+            layouts: Layouts {
+                width: Layout::MatchParent,
+                height: Layout::MatchParent,
+            },
         }
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
-        F: FnMut(&mut Self, &mut E),
-        F: 'a,
+        F: FnMut(&mut Self, &mut E) + 'static,
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
         self
     }
 
+    pub fn with_layouts(mut self, layouts: Layouts) -> Self {
+        self.layouts = layouts;
+        self
+    }
+
     pub fn with_none_group(mut self) -> Self {
-        if let Entry::Vacant(vacant) = self.content.items.entry(None) {
+        if let Entry::Vacant(vacant) = self.items.entry(None) {
             vacant.insert(HashSet::new());
         }
         self
     }
 
     pub fn with_unique_item(mut self) -> Self {
-        self.content.unique = true;
+        self.unique = true;
         self
     }
 
@@ -1172,7 +1309,7 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     where
         V: Ord,
     {
-        self.content.sort_item = Some(Box::new(|a, b| a.cmp(b)));
+        self.sort_item = Some(Box::new(|a, b| a.cmp(b)));
         self
     }
 
@@ -1181,7 +1318,7 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     where
         F: FnMut(&V, &V) -> cmp::Ordering + 'static,
     {
-        self.content.sort_item = Some(Box::new(compare));
+        self.sort_item = Some(Box::new(compare));
         self
     }
 
@@ -1190,7 +1327,7 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     where
         G: Ord,
     {
-        self.content.sort_group = Some(Box::new(|a, b| a.cmp(b)));
+        self.sort_group = Some(Box::new(|a, b| a.cmp(b)));
         self
     }
 
@@ -1199,13 +1336,13 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     where
         F: FnMut(&G, &G) -> cmp::Ordering + 'static,
     {
-        self.content.sort_group = Some(Box::new(compare));
+        self.sort_group = Some(Box::new(compare));
         self
     }
 
     #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn add_group(&mut self, group: G) {
-        if let Entry::Vacant(vacant) = self.content.items.entry(Some(group)) {
+        if let Entry::Vacant(vacant) = self.items.entry(Some(group)) {
             vacant.insert(HashSet::new());
         }
 
@@ -1213,12 +1350,12 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     }
 
     pub fn insert(&mut self, item: V, group: Option<G>) {
-        if self.content.unique {
-            for (_, items) in self.content.items.iter_mut() {
+        if self.unique {
+            for (_, items) in self.items.iter_mut() {
                 items.remove(&item);
             }
         }
-        match self.content.items.entry(group) {
+        match self.items.entry(group) {
             Entry::Vacant(vacant) => {
                 let mut items = HashSet::new();
                 items.insert(item);
@@ -1233,7 +1370,7 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     }
 
     pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
-        match self.content.items.entry(group) {
+        match self.items.entry(group) {
             Entry::Vacant(_) => Err(()),
             Entry::Occupied(mut occupied) => {
                 self.dirty = occupied.get_mut().remove(&item);
@@ -1243,15 +1380,24 @@ impl<'a, G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> View<'a, L
     }
 }
 
-impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
-    for View<'_, ListView<G, V>, E>
+impl<E, W, G, V> View<E, W> for ListView<E, W, G, V>
+where
+    W: Write,
+    G: fmt::Display + Hash + Eq,
+    V: fmt::Display + Hash + Eq,
 {
-    fn measure(&mut self, width_spec: Option<u16>, height_spec: Option<u16>) {
-        self.w = match self.width {
-            Dimension::MatchParent => width_spec,
-            Dimension::WrapContent => {
+    fn measure(
+        &mut self,
+        dimension: &mut Dimension,
+        width_spec: Option<u16>,
+        height_spec: Option<u16>,
+    ) {
+        let layouts = self.get_layouts();
+        dimension.w = match layouts.width {
+            Layout::MatchParent => width_spec,
+            Layout::WrapContent => {
                 let mut width: u16 = 0;
-                for (group, items) in &self.content.items {
+                for (group, items) in &self.items {
                     if let Some(group) = group {
                         width =
                             cmp::max(width, term_string_visible_len(&format!("{}", group)) as u16);
@@ -1274,17 +1420,17 @@ impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
                     None => Some(width),
                 }
             }
-            Dimension::Absolute(width) => match width_spec {
+            Layout::Absolute(width) => match width_spec {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        self.h = match self.height {
-            Dimension::MatchParent => height_spec,
-            Dimension::WrapContent => {
+        dimension.h = match layouts.height {
+            Layout::MatchParent => height_spec,
+            Layout::WrapContent => {
                 let mut height: u16 = 0;
-                for (group, items) in &self.content.items {
+                for (group, items) in &self.items {
                     if group.is_some() {
                         height += 1;
                     }
@@ -1296,68 +1442,88 @@ impl<G: fmt::Display + Hash + Eq, V: fmt::Display + Hash + Eq, E> ViewTrait<E>
                     None => Some(height),
                 }
             }
-            Dimension::Absolute(height) => match height_spec {
+            Layout::Absolute(height) => match height_spec {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
         };
     }
 
-    fn redraw(&mut self) {
-        self.save_cursor();
+    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+        save_cursor!(screen);
 
-        let mut y = self.y;
+        let mut y = dimension.y;
 
-        for y in self.y..self.y + self.h.unwrap() {
-            goto!(self, self.x, y);
-            for _ in self.x..self.x + self.w.unwrap() {
-                vprint!(self, " ");
+        for y in dimension.y..dimension.y + dimension.h.unwrap() {
+            goto!(screen, dimension.x, y);
+            for _ in dimension.x..dimension.x + dimension.w.unwrap() {
+                vprint!(screen, " ");
             }
 
-            goto!(self, self.x, y);
+            goto!(screen, dimension.x, y);
         }
 
-        for (group, items) in &self.content.items {
-            if y > self.y + self.h.unwrap() {
+        for (group, items) in &self.items {
+            if y > dimension.y + dimension.h.unwrap() {
                 break;
             }
 
-            goto!(self, self.x, y);
+            goto!(screen, dimension.x, y);
 
             if group.is_some() {
-                vprint!(self, "{}", group.as_ref().unwrap());
+                vprint!(screen, "{}", group.as_ref().unwrap());
                 y += 1;
             }
 
             let mut items = items.iter().collect::<Vec<&V>>();
-            if let Some(sort) = &mut self.content.sort_item {
+            if let Some(sort) = &mut self.sort_item {
                 items.sort_by(|a, b| sort(*a, *b));
             }
 
             for item in items {
-                if y > self.y + self.h.unwrap() {
+                if y > dimension.y + dimension.h.unwrap() {
                     break;
                 }
 
-                goto!(self, self.x, y);
+                goto!(screen, dimension.x, y);
 
                 match group {
-                    Some(_) => vprint!(self, "  {}", item),
-                    None => vprint!(self, "{}", item),
+                    Some(_) => vprint!(screen, "  {}", item),
+                    None => vprint!(screen, "{}", item),
                 };
 
                 y += 1;
             }
         }
 
-        self.restore_cursor();
-        flush!(self);
+        restore_cursor!(screen);
+        flush!(screen);
+
+        self.dirty = false;
+    }
+
+    fn event(&mut self, event: &mut E) {
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
+        }
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn get_layouts(&self) -> Layouts {
+        self.layouts.clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::predicate::*;
+    use mockall::*;
 
     #[test]
     fn test_term_string_visible_len_is_correct() {
@@ -1396,17 +1562,25 @@ mod tests {
         )
     }
 
+    mock! {
+        struct MockWriter {
+        }
+
+        impl Write for MockWriter {
+        }
+    }
+
     #[test]
     #[ignore]
     fn test_input_backspace() {
         // Given
-        let screen = Mock;
+        let screen = MockScreen::new();
         let input = View::<Input, ()>::new(screen.clone());
 
         // When
         input.backspace();
 
         // Then
-        assert_eq!(input.content.buf, "abc".to_string());
+        assert_eq!(input.buf, "abc".to_string());
     }
 }

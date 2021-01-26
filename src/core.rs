@@ -39,7 +39,6 @@ use crate::config::Config;
 use crate::cursor::Cursor;
 use crate::message::Message;
 use crate::plugins;
-use crate::terminus::ViewTrait;
 use crate::{
     command_def, generate_arg_autocompletion, generate_command_autocompletions, generate_help,
     parse_command_args,
@@ -109,12 +108,7 @@ pub enum Event {
     ResetCompletion,
     Completed(String, Cursor),
     ChangeWindow(String),
-}
-
-impl Debug for dyn ViewTrait<Event> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ViewTrait<Event>")
-    }
+    Notification(String),
 }
 
 pub trait Plugin: fmt::Display {

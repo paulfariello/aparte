@@ -22,7 +22,7 @@ use std::thread;
 use termion::color;
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
-use termion::raw::{IntoRawMode, RawTerminal};
+use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
@@ -34,12 +34,10 @@ use crate::core::{Aparte, Event, Plugin};
 use crate::cursor::Cursor;
 use crate::message::{Message, XmppMessage};
 use crate::terminus::{
-    BufferedWin, Dimension, FrameLayout, Input, LinearLayout, ListView, Orientation, View,
-    ViewTrait, Window as _,
+    BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
+    Orientation, Screen, View, Window as _,
 };
 use crate::{contact, conversation};
-
-type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 #[derive(Debug, Clone)]
 enum ConversationKind {
@@ -58,75 +56,73 @@ enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
-    AddWindow(String, Option<Box<dyn ViewTrait<UIEvent>>>),
+    AddWindow(String, Option<Box<dyn View<UIEvent, Stdout>>>),
 }
 
 struct TitleBar {
     window_name: Option<String>,
+    dirty: bool,
 }
 
-impl View<'_, TitleBar, UIEvent> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+impl TitleBar {
+    fn new() -> Self {
         Self {
-            screen: screen,
-            width: Dimension::MatchParent,
-            height: Dimension::Absolute(1),
-            x: 0,
-            y: 0,
-            w: None,
-            h: None,
+            window_name: None,
             dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: TitleBar { window_name: None },
-            event_handler: None,
         }
     }
 
     fn set_name(&mut self, name: &str) {
-        self.content.window_name = Some(name.to_string());
-        self.redraw();
+        self.window_name = Some(name.to_string());
+        self.dirty = true;
     }
 }
 
-impl ViewTrait<UIEvent> for View<'_, TitleBar, UIEvent> {
-    fn redraw(&mut self) {
-        self.save_cursor();
+impl<W> View<UIEvent, W> for TitleBar
+where
+    W: Write,
+{
+    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+        save_cursor!(screen);
 
-        {
-            let mut screen = self.screen.borrow_mut();
+        vprint!(
+            screen,
+            "{}",
+            termion::cursor::Goto(dimension.x, dimension.y)
+        );
+        vprint!(
+            screen,
+            "{}{}",
+            color::Bg(color::Blue),
+            color::Fg(color::White)
+        );
 
-            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-            write!(
-                screen,
-                "{}{}",
-                color::Bg(color::Blue),
-                color::Fg(color::White)
-            )
-            .unwrap();
-
-            for _ in 0..self.w.unwrap() {
-                write!(screen, " ").unwrap();
-            }
-            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-            if let Some(window_name) = &self.content.window_name {
-                write!(screen, " {}", window_name).unwrap();
-            }
-
-            write!(
-                screen,
-                "{}{}",
-                color::Bg(color::Reset),
-                color::Fg(color::Reset)
-            )
-            .unwrap();
+        for _ in 0..dimension.w.unwrap() {
+            vprint!(screen, " ");
+        }
+        vprint!(
+            screen,
+            "{}",
+            termion::cursor::Goto(dimension.x, dimension.y)
+        );
+        if let Some(window_name) = &self.window_name {
+            vprint!(screen, " {}", window_name);
         }
 
-        self.restore_cursor();
-        while let Err(_) = self.screen.borrow_mut().flush() {}
+        vprint!(
+            screen,
+            "{}{}",
+            color::Bg(color::Reset),
+            color::Fg(color::Reset)
+        );
+
+        restore_cursor!(screen);
+        while let Err(_) = screen.flush() {}
+        self.dirty = false;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -137,6 +133,13 @@ impl ViewTrait<UIEvent> for View<'_, TitleBar, UIEvent> {
             _ => {}
         }
     }
+
+    fn get_layouts(&self) -> Layouts {
+        Layouts {
+            width: Layout::MatchParent,
+            height: Layout::Absolute(1),
+        }
+    }
 }
 
 struct WinBar {
@@ -144,145 +147,140 @@ struct WinBar {
     windows: Vec<String>,
     current_window: Option<String>,
     highlighted: Vec<String>,
+    dirty: bool,
 }
 
-impl View<'_, WinBar, UIEvent> {
-    fn new(screen: Rc<RefCell<Screen>>) -> Self {
+impl WinBar {
+    pub fn new() -> Self {
         Self {
-            screen: screen,
-            width: Dimension::MatchParent,
-            height: Dimension::Absolute(1),
-            x: 0,
-            y: 0,
-            w: None,
-            h: None,
+            connection: None,
+            windows: Vec::new(),
+            current_window: None,
+            highlighted: Vec::new(),
             dirty: true,
-            visible: true,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_x: None,
-            #[cfg(feature = "no-cursor-save")]
-            cursor_y: None,
-            content: WinBar {
-                connection: None,
-                windows: Vec::new(),
-                current_window: None,
-                highlighted: Vec::new(),
-            },
-            event_handler: None,
         }
     }
 
-    fn add_window(&mut self, window: &str) {
-        self.content.windows.push(window.to_string());
-        self.redraw();
+    pub fn add_window(&mut self, window: &str) {
+        self.windows.push(window.to_string());
+        self.dirty = true;
     }
 
-    fn set_current_window(&mut self, window: &str) {
-        self.content.current_window = Some(window.to_string());
-        self.content.highlighted.drain_filter(|w| w == &window);
-        self.redraw();
+    pub fn set_current_window(&mut self, window: &str) {
+        self.current_window = Some(window.to_string());
+        self.highlighted.drain_filter(|w| w == &window);
+        self.dirty = true;
     }
 
-    fn highlight_window(&mut self, window: &str) {
-        if self
-            .content
-            .highlighted
-            .iter()
-            .find(|w| w == &window)
-            .is_none()
-        {
-            self.content.highlighted.push(window.to_string());
-            self.redraw();
+    pub fn highlight_window(&mut self, window: &str) {
+        if self.highlighted.iter().find(|w| w == &window).is_none() {
+            self.highlighted.push(window.to_string());
+            self.dirty = true;
         }
     }
 }
 
-impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
-    fn redraw(&mut self) {
-        self.save_cursor();
+impl<W> View<UIEvent, W> for WinBar
+where
+    W: Write,
+{
+    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+        save_cursor!(screen);
 
-        {
-            let mut screen = self.screen.borrow_mut();
-            let mut written = 0;
+        let mut written = 0;
 
-            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-            write!(
-                screen,
-                "{}{}",
-                color::Bg(color::Blue),
-                color::Fg(color::White)
-            )
-            .unwrap();
+        write!(
+            screen,
+            "{}",
+            termion::cursor::Goto(dimension.x, dimension.y)
+        )
+        .unwrap();
+        write!(
+            screen,
+            "{}{}",
+            color::Bg(color::Blue),
+            color::Fg(color::White)
+        )
+        .unwrap();
 
-            for _ in 0..self.w.unwrap() {
-                write!(screen, " ").unwrap();
-            }
-
-            write!(screen, "{}", termion::cursor::Goto(self.x, self.y)).unwrap();
-            if let Some(connection) = &self.content.connection {
-                write!(screen, " {}", connection).unwrap();
-                written += 1 + connection.len();
-            }
-
-            if let Some(current_window) = &self.content.current_window {
-                write!(
-                    screen,
-                    " [{}{}{}]",
-                    termion::style::Bold,
-                    current_window,
-                    termion::style::NoBold
-                )
-                .unwrap();
-                written += 3 + current_window.len();
-            } else {
-                write!(screen, " []").unwrap();
-                written += 3;
-            }
-
-            let mut first = true;
-            for window in &self.content.highlighted {
-                // Keep space for at least ", …]"
-                if window.len() + written + 4 > self.w.unwrap() as usize {
-                    if !first {
-                        write!(screen, ", …").unwrap();
-                    }
-                    break;
-                }
-
-                if first {
-                    write!(screen, " [").unwrap();
-                    written += 3; // Also count the closing bracket
-                    first = false;
-                } else {
-                    write!(screen, ", ").unwrap();
-                    written += 2;
-                }
-                write!(
-                    screen,
-                    "{}{}{}",
-                    termion::style::Bold,
-                    window,
-                    termion::style::NoBold
-                )
-                .unwrap();
-                written += window.len();
-            }
-
-            if !first {
-                write!(screen, "]").unwrap();
-            }
-
-            write!(
-                screen,
-                "{}{}",
-                color::Bg(color::Reset),
-                color::Fg(color::Reset)
-            )
-            .unwrap();
+        for _ in 0..dimension.w.unwrap() {
+            write!(screen, " ").unwrap();
         }
 
-        self.restore_cursor();
-        while let Err(_) = self.screen.borrow_mut().flush() {}
+        write!(
+            screen,
+            "{}",
+            termion::cursor::Goto(dimension.x, dimension.y)
+        )
+        .unwrap();
+        if let Some(connection) = &self.connection {
+            write!(screen, " {}", connection).unwrap();
+            written += 1 + connection.len();
+        }
+
+        if let Some(current_window) = &self.current_window {
+            write!(
+                screen,
+                " [{}{}{}]",
+                termion::style::Bold,
+                current_window,
+                termion::style::NoBold
+            )
+            .unwrap();
+            written += 3 + current_window.len();
+        } else {
+            write!(screen, " []").unwrap();
+            written += 3;
+        }
+
+        let mut first = true;
+        for window in &self.highlighted {
+            // Keep space for at least ", …]"
+            if window.len() + written + 4 > dimension.w.unwrap() as usize {
+                if !first {
+                    write!(screen, ", …").unwrap();
+                }
+                break;
+            }
+
+            if first {
+                write!(screen, " [").unwrap();
+                written += 3; // Also count the closing bracket
+                first = false;
+            } else {
+                write!(screen, ", ").unwrap();
+                written += 2;
+            }
+            write!(
+                screen,
+                "{}{}{}",
+                termion::style::Bold,
+                window,
+                termion::style::NoBold
+            )
+            .unwrap();
+            written += window.len();
+        }
+
+        if !first {
+            write!(screen, "]").unwrap();
+        }
+
+        write!(
+            screen,
+            "{}{}",
+            color::Bg(color::Reset),
+            color::Fg(color::Reset)
+        )
+        .unwrap();
+
+        restore_cursor!(screen);
+        flush!(screen);
+        self.dirty = false;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -294,21 +292,21 @@ impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
                 self.add_window(name);
             }
             UIEvent::Core(Event::Connected(account, _)) => {
-                self.content.connection = Some(account.to_string());
-                self.redraw();
+                self.connection = Some(account.to_string());
+                self.dirty = true;
             }
             UIEvent::Core(Event::Message(_, Message::Incoming(XmppMessage::Chat(message)))) => {
                 let mut highlighted = None;
-                for window in &self.content.windows {
+                for window in &self.windows {
                     if &message.from.to_string() == window
-                        && Some(window) != self.content.current_window.as_ref()
+                        && Some(window) != self.current_window.as_ref()
                     {
                         highlighted = Some(window.clone());
                     }
                 }
                 if highlighted.is_some() {
                     self.highlight_window(&highlighted.unwrap());
-                    self.redraw();
+                    self.dirty = true;
                 }
             }
             UIEvent::Core(Event::Message(
@@ -316,19 +314,26 @@ impl ViewTrait<UIEvent> for View<'_, WinBar, UIEvent> {
                 Message::Incoming(XmppMessage::Groupchat(message)),
             )) => {
                 let mut highlighted = None;
-                for window in &self.content.windows {
+                for window in &self.windows {
                     if &message.from.to_string() == window
-                        && Some(window) != self.content.current_window.as_ref()
+                        && Some(window) != self.current_window.as_ref()
                     {
                         highlighted = Some(window.clone());
                     }
                 }
                 if highlighted.is_some() {
                     self.highlight_window(&highlighted.unwrap());
-                    self.redraw();
+                    self.dirty = true;
                 }
             }
             _ => {}
+        }
+    }
+
+    fn get_layouts(&self) -> Layouts {
+        Layouts {
+            width: Layout::MatchParent,
+            height: Layout::Absolute(1),
         }
     }
 }
@@ -557,12 +562,13 @@ impl fmt::Display for conversation::Role {
 }
 
 pub struct UIPlugin {
-    screen: Rc<RefCell<Screen>>,
+    screen: Screen<Stdout>,
     windows: Vec<String>,
     current_window: Option<String>,
     unread_windows: LinkedHashSet<String>,
     conversations: HashMap<String, Conversation>,
-    root: Box<dyn ViewTrait<UIEvent>>,
+    root: LinearLayout<UIEvent, Stdout>,
+    dimension: Option<Dimension>,
     password_command: Option<Command>,
 }
 
@@ -575,8 +581,8 @@ impl UIPlugin {
         let jid = conversation.jid.clone();
         match conversation.kind {
             ConversationKind::Chat => {
-                let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone())
-                    .with_event(move |view, event| {
+                let chat = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
+                    move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(
                                 _,
@@ -587,7 +593,6 @@ impl UIPlugin {
                                     view.recv_message(&Message::Incoming(XmppMessage::Chat(
                                         message.clone(),
                                     )));
-                                    view.bell();
                                 }
                             }
                             UIEvent::Core(Event::Message(
@@ -608,7 +613,8 @@ impl UIPlugin {
                             UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
                             _ => {}
                         }
-                    });
+                    },
+                );
 
                 self.windows.push(conversation.jid.to_string());
                 self.root.event(&mut UIEvent::AddWindow(
@@ -619,21 +625,16 @@ impl UIPlugin {
                     .insert(conversation.jid.to_string(), conversation);
             }
             ConversationKind::Group => {
-                let mut layout = View::<LinearLayout<UIEvent>, UIEvent>::new(
-                    self.screen.clone(),
-                    Orientation::Horizontal,
-                    Dimension::MatchParent,
-                    Dimension::MatchParent,
-                )
-                .with_event(|layout, event| {
-                    for child in layout.content.children.iter_mut() {
-                        child.event(event);
-                    }
-                });
+                let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal)
+                    .with_event(|layout, event| {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    });
 
                 let chat_jid = jid.clone();
-                let chat = View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone())
-                    .with_event(move |view, event| {
+                let chat = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
+                    move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(
                                 _,
@@ -644,7 +645,6 @@ impl UIPlugin {
                                     view.recv_message(&Message::Incoming(XmppMessage::Groupchat(
                                         message.clone(),
                                     )));
-                                    view.bell();
                                 }
                             }
                             UIEvent::Core(Event::Message(
@@ -662,29 +662,32 @@ impl UIPlugin {
                             UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
                             _ => {}
                         }
-                    });
+                    },
+                );
                 layout.push(chat);
 
                 let roster_jid = jid.clone();
                 let roster =
-                    View::<ListView<conversation::Role, conversation::Occupant>, UIEvent>::new(
-                        self.screen.clone(),
-                    )
-                    .with_none_group()
-                    .with_unique_item()
-                    .with_sort_item()
-                    .with_event(move |view, event| match event {
-                        UIEvent::Core(Event::Occupant {
-                            conversation,
-                            occupant,
-                            ..
-                        }) => {
-                            if roster_jid == *conversation {
-                                view.insert(occupant.clone(), Some(occupant.role));
+                    ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
+                        .with_layouts(Layouts {
+                            width: Layout::WrapContent,
+                            height: Layout::MatchParent,
+                        })
+                        .with_none_group()
+                        .with_unique_item()
+                        .with_sort_item()
+                        .with_event(move |view, event| match event {
+                            UIEvent::Core(Event::Occupant {
+                                conversation,
+                                occupant,
+                                ..
+                            }) => {
+                                if roster_jid == *conversation {
+                                    view.insert(occupant.clone(), Some(occupant.role));
+                                }
                             }
-                        }
-                        _ => {}
-                    });
+                            _ => {}
+                        });
                 layout.push(roster);
 
                 self.windows.push(conversation.jid.to_string());
@@ -736,83 +739,65 @@ impl UIPlugin {
 impl Plugin for UIPlugin {
     fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
-        let screen = Rc::new(RefCell::new(AlternateScreen::from(stdout)));
-        let mut layout = View::<LinearLayout<UIEvent>, UIEvent>::new(
-            screen.clone(),
-            Orientation::Vertical,
-            Dimension::MatchParent,
-            Dimension::MatchParent,
-        )
-        .with_event(|layout, event| {
-            for child in layout.content.children.iter_mut() {
-                child.event(event);
-            }
-
-            if layout.is_dirty() {
-                layout.measure(layout.w, layout.h);
-                layout.layout(layout.x, layout.y);
-                layout.redraw();
-            }
-        });
-
-        let title_bar = View::<TitleBar, UIEvent>::new(screen.clone());
-        let frame = View::<FrameLayout<String, UIEvent>, UIEvent>::new(screen.clone()).with_event(
-            |frame, event| {
-                match event {
-                    UIEvent::Core(Event::ChangeWindow(name)) => {
-                        frame.current(name.to_string());
-                    }
-                    UIEvent::AddWindow(name, view) => {
-                        let view = view.take().unwrap();
-                        frame.insert(name.to_string(), view);
-                    }
-                    _ => {}
-                }
-                for (_, child) in frame.content.children.iter_mut() {
+        let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Vertical).with_event(
+            |layout, event| {
+                for child in layout.iter_children_mut() {
                     child.event(event);
                 }
             },
         );
-        let win_bar = View::<WinBar, UIEvent>::new(screen.clone());
-        let input =
-            View::<Input, UIEvent>::new(screen.clone()).with_event(|input, event| match event {
-                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
-                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
-                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
-                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
-                UIEvent::Core(Event::Key(Key::End)) => input.end(),
-                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
-                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
-                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
-                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
-                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
-                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
-                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
-                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
-                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
-                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
-                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
-                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
-                UIEvent::Validate(result) => {
-                    let mut result = result.borrow_mut();
-                    result.replace(input.validate());
+
+        let title_bar = TitleBar::new();
+        let frame = FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| {
+            match event {
+                UIEvent::Core(Event::ChangeWindow(name)) => {
+                    frame.current(name.to_string());
                 }
-                UIEvent::GetInput(result) => {
-                    let mut result = result.borrow_mut();
-                    result.replace((
-                        input.content.buf.clone(),
-                        input.content.cursor.clone(),
-                        input.content.password,
-                    ));
+                UIEvent::AddWindow(name, view) => {
+                    let view = view.take().unwrap();
+                    frame.insert_boxed(name.to_string(), view);
                 }
-                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                    input.content.buf = raw_buf.clone();
-                    input.content.cursor = cursor.clone();
-                    input.redraw();
-                }
-                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 _ => {}
-            });
+            }
+            for child in frame.iter_children_mut() {
+                child.event(event);
+            }
+        });
+        let win_bar = WinBar::new();
+        let input = Input::new().with_event(|input, event| match event {
+            UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
+            UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
+            UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
+            UIEvent::Core(Event::Key(Key::Home)) => input.home(),
+            UIEvent::Core(Event::Key(Key::End)) => input.end(),
+            UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
+            UIEvent::Core(Event::Key(Key::Down)) => input.next(),
+            UIEvent::Core(Event::Key(Key::Left)) => input.left(),
+            UIEvent::Core(Event::Key(Key::Right)) => input.right(),
+            UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
+            UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
+            UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
+            UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
+            UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
+            UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
+            UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
+            UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
+            UIEvent::Validate(result) => {
+                let mut result = result.borrow_mut();
+                result.replace(input.validate());
+            }
+            UIEvent::GetInput(result) => {
+                let mut result = result.borrow_mut();
+                result.replace((input.buf.clone(), input.cursor.clone(), input.password));
+            }
+            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+                input.buf = raw_buf.clone();
+                input.cursor = cursor.clone();
+                input.dirty = true;
+            }
+            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+            _ => {}
+        });
 
         layout.push(title_bar);
         layout.push(frame);
@@ -820,8 +805,9 @@ impl Plugin for UIPlugin {
         layout.push(input);
 
         Self {
-            screen: screen,
-            root: Box::new(layout),
+            screen: AlternateScreen::from(stdout),
+            root: layout,
+            dimension: None,
             windows: Vec::new(),
             unread_windows: LinkedHashSet::new(),
             current_window: None,
@@ -831,86 +817,79 @@ impl Plugin for UIPlugin {
     }
 
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
-        {
-            let mut screen = self.screen.borrow_mut();
-            write!(screen, "{}", termion::clear::All).unwrap();
-        }
+        vprint!(&mut self.screen, "{}", termion::clear::All);
 
         let (width, height) = termion::terminal_size().unwrap();
-        self.root.measure(Some(width), Some(height));
-        self.root.layout(1, 1);
-        self.root.redraw();
+        let mut dimension = Dimension::new();
+        self.root.measure(&mut dimension, Some(width), Some(height));
+        self.root.layout(&mut dimension, 1, 1);
+        self.root.render(&dimension, &mut self.screen);
+        self.dimension = Some(dimension);
 
-        let mut console = View::<LinearLayout<UIEvent>, UIEvent>::new(
-            self.screen.clone(),
-            Orientation::Horizontal,
-            Dimension::MatchParent,
-            Dimension::MatchParent,
-        )
-        .with_event(|layout, event| {
-            for child in layout.content.children.iter_mut() {
-                child.event(event);
-            }
-        });
-        console.push(
-            View::<BufferedWin<Message>, UIEvent>::new(self.screen.clone()).with_event(
-                |view, event| match event {
-                    UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                        view.recv_message(&Message::Log(message.clone()));
-                    }
-                    UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
-                    UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
-                    _ => {}
-                },
-            ),
+        let mut console = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal).with_event(
+            |layout, event| {
+                for (_, child_view) in layout.children.iter_mut() {
+                    child_view.event(event);
+                }
+            },
         );
-        let roster =
-            View::<ListView<contact::Group, RosterItem>, UIEvent>::new(self.screen.clone())
-                .with_none_group()
-                .with_sort_item()
-                .with_event(|view, event| match event {
-                    UIEvent::Core(Event::Connected(_, _)) => {
-                        view.add_group(contact::Group(String::from("Windows")));
-                        view.add_group(contact::Group(String::from("Contacts")));
-                        view.add_group(contact::Group(String::from("Bookmarks")));
-                    }
-                    UIEvent::Core(Event::Contact(_, contact))
-                    | UIEvent::Core(Event::ContactUpdate(_, contact)) => {
-                        if contact.groups.len() > 0 {
-                            for group in &contact.groups {
-                                view.insert(
-                                    RosterItem::Contact(contact.clone()),
-                                    Some(group.clone()),
-                                );
-                            }
-                        } else {
-                            let group = contact::Group(String::from("Contacts"));
-                            view.insert(RosterItem::Contact(contact.clone()), Some(group));
+        console.push(
+            BufferedWin::<UIEvent, Stdout, Message>::new().with_event(|view, event| match event {
+                UIEvent::Core(Event::Message(_, Message::Log(message))) => {
+                    view.recv_message(&Message::Log(message.clone()));
+                }
+                UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
+                UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                _ => {}
+            }),
+        );
+        let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
+            .with_layouts(Layouts {
+                width: Layout::WrapContent,
+                height: Layout::MatchParent,
+            })
+            .with_none_group()
+            .with_sort_item()
+            .with_event(|view, event| match event {
+                UIEvent::Core(Event::Connected(_, _)) => {
+                    view.add_group(contact::Group(String::from("Windows")));
+                    view.add_group(contact::Group(String::from("Contacts")));
+                    view.add_group(contact::Group(String::from("Bookmarks")));
+                }
+                UIEvent::Core(Event::Contact(_, contact))
+                | UIEvent::Core(Event::ContactUpdate(_, contact)) => {
+                    if contact.groups.len() > 0 {
+                        for group in &contact.groups {
+                            view.insert(RosterItem::Contact(contact.clone()), Some(group.clone()));
                         }
+                    } else {
+                        let group = contact::Group(String::from("Contacts"));
+                        view.insert(RosterItem::Contact(contact.clone()), Some(group));
                     }
-                    UIEvent::Core(Event::Bookmark(bookmark)) => {
-                        let group = contact::Group(String::from("Bookmarks"));
-                        view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
-                    }
-                    UIEvent::Core(Event::DeletedBookmark(jid)) => {
-                        let group = contact::Group(String::from("Bookmarks"));
-                        let bookmark = contact::Bookmark {
-                            jid: jid.clone(),
-                            name: None,
-                            nick: None,
-                            password: None,
-                            autojoin: false,
-                            extensions: None,
-                        };
-                        let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
-                    }
-                    UIEvent::AddWindow(name, _) => {
-                        debug!("test");
-                        let group = contact::Group(String::from("Windows"));
-                        view.insert(RosterItem::Window(name.clone()), Some(group));
-                    }
-                    _ => {}
-                });
+                }
+                UIEvent::Core(Event::Bookmark(bookmark)) => {
+                    let group = contact::Group(String::from("Bookmarks"));
+                    view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                }
+                UIEvent::Core(Event::DeletedBookmark(jid)) => {
+                    let group = contact::Group(String::from("Bookmarks"));
+                    let bookmark = contact::Bookmark {
+                        jid: jid.clone(),
+                        name: None,
+                        nick: None,
+                        password: None,
+                        autojoin: false,
+                        extensions: None,
+                    };
+                    let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                }
+                UIEvent::AddWindow(name, _) => {
+                    debug!("test");
+                    let group = contact::Group(String::from("Windows"));
+                    view.insert(RosterItem::Window(name.clone()), Some(group));
+                }
+                _ => {}
+            });
         console.push(roster);
 
         self.windows.push("console".to_string());
@@ -962,6 +941,7 @@ impl Plugin for UIPlugin {
                         if unread.is_some() {
                             self.unread_windows.insert(unread.unwrap());
                         }
+                        aparte.schedule(Event::Notification(String::from("")));
                     }
                     Message::Outgoing(XmppMessage::Chat(message)) => {
                         let window_name = message.to.to_string();
@@ -1000,6 +980,7 @@ impl Plugin for UIPlugin {
                         if unread.is_some() {
                             self.unread_windows.insert(unread.unwrap());
                         }
+                        aparte.schedule(Event::Notification(String::from("")));
                     }
                     Message::Outgoing(XmppMessage::Groupchat(message)) => {
                         let window_name = message.to.to_string();
@@ -1067,9 +1048,11 @@ impl Plugin for UIPlugin {
             }
             Event::WindowChange => {
                 let (width, height) = termion::terminal_size().unwrap();
-                self.root.measure(Some(width), Some(height));
-                self.root.layout(1, 1);
-                self.root.redraw();
+                let mut dimension = Dimension::new();
+                self.root.measure(&mut dimension, Some(width), Some(height));
+                self.root.layout(&mut dimension, 1, 1);
+                self.root.render(&dimension, &mut self.screen);
+                self.dimension = Some(dimension);
             }
             Event::Key(key) => {
                 match key {
@@ -1191,8 +1174,24 @@ impl Plugin for UIPlugin {
                     cursor.clone(),
                 )));
             }
+            Event::Notification(_) => {
+                vprint!(self.screen, "\x07");
+                flush!(self.screen);
+            }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
+        }
+
+        if self.root.is_layout_dirty() {
+            let (width, height) = termion::terminal_size().unwrap();
+            let mut dimension = Dimension::new();
+            self.root.measure(&mut dimension, Some(width), Some(height));
+            self.root.layout(&mut dimension, 1, 1);
+            self.root.render(&dimension, &mut self.screen);
+            self.dimension = Some(dimension);
+        } else if self.root.is_dirty() {
+            let dimension: &Dimension = self.dimension.as_ref().unwrap();
+            self.root.render(dimension, &mut self.screen);
         }
     }
 }
