@@ -168,7 +168,15 @@ impl WinBar {
 
     pub fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
-        self.highlighted.drain_filter(|w| w == &window);
+        // could use self.highlighted.drain_filter(|w| w == &window);
+        let mut i = 0;
+        while i != self.highlighted.len() {
+            if self.highlighted[i] == window {
+                self.highlighted.remove(i);
+            } else {
+                i += 1;
+            }
+        }
         self.dirty = true;
     }
 

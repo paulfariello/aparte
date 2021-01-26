@@ -265,7 +265,6 @@ macro_rules! parse_command_args(
             Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
         };
 
-        #[allow(unused_assignments)]
         $index += 1;
     );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Option<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
@@ -280,14 +279,22 @@ macro_rules! parse_command_args(
             }
         };
 
-        #[allow(unused_assignments)]
         $index += 1;
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Named<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
         let $arg: Option<$type> = {
-            let matching = $command.args.drain_filter(|a| a.starts_with(stringify!($arg))).collect::<Vec<String>>();
+            // Could use let matching = $command.args.drain_filter(|a| a.starts_with(stringify!($arg))).collect::<Vec<String>>();
+            let mut matching = Vec::new();
+            let mut i = 0;
+            while i != $command.args.len() {
+                if $command.args[i].starts_with(stringify!($arg)) {
+                    matching.push($command.args.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
             match matching.as_slice() {
                 [] => None,
                 [named] => {
@@ -326,7 +333,6 @@ macro_rules! parse_command_args(
             Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
         };
 
-        #[allow(unused_assignments)]
         $index += 1;
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
@@ -452,6 +458,10 @@ macro_rules! command_def (
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!($aparte, $command, index, $args);
+
+                // Avoid unused_assignement warning
+                // should use #[allow(unused_assignments)]
+                let _ = index;
                 $body
             }
 
