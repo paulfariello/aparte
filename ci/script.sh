@@ -3,6 +3,8 @@
 set -ex
 
 main() {
+    cross fmt -- --check
+
     cross build -v --target $TARGET
     cross build --target $TARGET --release
 
