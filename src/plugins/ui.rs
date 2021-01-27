@@ -1325,6 +1325,8 @@ impl Stream for EventStream {
                     Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
                     Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
                     Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
+                    Key::PageUp => Poll::Ready(Some(Event::Key(Key::PageUp))),
+                    Key::PageDown => Poll::Ready(Some(Event::Key(Key::PageDown))),
                     _ => {
                         self.inner.waker.register(cx.waker());
                         Poll::Pending
