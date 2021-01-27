@@ -15,5 +15,5 @@ before_install:
 
 script:
   - cargo fmt --all -- --check
-  - cargo build --verbose
-  - cargo test --verbose
+  - cargo build
+  - cargo test
