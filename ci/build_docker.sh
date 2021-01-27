@@ -26,6 +26,7 @@ EOF
     docker build -t $img - <<EOF
 FROM rustembedded/cross:$TARGET-$ver
 
+RUN rustup component add rustfmt-preview
 RUN apt-get update && \
     apt-get install --assume-yes libssl-dev
 EOF
