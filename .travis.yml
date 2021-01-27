@@ -15,5 +15,6 @@ before_install:
 
 script:
   - cargo fmt --all -- --check
+  - cargo check --features strict
   - cargo build
   - cargo test

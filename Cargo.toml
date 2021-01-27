@@ -9,6 +9,7 @@ repository = "https://github.com/paulfariello/aparte"
 
 [features]
 no-cursor-save = []
+strict = []
 
 [dependencies]
 log = "^0.4"
