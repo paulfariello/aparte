@@ -16,6 +16,8 @@ Features
   - [x] Auto completion
   - [x] Bookmarks
   - [x] Consistent color generation
+  - [ ] MAM
+  - [ ] Omemo
 
 Install
 -------
