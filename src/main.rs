@@ -32,10 +32,10 @@ use crate::core::{Aparte, Plugin};
 
 fn main() {
     let data_dir = dirs::data_dir().unwrap();
-    let aparte_data = data_dir.join("aparté");
+    let aparte_data = data_dir.join("aparte");
 
     if let Err(e) = std::fs::create_dir_all(&aparte_data) {
-        panic!("Cannot create aparté data dir: {}", e);
+        panic!("Cannot create aparte data dir: {}", e);
     }
 
     let file_writer = flexi_logger::writers::FileLogWriter::builder()
@@ -50,10 +50,10 @@ fn main() {
     }
 
     let conf_dir = dirs::config_dir().unwrap();
-    let aparte_conf = conf_dir.join("aparté");
+    let aparte_conf = conf_dir.join("aparte");
 
     if let Err(e) = std::fs::create_dir_all(&aparte_conf) {
-        panic!("Cannot create aparté data dir: {}", e);
+        panic!("Cannot create aparte data dir: {}", e);
     }
 
     let config = aparte_conf.join("config.toml");
