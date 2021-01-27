@@ -1563,10 +1563,14 @@ mod tests {
     }
 
     mock! {
-        struct MockWriter {
+        Writer {
         }
 
-        impl Write for MockWriter {
+        impl Write for Writer {
+            fn write(&mut self, buf: &[u8]) -> std::result::Result<usize, std::io::Error> {
+            }
+            fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
+            }
         }
     }
 
@@ -1574,13 +1578,15 @@ mod tests {
     #[ignore]
     fn test_input_backspace() {
         // Given
-        let screen = MockScreen::new();
-        let input = View::<Input, ()>::new(screen.clone());
+        let mut input = Input::<()>::new();
 
         // When
+        input.key('a');
+        input.key('b');
+        input.key('c');
         input.backspace();
 
         // Then
-        assert_eq!(input.buf, "abc".to_string());
+        assert_eq!(input.buf, "ab".to_string());
     }
 }
