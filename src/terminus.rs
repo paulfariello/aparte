@@ -730,7 +730,7 @@ impl<E> Input<E> {
             Space,
             Separator,
             Word,
-        };
+        }
 
         use WordParserState::*;
 

@@ -26,7 +26,7 @@ impl Command {
             UnquotedEscaped,
             SimplyQuotedEscaped,
             DoublyQuotedEscaped,
-        };
+        }
 
         use State::*;
 
