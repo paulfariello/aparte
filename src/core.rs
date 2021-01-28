@@ -835,7 +835,7 @@ impl Aparte {
     fn handle_message(&mut self, account: Account, message: XmppParsersMessage) {
         match message.type_ {
             XmppParsersMessageType::Chat => self.handle_chat_message(account, message),
-            XmppParsersMessageType::Groupchat => self.handle_groupchat_message(account, message),
+            XmppParsersMessageType::Groupchat => self.handle_channel_message(account, message),
             XmppParsersMessageType::Headline => self.handle_headline_message(account, message),
             XmppParsersMessageType::Error => {}
             XmppParsersMessageType::Normal => {}
@@ -876,7 +876,7 @@ impl Aparte {
         }
     }
 
-    fn handle_groupchat_message(&mut self, account: Account, message: XmppParsersMessage) {
+    fn handle_channel_message(&mut self, account: Account, message: XmppParsersMessage) {
         let id = message
             .id
             .clone()
@@ -889,7 +889,7 @@ impl Aparte {
                         timestamp = Some(delay.stamp.0);
                     }
                 }
-                let message = Message::incoming_groupchat(
+                let message = Message::incoming_channel(
                     id,
                     timestamp.unwrap_or(LocalTz::now().into()),
                     &from,

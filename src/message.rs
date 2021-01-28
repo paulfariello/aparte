@@ -19,7 +19,7 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone)]
-pub struct GroupchatMessage {
+pub struct ChannelMessage {
     pub id: String,
     pub timestamp: DateTime<FixedOffset>,
     pub from: BareJid,
@@ -32,7 +32,7 @@ pub struct GroupchatMessage {
 #[derive(Debug, Clone)]
 pub enum XmppMessage {
     Chat(ChatMessage),
-    Groupchat(GroupchatMessage),
+    Channel(ChannelMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +106,7 @@ impl Message {
         }))
     }
 
-    pub fn incoming_groupchat<I: Into<String>>(
+    pub fn incoming_channel<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
         from_full: &Jid,
@@ -123,7 +123,7 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Incoming(XmppMessage::Groupchat(GroupchatMessage {
+        Message::Incoming(XmppMessage::Channel(ChannelMessage {
             id: id.into(),
             timestamp: timestamp,
             from: from,
@@ -134,7 +134,7 @@ impl Message {
         }))
     }
 
-    pub fn outgoing_groupchat<I: Into<String>>(
+    pub fn outgoing_channel<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
         from_full: &Jid,
@@ -151,7 +151,7 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage {
+        Message::Outgoing(XmppMessage::Channel(ChannelMessage {
             id: id.into(),
             timestamp: timestamp,
             from: from,
@@ -175,8 +175,8 @@ impl Message {
         match self {
             Message::Outgoing(XmppMessage::Chat(ChatMessage { body, .. }))
             | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
-            | Message::Outgoing(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
-            | Message::Incoming(XmppMessage::Groupchat(GroupchatMessage { body, .. }))
+            | Message::Outgoing(XmppMessage::Channel(ChannelMessage { body, .. }))
+            | Message::Incoming(XmppMessage::Channel(ChannelMessage { body, .. }))
             | Message::Log(LogMessage { body, .. }) => &body,
         }
     }
@@ -188,8 +188,8 @@ impl hash::Hash for Message {
             Message::Log(message) => message.id.hash(state),
             Message::Incoming(XmppMessage::Chat(message))
             | Message::Outgoing(XmppMessage::Chat(message)) => message.id.hash(state),
-            Message::Incoming(XmppMessage::Groupchat(message))
-            | Message::Outgoing(XmppMessage::Groupchat(message)) => message.id.hash(state),
+            Message::Incoming(XmppMessage::Channel(message))
+            | Message::Outgoing(XmppMessage::Channel(message)) => message.id.hash(state),
         }
     }
 }
@@ -200,16 +200,16 @@ impl PartialEq for Message {
             Message::Log(message) => &message.id,
             Message::Incoming(XmppMessage::Chat(message))
             | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
-            Message::Incoming(XmppMessage::Groupchat(message))
-            | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
+            Message::Incoming(XmppMessage::Channel(message))
+            | Message::Outgoing(XmppMessage::Channel(message)) => &message.id,
         };
 
         let other_id = match other {
             Message::Log(message) => &message.id,
             Message::Incoming(XmppMessage::Chat(message))
             | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
-            Message::Incoming(XmppMessage::Groupchat(message))
-            | Message::Outgoing(XmppMessage::Groupchat(message)) => &message.id,
+            Message::Incoming(XmppMessage::Channel(message))
+            | Message::Outgoing(XmppMessage::Channel(message)) => &message.id,
         };
 
         my_id == other_id
@@ -235,7 +235,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
                     .insert(String::new(), xmpp_parsers::message::Body(message.body));
                 Ok(xmpp_message.into())
             }
-            Message::Outgoing(XmppMessage::Groupchat(message)) => {
+            Message::Outgoing(XmppMessage::Channel(message)) => {
                 let mut xmpp_message =
                     xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
                 xmpp_message.id = Some(message.id);

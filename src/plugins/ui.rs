@@ -303,10 +303,7 @@ where
                     self.dirty = true;
                 }
             }
-            UIEvent::Core(Event::Message(
-                _,
-                Message::Incoming(XmppMessage::Groupchat(message)),
-            )) => {
+            UIEvent::Core(Event::Message(_, Message::Incoming(XmppMessage::Channel(message)))) => {
                 let mut highlighted = None;
                 for window in &self.windows {
                     if &message.from.to_string() == window
@@ -387,7 +384,7 @@ impl fmt::Display for Message {
                     message.body
                 )
             }
-            Message::Incoming(XmppMessage::Groupchat(message)) => {
+            Message::Incoming(XmppMessage::Channel(message)) => {
                 if let Jid::Full(from) = &message.from_full {
                     let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                     let padding_len =
@@ -415,7 +412,7 @@ impl fmt::Display for Message {
                 }
                 Ok(())
             }
-            Message::Outgoing(XmppMessage::Groupchat(message)) => {
+            Message::Outgoing(XmppMessage::Channel(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 let from = match &message.from_full {
                     Jid::Full(from) => from,
@@ -635,22 +632,22 @@ impl UIPlugin {
                         match event {
                             UIEvent::Core(Event::Message(
                                 _,
-                                Message::Incoming(XmppMessage::Groupchat(message)),
+                                Message::Incoming(XmppMessage::Channel(message)),
                             )) => {
                                 // TODO check to == us
                                 if message.from == channel_for_event.jid {
-                                    view.recv_message(&Message::Incoming(XmppMessage::Groupchat(
+                                    view.recv_message(&Message::Incoming(XmppMessage::Channel(
                                         message.clone(),
                                     )));
                                 }
                             }
                             UIEvent::Core(Event::Message(
                                 _,
-                                Message::Outgoing(XmppMessage::Groupchat(message)),
+                                Message::Outgoing(XmppMessage::Channel(message)),
                             )) => {
                                 // TODO check from == us
                                 if message.to == channel_for_event.jid {
-                                    view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(
+                                    view.recv_message(&Message::Outgoing(XmppMessage::Channel(
                                         message.clone(),
                                     )));
                                 }
@@ -948,7 +945,7 @@ impl Plugin for UIPlugin {
                             );
                         }
                     }
-                    Message::Incoming(XmppMessage::Groupchat(message)) => {
+                    Message::Incoming(XmppMessage::Channel(message)) => {
                         let window_name = message.from.to_string();
                         if !self.conversations.contains_key(&window_name) {
                             self.add_conversation(
@@ -976,7 +973,7 @@ impl Plugin for UIPlugin {
                         }
                         aparte.schedule(Event::Notification(String::from("")));
                     }
-                    Message::Outgoing(XmppMessage::Groupchat(message)) => {
+                    Message::Outgoing(XmppMessage::Channel(message)) => {
                         let window_name = message.to.to_string();
                         if !self.conversations.contains_key(&window_name) {
                             self.add_conversation(
@@ -1138,7 +1135,7 @@ impl Plugin for UIPlugin {
                                             let to: Jid = channel.jid.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
-                                            let message = Message::outgoing_groupchat(
+                                            let message = Message::outgoing_channel(
                                                 id.to_string(),
                                                 timestamp,
                                                 &from,
