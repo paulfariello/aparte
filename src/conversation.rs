@@ -4,7 +4,9 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use xmpp_parsers::{BareJid, FullJid};
+use xmpp_parsers::BareJid;
+
+use crate::account::Account;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug, Copy)]
 pub enum Affiliation {
@@ -45,7 +47,7 @@ impl PartialOrd for Occupant {
 
 #[derive(Clone, Debug)]
 pub struct Channel {
-    pub account: FullJid,
+    pub account: Account,
     pub jid: BareJid,
     pub nick: String,
     pub name: Option<String>,
@@ -53,14 +55,41 @@ pub struct Channel {
     pub occupants: HashMap<String, Occupant>,
 }
 
+impl Channel {
+    pub fn get_name(&self) -> String {
+        match &self.name {
+            Some(name) => name.clone(),
+            None => self.jid.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Chat {
-    pub account: FullJid,
+    pub account: Account,
     pub contact: BareJid,
 }
 
+#[derive(Clone, Debug)]
 pub enum Conversation {
     Chat(Chat),
     Channel(Channel),
+}
+
+impl Conversation {
+    pub fn get_account<'a>(&'a self) -> &'a Account {
+        match self {
+            Conversation::Chat(chat) => &chat.account,
+            Conversation::Channel(channel) => &channel.account,
+        }
+    }
+
+    pub fn get_jid<'a>(&'a self) -> &'a BareJid {
+        match self {
+            Conversation::Chat(chat) => &chat.contact,
+            Conversation::Channel(channel) => &channel.jid,
+        }
+    }
 }
 
 impl Hash for Occupant {

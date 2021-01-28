@@ -15,7 +15,6 @@ use std::io::Error as IoError;
 use std::io::{Read, Stdout, Write};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -27,9 +26,9 @@ use termion::screen::AlternateScreen;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::command::Command;
+use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, Plugin};
 use crate::cursor::Cursor;
 use crate::message::{Message, XmppMessage};
@@ -38,19 +37,6 @@ use crate::terminus::{
     Orientation, Screen, View, Window as _,
 };
 use crate::{contact, conversation};
-
-#[derive(Debug, Clone)]
-enum ConversationKind {
-    Chat,
-    Group,
-}
-
-#[derive(Debug, Clone)]
-struct Conversation {
-    account: Account,
-    jid: BareJid,
-    kind: ConversationKind,
-}
 
 enum UIEvent {
     Core(Event),
@@ -431,12 +417,19 @@ impl fmt::Display for Message {
             }
             Message::Outgoing(XmppMessage::Groupchat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+                let from = match &message.from_full {
+                    Jid::Full(from) => from,
+                    Jid::Bare(_) => unreachable!(),
+                };
+
+                let (r, g, b) = id_to_rgb(&from.resource);
                 write!(
                     f,
-                    "{}{} - {}me:{} {}",
+                    "{}{} - {}{}:{} {}",
                     color::Fg(color::White),
                     timestamp.format("%T"),
-                    color::Fg(color::Yellow),
+                    color::Fg(color::Rgb(r, g, b)),
+                    from.resource,
                     color::Fg(color::White),
                     message.body
                 )
@@ -586,10 +579,10 @@ impl UIPlugin {
     }
 
     fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
-        let jid = conversation.jid.clone();
-        match conversation.kind {
-            ConversationKind::Chat => {
-                let chat = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
+        match &conversation {
+            Conversation::Chat(chat) => {
+                let chat_for_event = chat.clone();
+                let chatwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(
@@ -597,7 +590,7 @@ impl UIPlugin {
                                 Message::Incoming(XmppMessage::Chat(message)),
                             )) => {
                                 // TODO check to == us
-                                if message.from == jid {
+                                if message.from == chat_for_event.contact {
                                     view.recv_message(&Message::Incoming(XmppMessage::Chat(
                                         message.clone(),
                                     )));
@@ -608,7 +601,7 @@ impl UIPlugin {
                                 Message::Outgoing(XmppMessage::Chat(message)),
                             )) => {
                                 // TODO check from == us
-                                if message.to == jid {
+                                if message.to == chat_for_event.contact {
                                     view.recv_message(&Message::Outgoing(XmppMessage::Chat(
                                         message.clone(),
                                     )));
@@ -624,15 +617,11 @@ impl UIPlugin {
                     },
                 );
 
-                self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut UIEvent::AddWindow(
-                    conversation.jid.to_string(),
-                    Some(Box::new(chat)),
-                ));
+                self.add_window(chat.contact.to_string(), Box::new(chatwin));
                 self.conversations
-                    .insert(conversation.jid.to_string(), conversation);
+                    .insert(chat.contact.to_string(), conversation.clone());
             }
-            ConversationKind::Group => {
+            Conversation::Channel(channel) => {
                 let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal)
                     .with_event(|layout, event| {
                         for child in layout.iter_children_mut() {
@@ -640,8 +629,8 @@ impl UIPlugin {
                         }
                     });
 
-                let chat_jid = jid.clone();
-                let chat = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
+                let channel_for_event = channel.clone();
+                let chanwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(
@@ -649,7 +638,7 @@ impl UIPlugin {
                                 Message::Incoming(XmppMessage::Groupchat(message)),
                             )) => {
                                 // TODO check to == us
-                                if message.from == chat_jid {
+                                if message.from == channel_for_event.jid {
                                     view.recv_message(&Message::Incoming(XmppMessage::Groupchat(
                                         message.clone(),
                                     )));
@@ -660,7 +649,7 @@ impl UIPlugin {
                                 Message::Outgoing(XmppMessage::Groupchat(message)),
                             )) => {
                                 // TODO check from == us
-                                if message.to == chat_jid {
+                                if message.to == channel_for_event.jid {
                                     view.recv_message(&Message::Outgoing(XmppMessage::Groupchat(
                                         message.clone(),
                                     )));
@@ -672,9 +661,9 @@ impl UIPlugin {
                         }
                     },
                 );
-                layout.push(chat);
+                layout.push(chanwin);
 
-                let roster_jid = jid.clone();
+                let roster_jid = channel.jid.clone();
                 let roster =
                     ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
                         .with_layouts(Layouts {
@@ -698,15 +687,16 @@ impl UIPlugin {
                         });
                 layout.push(roster);
 
-                self.windows.push(conversation.jid.to_string());
-                self.root.event(&mut UIEvent::AddWindow(
-                    conversation.jid.to_string(),
-                    Some(Box::new(layout)),
-                ));
+                self.add_window(channel.get_name(), Box::new(layout));
                 self.conversations
-                    .insert(conversation.jid.to_string(), conversation);
+                    .insert(channel.get_name(), conversation.clone());
             }
         }
+    }
+
+    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent, Stdout>>) {
+        self.windows.push(name.clone());
+        self.root.event(&mut UIEvent::AddWindow(name, Some(window)));
     }
 
     pub fn change_window(&mut self, window: &str) {
@@ -900,11 +890,7 @@ impl Plugin for UIPlugin {
             });
         console.push(roster);
 
-        self.windows.push("console".to_string());
-        self.root.event(&mut UIEvent::AddWindow(
-            "console".to_string(),
-            Some(Box::new(console)),
-        ));
+        self.add_window("console".to_string(), Box::new(console));
         self.change_window("console");
 
         Ok(())
@@ -930,11 +916,10 @@ impl Plugin for UIPlugin {
                         if !self.conversations.contains_key(&window_name) {
                             self.add_conversation(
                                 aparte,
-                                Conversation {
+                                Conversation::Chat(Chat {
                                     account: account.clone().unwrap(),
-                                    jid: BareJid::from_str(&window_name).unwrap(),
-                                    kind: ConversationKind::Chat,
-                                },
+                                    contact: message.from.clone(),
+                                }),
                             );
                         }
 
@@ -956,11 +941,10 @@ impl Plugin for UIPlugin {
                         if !self.conversations.contains_key(&window_name) {
                             self.add_conversation(
                                 aparte,
-                                Conversation {
+                                Conversation::Chat(Chat {
                                     account: account.clone().unwrap(),
-                                    jid: BareJid::from_str(&window_name).unwrap(),
-                                    kind: ConversationKind::Chat,
-                                },
+                                    contact: message.to.clone(),
+                                }),
                             );
                         }
                     }
@@ -969,11 +953,13 @@ impl Plugin for UIPlugin {
                         if !self.conversations.contains_key(&window_name) {
                             self.add_conversation(
                                 aparte,
-                                Conversation {
+                                Conversation::Channel(Channel {
                                     account: account.clone().unwrap(),
-                                    jid: BareJid::from_str(&window_name).unwrap(),
-                                    kind: ConversationKind::Group,
-                                },
+                                    jid: message.from.clone(),
+                                    nick: account.as_ref().unwrap().resource.clone(),
+                                    name: None,
+                                    occupants: HashMap::new(),
+                                }),
                             );
                         }
 
@@ -995,11 +981,13 @@ impl Plugin for UIPlugin {
                         if !self.conversations.contains_key(&window_name) {
                             self.add_conversation(
                                 aparte,
-                                Conversation {
+                                Conversation::Channel(Channel {
                                     account: account.clone().unwrap(),
-                                    jid: BareJid::from_str(&window_name).unwrap(),
-                                    kind: ConversationKind::Group,
-                                },
+                                    jid: message.to.clone(),
+                                    nick: account.as_ref().unwrap().resource.clone(),
+                                    name: None,
+                                    occupants: HashMap::new(),
+                                }),
                             );
                         }
                     }
@@ -1017,11 +1005,10 @@ impl Plugin for UIPlugin {
                 if !self.conversations.contains_key(&win_name) {
                     self.add_conversation(
                         aparte,
-                        Conversation {
+                        Conversation::Chat(Chat {
                             account: account.clone(),
-                            jid: BareJid::from_str(&win_name).unwrap(),
-                            kind: ConversationKind::Chat,
-                        },
+                            contact: contact.clone(),
+                        }),
                     );
                 }
                 self.change_window(&win_name);
@@ -1036,11 +1023,13 @@ impl Plugin for UIPlugin {
                 if !self.conversations.contains_key(&win_name) {
                     self.add_conversation(
                         aparte,
-                        Conversation {
+                        Conversation::Channel(Channel {
                             account: account.clone(),
-                            jid: BareJid::from_str(&win_name).unwrap(),
-                            kind: ConversationKind::Group,
-                        },
+                            jid: channel.clone().into(),
+                            nick: channel.resource.clone(),
+                            name: None, // TODO use name from bookmark
+                            occupants: HashMap::new(),
+                        }),
                     );
                 }
                 if *user_request {
@@ -1081,8 +1070,8 @@ impl Plugin for UIPlugin {
                                 Some(current_window) => {
                                     match self.conversations.get(current_window) {
                                         Some(conversation) => (
-                                            Some(conversation.account.clone()),
-                                            Some(conversation.jid.clone()),
+                                            Some(conversation.get_account().clone()),
+                                            Some(conversation.get_jid().clone()),
                                         ),
                                         _ => (None, None),
                                     }
@@ -1122,12 +1111,12 @@ impl Plugin for UIPlugin {
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
-                                    let account = &conversation.account;
-                                    let us = account.clone().into();
-                                    match conversation.kind {
-                                        ConversationKind::Chat => {
+                                    match conversation {
+                                        Conversation::Chat(chat) => {
+                                            let account = &chat.account;
+                                            let us = account.clone().into();
                                             let from: Jid = us;
-                                            let to: Jid = conversation.jid.clone().into();
+                                            let to: Jid = chat.contact.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let message = Message::outgoing_chat(
@@ -1142,9 +1131,11 @@ impl Plugin for UIPlugin {
                                                 message,
                                             ));
                                         }
-                                        ConversationKind::Group => {
+                                        Conversation::Channel(channel) => {
+                                            let account = &channel.account;
+                                            let us = account.clone().into();
                                             let from: Jid = us;
-                                            let to: Jid = conversation.jid.clone().into();
+                                            let to: Jid = channel.jid.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let message = Message::outgoing_groupchat(
