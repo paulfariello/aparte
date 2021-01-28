@@ -1130,8 +1130,9 @@ impl Plugin for UIPlugin {
                                         }
                                         Conversation::Channel(channel) => {
                                             let account = &channel.account;
-                                            let us = account.clone().into();
-                                            let from: Jid = us;
+                                            let mut us = account.clone();
+                                            us.resource = channel.nick.clone();
+                                            let from: Jid = us.into();
                                             let to: Jid = channel.jid.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
