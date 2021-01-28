@@ -1575,7 +1575,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_input_backspace() {
         // Given
         let mut input = Input::<()>::new();
