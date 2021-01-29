@@ -24,11 +24,8 @@ impl CarbonsPlugin {
     }
 
     fn handle_carbon(&mut self, aparte: &mut Aparte, account: &Account, forwarded: Forwarded) {
-        match (forwarded.delay, forwarded.stanza) {
-            (Some(delay), Some(message)) => {
-                aparte.handle_message(account.clone(), message, Some(delay));
-            }
-            _ => {}
+        if let Some(message) = forwarded.stanza {
+            aparte.handle_message(account.clone(), message, forwarded.delay);
         }
     }
 }
