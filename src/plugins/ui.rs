@@ -212,21 +212,6 @@ where
             written += 1 + connection.len();
         }
 
-        if let Some(current_window) = &self.current_window {
-            write!(
-                screen,
-                " [{}{}{}]",
-                termion::style::Bold,
-                current_window,
-                termion::style::NoBold
-            )
-            .unwrap();
-            written += 3 + current_window.len();
-        } else {
-            write!(screen, " []").unwrap();
-            written += 3;
-        }
-
         let mut first = true;
         for window in &self.highlighted {
             // Keep space for at least ", …]"
