@@ -897,15 +897,28 @@ impl Aparte {
                     Some(to) => to,
                     None => account.clone().into(),
                 };
-                let message = Message::incoming_chat(
-                    id,
-                    delay
-                        .map(|delay| delay.stamp.0)
-                        .unwrap_or(LocalTz::now().into()),
-                    &from,
-                    &to,
-                    &body.0,
-                );
+
+                let message = if from.clone().node() == account.node && from.clone().domain() == account.domain {
+                    Message::outgoing_chat(
+                        id,
+                        delay
+                            .map(|delay| delay.stamp.0)
+                            .unwrap_or(LocalTz::now().into()),
+                        &from,
+                        &to,
+                        &body.0,
+                        )
+                } else {
+                    Message::incoming_chat(
+                        id,
+                        delay
+                            .map(|delay| delay.stamp.0)
+                            .unwrap_or(LocalTz::now().into()),
+                        &from,
+                        &to,
+                        &body.0,
+                    )
+                };
                 self.schedule(Event::Message(Some(account.clone()), message));
             }
         }
