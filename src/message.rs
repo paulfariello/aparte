@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use chrono::{DateTime, FixedOffset, Local};
+use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::hash;
 use uuid::Uuid;
@@ -171,13 +172,35 @@ impl Message {
     }
 
     #[allow(dead_code)]
-    pub fn body(&self) -> &str {
+    pub fn body<'a>(&'a self) -> &'a str {
         match self {
             Message::Outgoing(XmppMessage::Chat(ChatMessage { body, .. }))
             | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
             | Message::Outgoing(XmppMessage::Channel(ChannelMessage { body, .. }))
             | Message::Incoming(XmppMessage::Channel(ChannelMessage { body, .. }))
             | Message::Log(LogMessage { body, .. }) => &body,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn id<'a>(&'a self) -> &'a str {
+        match self {
+            Message::Outgoing(XmppMessage::Chat(ChatMessage { id, .. }))
+            | Message::Incoming(XmppMessage::Chat(ChatMessage { id, .. }))
+            | Message::Outgoing(XmppMessage::Channel(ChannelMessage { id, .. }))
+            | Message::Incoming(XmppMessage::Channel(ChannelMessage { id, .. }))
+            | Message::Log(LogMessage { id, .. }) => &id,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
+        match self {
+            Message::Outgoing(XmppMessage::Chat(ChatMessage { timestamp, .. }))
+            | Message::Incoming(XmppMessage::Chat(ChatMessage { timestamp, .. }))
+            | Message::Outgoing(XmppMessage::Channel(ChannelMessage { timestamp, .. }))
+            | Message::Incoming(XmppMessage::Channel(ChannelMessage { timestamp, .. }))
+            | Message::Log(LogMessage { timestamp, .. }) => timestamp,
         }
     }
 }
@@ -196,27 +219,27 @@ impl hash::Hash for Message {
 
 impl PartialEq for Message {
     fn eq(&self, other: &Self) -> bool {
-        let my_id = match self {
-            Message::Log(message) => &message.id,
-            Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
-            Message::Incoming(XmppMessage::Channel(message))
-            | Message::Outgoing(XmppMessage::Channel(message)) => &message.id,
-        };
-
-        let other_id = match other {
-            Message::Log(message) => &message.id,
-            Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Chat(message)) => &message.id,
-            Message::Incoming(XmppMessage::Channel(message))
-            | Message::Outgoing(XmppMessage::Channel(message)) => &message.id,
-        };
-
-        my_id == other_id
+        self.id() == other.id()
     }
 }
 
 impl std::cmp::Eq for Message {}
+
+impl Ord for Message {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.eq(other) {
+            Ordering::Equal
+        } else {
+            self.timestamp().cmp(other.timestamp())
+        }
+    }
+}
+
+impl PartialOrd for Message {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl TryFrom<Message> for xmpp_parsers::Element {
     type Error = ();

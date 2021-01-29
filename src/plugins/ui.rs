@@ -559,6 +559,17 @@ impl fmt::Display for conversation::Role {
     }
 }
 
+pub struct Scheduler {
+    queue: Rc<RefCell<Vec<Event>>>,
+}
+
+impl Scheduler {
+    pub fn schedule(&self, event: Event) {
+        let mut queue = self.queue.borrow_mut();
+        queue.push(event);
+    }
+}
+
 pub struct UIPlugin {
     screen: Screen<Stdout>,
     windows: Vec<String>,
@@ -568,6 +579,7 @@ pub struct UIPlugin {
     root: LinearLayout<UIEvent, Stdout>,
     dimension: Option<Dimension>,
     password_command: Option<Command>,
+    outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
 }
 
 impl UIPlugin {
@@ -575,7 +587,14 @@ impl UIPlugin {
         EventStream::new()
     }
 
+    fn get_scheduler(&self) -> Scheduler {
+        Scheduler {
+            queue: self.outgoing_event_queue.clone(),
+        }
+    }
+
     fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
+        let scheduler = self.get_scheduler();
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
@@ -588,7 +607,7 @@ impl UIPlugin {
                             )) => {
                                 // TODO check to == us
                                 if message.from == chat_for_event.contact {
-                                    view.recv_message(&Message::Incoming(XmppMessage::Chat(
+                                    view.insert(Message::Incoming(XmppMessage::Chat(
                                         message.clone(),
                                     )));
                                 }
@@ -599,16 +618,24 @@ impl UIPlugin {
                             )) => {
                                 // TODO check from == us
                                 if message.to == chat_for_event.contact {
-                                    view.recv_message(&Message::Outgoing(XmppMessage::Chat(
+                                    view.insert(Message::Outgoing(XmppMessage::Chat(
                                         message.clone(),
                                     )));
                                 }
                             }
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
-                                //aparte.schedule(Event::LoadHistory(jid.clone()));
-                                view.page_up();
+                                if view.page_up() {
+                                    let from = view.first().map(|message| message.timestamp());
+                                    scheduler.schedule(Event::LoadHistory {
+                                        account: chat_for_event.account.clone(),
+                                        jid: chat_for_event.contact.clone(),
+                                        from: from.cloned(),
+                                    });
+                                }
                             }
-                            UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                            UIEvent::Core(Event::Key(Key::PageDown)) => {
+                                view.page_down();
+                            }
                             _ => {}
                         }
                     },
@@ -636,7 +663,7 @@ impl UIPlugin {
                             )) => {
                                 // TODO check to == us
                                 if message.from == channel_for_event.jid {
-                                    view.recv_message(&Message::Incoming(XmppMessage::Channel(
+                                    view.insert(Message::Incoming(XmppMessage::Channel(
                                         message.clone(),
                                     )));
                                 }
@@ -647,13 +674,24 @@ impl UIPlugin {
                             )) => {
                                 // TODO check from == us
                                 if message.to == channel_for_event.jid {
-                                    view.recv_message(&Message::Outgoing(XmppMessage::Channel(
+                                    view.insert(Message::Outgoing(XmppMessage::Channel(
                                         message.clone(),
                                     )));
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
-                            UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                            UIEvent::Core(Event::Key(Key::PageUp)) => {
+                                if view.page_up() {
+                                    let from = view.first().map(|message| message.timestamp());
+                                    scheduler.schedule(Event::LoadHistory {
+                                        account: channel_for_event.account.clone(),
+                                        jid: channel_for_event.jid.clone(),
+                                        from: from.cloned(),
+                                    });
+                                }
+                            }
+                            UIEvent::Core(Event::Key(Key::PageDown)) => {
+                                view.page_down();
+                            }
                             _ => {}
                         }
                     },
@@ -743,21 +781,27 @@ impl Plugin for UIPlugin {
         );
 
         let title_bar = TitleBar::new();
-        let frame = FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| {
-            match event {
+        let frame =
+            FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| match event {
                 UIEvent::Core(Event::ChangeWindow(name)) => {
-                    frame.current(name.to_string());
+                    frame.set_current(name.to_string());
                 }
                 UIEvent::AddWindow(name, view) => {
                     let view = view.take().unwrap();
                     frame.insert_boxed(name.to_string(), view);
                 }
-                _ => {}
-            }
-            for child in frame.iter_children_mut() {
-                child.event(event);
-            }
-        });
+                UIEvent::Core(Event::Key(Key::PageUp))
+                | UIEvent::Core(Event::Key(Key::PageDown)) => {
+                    if let Some(current) = frame.get_current_mut() {
+                        current.event(event);
+                    }
+                }
+                _ => {
+                    for child in frame.iter_children_mut() {
+                        child.event(event);
+                    }
+                }
+            });
         let win_bar = WinBar::new();
         let input = Input::new().with_event(|input, event| match event {
             UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
@@ -808,6 +852,7 @@ impl Plugin for UIPlugin {
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
+            outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -831,10 +876,14 @@ impl Plugin for UIPlugin {
         console.push(
             BufferedWin::<UIEvent, Stdout, Message>::new().with_event(|view, event| match event {
                 UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                    view.recv_message(&Message::Log(message.clone()));
+                    view.insert(Message::Log(message.clone()));
                 }
-                UIEvent::Core(Event::Key(Key::PageUp)) => view.page_up(),
-                UIEvent::Core(Event::Key(Key::PageDown)) => view.page_down(),
+                UIEvent::Core(Event::Key(Key::PageUp)) => {
+                    view.page_up();
+                }
+                UIEvent::Core(Event::Key(Key::PageDown)) => {
+                    view.page_down();
+                }
                 _ => {}
             }),
         );
@@ -1178,6 +1227,7 @@ impl Plugin for UIPlugin {
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
 
+        // Update rendering
         if self.root.is_layout_dirty() {
             let (width, height) = termion::terminal_size().unwrap();
             let mut dimension = Dimension::new();
@@ -1188,6 +1238,11 @@ impl Plugin for UIPlugin {
         } else if self.root.is_dirty() {
             let dimension: &Dimension = self.dimension.as_ref().unwrap();
             self.root.render(dimension, &mut self.screen);
+        }
+
+        // Handle queued outgoing event
+        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
+            aparte.schedule(event);
         }
     }
 }

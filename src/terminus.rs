@@ -5,7 +5,7 @@ use crate::cursor::Cursor;
 use linked_hash_map::{Entry, LinkedHashMap};
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
 use std::io::Write;
@@ -262,9 +262,34 @@ where
         self
     }
 
-    pub fn current(&mut self, key: K) {
+    pub fn set_current(&mut self, key: K) {
         self.current = Some(key);
         self.dirty = true;
+    }
+
+    pub fn get_current_mut<'a>(&'a mut self) -> Option<&'a mut Box<dyn View<E, W>>> {
+        if let Some(current) = &self.current {
+            if let Some((_, view)) = self.children.get_mut(current) {
+                Some(view)
+            } else {
+                unreachable!();
+            }
+        } else {
+            None
+        }
+    }
+
+    #[allow(unused)]
+    pub fn get_current<'a>(&'a self) -> Option<&'a Box<dyn View<E, W>>> {
+        if let Some(current) = &self.current {
+            if let Some((_, view)) = self.children.get(current) {
+                Some(view)
+            } else {
+                unreachable!();
+            }
+        } else {
+            None
+        }
     }
 
     #[allow(unused)]
@@ -981,21 +1006,22 @@ where
 pub trait Window<E, W, T>: View<E, W>
 where
     W: Write,
-    T: fmt::Display + Hash + Eq + std::clone::Clone,
+    T: fmt::Display + Hash + Eq + Ord,
 {
-    fn recv_message(&mut self, message: &T);
+    fn insert(&mut self, item: T);
     fn send_message(&self);
-    fn page_up(&mut self);
-    fn page_down(&mut self);
+    /// PageUp the window, return true if top is reached
+    fn page_up(&mut self) -> bool;
+    /// PageDown the window, return true if bottom is reached
+    fn page_down(&mut self) -> bool;
 }
 
-pub struct BufferedWin<E, W, T>
+pub struct BufferedWin<E, W, I>
 where
-    T: fmt::Display + Hash + Eq + std::clone::Clone,
+    I: fmt::Display + Hash + Eq + Ord,
 {
     pub next_line: u16,
-    pub buf: Vec<T>,
-    pub history: HashMap<T, usize>,
+    pub history: BTreeSet<I>,
     pub view: usize,
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     pub dirty: bool,
@@ -1004,15 +1030,14 @@ where
     layouts: Layouts,
 }
 
-impl<E, W, T> BufferedWin<E, W, T>
+impl<E, W, I> BufferedWin<E, W, I>
 where
-    T: fmt::Display + Hash + Eq + std::clone::Clone,
+    I: fmt::Display + Hash + Eq + Ord,
 {
     pub fn new() -> Self {
         Self {
             next_line: 0,
-            buf: Vec::new(),
-            history: HashMap::new(),
+            history: BTreeSet::new(),
             view: 0,
             event_handler: None,
             dirty: true,
@@ -1039,11 +1064,11 @@ where
         self
     }
 
-    fn get_rendered_buffers(&self) -> Vec<String> {
+    fn get_rendered_items(&self) -> Vec<String> {
         let max_len = self.width;
         let mut buffers: Vec<String> = Vec::new();
 
-        for buf in &self.buf {
+        for buf in &self.history {
             let formatted = format!("{}", buf);
             for line in formatted.lines() {
                 let mut words = line.split_word_bounds();
@@ -1137,59 +1162,61 @@ where
 
         buffers
     }
+
+    #[allow(dead_code)]
+    pub fn first<'a>(&'a self) -> Option<&'a I> {
+        self.history.iter().nth(0)
+    }
 }
 
-impl<E, W, T> Window<E, W, T> for BufferedWin<E, W, T>
+impl<E, W, I> Window<E, W, I> for BufferedWin<E, W, I>
 where
     W: Write,
-    T: fmt::Display + Hash + Eq + std::clone::Clone,
+    I: fmt::Display + Hash + Eq + Ord,
 {
-    fn recv_message(&mut self, message: &T) {
-        if self.history.contains_key(message) {
-            return;
-        }
-
-        self.history.insert(message.clone(), self.buf.len());
-        self.buf.push(message.clone());
-
-        self.dirty = true;
+    fn insert(&mut self, item: I) {
+        self.dirty |= self.history.insert(item);
     }
 
-    fn page_up(&mut self) {
-        let buffers = self.get_rendered_buffers();
+    fn page_up(&mut self) -> bool {
+        let buffers = self.get_rendered_items();
         let count = buffers.len();
 
         if count < self.height {
-            return;
+            return true;
         }
+
+        self.dirty = true;
 
         let max = count - self.height;
 
         if self.view + self.height < max {
             self.view += self.height;
+            false
         } else {
             self.view = max;
+            true
         }
-
-        self.dirty = true;
     }
 
-    fn page_down(&mut self) {
+    fn page_down(&mut self) -> bool {
+        self.dirty = true;
         if self.view > self.height {
             self.view -= self.height;
+            false
         } else {
             self.view = 0;
+            true
         }
-        self.dirty = true;
     }
 
     fn send_message(&self) {}
 }
 
-impl<E, W, T> View<E, W> for BufferedWin<E, W, T>
+impl<E, W, I> View<E, W> for BufferedWin<E, W, I>
 where
     W: Write,
-    T: fmt::Display + Hash + Eq + std::clone::Clone,
+    I: fmt::Display + Hash + Eq + Ord,
 {
     fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
         save_cursor!(screen);
@@ -1198,7 +1225,7 @@ where
 
         self.next_line = 0;
 
-        let buffers = self.get_rendered_buffers();
+        let buffers = self.get_rendered_items();
         let count = buffers.len();
         let mut iter = buffers.iter();
 
