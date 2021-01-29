@@ -96,9 +96,14 @@ pub enum Event {
         occupant: conversation::Occupant,
     },
     WindowChange,
-    LoadHistory {
+    LoadChannelHistory {
         account: Account,
         jid: BareJid,
+        from: Option<DateTime<FixedOffset>>,
+    },
+    LoadChatHistory {
+        account: Account,
+        contact: BareJid,
         from: Option<DateTime<FixedOffset>>,
     },
     Quit,

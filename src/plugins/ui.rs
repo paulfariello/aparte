@@ -626,9 +626,9 @@ impl UIPlugin {
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
                                 if view.page_up() {
                                     let from = view.first().map(|message| message.timestamp());
-                                    scheduler.schedule(Event::LoadHistory {
+                                    scheduler.schedule(Event::LoadChatHistory {
                                         account: chat_for_event.account.clone(),
-                                        jid: chat_for_event.contact.clone(),
+                                        contact: chat_for_event.contact.clone(),
                                         from: from.cloned(),
                                     });
                                 }
@@ -682,7 +682,7 @@ impl UIPlugin {
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
                                 if view.page_up() {
                                     let from = view.first().map(|message| message.timestamp());
-                                    scheduler.schedule(Event::LoadHistory {
+                                    scheduler.schedule(Event::LoadChannelHistory {
                                         account: channel_for_event.account.clone(),
                                         jid: channel_for_event.jid.clone(),
                                         from: from.cloned(),
