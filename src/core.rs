@@ -204,6 +204,8 @@ Examples:
     let account = {
         if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
             account.clone()
+        } else if !account_name.contains("@") {
+            return Err(format!("Unknown account or invalid jid {}", account_name));
         } else if let Ok(jid) = Jid::from_str(&account_name) {
             ConnectionInfo {
                 jid: jid.to_string(),
