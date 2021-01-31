@@ -25,3 +25,8 @@ Install
 ```
 cargo install --git https://github.com/paulfariello/aparte --branch develop
 ```
+
+Contact
+-------
+
+Join [aparte@conference.fariello.eu](xmpp:aparte@conference.fariello.eu?join)
