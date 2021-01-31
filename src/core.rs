@@ -898,7 +898,9 @@ impl Aparte {
                     None => account.clone().into(),
                 };
 
-                let message = if from.clone().node() == account.node && from.clone().domain() == account.domain {
+                let message = if from.clone().node() == account.node
+                    && from.clone().domain() == account.domain
+                {
                     Message::outgoing_chat(
                         id,
                         delay
@@ -907,7 +909,7 @@ impl Aparte {
                         &from,
                         &to,
                         &body.0,
-                        )
+                    )
                 } else {
                     Message::incoming_chat(
                         id,

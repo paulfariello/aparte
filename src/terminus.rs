@@ -1176,7 +1176,11 @@ where
 {
     fn insert(&mut self, item: I) {
         // TODO is it better to iterate here or always set dirty?
-        let position = self.history.iter().position(|iter| iter > &item).unwrap_or(self.history.len());
+        let position = self
+            .history
+            .iter()
+            .position(|iter| iter > &item)
+            .unwrap_or(self.history.len());
         if self.history.insert(item) {
             self.dirty |= position >= self.view && position <= self.view + self.height;
         }

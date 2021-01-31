@@ -58,7 +58,10 @@ impl Eq for Contact {}
 
 impl Ord for Contact {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.jid.to_string().to_lowercase().cmp(&other.jid.to_string().to_lowercase())
+        self.jid
+            .to_string()
+            .to_lowercase()
+            .cmp(&other.jid.to_string().to_lowercase())
     }
 }
 

@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use chrono::{DateTime, FixedOffset};
-use std::convert::TryFrom;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use uuid::Uuid;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
@@ -86,7 +86,10 @@ impl Query {
         };
 
         let id = Uuid::new_v4().to_hyphenated().to_string();
-        (queryid, Iq::from_set(id, query).with_to(Jid::Bare(self.jid.clone())))
+        (
+            queryid,
+            Iq::from_set(id, query).with_to(Jid::Bare(self.jid.clone())),
+        )
     }
 }
 
@@ -123,7 +126,12 @@ impl MamPlugin {
     fn handle_fin(&mut self, aparte: &mut Aparte, account: &Account, query: Query, fin: mam::Fin) {
         if fin.complete == mam::Complete::False {
             if let Some(start) = fin.set.first {
-                info!("Continuing MAM retrieval for {} with {:?} from {:?}", query.jid, query.with.clone().map(|jid| jid.to_string()), query.from);
+                info!(
+                    "Continuing MAM retrieval for {} with {:?} from {:?}",
+                    query.jid,
+                    query.with.clone().map(|jid| jid.to_string()),
+                    query.from
+                );
                 let (queryid, iq) = query.cont(start);
                 self.queries.insert(queryid.clone(), query);
                 self.iq2id.insert(iq.id.clone(), queryid);
@@ -175,8 +183,12 @@ impl Plugin for MamPlugin {
                     count: 100,
                 };
                 self.query(aparte, account, query);
-            },
-            Event::LoadChatHistory { account, contact, from } => {
+            }
+            Event::LoadChatHistory {
+                account,
+                contact,
+                from,
+            } => {
                 let query = Query {
                     jid: account.clone().into(),
                     with: Some(contact.clone()),
@@ -184,7 +196,7 @@ impl Plugin for MamPlugin {
                     count: 100,
                 };
                 self.query(aparte, account, query);
-            },
+            }
             Event::MessagePayload(account, payload, _delay) => {
                 if let Ok(result) = mam::Result_::try_from(payload.clone()) {
                     self.handle_result(aparte, account, result);
