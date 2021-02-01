@@ -384,8 +384,8 @@ impl fmt::Display for Message {
                     let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                     let me = message.body.starts_with("/me");
                     let padding_len = match me {
-                        true => format!("{} - {}: ", timestamp.format("%T"), message.from).len(),
-                        false => format!("{} - * {}", timestamp.format("%T"), message.from).len(),
+                        true => format!("{} - {}: ", timestamp.format("%T"), from.resource).len(),
+                        false => format!("{} - * {}", timestamp.format("%T"), from.resource).len(),
                     };
                     let padding = " ".repeat(padding_len);
 
