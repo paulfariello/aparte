@@ -123,7 +123,7 @@ impl CompletionPlugin {
                         })
                     .filter(|sc| sc.0.is_some())
                         .collect::<Vec<_>>();
-                    scored.sort_by(|a, b| a.0.cmp(&b.0));
+                    scored.sort_by(|a, b| b.0.cmp(&a.0));
                     Some(scored.iter().map(|(_, c)| c).cloned().collect())
                 };
                 self.current_completion = 0;
