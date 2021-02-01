@@ -331,23 +331,44 @@ impl fmt::Display for Message {
 
                 Ok(())
             }
-            Message::Incoming(XmppMessage::Chat(message)) => {
+            Message::Incoming(XmppMessage::Chat(message))
+            | Message::Outgoing(XmppMessage::Chat(message)) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                let padding_len = format!("{} - {}: ", timestamp.format("%T"), message.from).len();
+                let me = message.body.starts_with("/me");
+                let padding_len = match me {
+                    true => format!("{} - {}: ", timestamp.format("%T"), message.from).len(),
+                    false => format!("{} - * {}", timestamp.format("%T"), message.from).len(),
+                };
                 let padding = " ".repeat(padding_len);
 
                 let (r, g, b) = id_to_rgb(&message.from.to_string());
-                write!(
-                    f,
-                    "{}{} - {}{}:{} ",
-                    color::Fg(color::White),
-                    timestamp.format("%T"),
-                    color::Fg(color::Rgb(r, g, b)),
-                    message.from,
-                    color::Fg(color::White)
-                )?;
 
-                let mut iter = message.body.lines();
+                match me {
+                    true => write!(
+                        f,
+                        "{}{} - * {}{}{}",
+                        color::Fg(color::White),
+                        timestamp.format("%T"),
+                        color::Fg(color::Rgb(r, g, b)),
+                        message.from,
+                        color::Fg(color::White)
+                    ),
+                    false => write!(
+                        f,
+                        "{}{} - {}{}:{} ",
+                        color::Fg(color::White),
+                        timestamp.format("%T"),
+                        color::Fg(color::Rgb(r, g, b)),
+                        message.from,
+                        color::Fg(color::White)
+                    ),
+                }?;
+
+                let mut iter = match me {
+                    true => message.body.strip_prefix("/me").unwrap().lines(),
+                    false => message.body.lines(),
+                };
+
                 if let Some(line) = iter.next() {
                     write!(f, "{}", line)?;
                 }
@@ -357,37 +378,45 @@ impl fmt::Display for Message {
 
                 Ok(())
             }
-            Message::Outgoing(XmppMessage::Chat(message)) => {
-                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                write!(
-                    f,
-                    "{}{} - {}me:{} {}",
-                    color::Fg(color::White),
-                    timestamp.format("%T"),
-                    color::Fg(color::Yellow),
-                    color::Fg(color::White),
-                    message.body
-                )
-            }
-            Message::Incoming(XmppMessage::Channel(message)) => {
+            Message::Incoming(XmppMessage::Channel(message))
+            | Message::Outgoing(XmppMessage::Channel(message)) => {
                 if let Jid::Full(from) = &message.from_full {
                     let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                    let padding_len =
-                        format!("{} - {}: ", timestamp.format("%T"), from.resource).len();
+                    let me = message.body.starts_with("/me");
+                    let padding_len = match me {
+                        true => format!("{} - {}: ", timestamp.format("%T"), message.from).len(),
+                        false => format!("{} - * {}", timestamp.format("%T"), message.from).len(),
+                    };
                     let padding = " ".repeat(padding_len);
 
                     let (r, g, b) = id_to_rgb(&from.resource);
-                    write!(
-                        f,
-                        "{}{} - {}{}:{} ",
-                        color::Fg(color::White),
-                        timestamp.format("%T"),
-                        color::Fg(color::Rgb(r, g, b)),
-                        from.resource,
-                        color::Fg(color::White)
-                    )?;
 
-                    let mut iter = message.body.lines();
+                    match me {
+                        true => write!(
+                            f,
+                            "{}{} - * {}{}{}",
+                            color::Fg(color::White),
+                            timestamp.format("%T"),
+                            color::Fg(color::Rgb(r, g, b)),
+                            from.resource,
+                            color::Fg(color::White)
+                        ),
+                        false => write!(
+                            f,
+                            "{}{} - {}{}:{} ",
+                            color::Fg(color::White),
+                            timestamp.format("%T"),
+                            color::Fg(color::Rgb(r, g, b)),
+                            from.resource,
+                            color::Fg(color::White)
+                        ),
+                    }?;
+
+                    let mut iter = match me {
+                        true => message.body.strip_prefix("/me").unwrap().lines(),
+                        false => message.body.lines(),
+                    };
+
                     if let Some(line) = iter.next() {
                         write!(f, "{}", line)?;
                     }
@@ -396,25 +425,6 @@ impl fmt::Display for Message {
                     }
                 }
                 Ok(())
-            }
-            Message::Outgoing(XmppMessage::Channel(message)) => {
-                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                let from = match &message.from_full {
-                    Jid::Full(from) => from,
-                    Jid::Bare(_) => unreachable!(),
-                };
-
-                let (r, g, b) = id_to_rgb(&from.resource);
-                write!(
-                    f,
-                    "{}{} - {}{}:{} {}",
-                    color::Fg(color::White),
-                    timestamp.format("%T"),
-                    color::Fg(color::Rgb(r, g, b)),
-                    from.resource,
-                    color::Fg(color::White),
-                    message.body
-                )
             }
         }
     }
