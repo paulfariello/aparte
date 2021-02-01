@@ -432,7 +432,12 @@ impl Aparte {
                 accounts: HashMap::new(),
             },
             _ => match toml::from_str(&config_str) {
-                Err(err) => panic!("Cannot read config file {}", err),
+                Err(err) => {
+                    error!("Malformed config file: {}", err);
+                    Config {
+                        accounts: HashMap::new(),
+                    }
+                }
                 Ok(config) => config,
             },
         };
