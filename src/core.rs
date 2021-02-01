@@ -81,6 +81,7 @@ pub enum Event {
         user_request: bool,
     },
     Iq(Account, iq::Iq),
+    RawMessage(Account, XmppParsersMessage, Option<Delay>),
     Disco(Account),
     PubSub(Account, PubSubEvent),
     Presence(Account, presence::Presence),
@@ -118,7 +119,6 @@ pub enum Event {
     Completed(String, Cursor),
     ChangeWindow(String),
     Notification(String),
-    MessagePayload(Account, Element, Option<Delay>),
 }
 
 pub trait Plugin: fmt::Display {
@@ -855,6 +855,13 @@ impl Aparte {
         message: XmppParsersMessage,
         delay: Option<Delay>,
     ) {
+        self.schedule(Event::RawMessage(
+            account.clone(),
+            message.clone(),
+            delay.clone(),
+        ));
+
+        // TODO avoid double handling of message
         match message.type_ {
             XmppParsersMessageType::Chat => {
                 self.handle_chat_message(account.clone(), message.clone(), delay.clone())
@@ -868,14 +875,6 @@ impl Aparte {
             XmppParsersMessageType::Error => {}
             XmppParsersMessageType::Normal => {}
         };
-
-        for payload in message.payloads.iter().cloned() {
-            self.schedule(Event::MessagePayload(
-                account.clone(),
-                payload,
-                delay.clone(),
-            ));
-        }
     }
 
     fn handle_chat_message(

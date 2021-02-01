@@ -197,9 +197,11 @@ impl Plugin for MamPlugin {
                 };
                 self.query(aparte, account, query);
             }
-            Event::MessagePayload(account, payload, _delay) => {
-                if let Ok(result) = mam::Result_::try_from(payload.clone()) {
-                    self.handle_result(aparte, account, result);
+            Event::RawMessage(account, message, _delay) => {
+                for payload in message.payloads.iter().cloned() {
+                    if let Ok(result) = mam::Result_::try_from(payload.clone()) {
+                        self.handle_result(aparte, account, result);
+                    }
                 }
             }
             Event::Iq(account, iq) => {

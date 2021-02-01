@@ -43,11 +43,13 @@ impl Plugin for CarbonsPlugin {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(account, _jid) => aparte.send(account, self.enable()),
-            Event::MessagePayload(account, payload, _delay) => {
-                if let Ok(received) = xmpp_parsers::carbons::Received::try_from(payload.clone()) {
-                    self.handle_carbon(aparte, account, received.forwarded);
-                } else if let Ok(sent) = xmpp_parsers::carbons::Sent::try_from(payload.clone()) {
-                    self.handle_carbon(aparte, account, sent.forwarded);
+            Event::RawMessage(account, message, _delay) => {
+                for payload in message.payloads.iter().cloned() {
+                    if let Ok(received) = carbons::Received::try_from(payload.clone()) {
+                        self.handle_carbon(aparte, account, received.forwarded);
+                    } else if let Ok(sent) = carbons::Sent::try_from(payload.clone()) {
+                        self.handle_carbon(aparte, account, sent.forwarded);
+                    }
                 }
             }
             _ => {}
