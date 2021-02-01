@@ -109,20 +109,23 @@ impl CompletionPlugin {
                     }
                 }
 
-                let matcher = SkimMatcherV2::default();
-                let mut scored = completions
-                    .iter()
-                    .map(|c| {
-                        (
-                            matcher.fuzzy_match(c, &command.args[command.cursor]),
-                            c.clone(),
-                        )
-                    })
+                self.completions = if command.args.len() == command.cursor {
+                    Some(completions)
+                } else {
+                    let matcher = SkimMatcherV2::default();
+                    let mut scored = completions
+                        .iter()
+                        .map(|c| {
+                            (
+                                matcher.fuzzy_match(c, &command.args[command.cursor]),
+                                c.clone(),
+                                )
+                        })
                     .filter(|sc| sc.0.is_some())
-                    .collect::<Vec<_>>();
-                scored.sort_by(|a, b| a.0.cmp(&b.0));
-
-                self.completions = Some(scored.iter().map(|(_, c)| c).cloned().collect());
+                        .collect::<Vec<_>>();
+                    scored.sort_by(|a, b| a.0.cmp(&b.0));
+                    Some(scored.iter().map(|(_, c)| c).cloned().collect())
+                };
                 self.current_completion = 0;
             }
         } else {
