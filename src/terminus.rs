@@ -1175,12 +1175,15 @@ where
     I: fmt::Display + Hash + Eq + Ord,
 {
     fn insert(&mut self, item: I) {
-        // TODO is it better to iterate here or always set dirty?
-        let position = self
-            .history
-            .iter()
-            .position(|iter| iter > &item)
-            .unwrap_or(self.history.len());
+        // We don't care about rendered buffer, we avoid computation here at cost of false positive
+        // (set dirty while in fact it shouldn't)
+        let len = self.history.len();
+        let position = len
+            - self
+                .history
+                .iter()
+                .position(|iter| iter > &item)
+                .unwrap_or(self.history.len());
         if self.history.insert(item) {
             self.dirty |= position >= self.view && position <= self.view + self.height;
         }

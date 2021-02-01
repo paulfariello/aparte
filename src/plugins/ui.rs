@@ -919,7 +919,6 @@ impl Plugin for UIPlugin {
                     let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
                 }
                 UIEvent::AddWindow(name, _) => {
-                    debug!("test");
                     let group = contact::Group(String::from("Windows"));
                     view.insert(RosterItem::Window(name.clone()), Some(group));
                 }
