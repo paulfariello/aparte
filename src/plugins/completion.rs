@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use std::fmt;
 use std::rc::Rc;
 use xmpp_parsers::BareJid;
@@ -107,20 +109,20 @@ impl CompletionPlugin {
                     }
                 }
 
-                self.completions = Some(
-                    completions
-                        .iter()
-                        .filter_map(|c| {
-                            if command.args.len() == command.cursor {
-                                Some(c.to_string())
-                            } else if c.starts_with(&command.args[command.cursor]) {
-                                Some(c.to_string())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                );
+                let matcher = SkimMatcherV2::default();
+                let mut scored = completions
+                    .iter()
+                    .map(|c| {
+                        (
+                            matcher.fuzzy_match(c, &command.args[command.cursor]),
+                            c.clone(),
+                        )
+                    })
+                    .filter(|sc| sc.0.is_some())
+                    .collect::<Vec<_>>();
+                scored.sort_by(|a, b| a.0.cmp(&b.0));
+
+                self.completions = Some(scored.iter().map(|(_, c)| c).cloned().collect());
                 self.current_completion = 0;
             }
         } else {

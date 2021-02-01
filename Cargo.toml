@@ -34,6 +34,7 @@ textwrap = "^0.12"
 linked-hash-map = "^0.5"
 rust-crypto = "^0.2"
 hsluv = "^0.1"
+fuzzy-matcher = "^0.3"
 
 [dev-dependencies]
 mockall = "^0.9"
