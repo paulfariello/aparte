@@ -774,6 +774,12 @@ impl Plugin for UIPlugin {
                 UIEvent::AddWindow(name, view) => {
                     let view = view.take().unwrap();
                     frame.insert_boxed(name.to_string(), view);
+
+                    // propagate AddWindow with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                    }
                 }
                 UIEvent::Core(Event::Key(Key::PageUp))
                 | UIEvent::Core(Event::Key(Key::PageDown)) => {
