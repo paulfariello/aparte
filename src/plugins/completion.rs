@@ -119,9 +119,9 @@ impl CompletionPlugin {
                             (
                                 matcher.fuzzy_match(c, &command.args[command.cursor]),
                                 c.clone(),
-                                )
+                            )
                         })
-                    .filter(|sc| sc.0.is_some())
+                        .filter(|sc| sc.0.is_some())
                         .collect::<Vec<_>>();
                     scored.sort_by(|a, b| b.0.cmp(&a.0));
                     Some(scored.iter().map(|(_, c)| c).cloned().collect())
