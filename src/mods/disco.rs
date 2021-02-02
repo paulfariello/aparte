@@ -10,14 +10,21 @@ use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::Element;
 
 use crate::account::Account;
-use crate::core::{Aparte, Event, Plugin};
+use crate::core::{Aparte, Event, ModTrait};
 
-pub struct Disco {
+pub struct DiscoMod {
     client_features: Vec<String>,
     server_features: HashMap<Account, Vec<String>>,
 }
 
-impl Disco {
+impl DiscoMod {
+    pub fn new() -> Self {
+        Self {
+            client_features: Vec::new(),
+            server_features: HashMap::new(),
+        }
+    }
+
     pub fn add_feature(&mut self, feature: &str) -> Result<(), ()> {
         debug!("Adding `{}` feature", feature);
         self.client_features.push(feature.to_string());
@@ -41,14 +48,7 @@ impl Disco {
     }
 }
 
-impl Plugin for Disco {
-    fn new() -> Disco {
-        Disco {
-            client_features: Vec::new(),
-            server_features: HashMap::new(),
-        }
-    }
-
+impl ModTrait for DiscoMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
@@ -75,7 +75,7 @@ impl Plugin for Disco {
     }
 }
 
-impl fmt::Display for Disco {
+impl fmt::Display for DiscoMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "XEP-0030: Service Discovery")
     }

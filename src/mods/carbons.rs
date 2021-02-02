@@ -13,12 +13,16 @@ use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::delay::Delay;
 
 use crate::account::Account;
-use crate::core::{Aparte, Event, Plugin};
-use crate::plugins::disco;
+use crate::core::{Aparte, Event, ModTrait};
+use crate::mods::disco;
 
-pub struct CarbonsPlugin {}
+pub struct CarbonsMod {}
 
-impl CarbonsPlugin {
+impl CarbonsMod {
+    pub fn new() -> Self {
+        Self {}
+    }
+
     fn enable(&self) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let iq = Iq::from_set(id, carbons::Enable);
@@ -32,13 +36,9 @@ impl CarbonsPlugin {
     }
 }
 
-impl Plugin for CarbonsPlugin {
-    fn new() -> CarbonsPlugin {
-        CarbonsPlugin {}
-    }
-
+impl ModTrait for CarbonsMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        let mut disco = aparte.get_plugin_mut::<disco::Disco>().unwrap();
+        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>().unwrap();
         disco.add_feature(ns::CARBONS)
     }
 
@@ -71,7 +71,7 @@ impl Plugin for CarbonsPlugin {
     }
 }
 
-impl fmt::Display for CarbonsPlugin {
+impl fmt::Display for CarbonsMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "XEP-0280: Message Carbons")
     }

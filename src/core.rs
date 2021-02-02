@@ -6,7 +6,7 @@ use core::fmt::Debug;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::{self, Rng};
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
@@ -39,7 +39,7 @@ use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::cursor::Cursor;
 use crate::message::Message;
-use crate::plugins;
+use crate::mods;
 use crate::{
     command_def, generate_arg_autocompletion, generate_command_autocompletions, generate_help,
     parse_command_args,
@@ -121,10 +121,49 @@ pub enum Event {
     Notification(String),
 }
 
-pub trait Plugin: fmt::Display {
-    fn new() -> Self
-    where
-        Self: Sized;
+pub enum Mod {
+    Completion(mods::completion::CompletionMod),
+    Carbons(mods::carbons::CarbonsMod),
+    Contact(mods::contact::ContactMod),
+    Conversation(mods::conversation::ConversationMod),
+    Disco(mods::disco::DiscoMod),
+    Bookmarks(mods::bookmarks::BookmarksMod),
+    UI(mods::ui::UIMod),
+    Mam(mods::mam::MamMod),
+}
+
+macro_rules! from_mod {
+    ($enum:ident, $type:path) => {
+        impl<'a> From<&'a Mod> for &'a $type {
+            fn from(r#mod: &'a Mod) -> &'a $type {
+                match r#mod {
+                    Mod::$enum(r#mod) => r#mod,
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        impl<'a> From<&'a mut Mod> for &'a mut $type {
+            fn from(r#mod: &'a mut Mod) -> &'a mut $type {
+                match r#mod {
+                    Mod::$enum(r#mod) => r#mod,
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+from_mod!(Completion, mods::completion::CompletionMod);
+from_mod!(Carbons, mods::carbons::CarbonsMod);
+from_mod!(Contact, mods::contact::ContactMod);
+from_mod!(Conversation, mods::conversation::ConversationMod);
+from_mod!(Disco, mods::disco::DiscoMod);
+from_mod!(Bookmarks, mods::bookmarks::BookmarksMod);
+from_mod!(UI, mods::ui::UIMod);
+from_mod!(Mam, mods::mam::MamMod);
+
+pub trait ModTrait: fmt::Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event);
     /// Return weither this message can be handled
@@ -138,26 +177,72 @@ pub trait Plugin: fmt::Display {
     }
 }
 
-pub trait AnyPlugin: Any + Plugin {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn as_plugin(&mut self) -> &mut dyn Plugin;
+impl ModTrait for Mod {
+    fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
+        match self {
+            Mod::Completion(r#mod) => r#mod.init(aparte),
+            Mod::Carbons(r#mod) => r#mod.init(aparte),
+            Mod::Contact(r#mod) => r#mod.init(aparte),
+            Mod::Conversation(r#mod) => r#mod.init(aparte),
+            Mod::Disco(r#mod) => r#mod.init(aparte),
+            Mod::Bookmarks(r#mod) => r#mod.init(aparte),
+            Mod::UI(r#mod) => r#mod.init(aparte),
+            Mod::Mam(r#mod) => r#mod.init(aparte),
+        }
+    }
+
+    fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
+        match self {
+            Mod::Completion(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Carbons(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Contact(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Conversation(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Disco(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Bookmarks(r#mod) => r#mod.on_event(aparte, event),
+            Mod::UI(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Mam(r#mod) => r#mod.on_event(aparte, event),
+        }
+    }
+
+    fn can_handle_message(&mut self, aparte: &mut Aparte, account: &Account, message: &XmppParsersMessage, delay: &Option<Delay>) -> f64 {
+        match self {
+            Mod::Completion(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::Carbons(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::Contact(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::Conversation(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::Disco(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::Bookmarks(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::UI(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+            Mod::Mam(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
+        }
+    }
+
+    fn handle_message(&mut self, aparte: &mut Aparte, account: &Account, message: &XmppParsersMessage, delay: &Option<Delay>) {
+        match self {
+            Mod::Completion(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::Carbons(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::Contact(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::Conversation(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::Disco(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::Bookmarks(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::UI(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+            Mod::Mam(r#mod) => r#mod.handle_message(aparte, account, message, delay),
+        }
+    }
 }
 
-impl<T> AnyPlugin for T
-where
-    T: Any + Plugin,
-{
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn as_plugin(&mut self) -> &mut dyn Plugin {
-        self
+impl fmt::Display for Mod {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Mod::Completion(r#mod) => r#mod.fmt(f),
+            Mod::Carbons(r#mod) => r#mod.fmt(f),
+            Mod::Contact(r#mod) => r#mod.fmt(f),
+            Mod::Conversation(r#mod) => r#mod.fmt(f),
+            Mod::Disco(r#mod) => r#mod.fmt(f),
+            Mod::Bookmarks(r#mod) => r#mod.fmt(f),
+            Mod::UI(r#mod) => r#mod.fmt(f),
+            Mod::Mam(r#mod) => r#mod.fmt(f),
+        }
     }
 }
 
@@ -182,7 +267,7 @@ pub struct Connection {
 
 pub struct Aparte {
     pub command_parsers: Rc<HashMap<String, CommandParser>>,
-    plugins: Rc<HashMap<TypeId, RefCell<Box<dyn AnyPlugin>>>>,
+    mods: Rc<HashMap<TypeId, RefCell<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
     event_queue: Vec<Event>,
@@ -251,7 +336,7 @@ Examples:
 {
     window: String = {
         completion: (|aparte, _command| {
-            let ui = aparte.get_plugin::<plugins::ui::UIPlugin>().unwrap();
+            let ui = aparte.get_mod::<mods::ui::UIMod>().unwrap();
             ui.get_windows()
         })
     }
@@ -278,7 +363,7 @@ Example:
 {
     contact: String = {
         completion: (|aparte, _command| {
-            let contact = aparte.get_plugin::<plugins::contact::ContactPlugin>().unwrap();
+            let contact = aparte.get_mod::<mods::contact::ContactMod>().unwrap();
             contact.contacts.iter().map(|(_, contact)| contact.jid.to_string()).collect()
         })
     },
@@ -322,7 +407,7 @@ Example:
 {
     muc: String = {
         completion: (|aparte, _command| {
-            let bookmarks = aparte.get_plugin::<plugins::bookmarks::BookmarksPlugin>().unwrap();
+            let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>().unwrap();
             bookmarks.bookmarks_by_name.iter().map(|(a, _)| a.clone()).chain(bookmarks.bookmarks_by_jid.iter().map(|(a, _)| a.to_string())).collect()
         })
     },
@@ -340,7 +425,7 @@ Example:
         },
         Err(_) => {
             let jid = {
-                let bookmarks = aparte.get_plugin::<plugins::bookmarks::BookmarksPlugin>().unwrap();
+                let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>().unwrap();
                 match bookmarks.get_by_name(&muc) {
                     Some(bookmark) => {
                         match bookmark.nick {
@@ -453,7 +538,7 @@ impl Aparte {
 
         Self {
             command_parsers: Rc::new(HashMap::new()),
-            plugins: Rc::new(HashMap::new()),
+            mods: Rc::new(HashMap::new()),
             connections: HashMap::new(),
             current_connection: None,
             event_queue: Vec::new(),
@@ -479,36 +564,60 @@ impl Aparte {
         (parser.parser)(self, command)
     }
 
-    pub fn add_plugin<T: 'static + fmt::Display + Plugin>(&mut self, plugin: T) {
-        info!("Add plugin `{}`", plugin);
-        let plugins = Rc::get_mut(&mut self.plugins).unwrap();
-        plugins.insert(TypeId::of::<T>(), RefCell::new(Box::new(plugin)));
+    pub fn add_mod(&mut self, r#mod: Mod) {
+        info!("Add mod `{}`", r#mod);
+        let mods = Rc::get_mut(&mut self.mods).unwrap();
+        // TODO ensure mod is not inserted twice
+        match r#mod {
+            Mod::Completion(r#mod) => {
+                mods.insert(TypeId::of::<mods::completion::CompletionMod>(), RefCell::new(Mod::Completion(r#mod)));
+            },
+            Mod::Carbons(r#mod) => {
+                mods.insert(TypeId::of::<mods::carbons::CarbonsMod>(), RefCell::new(Mod::Carbons(r#mod)));
+            },
+            Mod::Contact(r#mod) => {
+                mods.insert(TypeId::of::<mods::contact::ContactMod>(), RefCell::new(Mod::Contact(r#mod)));
+            },
+            Mod::Conversation(r#mod) => {
+                mods.insert(TypeId::of::<mods::conversation::ConversationMod>(), RefCell::new(Mod::Conversation(r#mod)));
+            },
+            Mod::Disco(r#mod) => {
+                mods.insert(TypeId::of::<mods::disco::DiscoMod>(), RefCell::new(Mod::Disco(r#mod)));
+            },
+            Mod::Bookmarks(r#mod) => {
+                mods.insert(TypeId::of::<mods::bookmarks::BookmarksMod>(), RefCell::new(Mod::Bookmarks(r#mod)));
+            },
+            Mod::UI(r#mod) => {
+                mods.insert(TypeId::of::<mods::ui::UIMod>(), RefCell::new(Mod::UI(r#mod)));
+            },
+            Mod::Mam(r#mod) => {
+                mods.insert(TypeId::of::<mods::mam::MamMod>(), RefCell::new(Mod::Mam(r#mod)));
+            },
+        }
     }
 
-    pub fn get_plugin<T: 'static>(&self) -> Option<Ref<T>> {
-        let plugin = match self.plugins.get(&TypeId::of::<T>()) {
-            Some(plugin) => plugin,
-            None => return None,
-        };
-
-        let any_plugin = plugin.borrow();
-        /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
-        Some(Ref::map(any_plugin, |p| {
-            p.as_any().downcast_ref::<T>().unwrap()
-        }))
+    pub fn get_mod<'a, T>(&'a self) -> Option<Ref<'a, T>>
+    where
+        T: 'static, for<'b> &'b T: From<&'b Mod>
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => {
+                Some(Ref::map(r#mod.borrow(), |m| m.into()))
+            },
+            None => None
+        }
     }
 
-    pub fn get_plugin_mut<T: 'static>(&self) -> Option<RefMut<T>> {
-        let plugin = match self.plugins.get(&TypeId::of::<T>()) {
-            Some(plugin) => plugin,
-            None => return None,
-        };
-
-        let any_plugin = plugin.borrow_mut();
-        /* Calling unwrap here on purpose as we expect panic if plugin is not of the right type */
-        Some(RefMut::map(any_plugin, |p| {
-            p.as_any_mut().downcast_mut::<T>().unwrap()
-        }))
+    pub fn get_mod_mut<T: 'static>(&self) -> Option<RefMut<T>>
+    where
+        T: 'static, for<'b> &'b mut T: From<&'b mut Mod>
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => {
+                Some(RefMut::map(r#mod.borrow_mut(), |m| m.into()))
+            },
+            None => None
+        }
     }
 
     pub fn add_connection(&mut self, account: Account, sink: mpsc::Sender<Element>) {
@@ -533,9 +642,9 @@ impl Aparte {
         self.add_command(join::new());
         self.add_command(quit::new());
 
-        let plugins = Rc::clone(&self.plugins);
-        for (_, plugin) in plugins.iter() {
-            if let Err(err) = plugin.borrow_mut().as_plugin().init(self) {
+        let mods = Rc::clone(&self.mods);
+        for (_, r#mod) in mods.iter() {
+            if let Err(err) = r#mod.borrow_mut().init(self) {
                 return Err(err);
             }
         }
@@ -545,7 +654,7 @@ impl Aparte {
 
     pub fn run(mut self) {
         let mut input_event_stream = {
-            let ui = self.get_plugin::<plugins::ui::UIPlugin>().unwrap();
+            let ui = self.get_mod::<mods::ui::UIMod>().unwrap();
             ui.event_stream()
         };
 
@@ -753,9 +862,9 @@ impl Aparte {
             let event = self.event_queue.remove(0);
             debug!("Event: {:?}", event);
             {
-                let plugins = Rc::clone(&self.plugins);
-                for (_, plugin) in plugins.iter() {
-                    plugin.borrow_mut().as_plugin().on_event(self, &event);
+                let mods = Rc::clone(&self.mods);
+                for (_, r#mod) in mods.iter() {
+                    r#mod.borrow_mut().on_event(self, &event);
                 }
                 self.send_loop().await;
             }
@@ -868,19 +977,19 @@ impl Aparte {
         delay: Option<Delay>,
     ) {
         let mut best_match = 0f64;
-        let mut matched_plugin = None;
+        let mut matched_mod = None;
 
-        let plugins = Rc::clone(&self.plugins);
-        for (_, plugin) in plugins.iter() {
-            let message_match = plugin.borrow_mut().as_plugin().can_handle_message(self, &account, &message, &delay);
+        let mods = Rc::clone(&self.mods);
+        for (_, r#mod) in mods.iter() {
+            let message_match = r#mod.borrow_mut().can_handle_message(self, &account, &message, &delay);
             if message_match > best_match {
-                matched_plugin = Some(plugin);
+                matched_mod = Some(r#mod);
                 best_match = message_match;
             }
         }
 
-        if let Some(plugin) = matched_plugin {
-            plugin.borrow_mut().as_plugin().handle_message(self, &account, &message, &delay);
+        if let Some(r#mod) = matched_mod {
+            r#mod.borrow_mut().handle_message(self, &account, &message, &delay);
         } else {
             match message.type_ {
                 XmppParsersMessageType::Chat => {

@@ -8,7 +8,7 @@ use xmpp_parsers::{muc, BareJid, Jid};
 
 use crate::account::Account;
 use crate::conversation;
-use crate::core::{Aparte, Event, Plugin};
+use crate::core::{Aparte, Event, ModTrait};
 
 #[derive(Eq, PartialEq, Hash)]
 struct ConversationIndex {
@@ -16,12 +16,18 @@ struct ConversationIndex {
     jid: BareJid,
 }
 
-pub struct ConversationPlugin {
+pub struct ConversationMod {
     /// Collections of currently opened conversations.
     conversations: HashMap<ConversationIndex, conversation::Conversation>,
 }
 
-impl ConversationPlugin {
+impl ConversationMod {
+    pub fn new() -> Self {
+        Self {
+            conversations: HashMap::new(),
+        }
+    }
+
     pub fn get<'a>(
         &'a self,
         account: &Account,
@@ -58,13 +64,7 @@ impl From<muc::user::Affiliation> for conversation::Affiliation {
     }
 }
 
-impl Plugin for ConversationPlugin {
-    fn new() -> ConversationPlugin {
-        Self {
-            conversations: HashMap::new(),
-        }
-    }
-
+impl ModTrait for ConversationMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
@@ -140,7 +140,7 @@ impl Plugin for ConversationPlugin {
     }
 }
 
-impl fmt::Display for ConversationPlugin {
+impl fmt::Display for ConversationMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Conversations management")
     }

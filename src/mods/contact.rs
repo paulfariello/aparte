@@ -10,7 +10,7 @@ use xmpp_parsers::{ns, presence, roster, BareJid, Element, Jid};
 
 use crate::account::Account;
 use crate::contact;
-use crate::core::{Aparte, Event, Plugin};
+use crate::core::{Aparte, Event, ModTrait};
 
 impl From<roster::Group> for contact::Group {
     fn from(item: roster::Group) -> Self {
@@ -41,11 +41,17 @@ pub struct ContactIndex {
     jid: BareJid,
 }
 
-pub struct ContactPlugin {
+pub struct ContactMod {
     pub contacts: HashMap<ContactIndex, contact::Contact>,
 }
 
-impl ContactPlugin {
+impl ContactMod {
+    pub fn new() -> Self {
+        Self {
+            contacts: HashMap::new(),
+        }
+    }
+
     fn request(&self) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let iq = Iq::from_get(
@@ -59,13 +65,7 @@ impl ContactPlugin {
     }
 }
 
-impl Plugin for ContactPlugin {
-    fn new() -> ContactPlugin {
-        Self {
-            contacts: HashMap::new(),
-        }
-    }
-
+impl ModTrait for ContactMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
@@ -117,7 +117,7 @@ impl Plugin for ContactPlugin {
     }
 }
 
-impl fmt::Display for ContactPlugin {
+impl fmt::Display for ContactMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Contact management")
     }

@@ -29,7 +29,7 @@ use xmpp_parsers::{BareJid, Jid};
 use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::conversation::{Channel, Chat, Conversation};
-use crate::core::{Aparte, Event, Plugin};
+use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::message::{Message, XmppMessage};
 use crate::terminus::{
@@ -565,7 +565,7 @@ impl Scheduler {
     }
 }
 
-pub struct UIPlugin {
+pub struct UIMod {
     screen: Screen<Stdout>,
     windows: Vec<String>,
     current_window: Option<String>,
@@ -577,7 +577,99 @@ pub struct UIPlugin {
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
 }
 
-impl UIPlugin {
+impl UIMod {
+    pub fn new() -> Self {
+        let stdout = std::io::stdout().into_raw_mode().unwrap();
+        let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Vertical).with_event(
+            |layout, event| {
+                for child in layout.iter_children_mut() {
+                    child.event(event);
+                }
+            },
+        );
+
+        let title_bar = TitleBar::new();
+        let frame =
+            FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| match event {
+                UIEvent::Core(Event::ChangeWindow(name)) => {
+                    frame.set_current(name.to_string());
+                }
+                UIEvent::AddWindow(name, view) => {
+                    let view = view.take().unwrap();
+                    frame.insert_boxed(name.to_string(), view);
+
+                    // propagate AddWindow with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                    }
+                }
+                UIEvent::Core(Event::Key(Key::PageUp))
+                | UIEvent::Core(Event::Key(Key::PageDown)) => {
+                    if let Some(current) = frame.get_current_mut() {
+                        current.event(event);
+                    }
+                }
+                _ => {
+                    for child in frame.iter_children_mut() {
+                        child.event(event);
+                    }
+                }
+            });
+        let win_bar = WinBar::new();
+        let input = Input::new().with_event(|input, event| match event {
+            UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
+            UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
+            UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
+            UIEvent::Core(Event::Key(Key::Home)) => input.home(),
+            UIEvent::Core(Event::Key(Key::End)) => input.end(),
+            UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
+            UIEvent::Core(Event::Key(Key::Down)) => input.next(),
+            UIEvent::Core(Event::Key(Key::Left)) => input.left(),
+            UIEvent::Core(Event::Key(Key::Right)) => input.right(),
+            UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
+            UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
+            UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
+            UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
+            UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
+            UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
+            UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
+            UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
+            UIEvent::Validate(result) => {
+                let mut result = result.borrow_mut();
+                result.replace(input.validate());
+            }
+            UIEvent::GetInput(result) => {
+                let mut result = result.borrow_mut();
+                result.replace((input.buf.clone(), input.cursor.clone(), input.password));
+            }
+            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+                input.buf = raw_buf.clone();
+                input.cursor = cursor.clone();
+                input.dirty = true;
+            }
+            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+            _ => {}
+        });
+
+        layout.push(title_bar);
+        layout.push(frame);
+        layout.push(win_bar);
+        layout.push(input);
+
+        Self {
+            screen: AlternateScreen::from(stdout),
+            root: layout,
+            dimension: None,
+            windows: Vec::new(),
+            unread_windows: LinkedHashSet::new(),
+            current_window: None,
+            conversations: HashMap::new(),
+            password_command: None,
+            outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
     pub fn event_stream(&self) -> EventStream {
         EventStream::new()
     }
@@ -764,99 +856,7 @@ impl UIPlugin {
     }
 }
 
-impl Plugin for UIPlugin {
-    fn new() -> Self {
-        let stdout = std::io::stdout().into_raw_mode().unwrap();
-        let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Vertical).with_event(
-            |layout, event| {
-                for child in layout.iter_children_mut() {
-                    child.event(event);
-                }
-            },
-        );
-
-        let title_bar = TitleBar::new();
-        let frame =
-            FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| match event {
-                UIEvent::Core(Event::ChangeWindow(name)) => {
-                    frame.set_current(name.to_string());
-                }
-                UIEvent::AddWindow(name, view) => {
-                    let view = view.take().unwrap();
-                    frame.insert_boxed(name.to_string(), view);
-
-                    // propagate AddWindow with name only to each subview
-                    // required at least for console view
-                    for child in frame.iter_children_mut() {
-                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
-                    }
-                }
-                UIEvent::Core(Event::Key(Key::PageUp))
-                | UIEvent::Core(Event::Key(Key::PageDown)) => {
-                    if let Some(current) = frame.get_current_mut() {
-                        current.event(event);
-                    }
-                }
-                _ => {
-                    for child in frame.iter_children_mut() {
-                        child.event(event);
-                    }
-                }
-            });
-        let win_bar = WinBar::new();
-        let input = Input::new().with_event(|input, event| match event {
-            UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
-            UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
-            UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
-            UIEvent::Core(Event::Key(Key::Home)) => input.home(),
-            UIEvent::Core(Event::Key(Key::End)) => input.end(),
-            UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
-            UIEvent::Core(Event::Key(Key::Down)) => input.next(),
-            UIEvent::Core(Event::Key(Key::Left)) => input.left(),
-            UIEvent::Core(Event::Key(Key::Right)) => input.right(),
-            UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
-            UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
-            UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
-            UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
-            UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
-            UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
-            UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
-            UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
-            UIEvent::Validate(result) => {
-                let mut result = result.borrow_mut();
-                result.replace(input.validate());
-            }
-            UIEvent::GetInput(result) => {
-                let mut result = result.borrow_mut();
-                result.replace((input.buf.clone(), input.cursor.clone(), input.password));
-            }
-            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                input.buf = raw_buf.clone();
-                input.cursor = cursor.clone();
-                input.dirty = true;
-            }
-            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
-            _ => {}
-        });
-
-        layout.push(title_bar);
-        layout.push(frame);
-        layout.push(win_bar);
-        layout.push(input);
-
-        Self {
-            screen: AlternateScreen::from(stdout),
-            root: layout,
-            dimension: None,
-            windows: Vec::new(),
-            unread_windows: LinkedHashSet::new(),
-            current_window: None,
-            conversations: HashMap::new(),
-            password_command: None,
-            outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
-        }
-    }
-
+impl ModTrait for UIMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         vprint!(&mut self.screen, "{}", termion::clear::All);
 
@@ -1247,7 +1247,7 @@ impl Plugin for UIPlugin {
     }
 }
 
-impl fmt::Display for UIPlugin {
+impl fmt::Display for UIMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Aparté UI")
     }

@@ -16,7 +16,7 @@ use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::delay::Delay;
 
 use crate::account::Account;
-use crate::core::{Aparte, Event, Plugin};
+use crate::core::{Aparte, Event, ModTrait};
 
 struct Query {
     jid: BareJid,
@@ -95,7 +95,7 @@ impl Query {
     }
 }
 
-pub struct MamPlugin {
+pub struct MamMod {
     /// Queries indexed by queryid
     queries: HashMap<String, Query>,
 
@@ -103,7 +103,14 @@ pub struct MamPlugin {
     iq2id: HashMap<String, String>,
 }
 
-impl MamPlugin {
+impl MamMod {
+    pub fn new() -> Self {
+        Self {
+            queries: HashMap::new(),
+            iq2id: HashMap::new(),
+        }
+    }
+
     fn query(&mut self, aparte: &mut Aparte, account: &Account, query: Query) {
         let (queryid, iq) = query.start();
         self.queries.insert(queryid.clone(), query);
@@ -143,14 +150,7 @@ impl MamPlugin {
     }
 }
 
-impl Plugin for MamPlugin {
-    fn new() -> MamPlugin {
-        MamPlugin {
-            queries: HashMap::new(),
-            iq2id: HashMap::new(),
-        }
-    }
-
+impl ModTrait for MamMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
@@ -234,7 +234,7 @@ impl Plugin for MamPlugin {
     }
 }
 
-impl fmt::Display for MamPlugin {
+impl fmt::Display for MamMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "XEP-0313: Message Archive Management")
     }

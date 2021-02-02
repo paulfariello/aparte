@@ -21,8 +21,8 @@ use xmpp_parsers::{BareJid, Jid};
 use crate::account::Account;
 use crate::command::{Command, CommandParser};
 use crate::contact;
-use crate::core::{Aparte, Event, Plugin};
-use crate::plugins::disco;
+use crate::core::{Aparte, Event, ModTrait};
+use crate::mods::disco;
 
 command_def!(bookmark_add,
 r#"/bookmark add <bookmark> <conference> [autojoin=on|off]
@@ -61,7 +61,7 @@ Examples:
         extensions: None,
     };
     let add = {
-        let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
+        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>().unwrap();
         bookmarks.add(bookmark.clone())
     };
     aparte.schedule(Event::Bookmark(bookmark));
@@ -87,7 +87,7 @@ Examples:
             .current_account()
             .ok_or(format!("No connection found"))?;
         if let Some((bookmark, delete)) = {
-            let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
+            let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>().unwrap();
             bookmarks.delete(conference.clone())
         } {
             aparte.schedule(Event::DeletedBookmark(bookmark.jid));
@@ -122,7 +122,7 @@ Examples:
 |aparte, _command| {
     let account = aparte.current_account().ok_or(format!("No connection found"))?;
     if let Some(edit) = {
-        let mut bookmarks = aparte.get_plugin_mut::<BookmarksPlugin>().unwrap();
+        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>().unwrap();
         bookmarks.edit(name.clone(), conference, nick, autojoin)
     } {
         aparte.send(&account, edit);
@@ -500,14 +500,23 @@ impl Bookmarks2 {
     }
 }
 
-pub struct BookmarksPlugin {
+pub struct BookmarksMod {
     backend: Backend,
     pub bookmarks: Vec<contact::Bookmark>,
     pub bookmarks_by_name: HashMap<String, usize>,
     pub bookmarks_by_jid: HashMap<Jid, usize>,
 }
 
-impl BookmarksPlugin {
+impl BookmarksMod {
+    pub fn new() -> Self {
+        Self {
+            backend: Backend::Bookmarks(Bookmarks {}),
+            bookmarks: vec![],
+            bookmarks_by_name: HashMap::new(),
+            bookmarks_by_jid: HashMap::new(),
+        }
+    }
+
     fn retreive(&self) -> Element {
         match &self.backend {
             Backend::Bookmarks(backend) => backend.retreive(),
@@ -656,19 +665,10 @@ impl BookmarksPlugin {
     }
 }
 
-impl Plugin for BookmarksPlugin {
-    fn new() -> BookmarksPlugin {
-        BookmarksPlugin {
-            backend: Backend::Bookmarks(Bookmarks {}),
-            bookmarks: vec![],
-            bookmarks_by_name: HashMap::new(),
-            bookmarks_by_jid: HashMap::new(),
-        }
-    }
-
+impl ModTrait for BookmarksMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         aparte.add_command(bookmark::new());
-        let mut disco = aparte.get_plugin_mut::<disco::Disco>().unwrap();
+        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>().unwrap();
         disco.add_feature(ns::BOOKMARKS2)
     }
 
@@ -676,7 +676,7 @@ impl Plugin for BookmarksPlugin {
         match event {
             Event::Disco(account) => {
                 {
-                    let disco = aparte.get_plugin::<disco::Disco>().unwrap();
+                    let disco = aparte.get_mod::<disco::DiscoMod>().unwrap();
                     if disco.has_feature(account, ns::BOOKMARKS2) {
                         self.backend = Backend::Bookmarks2(Bookmarks2 {});
                     }
@@ -720,7 +720,7 @@ impl Plugin for BookmarksPlugin {
     }
 }
 
-impl fmt::Display for BookmarksPlugin {
+impl fmt::Display for BookmarksMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "XEP-0402: PEP Native Bookmarks")
     }

@@ -10,19 +10,26 @@ use xmpp_parsers::BareJid;
 use crate::account::Account;
 use crate::command::Command;
 use crate::conversation::Conversation;
-use crate::core::{Aparte, Event, Plugin};
+use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
-use crate::plugins::conversation::ConversationPlugin;
+use crate::mods::conversation::ConversationMod;
 use crate::word::Words;
 
-pub struct CompletionPlugin {
+pub struct CompletionMod {
     /// List of possible completions for current raw_buf
     completions: Option<Vec<String>>,
     /// Index of currently displayed completion
     current_completion: usize,
 }
 
-impl CompletionPlugin {
+impl CompletionMod {
+    pub fn new() -> CompletionMod {
+        CompletionMod {
+            completions: None,
+            current_completion: 0,
+        }
+    }
+
     pub fn autocomplete(
         &mut self,
         aparte: &mut Aparte,
@@ -131,9 +138,9 @@ impl CompletionPlugin {
         } else {
             match (account, conversation) {
                 (Some(account), Some(conversation)) => {
-                    if let Some(conversation_plugin) = aparte.get_plugin::<ConversationPlugin>() {
+                    if let Some(conversation_mod) = aparte.get_mod::<ConversationMod>() {
                         if let Some(Conversation::Channel(channel)) =
-                            conversation_plugin.get(account, conversation)
+                            conversation_mod.get(account, conversation)
                         {
                             let words =
                                 Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
@@ -170,14 +177,7 @@ impl CompletionPlugin {
     }
 }
 
-impl Plugin for CompletionPlugin {
-    fn new() -> CompletionPlugin {
-        CompletionPlugin {
-            completions: None,
-            current_completion: 0,
-        }
-    }
-
+impl ModTrait for CompletionMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
     }
@@ -202,7 +202,7 @@ impl Plugin for CompletionPlugin {
     }
 }
 
-impl fmt::Display for CompletionPlugin {
+impl fmt::Display for CompletionMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Autocompletion")
     }
