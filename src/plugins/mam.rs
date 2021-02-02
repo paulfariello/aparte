@@ -12,6 +12,8 @@ use xmpp_parsers::mam;
 use xmpp_parsers::ns;
 use xmpp_parsers::rsm::SetQuery;
 use xmpp_parsers::{BareJid, Jid};
+use xmpp_parsers::message::Message as XmppParsersMessage;
+use xmpp_parsers::delay::Delay;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, Plugin};
@@ -115,7 +117,7 @@ impl MamPlugin {
                 query.count -= 1;
                 match (result.forwarded.delay, result.forwarded.stanza) {
                     (Some(delay), Some(message)) => {
-                        aparte.handle_message(account.clone(), message, Some(delay));
+                        aparte.schedule(Event::RawMessage(account.clone(), message, Some(delay)));
                     }
                     _ => {}
                 }
@@ -151,6 +153,23 @@ impl Plugin for MamPlugin {
 
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         Ok(())
+    }
+
+    fn can_handle_message(&mut self, _aparte: &mut Aparte, _account: &Account, message: &XmppParsersMessage, _delay: &Option<Delay>) -> f64 {
+        for payload in message.payloads.iter().cloned() {
+            if mam::Result_::try_from(payload.clone()).is_ok() {
+                return 1f64;
+            }
+        }
+        return 0f64;
+    }
+
+    fn handle_message(&mut self, aparte: &mut Aparte, account: &Account, message: &XmppParsersMessage, _delay: &Option<Delay>) {
+        for payload in message.payloads.iter().cloned() {
+            if let Ok(result) = mam::Result_::try_from(payload.clone()) {
+                self.handle_result(aparte, account, result);
+            }
+        }
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
@@ -196,13 +215,6 @@ impl Plugin for MamPlugin {
                     count: 100,
                 };
                 self.query(aparte, account, query);
-            }
-            Event::RawMessage(account, message, _delay) => {
-                for payload in message.payloads.iter().cloned() {
-                    if let Ok(result) = mam::Result_::try_from(payload.clone()) {
-                        self.handle_result(aparte, account, result);
-                    }
-                }
             }
             Event::Iq(account, iq) => {
                 if let Some(id) = self.iq2id.remove(&iq.id) {

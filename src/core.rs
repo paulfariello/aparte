@@ -62,6 +62,7 @@ pub enum Event {
     Disconnected(Account, String),
     AuthError(Account, String),
     Stanza(Account, Element),
+    RawMessage(Account, XmppParsersMessage, Option<Delay>),
     Command(Command),
     CommandError(String),
     SendMessage(Account, Message),
@@ -81,7 +82,6 @@ pub enum Event {
         user_request: bool,
     },
     Iq(Account, iq::Iq),
-    RawMessage(Account, XmppParsersMessage, Option<Delay>),
     Disco(Account),
     PubSub(Account, PubSubEvent),
     Presence(Account, presence::Presence),
@@ -127,6 +127,15 @@ pub trait Plugin: fmt::Display {
         Self: Sized;
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event);
+    /// Return weither this message can be handled
+    /// 0 means no, 1 mean definitely yes
+    fn can_handle_message(&mut self, _aparte: &mut Aparte, _account: &Account, _message: &XmppParsersMessage, _delay: &Option<Delay>) -> f64 {
+        0f64
+    }
+
+    /// Handle message
+    fn handle_message(&mut self, _aparte: &mut Aparte, _account: &Account, _message: &XmppParsersMessage, _delay: &Option<Delay>) {
+    }
 }
 
 pub trait AnyPlugin: Any + Plugin {
@@ -784,6 +793,9 @@ impl Aparte {
                 Event::Stanza(account, stanza) => {
                     self.handle_stanza(account, stanza);
                 }
+                Event::RawMessage(account, message, delay) => {
+                    self.handle_message(account, message, delay);
+                }
                 Event::Join {
                     account,
                     channel,
@@ -833,7 +845,7 @@ impl Aparte {
         self.schedule(Event::Message(None, message));
     }
 
-    pub fn handle_stanza(&mut self, account: Account, stanza: Element) {
+    fn handle_stanza(&mut self, account: Account, stanza: Element) {
         if let Ok(message) = XmppParsersMessage::try_from(stanza.clone()) {
             self.handle_message(account, message, None);
         } else if let Ok(iq) = Iq::try_from(stanza.clone()) {
@@ -849,32 +861,41 @@ impl Aparte {
         }
     }
 
-    pub fn handle_message(
+    fn handle_message(
         &mut self,
         account: Account,
         message: XmppParsersMessage,
         delay: Option<Delay>,
     ) {
-        self.schedule(Event::RawMessage(
-            account.clone(),
-            message.clone(),
-            delay.clone(),
-        ));
+        let mut best_match = 0f64;
+        let mut matched_plugin = None;
 
-        // TODO avoid double handling of message
-        match message.type_ {
-            XmppParsersMessageType::Chat => {
-                self.handle_chat_message(account.clone(), message.clone(), delay.clone())
+        let plugins = Rc::clone(&self.plugins);
+        for (_, plugin) in plugins.iter() {
+            let message_match = plugin.borrow_mut().as_plugin().can_handle_message(self, &account, &message, &delay);
+            if message_match > best_match {
+                matched_plugin = Some(plugin);
+                best_match = message_match;
             }
-            XmppParsersMessageType::Groupchat => {
-                self.handle_channel_message(account.clone(), message.clone(), delay.clone())
-            }
-            XmppParsersMessageType::Headline => {
-                self.handle_headline_message(account.clone(), message.clone(), delay.clone())
-            }
-            XmppParsersMessageType::Error => {}
-            XmppParsersMessageType::Normal => {}
-        };
+        }
+
+        if let Some(plugin) = matched_plugin {
+            plugin.borrow_mut().as_plugin().handle_message(self, &account, &message, &delay);
+        } else {
+            match message.type_ {
+                XmppParsersMessageType::Chat => {
+                    self.handle_chat_message(account.clone(), message.clone(), delay.clone())
+                }
+                XmppParsersMessageType::Groupchat => {
+                    self.handle_channel_message(account.clone(), message.clone(), delay.clone())
+                }
+                XmppParsersMessageType::Headline => {
+                    self.handle_headline_message(account.clone(), message.clone(), delay.clone())
+                }
+                XmppParsersMessageType::Error => {}
+                XmppParsersMessageType::Normal => {}
+            };
+        }
     }
 
     fn handle_chat_message(
