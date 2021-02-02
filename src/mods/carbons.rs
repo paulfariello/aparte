@@ -5,12 +5,12 @@ use std::convert::TryFrom;
 use std::fmt;
 use uuid::Uuid;
 use xmpp_parsers::carbons;
+use xmpp_parsers::delay::Delay;
 use xmpp_parsers::forwarding::Forwarded;
 use xmpp_parsers::iq::Iq;
+use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::ns;
 use xmpp_parsers::Element;
-use xmpp_parsers::message::Message as XmppParsersMessage;
-use xmpp_parsers::delay::Delay;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
@@ -42,7 +42,13 @@ impl ModTrait for CarbonsMod {
         disco.add_feature(ns::CARBONS)
     }
 
-    fn can_handle_message(&mut self, _aparte: &mut Aparte, _account: &Account, message: &XmppParsersMessage, _delay: &Option<Delay>) -> f64 {
+    fn can_handle_message(
+        &mut self,
+        _aparte: &mut Aparte,
+        _account: &Account,
+        message: &XmppParsersMessage,
+        _delay: &Option<Delay>,
+    ) -> f64 {
         for payload in message.payloads.iter().cloned() {
             if carbons::Received::try_from(payload.clone()).is_ok() {
                 return 1f64;
@@ -53,7 +59,13 @@ impl ModTrait for CarbonsMod {
         return 0f64;
     }
 
-    fn handle_message(&mut self, aparte: &mut Aparte, account: &Account, message: &XmppParsersMessage, _delay: &Option<Delay>) {
+    fn handle_message(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+        _delay: &Option<Delay>,
+    ) {
         for payload in message.payloads.iter().cloned() {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
                 self.handle_carbon(aparte, account, received.forwarded);

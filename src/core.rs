@@ -151,7 +151,7 @@ macro_rules! from_mod {
                 }
             }
         }
-    }
+    };
 }
 
 from_mod!(Completion, mods::completion::CompletionMod);
@@ -168,12 +168,24 @@ pub trait ModTrait: fmt::Display {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event);
     /// Return weither this message can be handled
     /// 0 means no, 1 mean definitely yes
-    fn can_handle_message(&mut self, _aparte: &mut Aparte, _account: &Account, _message: &XmppParsersMessage, _delay: &Option<Delay>) -> f64 {
+    fn can_handle_message(
+        &mut self,
+        _aparte: &mut Aparte,
+        _account: &Account,
+        _message: &XmppParsersMessage,
+        _delay: &Option<Delay>,
+    ) -> f64 {
         0f64
     }
 
     /// Handle message
-    fn handle_message(&mut self, _aparte: &mut Aparte, _account: &Account, _message: &XmppParsersMessage, _delay: &Option<Delay>) {
+    fn handle_message(
+        &mut self,
+        _aparte: &mut Aparte,
+        _account: &Account,
+        _message: &XmppParsersMessage,
+        _delay: &Option<Delay>,
+    ) {
     }
 }
 
@@ -204,7 +216,13 @@ impl ModTrait for Mod {
         }
     }
 
-    fn can_handle_message(&mut self, aparte: &mut Aparte, account: &Account, message: &XmppParsersMessage, delay: &Option<Delay>) -> f64 {
+    fn can_handle_message(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+        delay: &Option<Delay>,
+    ) -> f64 {
         match self {
             Mod::Completion(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
             Mod::Carbons(r#mod) => r#mod.can_handle_message(aparte, account, message, delay),
@@ -217,7 +235,13 @@ impl ModTrait for Mod {
         }
     }
 
-    fn handle_message(&mut self, aparte: &mut Aparte, account: &Account, message: &XmppParsersMessage, delay: &Option<Delay>) {
+    fn handle_message(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+        delay: &Option<Delay>,
+    ) {
         match self {
             Mod::Completion(r#mod) => r#mod.handle_message(aparte, account, message, delay),
             Mod::Carbons(r#mod) => r#mod.handle_message(aparte, account, message, delay),
@@ -570,53 +594,75 @@ impl Aparte {
         // TODO ensure mod is not inserted twice
         match r#mod {
             Mod::Completion(r#mod) => {
-                mods.insert(TypeId::of::<mods::completion::CompletionMod>(), RefCell::new(Mod::Completion(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::completion::CompletionMod>(),
+                    RefCell::new(Mod::Completion(r#mod)),
+                );
+            }
             Mod::Carbons(r#mod) => {
-                mods.insert(TypeId::of::<mods::carbons::CarbonsMod>(), RefCell::new(Mod::Carbons(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::carbons::CarbonsMod>(),
+                    RefCell::new(Mod::Carbons(r#mod)),
+                );
+            }
             Mod::Contact(r#mod) => {
-                mods.insert(TypeId::of::<mods::contact::ContactMod>(), RefCell::new(Mod::Contact(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::contact::ContactMod>(),
+                    RefCell::new(Mod::Contact(r#mod)),
+                );
+            }
             Mod::Conversation(r#mod) => {
-                mods.insert(TypeId::of::<mods::conversation::ConversationMod>(), RefCell::new(Mod::Conversation(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::conversation::ConversationMod>(),
+                    RefCell::new(Mod::Conversation(r#mod)),
+                );
+            }
             Mod::Disco(r#mod) => {
-                mods.insert(TypeId::of::<mods::disco::DiscoMod>(), RefCell::new(Mod::Disco(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::disco::DiscoMod>(),
+                    RefCell::new(Mod::Disco(r#mod)),
+                );
+            }
             Mod::Bookmarks(r#mod) => {
-                mods.insert(TypeId::of::<mods::bookmarks::BookmarksMod>(), RefCell::new(Mod::Bookmarks(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::bookmarks::BookmarksMod>(),
+                    RefCell::new(Mod::Bookmarks(r#mod)),
+                );
+            }
             Mod::UI(r#mod) => {
-                mods.insert(TypeId::of::<mods::ui::UIMod>(), RefCell::new(Mod::UI(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::ui::UIMod>(),
+                    RefCell::new(Mod::UI(r#mod)),
+                );
+            }
             Mod::Mam(r#mod) => {
-                mods.insert(TypeId::of::<mods::mam::MamMod>(), RefCell::new(Mod::Mam(r#mod)));
-            },
+                mods.insert(
+                    TypeId::of::<mods::mam::MamMod>(),
+                    RefCell::new(Mod::Mam(r#mod)),
+                );
+            }
         }
     }
 
     pub fn get_mod<'a, T>(&'a self) -> Option<Ref<'a, T>>
     where
-        T: 'static, for<'b> &'b T: From<&'b Mod>
+        T: 'static,
+        for<'b> &'b T: From<&'b Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => {
-                Some(Ref::map(r#mod.borrow(), |m| m.into()))
-            },
-            None => None
+            Some(r#mod) => Some(Ref::map(r#mod.borrow(), |m| m.into())),
+            None => None,
         }
     }
 
     pub fn get_mod_mut<T: 'static>(&self) -> Option<RefMut<T>>
     where
-        T: 'static, for<'b> &'b mut T: From<&'b mut Mod>
+        T: 'static,
+        for<'b> &'b mut T: From<&'b mut Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => {
-                Some(RefMut::map(r#mod.borrow_mut(), |m| m.into()))
-            },
-            None => None
+            Some(r#mod) => Some(RefMut::map(r#mod.borrow_mut(), |m| m.into())),
+            None => None,
         }
     }
 
@@ -981,7 +1027,9 @@ impl Aparte {
 
         let mods = Rc::clone(&self.mods);
         for (_, r#mod) in mods.iter() {
-            let message_match = r#mod.borrow_mut().can_handle_message(self, &account, &message, &delay);
+            let message_match = r#mod
+                .borrow_mut()
+                .can_handle_message(self, &account, &message, &delay);
             if message_match > best_match {
                 matched_mod = Some(r#mod);
                 best_match = message_match;
@@ -989,7 +1037,9 @@ impl Aparte {
         }
 
         if let Some(r#mod) = matched_mod {
-            r#mod.borrow_mut().handle_message(self, &account, &message, &delay);
+            r#mod
+                .borrow_mut()
+                .handle_message(self, &account, &message, &delay);
         } else {
             match message.type_ {
                 XmppParsersMessageType::Chat => {
