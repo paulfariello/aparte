@@ -113,6 +113,10 @@ impl VersionedXmppMessage {
             bodies,
         });
     }
+
+    pub fn has_multiple_version(&self) -> bool {
+        self.history.len() > 1
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

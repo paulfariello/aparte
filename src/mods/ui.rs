@@ -338,21 +338,28 @@ impl fmt::Display for Message {
 
                 let (r, g, b) = id_to_rgb(&author.to_string());
 
+                let mut attributes = "".to_string();
+                if message.has_multiple_version() {
+                    attributes.push_str("🖉  ");
+                }
+
                 match me {
                     true => write!(
                         f,
-                        "{}{} - * {}{}{}",
+                        "{}{} - {}* {}{}{}",
                         color::Fg(color::White),
                         timestamp.format("%T"),
+                        attributes,
                         color::Fg(color::Rgb(r, g, b)),
                         author,
                         color::Fg(color::White)
                     ),
                     false => write!(
                         f,
-                        "{}{} - {}{}:{} ",
+                        "{}{} - {}{}{}:{} ",
                         color::Fg(color::White),
                         timestamp.format("%T"),
+                        attributes,
                         color::Fg(color::Rgb(r, g, b)),
                         author,
                         color::Fg(color::White)
