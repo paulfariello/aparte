@@ -412,11 +412,13 @@ Example:
                 Jid::Full(jid) => jid.into(),
             };
             aparte.schedule(Event::Chat { account: account.clone(), contact: to });
-            if message.is_some() {
+            if let Some(body) = message {
+                let mut bodies = HashMap::new();
+                bodies.insert("".to_string(), body);
                 let id = Uuid::new_v4().to_string();
                 let from: Jid = account.clone().into();
                 let timestamp = LocalTz::now();
-                let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &message.unwrap());
+                let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies);
                 aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
                 aparte.send(&account, Element::try_from(message).unwrap());

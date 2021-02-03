@@ -333,8 +333,10 @@ impl fmt::Display for Message {
             }
             Message::Incoming(XmppMessage::Chat(message))
             | Message::Outgoing(XmppMessage::Chat(message)) => {
-                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                let me = message.body.starts_with("/me");
+                let timestamp =
+                    Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
+                let body = message.get_last_body();
+                let me = body.starts_with("/me");
                 let padding_len = match me {
                     true => format!("{} - {}: ", timestamp.format("%T"), message.from).len(),
                     false => format!("{} - * {}", timestamp.format("%T"), message.from).len(),
@@ -365,8 +367,8 @@ impl fmt::Display for Message {
                 }?;
 
                 let mut iter = match me {
-                    true => message.body.strip_prefix("/me").unwrap().lines(),
-                    false => message.body.lines(),
+                    true => body.strip_prefix("/me").unwrap().lines(),
+                    false => body.lines(),
                 };
 
                 if let Some(line) = iter.next() {
@@ -381,8 +383,10 @@ impl fmt::Display for Message {
             Message::Incoming(XmppMessage::Channel(message))
             | Message::Outgoing(XmppMessage::Channel(message)) => {
                 if let Jid::Full(from) = &message.from_full {
-                    let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                    let me = message.body.starts_with("/me");
+                    let timestamp =
+                        Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
+                    let body = message.get_last_body();
+                    let me = body.starts_with("/me");
                     let padding_len = match me {
                         true => format!("{} - {}: ", timestamp.format("%T"), from.resource).len(),
                         false => format!("{} - * {}", timestamp.format("%T"), from.resource).len(),
@@ -413,8 +417,8 @@ impl fmt::Display for Message {
                     }?;
 
                     let mut iter = match me {
-                        true => message.body.strip_prefix("/me").unwrap().lines(),
-                        false => message.body.lines(),
+                        true => body.strip_prefix("/me").unwrap().lines(),
+                        false => body.lines(),
                     };
 
                     if let Some(line) = iter.next() {
@@ -1165,12 +1169,14 @@ impl ModTrait for UIMod {
                                             let to: Jid = chat.contact.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
+                                            let mut bodies = HashMap::new();
+                                            bodies.insert("".to_string(), raw_buf.clone());
                                             let message = Message::outgoing_chat(
                                                 id.to_string(),
                                                 timestamp,
                                                 &from,
                                                 &to,
-                                                &raw_buf,
+                                                &bodies,
                                             );
                                             aparte.schedule(Event::SendMessage(
                                                 account.clone(),
@@ -1185,12 +1191,14 @@ impl ModTrait for UIMod {
                                             let to: Jid = channel.jid.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
+                                            let mut bodies = HashMap::new();
+                                            bodies.insert("".to_string(), raw_buf.clone());
                                             let message = Message::outgoing_channel(
                                                 id.to_string(),
                                                 timestamp,
                                                 &from,
                                                 &to,
-                                                &raw_buf,
+                                                &bodies,
                                             );
                                             aparte.schedule(Event::SendMessage(
                                                 account.clone(),

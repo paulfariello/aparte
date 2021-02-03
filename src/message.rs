@@ -3,37 +3,89 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use chrono::{DateTime, FixedOffset, Local};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
 #[derive(Debug, Clone)]
-pub struct ChatMessage {
+pub struct XmppMessageVersion {
     pub id: String,
     pub timestamp: DateTime<FixedOffset>,
-    pub from: BareJid,
-    pub from_full: Jid,
-    pub to: BareJid,
-    pub to_full: Jid,
-    pub body: String,
+    pub bodies: HashMap<String, String>,
+}
+
+impl Eq for XmppMessageVersion {}
+
+impl PartialEq for XmppMessageVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Ord for XmppMessageVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self == other {
+            Ordering::Equal
+        } else {
+            self.timestamp.cmp(&other.timestamp)
+        }
+    }
+}
+
+impl PartialOrd for XmppMessageVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl XmppMessageVersion {
+    pub fn get_best_body<'a>(&'a self, prefered_langs: Vec<&str>) -> &'a String {
+        for lang in prefered_langs {
+            if let Some(body) = self.bodies.get(lang) {
+                return body;
+            }
+        }
+
+        if let Some(body) = self.bodies.get("") {
+            return body;
+        }
+
+        self.bodies.iter().map(|(_, body)| body).next().unwrap()
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct ChannelMessage {
+pub struct VersionedXmppMessage {
     pub id: String,
-    pub timestamp: DateTime<FixedOffset>,
     pub from: BareJid,
     pub from_full: Jid,
     pub to: BareJid,
     pub to_full: Jid,
-    pub body: String,
+    pub history: Vec<XmppMessageVersion>,
+}
+
+impl VersionedXmppMessage {
+    pub fn get_last_bodies<'a>(&'a self) -> impl Iterator<Item = (&'a String, &'a String)> {
+        let last = self.history.iter().max().unwrap();
+        last.bodies.iter()
+    }
+    pub fn get_last_body<'a>(&'a self) -> &'a str {
+        let last = self.history.iter().max().unwrap();
+        &last.get_best_body(vec![])
+    }
+
+    pub fn get_original_timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
+        let first = self.history.iter().min().unwrap();
+        &first.timestamp
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum XmppMessage {
-    Chat(ChatMessage),
-    Channel(ChannelMessage),
+    Chat(VersionedXmppMessage),
+    Channel(VersionedXmppMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +108,7 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from_full: &Jid,
         to_full: &Jid,
-        body: &str,
+        bodies: &HashMap<String, String>,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -68,14 +120,21 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Incoming(XmppMessage::Chat(ChatMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
+        let id = id.into();
+
+        let version = XmppMessageVersion {
+            id: id.clone(),
+            timestamp,
+            bodies: bodies.clone(),
+        };
+
+        Message::Incoming(XmppMessage::Chat(VersionedXmppMessage {
+            id,
+            from,
             from_full: from_full.clone(),
-            to: to.clone(),
+            to,
             to_full: to_full.clone(),
-            body: body.to_string(),
+            history: vec![version],
         }))
     }
 
@@ -84,7 +143,7 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from_full: &Jid,
         to_full: &Jid,
-        body: &str,
+        bodies: &HashMap<String, String>,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -96,14 +155,21 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Outgoing(XmppMessage::Chat(ChatMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
+        let id = id.into();
+
+        let version = XmppMessageVersion {
+            id: id.clone(),
+            timestamp,
+            bodies: bodies.clone(),
+        };
+
+        Message::Outgoing(XmppMessage::Chat(VersionedXmppMessage {
+            id,
+            from,
             from_full: from_full.clone(),
-            to: to.clone(),
+            to,
             to_full: to_full.clone(),
-            body: body.to_string(),
+            history: vec![version],
         }))
     }
 
@@ -112,7 +178,7 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from_full: &Jid,
         to_full: &Jid,
-        body: &str,
+        bodies: &HashMap<String, String>,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -124,14 +190,21 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Incoming(XmppMessage::Channel(ChannelMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
+        let id = id.into();
+
+        let version = XmppMessageVersion {
+            id: id.clone(),
+            timestamp,
+            bodies: bodies.clone(),
+        };
+
+        Message::Incoming(XmppMessage::Channel(VersionedXmppMessage {
+            id,
+            from,
             from_full: from_full.clone(),
-            to: to.clone(),
+            to,
             to_full: to_full.clone(),
-            body: body.to_string(),
+            history: vec![version],
         }))
     }
 
@@ -140,7 +213,7 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from_full: &Jid,
         to_full: &Jid,
-        body: &str,
+        bodies: &HashMap<String, String>,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -152,14 +225,21 @@ impl Message {
             Jid::Full(to_full) => to_full.clone().into(),
         };
 
-        Message::Outgoing(XmppMessage::Channel(ChannelMessage {
-            id: id.into(),
-            timestamp: timestamp,
-            from: from,
+        let id = id.into();
+
+        let version = XmppMessageVersion {
+            id: id.clone(),
+            timestamp,
+            bodies: bodies.clone(),
+        };
+
+        Message::Outgoing(XmppMessage::Channel(VersionedXmppMessage {
+            id,
+            from,
             from_full: from_full.clone(),
-            to: to.clone(),
+            to,
             to_full: to_full.clone(),
-            body: body.to_string(),
+            history: vec![version],
         }))
     }
 
@@ -174,21 +254,21 @@ impl Message {
     #[allow(dead_code)]
     pub fn body<'a>(&'a self) -> &'a str {
         match self {
-            Message::Outgoing(XmppMessage::Chat(ChatMessage { body, .. }))
-            | Message::Incoming(XmppMessage::Chat(ChatMessage { body, .. }))
-            | Message::Outgoing(XmppMessage::Channel(ChannelMessage { body, .. }))
-            | Message::Incoming(XmppMessage::Channel(ChannelMessage { body, .. }))
-            | Message::Log(LogMessage { body, .. }) => &body,
+            Message::Outgoing(XmppMessage::Chat(message))
+            | Message::Incoming(XmppMessage::Chat(message))
+            | Message::Outgoing(XmppMessage::Channel(message))
+            | Message::Incoming(XmppMessage::Channel(message)) => message.get_last_body(),
+            Message::Log(LogMessage { body, .. }) => &body,
         }
     }
 
     #[allow(dead_code)]
     pub fn id<'a>(&'a self) -> &'a str {
         match self {
-            Message::Outgoing(XmppMessage::Chat(ChatMessage { id, .. }))
-            | Message::Incoming(XmppMessage::Chat(ChatMessage { id, .. }))
-            | Message::Outgoing(XmppMessage::Channel(ChannelMessage { id, .. }))
-            | Message::Incoming(XmppMessage::Channel(ChannelMessage { id, .. }))
+            Message::Outgoing(XmppMessage::Chat(VersionedXmppMessage { id, .. }))
+            | Message::Incoming(XmppMessage::Chat(VersionedXmppMessage { id, .. }))
+            | Message::Outgoing(XmppMessage::Channel(VersionedXmppMessage { id, .. }))
+            | Message::Incoming(XmppMessage::Channel(VersionedXmppMessage { id, .. }))
             | Message::Log(LogMessage { id, .. }) => &id,
         }
     }
@@ -196,11 +276,11 @@ impl Message {
     #[allow(dead_code)]
     pub fn timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
         match self {
-            Message::Outgoing(XmppMessage::Chat(ChatMessage { timestamp, .. }))
-            | Message::Incoming(XmppMessage::Chat(ChatMessage { timestamp, .. }))
-            | Message::Outgoing(XmppMessage::Channel(ChannelMessage { timestamp, .. }))
-            | Message::Incoming(XmppMessage::Channel(ChannelMessage { timestamp, .. }))
-            | Message::Log(LogMessage { timestamp, .. }) => timestamp,
+            Message::Outgoing(XmppMessage::Chat(message))
+            | Message::Incoming(XmppMessage::Chat(message))
+            | Message::Outgoing(XmppMessage::Channel(message))
+            | Message::Incoming(XmppMessage::Channel(message)) => message.get_original_timestamp(),
+            Message::Log(LogMessage { timestamp, .. }) => timestamp,
         }
     }
 }
@@ -210,8 +290,8 @@ impl hash::Hash for Message {
         match self {
             Message::Log(message) => message.id.hash(state),
             Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Chat(message)) => message.id.hash(state),
-            Message::Incoming(XmppMessage::Channel(message))
+            | Message::Outgoing(XmppMessage::Chat(message))
+            | Message::Incoming(XmppMessage::Channel(message))
             | Message::Outgoing(XmppMessage::Channel(message)) => message.id.hash(state),
         }
     }
@@ -250,22 +330,24 @@ impl TryFrom<Message> for xmpp_parsers::Element {
             Message::Incoming(_) => Err(()),
             Message::Outgoing(XmppMessage::Chat(message)) => {
                 let mut xmpp_message =
-                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
-                xmpp_message.id = Some(message.id);
+                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to.clone())));
+                xmpp_message.id = Some(message.id.clone());
                 xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
-                xmpp_message
-                    .bodies
-                    .insert(String::new(), xmpp_parsers::message::Body(message.body));
+                xmpp_message.bodies = message
+                    .get_last_bodies()
+                    .map(|(lang, body)| (lang.clone(), xmpp_parsers::message::Body(body.clone())))
+                    .collect();
                 Ok(xmpp_message.into())
             }
             Message::Outgoing(XmppMessage::Channel(message)) => {
                 let mut xmpp_message =
-                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to)));
-                xmpp_message.id = Some(message.id);
+                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to.clone())));
+                xmpp_message.id = Some(message.id.clone());
                 xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
-                xmpp_message
-                    .bodies
-                    .insert(String::new(), xmpp_parsers::message::Body(message.body));
+                xmpp_message.bodies = message
+                    .get_last_bodies()
+                    .map(|(lang, body)| (lang.clone(), xmpp_parsers::message::Body(body.clone())))
+                    .collect();
                 Ok(xmpp_message.into())
             }
         }
