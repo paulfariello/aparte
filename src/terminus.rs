@@ -1184,9 +1184,8 @@ where
                 .iter()
                 .position(|iter| iter > &item)
                 .unwrap_or(self.history.len());
-        if self.history.insert(item) {
-            self.dirty |= position >= self.view && position <= self.view + self.height;
-        }
+        self.history.replace(item);
+        self.dirty |= position >= self.view && position <= self.view + self.height;
     }
 
     fn page_up(&mut self) -> bool {

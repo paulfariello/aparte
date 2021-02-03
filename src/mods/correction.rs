@@ -6,6 +6,7 @@ use std::fmt;
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::message_correct::Replace;
 use xmpp_parsers::ns;
+use xmpp_parsers::delay::Delay;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
@@ -57,6 +58,36 @@ impl ModTrait for CorrectionMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
         disco.add_feature(ns::MESSAGE_CORRECT)
+    }
+
+    fn can_handle_xmpp_message(
+        &mut self,
+        _aparte: &mut Aparte,
+        _account: &Account,
+        message: &XmppParsersMessage,
+        _delay: &Option<Delay>,
+    ) -> f64 {
+        for payload in message.payloads.iter().cloned() {
+            if Replace::try_from(payload.clone()).is_ok() {
+                return 1f64;
+            }
+        }
+
+        return 0f64;
+    }
+
+    fn handle_xmpp_message(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+        delay: &Option<Delay>,
+    ) {
+        for payload in message.payloads.iter().cloned() {
+            if let Ok(replace) = Replace::try_from(payload.clone()) {
+                self.handle_replace(aparte, account, message, replace);
+            }
+        }
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
