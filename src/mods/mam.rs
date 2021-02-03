@@ -155,7 +155,7 @@ impl ModTrait for MamMod {
         Ok(())
     }
 
-    fn can_handle_message(
+    fn can_handle_xmpp_message(
         &mut self,
         _aparte: &mut Aparte,
         _account: &Account,
@@ -170,7 +170,7 @@ impl ModTrait for MamMod {
         return 0f64;
     }
 
-    fn handle_message(
+    fn handle_xmpp_message(
         &mut self,
         aparte: &mut Aparte,
         account: &Account,

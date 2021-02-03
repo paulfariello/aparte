@@ -8,4 +8,5 @@ pub mod contact;
 pub mod conversation;
 pub mod disco;
 pub mod mam;
+pub mod messages;
 pub mod ui;

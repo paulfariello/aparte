@@ -70,6 +70,7 @@ fn main() {
     aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
     aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
     aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
+    aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
 
     aparte.init().unwrap();
 

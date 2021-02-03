@@ -42,7 +42,7 @@ impl ModTrait for CarbonsMod {
         disco.add_feature(ns::CARBONS)
     }
 
-    fn can_handle_message(
+    fn can_handle_xmpp_message(
         &mut self,
         _aparte: &mut Aparte,
         _account: &Account,
@@ -59,7 +59,7 @@ impl ModTrait for CarbonsMod {
         return 0f64;
     }
 
-    fn handle_message(
+    fn handle_xmpp_message(
         &mut self,
         aparte: &mut Aparte,
         account: &Account,
