@@ -81,7 +81,7 @@ impl ModTrait for CorrectionMod {
         aparte: &mut Aparte,
         account: &Account,
         message: &XmppParsersMessage,
-        delay: &Option<Delay>,
+        _delay: &Option<Delay>,
     ) {
         for payload in message.payloads.iter().cloned() {
             if let Ok(replace) = Replace::try_from(payload.clone()) {
