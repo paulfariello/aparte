@@ -6,6 +6,7 @@ pub mod carbons;
 pub mod completion;
 pub mod contact;
 pub mod conversation;
+pub mod correction;
 pub mod disco;
 pub mod mam;
 pub mod messages;

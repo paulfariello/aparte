@@ -38,7 +38,7 @@ impl CarbonsMod {
 
 impl ModTrait for CarbonsMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>().unwrap();
+        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
         disco.add_feature(ns::CARBONS)
     }
 

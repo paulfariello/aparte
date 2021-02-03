@@ -29,7 +29,7 @@ mod cursor;
 mod mods;
 mod word;
 
-use crate::core::{Aparte, Mod};
+use crate::core::Aparte;
 
 fn main() {
     let data_dir = dirs::data_dir().unwrap();
@@ -62,15 +62,6 @@ fn main() {
     info!("Starting aparté");
 
     let mut aparte = Aparte::new(config);
-    aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
-    aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
-    aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
-    aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
-    aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new()));
-    aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
-    aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
-    aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
-    aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
 
     aparte.init().unwrap();
 

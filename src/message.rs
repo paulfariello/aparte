@@ -1,13 +1,17 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::{DateTime, FixedOffset, Local};
+use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash;
 use uuid::Uuid;
+use xmpp_parsers::delay::Delay;
+use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use xmpp_parsers::{BareJid, Jid};
+
+use crate::account::Account;
 
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
@@ -64,6 +68,8 @@ pub struct VersionedXmppMessage {
     pub to: BareJid,
     pub to_full: Jid,
     pub history: Vec<XmppMessageVersion>,
+    pub type_: XmppMessageType,
+    pub direction: Direction,
 }
 
 impl VersionedXmppMessage {
@@ -80,12 +86,45 @@ impl VersionedXmppMessage {
         let first = self.history.iter().min().unwrap();
         &first.timestamp
     }
+
+    pub fn add_version_from_xmpp(&mut self, message: &XmppParsersMessage) {
+        let id = message
+            .id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let bodies: HashMap<String, String> = message
+            .bodies
+            .iter()
+            .map(|(lang, body)| (lang.clone(), body.0.clone()))
+            .collect();
+
+        let delay = message
+            .payloads
+            .iter()
+            .filter_map(|payload| Delay::try_from(payload.clone()).ok())
+            .nth(0);
+        let timestamp = delay
+            .map(|delay| delay.stamp.0)
+            .unwrap_or(LocalTz::now().into());
+
+        self.history.push(XmppMessageVersion {
+            id,
+            timestamp,
+            bodies,
+        });
+    }
 }
 
-#[derive(Debug, Clone)]
-pub enum XmppMessage {
-    Chat(VersionedXmppMessage),
-    Channel(VersionedXmppMessage),
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum XmppMessageType {
+    Chat,
+    Channel,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Direction {
+    Incoming,
+    Outgoing,
 }
 
 #[derive(Debug, Clone)]
@@ -97,12 +136,81 @@ pub struct LogMessage {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    Incoming(XmppMessage),
-    Outgoing(XmppMessage),
+    Xmpp(VersionedXmppMessage),
     Log(LogMessage),
 }
 
 impl Message {
+    pub fn from_xmpp(
+        account: &Account,
+        message: &XmppParsersMessage,
+        delay: &Option<Delay>,
+    ) -> Result<Self, ()> {
+        let id = message
+            .id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        if let Some(from) = message.from.clone() {
+            let bodies: HashMap<String, String> = message
+                .bodies
+                .iter()
+                .map(|(lang, body)| (lang.clone(), body.0.clone()))
+                .collect();
+            let delay = match delay {
+                Some(delay) => Some(delay.clone()),
+                None => message
+                    .payloads
+                    .iter()
+                    .filter_map(|payload| Delay::try_from(payload.clone()).ok())
+                    .nth(0),
+            };
+            let to = match message.to.clone() {
+                Some(to) => to,
+                None => account.clone().into(),
+            };
+
+            match message.type_ {
+                XmppParsersMessageType::Chat => {
+                    if from.clone().node() == account.node
+                        && from.clone().domain() == account.domain
+                    {
+                        Ok(Message::outgoing_chat(
+                            id,
+                            delay
+                                .map(|delay| delay.stamp.0)
+                                .unwrap_or(LocalTz::now().into()),
+                            &from,
+                            &to,
+                            &bodies,
+                        ))
+                    } else {
+                        Ok(Message::incoming_chat(
+                            id,
+                            delay
+                                .map(|delay| delay.stamp.0)
+                                .unwrap_or(LocalTz::now().into()),
+                            &from,
+                            &to,
+                            &bodies,
+                        ))
+                    }
+                }
+                XmppParsersMessageType::Groupchat => Ok(Message::incoming_channel(
+                    id,
+                    delay
+                        .map(|delay| delay.stamp.0)
+                        .unwrap_or(LocalTz::now().into()),
+                    &from,
+                    &to,
+                    &bodies,
+                )),
+                _ => Err(()),
+            }
+        } else {
+            Err(())
+        }
+    }
+
     pub fn incoming_chat<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
@@ -128,14 +236,16 @@ impl Message {
             bodies: bodies.clone(),
         };
 
-        Message::Incoming(XmppMessage::Chat(VersionedXmppMessage {
+        Message::Xmpp(VersionedXmppMessage {
             id,
             from,
             from_full: from_full.clone(),
             to,
             to_full: to_full.clone(),
             history: vec![version],
-        }))
+            type_: XmppMessageType::Chat,
+            direction: Direction::Incoming,
+        })
     }
 
     pub fn outgoing_chat<I: Into<String>>(
@@ -163,14 +273,16 @@ impl Message {
             bodies: bodies.clone(),
         };
 
-        Message::Outgoing(XmppMessage::Chat(VersionedXmppMessage {
+        Message::Xmpp(VersionedXmppMessage {
             id,
             from,
             from_full: from_full.clone(),
             to,
             to_full: to_full.clone(),
             history: vec![version],
-        }))
+            type_: XmppMessageType::Chat,
+            direction: Direction::Outgoing,
+        })
     }
 
     pub fn incoming_channel<I: Into<String>>(
@@ -198,14 +310,16 @@ impl Message {
             bodies: bodies.clone(),
         };
 
-        Message::Incoming(XmppMessage::Channel(VersionedXmppMessage {
+        Message::Xmpp(VersionedXmppMessage {
             id,
             from,
             from_full: from_full.clone(),
             to,
             to_full: to_full.clone(),
             history: vec![version],
-        }))
+            type_: XmppMessageType::Channel,
+            direction: Direction::Incoming,
+        })
     }
 
     pub fn outgoing_channel<I: Into<String>>(
@@ -233,20 +347,22 @@ impl Message {
             bodies: bodies.clone(),
         };
 
-        Message::Outgoing(XmppMessage::Channel(VersionedXmppMessage {
+        Message::Xmpp(VersionedXmppMessage {
             id,
             from,
             from_full: from_full.clone(),
             to,
             to_full: to_full.clone(),
             history: vec![version],
-        }))
+            type_: XmppMessageType::Channel,
+            direction: Direction::Outgoing,
+        })
     }
 
     pub fn log(msg: String) -> Self {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
-            timestamp: Local::now().into(),
+            timestamp: LocalTz::now().into(),
             body: msg,
         })
     }
@@ -254,10 +370,7 @@ impl Message {
     #[allow(dead_code)]
     pub fn body<'a>(&'a self) -> &'a str {
         match self {
-            Message::Outgoing(XmppMessage::Chat(message))
-            | Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Channel(message))
-            | Message::Incoming(XmppMessage::Channel(message)) => message.get_last_body(),
+            Message::Xmpp(message) => message.get_last_body(),
             Message::Log(LogMessage { body, .. }) => &body,
         }
     }
@@ -265,10 +378,7 @@ impl Message {
     #[allow(dead_code)]
     pub fn id<'a>(&'a self) -> &'a str {
         match self {
-            Message::Outgoing(XmppMessage::Chat(VersionedXmppMessage { id, .. }))
-            | Message::Incoming(XmppMessage::Chat(VersionedXmppMessage { id, .. }))
-            | Message::Outgoing(XmppMessage::Channel(VersionedXmppMessage { id, .. }))
-            | Message::Incoming(XmppMessage::Channel(VersionedXmppMessage { id, .. }))
+            Message::Xmpp(VersionedXmppMessage { id, .. })
             | Message::Log(LogMessage { id, .. }) => &id,
         }
     }
@@ -276,10 +386,7 @@ impl Message {
     #[allow(dead_code)]
     pub fn timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
         match self {
-            Message::Outgoing(XmppMessage::Chat(message))
-            | Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Channel(message))
-            | Message::Incoming(XmppMessage::Channel(message)) => message.get_original_timestamp(),
+            Message::Xmpp(message) => message.get_original_timestamp(),
             Message::Log(LogMessage { timestamp, .. }) => timestamp,
         }
     }
@@ -287,13 +394,7 @@ impl Message {
 
 impl hash::Hash for Message {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        match self {
-            Message::Log(message) => message.id.hash(state),
-            Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Chat(message))
-            | Message::Incoming(XmppMessage::Channel(message))
-            | Message::Outgoing(XmppMessage::Channel(message)) => message.id.hash(state),
-        }
+        self.id().hash(state)
     }
 }
 
@@ -327,29 +428,39 @@ impl TryFrom<Message> for xmpp_parsers::Element {
     fn try_from(message: Message) -> Result<Self, Self::Error> {
         match message {
             Message::Log(_) => Err(()),
-            Message::Incoming(_) => Err(()),
-            Message::Outgoing(XmppMessage::Chat(message)) => {
-                let mut xmpp_message =
-                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to.clone())));
-                xmpp_message.id = Some(message.id.clone());
-                xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
-                xmpp_message.bodies = message
-                    .get_last_bodies()
-                    .map(|(lang, body)| (lang.clone(), xmpp_parsers::message::Body(body.clone())))
-                    .collect();
-                Ok(xmpp_message.into())
-            }
-            Message::Outgoing(XmppMessage::Channel(message)) => {
-                let mut xmpp_message =
-                    xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to.clone())));
-                xmpp_message.id = Some(message.id.clone());
-                xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
-                xmpp_message.bodies = message
-                    .get_last_bodies()
-                    .map(|(lang, body)| (lang.clone(), xmpp_parsers::message::Body(body.clone())))
-                    .collect();
-                Ok(xmpp_message.into())
-            }
+            Message::Xmpp(message) => match message.direction {
+                Direction::Outgoing => match message.type_ {
+                    XmppMessageType::Chat => {
+                        let mut xmpp_message = xmpp_parsers::message::Message::new(Some(
+                            Jid::Bare(message.to.clone()),
+                        ));
+                        xmpp_message.id = Some(message.id.clone());
+                        xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
+                        xmpp_message.bodies = message
+                            .get_last_bodies()
+                            .map(|(lang, body)| {
+                                (lang.clone(), xmpp_parsers::message::Body(body.clone()))
+                            })
+                            .collect();
+                        Ok(xmpp_message.into())
+                    }
+                    XmppMessageType::Channel => {
+                        let mut xmpp_message = xmpp_parsers::message::Message::new(Some(
+                            Jid::Bare(message.to.clone()),
+                        ));
+                        xmpp_message.id = Some(message.id.clone());
+                        xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
+                        xmpp_message.bodies = message
+                            .get_last_bodies()
+                            .map(|(lang, body)| {
+                                (lang.clone(), xmpp_parsers::message::Body(body.clone()))
+                            })
+                            .collect();
+                        Ok(xmpp_message.into())
+                    }
+                },
+                Direction::Incoming => Err(()),
+            },
         }
     }
 }

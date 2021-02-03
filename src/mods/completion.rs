@@ -138,32 +138,31 @@ impl CompletionMod {
         } else {
             match (account, conversation) {
                 (Some(account), Some(conversation)) => {
-                    if let Some(conversation_mod) = aparte.get_mod::<ConversationMod>() {
-                        if let Some(Conversation::Channel(channel)) =
-                            conversation_mod.get(account, conversation)
-                        {
-                            let words =
-                                Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
-                            let current_word = *words.last().unwrap_or(&"");
+                    let conversation_mod = aparte.get_mod::<ConversationMod>();
+                    if let Some(Conversation::Channel(channel)) =
+                        conversation_mod.get(account, conversation)
+                    {
+                        let words =
+                            Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
+                        let current_word = *words.last().unwrap_or(&"");
 
-                            let append = if words.len() <= 1 { ": " } else { " " };
+                        let append = if words.len() <= 1 { ": " } else { " " };
 
-                            // Collect completion candidates
-                            self.completions = Some(
-                                channel
-                                    .occupants
-                                    .iter()
-                                    .filter_map(|(_, occupant)| {
-                                        if occupant.nick.starts_with(current_word) {
-                                            Some(occupant.nick.clone() + append)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect(),
-                            );
-                            self.current_completion = 0;
-                        }
+                        // Collect completion candidates
+                        self.completions = Some(
+                            channel
+                                .occupants
+                                .iter()
+                                .filter_map(|(_, occupant)| {
+                                    if occupant.nick.starts_with(current_word) {
+                                        Some(occupant.nick.clone() + append)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect(),
+                        );
+                        self.current_completion = 0;
                     }
                 }
                 _ => {}

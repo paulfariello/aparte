@@ -1,11 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use chrono::Local as LocalTz;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
 use xmpp_parsers::ns;
@@ -16,7 +14,7 @@ use crate::message::Message;
 use crate::mods::disco;
 
 pub struct MessagesMod {
-    messages: HashMap<(Option<Account>, String), Message>,
+    messages: HashMap<Option<Account>, HashMap<String, Message>>,
 }
 
 impl MessagesMod {
@@ -26,107 +24,24 @@ impl MessagesMod {
         }
     }
 
+    pub fn get<'a>(&'a self, account: &Option<Account>, id: &String) -> Option<&'a Message> {
+        self.messages.get(account)?.get(id)
+    }
+
+    pub fn get_mut<'a>(
+        &'a mut self,
+        account: &Option<Account>,
+        id: &String,
+    ) -> Option<&'a mut Message> {
+        self.messages.get_mut(account)?.get_mut(id)
+    }
+
     pub fn handle_message(&mut self, account: &Option<Account>, message: &Message) {
-        self.messages
-            .insert((account.clone(), message.id().to_string()), message.clone());
-    }
-
-    fn handle_chat_message(
-        &mut self,
-        aparte: &mut Aparte,
-        account: &Account,
-        message: &XmppParsersMessage,
-        delay: &Option<Delay>,
-    ) {
-        let id = message
-            .id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        if let Some(from) = message.from.clone() {
-            let bodies: HashMap<String, String> = message
-                .bodies
-                .iter()
-                .map(|(lang, body)| (lang.clone(), body.0.clone()))
-                .collect();
-            let delay = match delay {
-                Some(delay) => Some(delay.clone()),
-                None => message
-                    .payloads
-                    .iter()
-                    .filter_map(|payload| Delay::try_from(payload.clone()).ok())
-                    .nth(0),
-            };
-            let to = match message.to.clone() {
-                Some(to) => to,
-                None => account.clone().into(),
-            };
-
-            let message =
-                if from.clone().node() == account.node && from.clone().domain() == account.domain {
-                    Message::outgoing_chat(
-                        id,
-                        delay
-                            .map(|delay| delay.stamp.0)
-                            .unwrap_or(LocalTz::now().into()),
-                        &from,
-                        &to,
-                        &bodies,
-                    )
-                } else {
-                    Message::incoming_chat(
-                        id,
-                        delay
-                            .map(|delay| delay.stamp.0)
-                            .unwrap_or(LocalTz::now().into()),
-                        &from,
-                        &to,
-                        &bodies,
-                    )
-                };
-            aparte.schedule(Event::Message(Some(account.clone()), message));
-        }
-    }
-
-    fn handle_channel_message(
-        &mut self,
-        aparte: &mut Aparte,
-        account: &Account,
-        message: &XmppParsersMessage,
-        delay: &Option<Delay>,
-    ) {
-        let id = message
-            .id
-            .clone()
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        if let Some(from) = message.from.clone() {
-            let bodies: HashMap<String, String> = message
-                .bodies
-                .iter()
-                .map(|(lang, body)| (lang.clone(), body.0.clone()))
-                .collect();
-            let delay = match delay {
-                Some(delay) => Some(delay.clone()),
-                None => message
-                    .payloads
-                    .iter()
-                    .filter_map(|payload| Delay::try_from(payload.clone()).ok())
-                    .nth(0),
-            };
-            let to = match message.to.clone() {
-                Some(to) => to,
-                None => account.clone().into(),
-            };
-            let message = Message::incoming_channel(
-                id,
-                delay
-                    .map(|delay| delay.stamp.0)
-                    .unwrap_or(LocalTz::now().into()),
-                &from,
-                &to,
-                &bodies,
-            );
-            aparte.schedule(Event::Message(Some(account.clone()), message));
-        }
+        let messages = self
+            .messages
+            .entry(account.clone())
+            .or_insert(HashMap::new());
+        messages.insert(message.id().to_string(), message.clone());
     }
 
     fn handle_headline_message(
@@ -147,7 +62,7 @@ impl MessagesMod {
 
 impl ModTrait for MessagesMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>().unwrap();
+        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
         disco.add_feature(ns::MESSAGE_CORRECT)
     }
 
@@ -173,11 +88,10 @@ impl ModTrait for MessagesMod {
         delay: &Option<Delay>,
     ) {
         match message.type_ {
-            XmppParsersMessageType::Chat => {
-                self.handle_chat_message(aparte, account, message, delay)
-            }
-            XmppParsersMessageType::Groupchat => {
-                self.handle_channel_message(aparte, account, message, delay)
+            XmppParsersMessageType::Chat | XmppParsersMessageType::Groupchat => {
+                if let Ok(message) = Message::from_xmpp(account, message, delay) {
+                    aparte.schedule(Event::Message(Some(account.clone()), message));
+                }
             }
             XmppParsersMessageType::Headline => {
                 self.handle_headline_message(aparte, account, message, delay)

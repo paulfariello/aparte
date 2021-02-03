@@ -61,7 +61,7 @@ Examples:
         extensions: None,
     };
     let add = {
-        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>().unwrap();
+        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
         bookmarks.add(bookmark.clone())
     };
     aparte.schedule(Event::Bookmark(bookmark));
@@ -87,7 +87,7 @@ Examples:
             .current_account()
             .ok_or(format!("No connection found"))?;
         if let Some((bookmark, delete)) = {
-            let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>().unwrap();
+            let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
             bookmarks.delete(conference.clone())
         } {
             aparte.schedule(Event::DeletedBookmark(bookmark.jid));
@@ -122,7 +122,7 @@ Examples:
 |aparte, _command| {
     let account = aparte.current_account().ok_or(format!("No connection found"))?;
     if let Some(edit) = {
-        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>().unwrap();
+        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
         bookmarks.edit(name.clone(), conference, nick, autojoin)
     } {
         aparte.send(&account, edit);
@@ -668,7 +668,7 @@ impl BookmarksMod {
 impl ModTrait for BookmarksMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         aparte.add_command(bookmark::new());
-        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>().unwrap();
+        let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
         disco.add_feature(ns::BOOKMARKS2)
     }
 
@@ -676,7 +676,7 @@ impl ModTrait for BookmarksMod {
         match event {
             Event::Disco(account) => {
                 {
-                    let disco = aparte.get_mod::<disco::DiscoMod>().unwrap();
+                    let disco = aparte.get_mod::<disco::DiscoMod>();
                     if disco.has_feature(account, ns::BOOKMARKS2) {
                         self.backend = Backend::Bookmarks2(Bookmarks2 {});
                     }

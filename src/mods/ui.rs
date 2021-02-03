@@ -31,7 +31,7 @@ use crate::command::Command;
 use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
-use crate::message::{Message, XmppMessage};
+use crate::message::{Direction, Message, XmppMessageType};
 use crate::terminus::{
     BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
     Orientation, Screen, View, Window as _,
@@ -274,21 +274,7 @@ where
                 self.connection = Some(account.to_string());
                 self.dirty = true;
             }
-            UIEvent::Core(Event::Message(_, Message::Incoming(XmppMessage::Chat(message)))) => {
-                let mut highlighted = None;
-                for window in &self.windows {
-                    if &message.from.to_string() == window
-                        && Some(window) != self.current_window.as_ref()
-                    {
-                        highlighted = Some(window.clone());
-                    }
-                }
-                if highlighted.is_some() {
-                    self.highlight_window(&highlighted.unwrap());
-                    self.dirty = true;
-                }
-            }
-            UIEvent::Core(Event::Message(_, Message::Incoming(XmppMessage::Channel(message)))) => {
+            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                 let mut highlighted = None;
                 for window in &self.windows {
                     if &message.from.to_string() == window
@@ -331,19 +317,26 @@ impl fmt::Display for Message {
 
                 Ok(())
             }
-            Message::Incoming(XmppMessage::Chat(message))
-            | Message::Outgoing(XmppMessage::Chat(message)) => {
+            Message::Xmpp(message) => {
+                let author = match &message.type_ {
+                    XmppMessageType::Channel => match &message.from_full {
+                        Jid::Full(from) => from.resource.clone(),
+                        Jid::Bare(from) => from.to_string(),
+                    },
+                    XmppMessageType::Chat => message.from.to_string(),
+                };
+
                 let timestamp =
                     Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
                 let body = message.get_last_body();
                 let me = body.starts_with("/me");
                 let padding_len = match me {
-                    true => format!("{} - {}: ", timestamp.format("%T"), message.from).len(),
-                    false => format!("{} - * {}", timestamp.format("%T"), message.from).len(),
+                    true => format!("{} - {}: ", timestamp.format("%T"), author).len(),
+                    false => format!("{} - * {}", timestamp.format("%T"), author).len(),
                 };
                 let padding = " ".repeat(padding_len);
 
-                let (r, g, b) = id_to_rgb(&message.from.to_string());
+                let (r, g, b) = id_to_rgb(&author.to_string());
 
                 match me {
                     true => write!(
@@ -352,7 +345,7 @@ impl fmt::Display for Message {
                         color::Fg(color::White),
                         timestamp.format("%T"),
                         color::Fg(color::Rgb(r, g, b)),
-                        message.from,
+                        author,
                         color::Fg(color::White)
                     ),
                     false => write!(
@@ -361,7 +354,7 @@ impl fmt::Display for Message {
                         color::Fg(color::White),
                         timestamp.format("%T"),
                         color::Fg(color::Rgb(r, g, b)),
-                        message.from,
+                        author,
                         color::Fg(color::White)
                     ),
                 }?;
@@ -378,56 +371,6 @@ impl fmt::Display for Message {
                     write!(f, "\n{}{}", padding, line)?;
                 }
 
-                Ok(())
-            }
-            Message::Incoming(XmppMessage::Channel(message))
-            | Message::Outgoing(XmppMessage::Channel(message)) => {
-                if let Jid::Full(from) = &message.from_full {
-                    let timestamp =
-                        Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
-                    let body = message.get_last_body();
-                    let me = body.starts_with("/me");
-                    let padding_len = match me {
-                        true => format!("{} - {}: ", timestamp.format("%T"), from.resource).len(),
-                        false => format!("{} - * {}", timestamp.format("%T"), from.resource).len(),
-                    };
-                    let padding = " ".repeat(padding_len);
-
-                    let (r, g, b) = id_to_rgb(&from.resource);
-
-                    match me {
-                        true => write!(
-                            f,
-                            "{}{} - * {}{}{}",
-                            color::Fg(color::White),
-                            timestamp.format("%T"),
-                            color::Fg(color::Rgb(r, g, b)),
-                            from.resource,
-                            color::Fg(color::White)
-                        ),
-                        false => write!(
-                            f,
-                            "{}{} - {}{}:{} ",
-                            color::Fg(color::White),
-                            timestamp.format("%T"),
-                            color::Fg(color::Rgb(r, g, b)),
-                            from.resource,
-                            color::Fg(color::White)
-                        ),
-                    }?;
-
-                    let mut iter = match me {
-                        true => body.strip_prefix("/me").unwrap().lines(),
-                        false => body.lines(),
-                    };
-
-                    if let Some(line) = iter.next() {
-                        write!(f, "{}", line)?;
-                    }
-                    while let Some(line) = iter.next() {
-                        write!(f, "\n{}{}", padding, line)?;
-                    }
-                }
                 Ok(())
             }
         }
@@ -692,26 +635,20 @@ impl UIMod {
                 let chatwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
                     move |view, event| {
                         match event {
-                            UIEvent::Core(Event::Message(
-                                _,
-                                Message::Incoming(XmppMessage::Chat(message)),
-                            )) => {
-                                // TODO check to == us
-                                if message.from == chat_for_event.contact {
-                                    view.insert(Message::Incoming(XmppMessage::Chat(
-                                        message.clone(),
-                                    )));
-                                }
-                            }
-                            UIEvent::Core(Event::Message(
-                                _,
-                                Message::Outgoing(XmppMessage::Chat(message)),
-                            )) => {
-                                // TODO check from == us
-                                if message.to == chat_for_event.contact {
-                                    view.insert(Message::Outgoing(XmppMessage::Chat(
-                                        message.clone(),
-                                    )));
+                            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
+                                match message.direction {
+                                    // TODO check to == us
+                                    Direction::Incoming => {
+                                        if message.from == chat_for_event.contact {
+                                            view.insert(Message::Xmpp(message.clone()));
+                                        }
+                                    }
+                                    Direction::Outgoing => {
+                                        // TODO check from == us
+                                        if message.to == chat_for_event.contact {
+                                            view.insert(Message::Xmpp(message.clone()));
+                                        }
+                                    }
                                 }
                             }
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
@@ -748,26 +685,20 @@ impl UIMod {
                 let chanwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
                     move |view, event| {
                         match event {
-                            UIEvent::Core(Event::Message(
-                                _,
-                                Message::Incoming(XmppMessage::Channel(message)),
-                            )) => {
-                                // TODO check to == us
-                                if message.from == channel_for_event.jid {
-                                    view.insert(Message::Incoming(XmppMessage::Channel(
-                                        message.clone(),
-                                    )));
-                                }
-                            }
-                            UIEvent::Core(Event::Message(
-                                _,
-                                Message::Outgoing(XmppMessage::Channel(message)),
-                            )) => {
-                                // TODO check from == us
-                                if message.to == channel_for_event.jid {
-                                    view.insert(Message::Outgoing(XmppMessage::Channel(
-                                        message.clone(),
-                                    )));
+                            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
+                                match message.direction {
+                                    // TODO check to == us
+                                    Direction::Incoming => {
+                                        if message.from == channel_for_event.jid {
+                                            view.insert(Message::Xmpp(message.clone()));
+                                        }
+                                    }
+                                    Direction::Outgoing => {
+                                        // TODO check from == us
+                                        if message.to == channel_for_event.jid {
+                                            view.insert(Message::Xmpp(message.clone()));
+                                        }
+                                    }
                                 }
                             }
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
@@ -961,84 +892,58 @@ impl ModTrait for UIMod {
             }
             Event::Message(account, message) => {
                 match message {
-                    Message::Incoming(XmppMessage::Chat(message)) => {
-                        let window_name = message.from.to_string();
+                    Message::Xmpp(message) => {
+                        let window_name = match message.direction {
+                            Direction::Incoming => message.from.to_string(),
+                            Direction::Outgoing => message.to.to_string(),
+                        };
+
                         if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(
-                                aparte,
-                                Conversation::Chat(Chat {
-                                    account: account.clone().unwrap(),
-                                    contact: message.from.clone(),
-                                }),
-                            );
+                            let conversation = match message.type_ {
+                                XmppMessageType::Chat => match message.direction {
+                                    Direction::Incoming => Conversation::Chat(Chat {
+                                        account: account.clone().unwrap(),
+                                        contact: message.from.clone(),
+                                    }),
+                                    Direction::Outgoing => Conversation::Chat(Chat {
+                                        account: account.clone().unwrap(),
+                                        contact: message.to.clone(),
+                                    }),
+                                },
+                                XmppMessageType::Channel => match message.direction {
+                                    Direction::Incoming => Conversation::Channel(Channel {
+                                        account: account.clone().unwrap(),
+                                        jid: message.from.clone(),
+                                        nick: account.as_ref().unwrap().resource.clone(),
+                                        name: None,
+                                        occupants: HashMap::new(),
+                                    }),
+                                    Direction::Outgoing => Conversation::Channel(Channel {
+                                        account: account.clone().unwrap(),
+                                        jid: message.to.clone(),
+                                        nick: account.as_ref().unwrap().resource.clone(),
+                                        name: None,
+                                        occupants: HashMap::new(),
+                                    }),
+                                },
+                            };
+
+                            self.add_conversation(aparte, conversation);
                         }
 
-                        let mut unread = None;
-                        for window in &self.windows {
-                            if &message.from.to_string() == window
-                                && Some(window) != self.current_window.as_ref()
-                            {
-                                unread = Some(window.clone());
+                        if message.direction == Direction::Incoming {
+                            let mut unread = None;
+                            for window in &self.windows {
+                                if &message.from.to_string() == window
+                                    && Some(window) != self.current_window.as_ref()
+                                {
+                                    unread = Some(window.clone());
+                                }
                             }
-                        }
-                        if unread.is_some() {
-                            self.unread_windows.insert(unread.unwrap());
-                        }
-                        aparte.schedule(Event::Notification(String::from("")));
-                    }
-                    Message::Outgoing(XmppMessage::Chat(message)) => {
-                        let window_name = message.to.to_string();
-                        if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(
-                                aparte,
-                                Conversation::Chat(Chat {
-                                    account: account.clone().unwrap(),
-                                    contact: message.to.clone(),
-                                }),
-                            );
-                        }
-                    }
-                    Message::Incoming(XmppMessage::Channel(message)) => {
-                        let window_name = message.from.to_string();
-                        if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(
-                                aparte,
-                                Conversation::Channel(Channel {
-                                    account: account.clone().unwrap(),
-                                    jid: message.from.clone(),
-                                    nick: account.as_ref().unwrap().resource.clone(),
-                                    name: None,
-                                    occupants: HashMap::new(),
-                                }),
-                            );
-                        }
-
-                        let mut unread = None;
-                        for window in &self.windows {
-                            if &message.from.to_string() == window
-                                && Some(window) != self.current_window.as_ref()
-                            {
-                                unread = Some(window.clone());
+                            if unread.is_some() {
+                                self.unread_windows.insert(unread.unwrap());
                             }
-                        }
-                        if unread.is_some() {
-                            self.unread_windows.insert(unread.unwrap());
-                        }
-                        aparte.schedule(Event::Notification(String::from("")));
-                    }
-                    Message::Outgoing(XmppMessage::Channel(message)) => {
-                        let window_name = message.to.to_string();
-                        if !self.conversations.contains_key(&window_name) {
-                            self.add_conversation(
-                                aparte,
-                                Conversation::Channel(Channel {
-                                    account: account.clone().unwrap(),
-                                    jid: message.to.clone(),
-                                    nick: account.as_ref().unwrap().resource.clone(),
-                                    name: None,
-                                    occupants: HashMap::new(),
-                                }),
-                            );
+                            aparte.schedule(Event::Notification(String::from("")));
                         }
                     }
                     Message::Log(_message) => {}

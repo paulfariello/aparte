@@ -131,6 +131,7 @@ pub enum Mod {
     Bookmarks(mods::bookmarks::BookmarksMod),
     UI(mods::ui::UIMod),
     Mam(mods::mam::MamMod),
+    Correction(mods::correction::CorrectionMod),
 }
 
 macro_rules! from_mod {
@@ -163,6 +164,8 @@ from_mod!(Disco, mods::disco::DiscoMod);
 from_mod!(Bookmarks, mods::bookmarks::BookmarksMod);
 from_mod!(UI, mods::ui::UIMod);
 from_mod!(Mam, mods::mam::MamMod);
+from_mod!(Messages, mods::messages::MessagesMod);
+from_mod!(Correction, mods::correction::CorrectionMod);
 
 pub trait ModTrait: fmt::Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
@@ -202,6 +205,7 @@ impl ModTrait for Mod {
             Mod::UI(r#mod) => r#mod.init(aparte),
             Mod::Mam(r#mod) => r#mod.init(aparte),
             Mod::Messages(r#mod) => r#mod.init(aparte),
+            Mod::Correction(r#mod) => r#mod.init(aparte),
         }
     }
 
@@ -216,6 +220,7 @@ impl ModTrait for Mod {
             Mod::UI(r#mod) => r#mod.on_event(aparte, event),
             Mod::Mam(r#mod) => r#mod.on_event(aparte, event),
             Mod::Messages(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Correction(r#mod) => r#mod.on_event(aparte, event),
         }
     }
 
@@ -240,6 +245,9 @@ impl ModTrait for Mod {
             Mod::UI(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
             Mod::Mam(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
             Mod::Messages(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
+            Mod::Correction(r#mod) => {
+                r#mod.can_handle_xmpp_message(aparte, account, message, delay)
+            }
         }
     }
 
@@ -260,6 +268,24 @@ impl ModTrait for Mod {
             Mod::UI(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
             Mod::Mam(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
             Mod::Messages(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
+            Mod::Correction(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
+        }
+    }
+}
+
+impl fmt::Debug for Mod {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Mod::Completion(_) => f.write_str("Mod::Completion"),
+            Mod::Carbons(_) => f.write_str("Mod::Carbons"),
+            Mod::Contact(_) => f.write_str("Mod::Contact"),
+            Mod::Conversation(_) => f.write_str("Mod::Conversation"),
+            Mod::Disco(_) => f.write_str("Mod::Disco"),
+            Mod::Bookmarks(_) => f.write_str("Mod::Bookmarks"),
+            Mod::UI(_) => f.write_str("Mod::UI"),
+            Mod::Mam(_) => f.write_str("Mod::Mam"),
+            Mod::Messages(_) => f.write_str("Mod::Messages"),
+            Mod::Correction(_) => f.write_str("Mod::Correction"),
         }
     }
 }
@@ -276,6 +302,7 @@ impl fmt::Display for Mod {
             Mod::UI(r#mod) => r#mod.fmt(f),
             Mod::Mam(r#mod) => r#mod.fmt(f),
             Mod::Messages(r#mod) => r#mod.fmt(f),
+            Mod::Correction(r#mod) => r#mod.fmt(f),
         }
     }
 }
@@ -370,7 +397,7 @@ Examples:
 {
     window: String = {
         completion: (|aparte, _command| {
-            let ui = aparte.get_mod::<mods::ui::UIMod>().unwrap();
+            let ui = aparte.get_mod::<mods::ui::UIMod>();
             ui.get_windows()
         })
     }
@@ -397,7 +424,7 @@ Example:
 {
     contact: String = {
         completion: (|aparte, _command| {
-            let contact = aparte.get_mod::<mods::contact::ContactMod>().unwrap();
+            let contact = aparte.get_mod::<mods::contact::ContactMod>();
             contact.contacts.iter().map(|(_, contact)| contact.jid.to_string()).collect()
         })
     },
@@ -443,7 +470,7 @@ Example:
 {
     muc: String = {
         completion: (|aparte, _command| {
-            let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>().unwrap();
+            let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
             bookmarks.bookmarks_by_name.iter().map(|(a, _)| a.clone()).chain(bookmarks.bookmarks_by_jid.iter().map(|(a, _)| a.to_string())).collect()
         })
     },
@@ -461,7 +488,7 @@ Example:
         },
         Err(_) => {
             let jid = {
-                let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>().unwrap();
+                let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
                 match bookmarks.get_by_name(&muc) {
                     Some(bookmark) => {
                         match bookmark.nick {
@@ -572,7 +599,7 @@ impl Aparte {
             },
         };
 
-        Self {
+        let mut aparte = Self {
             command_parsers: Rc::new(HashMap::new()),
             mods: Rc::new(HashMap::new()),
             connections: HashMap::new(),
@@ -581,7 +608,20 @@ impl Aparte {
             send_queue: VecDeque::new(),
             event_channel: None,
             config: config,
-        }
+        };
+
+        aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
+        aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
+        aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
+        aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
+        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new()));
+        aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
+        aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
+        aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
+        aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
+        aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
+
+        aparte
     }
 
     pub fn add_command(&mut self, command_parser: CommandParser) {
@@ -659,28 +699,34 @@ impl Aparte {
                     RefCell::new(Mod::Messages(r#mod)),
                 );
             }
+            Mod::Correction(r#mod) => {
+                mods.insert(
+                    TypeId::of::<mods::correction::CorrectionMod>(),
+                    RefCell::new(Mod::Correction(r#mod)),
+                );
+            }
         }
     }
 
-    pub fn get_mod<'a, T>(&'a self) -> Option<Ref<'a, T>>
+    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
     where
         T: 'static,
         for<'b> &'b T: From<&'b Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => Some(Ref::map(r#mod.borrow(), |m| m.into())),
-            None => None,
+            Some(r#mod) => Ref::map(r#mod.borrow(), |m| m.into()),
+            None => unreachable!(),
         }
     }
 
-    pub fn get_mod_mut<T: 'static>(&self) -> Option<RefMut<T>>
+    pub fn get_mod_mut<T: 'static>(&self) -> RefMut<T>
     where
         T: 'static,
         for<'b> &'b mut T: From<&'b mut Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => Some(RefMut::map(r#mod.borrow_mut(), |m| m.into())),
-            None => None,
+            Some(r#mod) => RefMut::map(r#mod.borrow_mut(), |m| m.into()),
+            None => unreachable!(),
         }
     }
 
@@ -718,7 +764,7 @@ impl Aparte {
 
     pub fn run(mut self) {
         let mut input_event_stream = {
-            let ui = self.get_mod::<mods::ui::UIMod>().unwrap();
+            let ui = self.get_mod::<mods::ui::UIMod>();
             ui.event_stream()
         };
 
@@ -1055,6 +1101,7 @@ impl Aparte {
         }
 
         if let Some(r#mod) = matched_mod {
+            debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
                 .borrow_mut()
                 .handle_xmpp_message(self, &account, &message, &delay);
