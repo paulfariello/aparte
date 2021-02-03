@@ -3,10 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
 use std::fmt;
+use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::message_correct::Replace;
 use xmpp_parsers::ns;
-use xmpp_parsers::delay::Delay;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
