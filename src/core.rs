@@ -63,8 +63,8 @@ pub enum Event {
     AuthError(Account, String),
     Stanza(Account, Element),
     RawMessage(Account, XmppParsersMessage, Option<Delay>),
+    RawCommand(Option<Account>, String, String),
     Command(Command),
-    CommandError(String),
     SendMessage(Account, Message),
     Message(Option<Account>, Message),
     Chat {
@@ -111,7 +111,7 @@ pub enum Event {
     Key(Key),
     AutoComplete {
         account: Option<Account>,
-        conversation: Option<BareJid>,
+        context: String,
         raw_buf: String,
         cursor: Cursor,
     },
@@ -629,7 +629,26 @@ impl Aparte {
         command_parsers.insert(command_parser.name.to_string(), command_parser);
     }
 
-    pub fn parse_command(&mut self, command: Command) -> Result<(), String> {
+    pub fn handle_raw_command(
+        &mut self,
+        account: &Option<Account>,
+        context: &String,
+        buf: &String,
+    ) -> Result<(), String> {
+        let command_name = Command::parse_name(&buf)?;
+
+        let parser = {
+            match self.command_parsers.get(command_name) {
+                Some(parser) => parser.clone(),
+                None => return Err(format!("Unknown command {}", command_name)),
+            }
+        };
+
+        let command = (parser.parse)(account, context, buf)?;
+        (parser.exec)(self, command)
+    }
+
+    pub fn handle_command(&mut self, command: Command) -> Result<(), String> {
         let parser = {
             match self.command_parsers.get(&command.args[0]) {
                 Some(parser) => parser.clone(),
@@ -637,7 +656,7 @@ impl Aparte {
             }
         };
 
-        (parser.parser)(self, command)
+        (parser.exec)(self, command)
     }
 
     pub fn add_mod(&mut self, r#mod: Mod) {
@@ -829,10 +848,11 @@ impl Aparte {
 
         for (_, account) in self.config.accounts.clone() {
             if account.autoconnect {
-                self.schedule(Event::Command(Command {
-                    args: vec!["connect".to_string(), account.jid.clone()],
-                    cursor: 0,
-                }));
+                self.schedule(Event::RawCommand(
+                    None,
+                    "console".to_string(),
+                    format!("/connect {}", account.jid),
+                ));
             }
         }
     }
@@ -983,10 +1003,16 @@ impl Aparte {
                 Event::Start => {
                     self.start();
                 }
-                Event::Command(command) => match self.parse_command(command) {
+                Event::Command(command) => match self.handle_command(command) {
                     Err(err) => self.log(err),
                     Ok(()) => {}
                 },
+                Event::RawCommand(account, context, buf) => {
+                    match self.handle_raw_command(&account, &context, &buf) {
+                        Err(err) => self.log(err),
+                        Ok(()) => {}
+                    }
+                }
                 Event::SendMessage(account, message) => {
                     self.schedule(Event::Message(Some(account.clone()), message.clone()));
                     if let Ok(xmpp_message) = Element::try_from(message) {

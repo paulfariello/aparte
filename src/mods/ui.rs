@@ -8,7 +8,6 @@ use futures::Stream;
 use linked_hash_set::LinkedHashSet;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::Error as IoError;
@@ -1028,21 +1027,17 @@ impl ModTrait for UIMod {
                         if password {
                             aparte.schedule(Event::Key(Key::Char('\t')));
                         } else {
-                            let (account, conversation) = match &self.current_window {
-                                Some(current_window) => {
-                                    match self.conversations.get(current_window) {
-                                        Some(conversation) => (
-                                            Some(conversation.get_account().clone()),
-                                            Some(conversation.get_jid().clone()),
-                                        ),
-                                        _ => (None, None),
-                                    }
+                            let window = self.current_window.clone().unwrap();
+                            let account = match self.conversations.get(&window) {
+                                Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
+                                Some(Conversation::Channel(channel)) => {
+                                    Some(channel.account.clone())
                                 }
-                                _ => (None, None),
+                                _ => None,
                             };
                             aparte.schedule(Event::AutoComplete {
                                 account,
-                                conversation,
+                                context: window,
                                 raw_buf,
                                 cursor: cursor,
                             });
@@ -1061,14 +1056,15 @@ impl ModTrait for UIMod {
                             command.args.push(raw_buf.clone());
                             aparte.schedule(Event::Command(command));
                         } else if raw_buf.starts_with("/") {
-                            match Command::try_from(&*raw_buf) {
-                                Ok(command) => {
-                                    aparte.schedule(Event::Command(command));
+                            let window = self.current_window.clone().unwrap();
+                            let account = match self.conversations.get(&window) {
+                                Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
+                                Some(Conversation::Channel(channel)) => {
+                                    Some(channel.account.clone())
                                 }
-                                Err(error) => {
-                                    aparte.schedule(Event::CommandError(error.to_string()));
-                                }
-                            }
+                                _ => None,
+                            };
+                            aparte.schedule(Event::RawCommand(account, window, raw_buf.clone()));
                         } else if raw_buf.len() > 0 {
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)

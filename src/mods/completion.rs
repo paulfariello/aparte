@@ -5,6 +5,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::fmt;
 use std::rc::Rc;
+use std::str::FromStr;
 use xmpp_parsers::BareJid;
 
 use crate::account::Account;
@@ -34,12 +35,12 @@ impl CompletionMod {
         &mut self,
         aparte: &mut Aparte,
         account: &Option<Account>,
-        conversation: &Option<BareJid>,
-        raw_buf: String,
+        context: &str,
+        raw_buf: &str,
         cursor: Cursor,
     ) {
         if self.completions.is_none() {
-            self.build_completions(aparte, account, conversation, raw_buf.clone(), &cursor);
+            self.build_completions(aparte, account, context, raw_buf, &cursor);
         }
 
         if let Some(completions) = &self.completions {
@@ -48,7 +49,12 @@ impl CompletionMod {
                 let mut new_index = 0;
                 let completion = completions[self.current_completion].clone();
                 if raw_buf.starts_with("/") {
-                    if let Ok(mut command) = Command::parse_with_cursor(&raw_buf, &cursor) {
+                    if let Ok(mut command) = Command::parse_with_cursor(
+                        account.clone(),
+                        context.to_string(),
+                        raw_buf.to_string(),
+                        cursor.clone(),
+                    ) {
                         if command.cursor < command.args.len() {
                             command.args[command.cursor] = completion;
                         } else {
@@ -92,13 +98,18 @@ impl CompletionMod {
         &mut self,
         aparte: &mut Aparte,
         account: &Option<Account>,
-        conversation: &Option<BareJid>,
-        raw_buf: String,
+        context: &str,
+        raw_buf: &str,
         cursor: &Cursor,
     ) {
         if raw_buf.starts_with("/") {
             let mut completions = Vec::new();
-            if let Ok(command) = Command::parse_with_cursor(&raw_buf, cursor) {
+            if let Ok(command) = Command::parse_with_cursor(
+                account.clone(),
+                context.to_string(),
+                raw_buf.to_string(),
+                cursor.clone(),
+            ) {
                 if command.cursor == 0 {
                     completions = aparte
                         .command_parsers
@@ -136,11 +147,12 @@ impl CompletionMod {
                 self.current_completion = 0;
             }
         } else {
+            let conversation = BareJid::from_str(context);
             match (account, conversation) {
-                (Some(account), Some(conversation)) => {
+                (Some(account), Ok(conversation)) => {
                     let conversation_mod = aparte.get_mod::<ConversationMod>();
                     if let Some(Conversation::Channel(channel)) =
-                        conversation_mod.get(account, conversation)
+                        conversation_mod.get(account, &conversation)
                     {
                         let words =
                             Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
@@ -185,16 +197,10 @@ impl ModTrait for CompletionMod {
         match event {
             Event::AutoComplete {
                 account,
-                conversation,
+                context,
                 raw_buf,
                 cursor,
-            } => self.autocomplete(
-                aparte,
-                account,
-                conversation,
-                raw_buf.clone(),
-                cursor.clone(),
-            ),
+            } => self.autocomplete(aparte, account, context, raw_buf, cursor.clone()),
             Event::ResetCompletion => self.reset_completion(),
             _ => {}
         }

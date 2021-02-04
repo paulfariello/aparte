@@ -1,22 +1,47 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::convert::TryFrom;
 #[allow(unused_imports)]
 use textwrap;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::account::Account;
 use crate::core::Aparte;
 use crate::cursor::Cursor;
 
 #[derive(Debug, Clone)]
 pub struct Command {
+    pub account: Option<Account>,
+    pub context: String,
     pub args: Vec<String>,
     pub cursor: usize,
 }
 
 impl Command {
-    pub fn parse_with_cursor(string: &str, cursor: &Cursor) -> Result<Self, &'static str> {
+    pub fn new(account: Option<Account>, context: String, buf: String) -> Result<Self, String> {
+        let cursor = Cursor::from_index(&buf, buf.graphemes(true).count() - 1)
+            .map_err(|_| "invalid cursor".to_string())?;
+        Command::parse_with_cursor(account, context, buf, cursor)
+    }
+
+    pub fn parse_name<'a>(buf: &'a str) -> Result<&'a str, String> {
+        if &buf[0..1] != "/" {
+            return Err("Missing starting /".to_string());
+        }
+
+        let buf = &buf[1..];
+        match buf.find(|c: char| !c.is_alphanumeric()) {
+            Some(end) => Ok(&buf[..end]),
+            None => Ok(buf),
+        }
+    }
+
+    pub fn parse_with_cursor(
+        account: Option<Account>,
+        context: String,
+        buf: String,
+        cursor: Cursor,
+    ) -> Result<Self, String> {
         enum State {
             Initial,
             Delimiter,
@@ -30,11 +55,13 @@ impl Command {
 
         use State::*;
 
-        let mut string_cursor = cursor.try_index(string).map_err(|_| "invalid cursor")?;
+        let mut string_cursor = cursor
+            .try_index(&buf)
+            .map_err(|_| "invalid cursor".to_string())?;
         let mut tokens: Vec<String> = Vec::new();
         let mut token = String::new();
         let mut state = Initial;
-        let mut chars = string.chars();
+        let mut chars = buf.chars();
         let mut token_cursor = None;
 
         loop {
@@ -42,7 +69,7 @@ impl Command {
             state = match state {
                 Initial => match c {
                     Some('/') => Delimiter,
-                    _ => return Err("Missing starting /"),
+                    _ => return Err("Missing starting /".to_string()),
                 },
                 Delimiter => match c {
                     Some(' ') => Delimiter,
@@ -64,7 +91,7 @@ impl Command {
                         token.push(c);
                         SimplyQuoted
                     }
-                    None => return Err("Missing closing quote"),
+                    None => return Err("Missing closing quote".to_string()),
                 },
                 DoublyQuoted => match c {
                     Some('\"') => Unquoted,
@@ -73,7 +100,7 @@ impl Command {
                         token.push(c);
                         DoublyQuoted
                     }
-                    None => return Err("Missing closing quote"),
+                    None => return Err("Missing closing quote".to_string()),
                 },
                 Unquoted => match c {
                     Some('\'') => SimplyQuoted,
@@ -98,21 +125,21 @@ impl Command {
                         token.push(c);
                         Unquoted
                     }
-                    None => return Err("Missing escaped char"),
+                    None => return Err("Missing escaped char".to_string()),
                 },
                 SimplyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         SimplyQuoted
                     }
-                    None => return Err("Missing escaped char"),
+                    None => return Err("Missing escaped char".to_string()),
                 },
                 DoublyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         DoublyQuoted
                     }
-                    None => return Err("Missing escaped char"),
+                    None => return Err("Missing escaped char".to_string()),
                 },
             };
 
@@ -137,11 +164,15 @@ impl Command {
 
         if tokens.len() > 0 {
             Ok(Command {
+                account,
+                context,
                 args: tokens,
                 cursor: token_cursor.unwrap(),
             })
         } else {
             Ok(Command {
+                account,
+                context,
                 args: vec!["".to_string()],
                 cursor: token_cursor.unwrap(),
             })
@@ -196,39 +227,36 @@ impl Command {
         }
     }
 
-    pub fn assemble(&self) -> String {
-        let mut command = "/".to_string();
-
+    pub fn assemble_args(args: &[String]) -> String {
+        let mut command = String::new();
         let mut first = true;
-        for arg in &self.args {
+        for arg in args {
             if !first {
                 command.push(' ');
             } else {
                 first = false;
             }
-            command.extend(Command::escape(arg).chars());
+            command.push_str(&Command::escape(arg));
         }
 
         command
     }
-}
 
-impl TryFrom<&str> for Command {
-    type Error = &'static str;
+    pub fn assemble(&self) -> String {
+        let mut command = "/".to_string();
 
-    fn try_from(string: &str) -> Result<Self, Self::Error> {
-        Command::parse_with_cursor(
-            string,
-            &Cursor::from_index(string, string.graphemes(true).count() - 1)
-                .map_err(|_| "invalid cursor")?,
-        )
+        let args = Command::assemble_args(&self.args);
+        command.push_str(&args);
+
+        command
     }
 }
 
 pub struct CommandParser {
     pub name: &'static str,
     pub help: String,
-    pub parser: fn(&mut Aparte, Command) -> Result<(), String>,
+    pub parse: fn(&Option<Account>, &str, &str) -> Result<Command, String>,
+    pub exec: fn(&mut Aparte, Command) -> Result<(), String>,
     pub autocompletions: Vec<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>,
 }
 
@@ -319,7 +347,13 @@ macro_rules! parse_command_args(
         parse_subcommand_attrs!(sub_commands, $attr);
 
         return match sub_commands.get(&$command.args[$index]) {
-            Some(sub_parser) => (sub_parser.parser)($aparte, Command { args: $command.args[$index..].to_vec(), cursor: 0 }),
+            Some(sub_parser) => {
+                let sub_command = Command {
+                    args: $command.args[$index..].to_vec(),
+                    ..$command
+                };
+                (sub_parser.exec)($aparte, sub_command)
+            },
             None => Err(format!("Invalid subcommand {}", $command.args[$index])),
         };
     );
@@ -424,7 +458,11 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
-            fn parser(aparte: &mut Aparte, command: Command) -> Result<(), String> {
+            fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command, String> {
+                Command::new(account.clone(), context.to_string(), buf.to_string())
+            }
+
+            fn exec(aparte: &mut Aparte, command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!(aparte, command, index, $args);
@@ -437,7 +475,8 @@ macro_rules! command_def (
                 CommandParser {
                     name: stringify!($name),
                     help: help(),
-                    parser: parser,
+                    parse,
+                    exec,
                     autocompletions: autocompletions,
                 }
             }
@@ -454,7 +493,11 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
-            fn parser($aparte: &mut Aparte, mut $command: Command) -> Result<(), String> {
+            fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command, String> {
+                Command::new(account.clone(), context.to_string(), buf.to_string())
+            }
+
+            fn exec($aparte: &mut Aparte, mut $command: Command) -> Result<(), String> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!($aparte, $command, index, $args);
@@ -474,7 +517,8 @@ macro_rules! command_def (
                 CommandParser {
                     name: stringify!($name),
                     help: help(),
-                    parser: parser,
+                    parse,
+                    exec,
                     autocompletions: autocompletions,
                 }
             }
@@ -565,7 +609,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_simple_command_parsing() {
-        let command = Command::try_from("/test command");
+        let command = Command::new(None, "test".to_string(), "/test command".to_string());
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -576,7 +620,11 @@ mod tests_command_parser {
 
     #[test]
     fn test_multiple_args_command_parsing() {
-        let command = Command::try_from("/test command with args");
+        let command = Command::new(
+            None,
+            "test".to_string(),
+            "/test command with args".to_string(),
+        );
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 4);
@@ -589,7 +637,11 @@ mod tests_command_parser {
 
     #[test]
     fn test_doubly_quoted_arg_command_parsing() {
-        let command = Command::try_from("/test \"command with arg\"");
+        let command = Command::new(
+            None,
+            "test".to_string(),
+            "/test \"command with arg\"".to_string(),
+        );
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -600,7 +652,11 @@ mod tests_command_parser {
 
     #[test]
     fn test_simply_quoted_arg_command_parsing() {
-        let command = Command::try_from("/test 'command with arg'");
+        let command = Command::new(
+            None,
+            "test".to_string(),
+            "/test 'command with arg'".to_string(),
+        );
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -611,7 +667,11 @@ mod tests_command_parser {
 
     #[test]
     fn test_mixed_quote_arg_command_parsing() {
-        let command = Command::try_from("/test 'command with \" arg'");
+        let command = Command::new(
+            None,
+            "test".to_string(),
+            "/test 'command with \" arg'".to_string(),
+        );
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -622,14 +682,23 @@ mod tests_command_parser {
 
     #[test]
     fn test_missing_closing_quote() {
-        let command = Command::try_from("/test \"command with arg");
+        let command = Command::new(
+            None,
+            "test".to_string(),
+            "/test \"command with arg".to_string(),
+        );
         assert!(command.is_err());
-        assert_eq!(command.err(), Some("Missing closing quote"));
+        assert_eq!(command.err(), Some("Missing closing quote".to_string()));
     }
 
     #[test]
     fn test_command_args_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/test command with args", &Cursor::new(10));
+        let command = Command::parse_with_cursor(
+            None,
+            "test".to_string(),
+            "/test command with args".to_string(),
+            Cursor::new(10),
+        );
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 4);
@@ -642,7 +711,8 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/te", &Cursor::new(3));
+        let command =
+            Command::parse_with_cursor(None, "test".to_string(), "/te".to_string(), Cursor::new(3));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -652,7 +722,12 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_end_with_space_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/test ", &Cursor::new(6));
+        let command = Command::parse_with_cursor(
+            None,
+            "test".to_string(),
+            "/test ".to_string(),
+            Cursor::new(6),
+        );
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -662,7 +737,8 @@ mod tests_command_parser {
 
     #[test]
     fn test_no_command_parsing_with_cursor() {
-        let command = Command::parse_with_cursor("/", &Cursor::new(1));
+        let command =
+            Command::parse_with_cursor(None, "test".to_string(), "/".to_string(), Cursor::new(1));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -673,6 +749,8 @@ mod tests_command_parser {
     #[test]
     fn test_command_assemble() {
         let command = Command {
+            account: None,
+            context: "test".to_string(),
             args: vec!["foo".to_string(), "bar".to_string()],
             cursor: 0,
         };
@@ -683,6 +761,8 @@ mod tests_command_parser {
     #[test]
     fn test_command_with_double_quote_assemble() {
         let command = Command {
+            account: None,
+            context: "test".to_string(),
             args: vec!["test".to_string(), "fo\"o".to_string(), "bar".to_string()],
             cursor: 0,
         };
@@ -693,6 +773,8 @@ mod tests_command_parser {
     #[test]
     fn test_command_with_simple_quote_assemble() {
         let command = Command {
+            account: None,
+            context: "test".to_string(),
             args: vec!["test".to_string(), "fo'o".to_string(), "bar".to_string()],
             cursor: 0,
         };
@@ -703,6 +785,8 @@ mod tests_command_parser {
     #[test]
     fn test_command_with_space_assemble() {
         let command = Command {
+            account: None,
+            context: "test".to_string(),
             args: vec!["test".to_string(), "foo bar".to_string()],
             cursor: 0,
         };
@@ -713,10 +797,24 @@ mod tests_command_parser {
     #[test]
     fn test_command_with_space_and_quote_assemble() {
         let command = Command {
+            account: None,
+            context: "test".to_string(),
             args: vec!["test".to_string(), "foo bar\"".to_string()],
             cursor: 0,
         };
 
         assert_eq!(command.assemble(), "/test 'foo bar\"'");
+    }
+
+    #[test]
+    fn test_command_parse_name() {
+        let name = Command::parse_name("/me's best client is Aparté");
+        assert_eq!(Ok("me"), name);
+    }
+
+    #[test]
+    fn test_command_parse_name_without_args() {
+        let name = Command::parse_name("/close");
+        assert_eq!(Ok("close"), name);
     }
 }
