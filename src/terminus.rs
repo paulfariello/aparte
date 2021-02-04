@@ -16,7 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub type Screen<W> = AlternateScreen<RawTerminal<W>>;
 
-fn term_string_visible_len(string: &str) -> usize {
+pub fn term_string_visible_len(string: &str) -> usize {
     // Count each grapheme on a given struct but ignore invisible chars sequences like '\x1b[…'
     let mut len = 0;
     let mut iter = string.graphemes(true);
@@ -50,6 +50,56 @@ fn term_string_visible_len(string: &str) -> usize {
     }
 
     len
+}
+
+/// Remove all terminal specific chars sequences and truncate the resulting string to max visible
+/// chars. Optionnaly appending the (already clean) append string.
+pub fn term_string_clean_and_truncate(string: &str, max: usize, append: Option<&str>) -> String {
+    let mut iter = string.graphemes(true);
+    let mut remaining = max;
+    if let Some(append) = append {
+        remaining -= append.graphemes(true).count();
+    }
+    let mut output = String::new();
+
+    while let Some(grapheme) = iter.next() {
+        match grapheme {
+            "\x1b" => {
+                if let Some(grapheme) = iter.next() {
+                    if grapheme == "[" {
+                        while let Some(grapheme) = iter.next() {
+                            let chars = grapheme.chars().collect::<Vec<_>>();
+                            if chars.len() == 1 {
+                                match chars[0] {
+                                    '\x30'..='\x3f' => {}     // parameter bytes
+                                    '\x20'..='\x2f' => {}     // intermediate bytes
+                                    '\x40'..='\x7e' => break, // final byte
+                                    _ => break,
+                                }
+                            } else {
+                                output.push_str(grapheme);
+                                remaining -= 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                output.push_str(grapheme);
+                remaining -= 1;
+            }
+        }
+
+        if remaining == 0 {
+            if let Some(append) = append {
+                output.push_str(append);
+            }
+            break;
+        }
+    }
+
+    output
 }
 
 #[derive(Debug, Clone)]
@@ -1624,5 +1674,41 @@ mod tests {
 
         // Then
         assert_eq!(input.buf, "ab".to_string());
+    }
+
+    #[test]
+    fn test_term_string_clean() {
+        // Given
+        let input = "test \x1b[5mBlink";
+
+        // When
+        let clean = term_string_clean_and_truncate(input, 100, None);
+
+        // Then
+        assert_eq!(clean, "test Blink");
+    }
+
+    #[test]
+    fn test_term_string_clean_and_truncate() {
+        // Given
+        let input = "test \x1b[5mBlink";
+
+        // When
+        let clean = term_string_clean_and_truncate(input, 6, None);
+
+        // Then
+        assert_eq!(clean, "test B");
+    }
+
+    #[test]
+    fn test_term_string_clean_and_truncate_and_append() {
+        // Given
+        let input = "test \x1b[5mBlink";
+
+        // When
+        let clean = term_string_clean_and_truncate(input, 6, Some("…"));
+
+        // Then
+        assert_eq!(clean, "test …");
     }
 }

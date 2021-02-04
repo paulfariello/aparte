@@ -73,11 +73,34 @@ impl ModTrait for MessagesMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        if message.bodies.is_empty() {
-            return 0f64;
+        match message.type_ {
+            XmppParsersMessageType::Chat => {
+                if message.bodies.is_empty() {
+                    0f64
+                } else {
+                    0.01f64
+                }
+            }
+            XmppParsersMessageType::Groupchat => {
+                if message.bodies.is_empty() && message.subjects.is_empty() {
+                    0f64
+                } else {
+                    0.01f64
+                }
+            }
+            XmppParsersMessageType::Headline => {
+                if message
+                    .payloads
+                    .iter()
+                    .any(|p| p.is("event", ns::PUBSUB_EVENT))
+                {
+                    0.01f64
+                } else {
+                    0f64
+                }
+            }
+            _ => 0f64,
         }
-
-        return 0.01f64;
     }
 
     fn handle_xmpp_message(
@@ -88,9 +111,32 @@ impl ModTrait for MessagesMod {
         delay: &Option<Delay>,
     ) {
         match message.type_ {
-            XmppParsersMessageType::Chat | XmppParsersMessageType::Groupchat => {
+            XmppParsersMessageType::Chat => {
                 if let Ok(message) = Message::from_xmpp(account, message, delay) {
                     aparte.schedule(Event::Message(Some(account.clone()), message));
+                }
+            }
+            XmppParsersMessageType::Groupchat => {
+                if !message.bodies.is_empty() {
+                    if let Ok(message) = Message::from_xmpp(account, message, delay) {
+                        aparte.schedule(Event::Message(Some(account.clone()), message));
+                    }
+                }
+
+                if !message.subjects.is_empty() {
+                    if let Ok(destination) =
+                        Message::get_local_destination_from_xmpp(account, &message)
+                    {
+                        aparte.schedule(Event::Subject(
+                            account.clone(),
+                            destination.clone(),
+                            message
+                                .subjects
+                                .iter()
+                                .map(|(lang, subject)| (lang.clone(), subject.0.clone()))
+                                .collect(),
+                        ));
+                    }
                 }
             }
             XmppParsersMessageType::Headline => {

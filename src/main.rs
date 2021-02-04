@@ -26,6 +26,7 @@ mod message;
 mod command;
 mod color;
 mod cursor;
+mod i18n;
 mod mods;
 mod word;
 

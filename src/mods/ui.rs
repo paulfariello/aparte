@@ -30,9 +30,10 @@ use crate::command::Command;
 use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
+use crate::i18n;
 use crate::message::{Direction, Message, XmppMessageType};
 use crate::terminus::{
-    BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
+    self, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
     Orientation, Screen, View, Window as _,
 };
 use crate::{contact, conversation};
@@ -45,21 +46,33 @@ enum UIEvent {
 }
 
 struct TitleBar {
-    window_name: Option<String>,
+    name: Option<String>,
+    subjects: HashMap<String, HashMap<String, String>>,
     dirty: bool,
 }
 
 impl TitleBar {
     fn new() -> Self {
         Self {
-            window_name: None,
+            name: None,
+            subjects: HashMap::new(),
             dirty: true,
         }
     }
 
     fn set_name(&mut self, name: &str) {
-        self.window_name = Some(name.to_string());
+        self.name = Some(name.to_string());
+        self.subjects
+            .entry(name.to_string())
+            .or_insert(HashMap::new());
         self.dirty = true;
+    }
+
+    fn add_subjects(&mut self, jid: String, subjects: HashMap<String, String>) {
+        if Some(&jid) == self.name.as_ref() {
+            self.dirty = true;
+        }
+        self.subjects.insert(jid, subjects);
     }
 }
 
@@ -82,16 +95,38 @@ where
             color::Fg(color::White)
         );
 
-        for _ in 0..dimension.w.unwrap() {
-            vprint!(screen, " ");
-        }
+        vprint!(screen, "{}", " ".repeat(dimension.w.unwrap().into()));
+
         vprint!(
             screen,
             "{}",
             termion::cursor::Goto(dimension.x, dimension.y)
         );
-        if let Some(window_name) = &self.window_name {
-            vprint!(screen, " {}", window_name);
+
+        if let Some(name) = &self.name {
+            let clean_name = terminus::term_string_clean_and_truncate(
+                name,
+                dimension.w.unwrap().into(),
+                Some("…"),
+            );
+            vprint!(screen, "{}", clean_name);
+
+            let remaining = dimension.w.unwrap()
+                - terminus::term_string_visible_len(&clean_name) as u16
+                - " – ".len() as u16;
+            if remaining > 0 {
+                let subjects = self.subjects.get(name).unwrap();
+                if !subjects.is_empty() {
+                    if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
+                        let clean_subject = terminus::term_string_clean_and_truncate(
+                            subject,
+                            remaining.into(),
+                            Some("…"),
+                        );
+                        vprint!(screen, " — {}", clean_subject);
+                    }
+                }
+            }
         }
 
         vprint!(
@@ -102,7 +137,7 @@ where
         );
 
         restore_cursor!(screen);
-        while let Err(_) = screen.flush() {}
+        flush!(screen);
         self.dirty = false;
     }
 
@@ -114,6 +149,10 @@ where
         match event {
             UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_name(name);
+            }
+            UIEvent::Core(Event::Subject(_, jid, subjects)) => {
+                let window: BareJid = jid.clone().into();
+                self.add_subjects(window.to_string(), subjects.clone());
             }
             _ => {}
         }
@@ -182,32 +221,29 @@ where
 
         let mut written = 0;
 
-        write!(
+        vprint!(
             screen,
             "{}",
             termion::cursor::Goto(dimension.x, dimension.y)
-        )
-        .unwrap();
-        write!(
+        );
+        vprint!(
             screen,
             "{}{}",
             color::Bg(color::Blue),
             color::Fg(color::White)
-        )
-        .unwrap();
+        );
 
         for _ in 0..dimension.w.unwrap() {
-            write!(screen, " ").unwrap();
+            vprint!(screen, " ");
         }
 
-        write!(
+        vprint!(
             screen,
             "{}",
             termion::cursor::Goto(dimension.x, dimension.y)
-        )
-        .unwrap();
+        );
         if let Some(connection) = &self.connection {
-            write!(screen, " {}", connection).unwrap();
+            vprint!(screen, " {}", connection);
             written += 1 + connection.len();
         }
 
@@ -216,41 +252,39 @@ where
             // Keep space for at least ", …]"
             if window.len() + written + 4 > dimension.w.unwrap() as usize {
                 if !first {
-                    write!(screen, ", …").unwrap();
+                    vprint!(screen, ", …");
                 }
                 break;
             }
 
             if first {
-                write!(screen, " [").unwrap();
+                vprint!(screen, " [");
                 written += 3; // Also count the closing bracket
                 first = false;
             } else {
-                write!(screen, ", ").unwrap();
+                vprint!(screen, ", ");
                 written += 2;
             }
-            write!(
+            vprint!(
                 screen,
                 "{}{}{}",
                 termion::style::Bold,
                 window,
                 termion::style::NoBold
-            )
-            .unwrap();
+            );
             written += window.len();
         }
 
         if !first {
-            write!(screen, "]").unwrap();
+            vprint!(screen, "]");
         }
 
-        write!(
+        vprint!(
             screen,
             "{}{}",
             color::Bg(color::Reset),
             color::Fg(color::Reset)
-        )
-        .unwrap();
+        );
 
         restore_cursor!(screen);
         flush!(screen);

@@ -119,6 +119,7 @@ pub enum Event {
     Completed(String, Cursor),
     ChangeWindow(String),
     Notification(String),
+    Subject(Account, Jid, HashMap<String, String>),
 }
 
 pub enum Mod {
@@ -1230,7 +1231,7 @@ impl Aparte {
                 .borrow_mut()
                 .handle_xmpp_message(self, &account, &message, &delay);
         } else {
-            info!("Unknown message: {:?}", message);
+            info!("Don't know how to handle message: {:?}", message);
         }
     }
 }

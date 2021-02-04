@@ -12,6 +12,7 @@ use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppPa
 use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
+use crate::i18n;
 
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
@@ -46,17 +47,7 @@ impl PartialOrd for XmppMessageVersion {
 
 impl XmppMessageVersion {
     pub fn get_best_body<'a>(&'a self, prefered_langs: Vec<&str>) -> &'a String {
-        for lang in prefered_langs {
-            if let Some(body) = self.bodies.get(lang) {
-                return body;
-            }
-        }
-
-        if let Some(body) = self.bodies.get("") {
-            return body;
-        }
-
-        self.bodies.iter().map(|(_, body)| body).next().unwrap()
+        i18n::get_best(&self.bodies, prefered_langs).unwrap().1
     }
 }
 
@@ -212,6 +203,56 @@ impl Message {
             }
         } else {
             Err(())
+        }
+    }
+
+    pub fn get_local_destination_from_xmpp<'a>(
+        account: &Account,
+        message: &'a XmppParsersMessage,
+    ) -> Result<&'a Jid, String> {
+        match Message::get_direction_from_xmpp(account, message)? {
+            Direction::Incoming => message
+                .from
+                .as_ref()
+                .ok_or("Missing 'from' attribute for incoming message".to_string()),
+            Direction::Outgoing => message
+                .to
+                .as_ref()
+                .ok_or("Missing 'to' attribute for outgoing message".to_string()),
+        }
+    }
+
+    pub fn get_direction_from_xmpp(
+        account: &Account,
+        message: &XmppParsersMessage,
+    ) -> Result<Direction, String> {
+        let from: Option<BareJid> = message.from.clone().map(|f| f.into());
+        let to: Option<BareJid> = message.to.clone().map(|f| f.into());
+        let bare_account: BareJid = account.clone().into();
+
+        match (from.as_ref(), to.as_ref()) {
+            (Some(from), Some(_to)) => {
+                if from == &bare_account {
+                    Ok(Direction::Outgoing)
+                } else {
+                    Ok(Direction::Incoming)
+                }
+            }
+            (None, Some(to)) => {
+                if to == &bare_account {
+                    Ok(Direction::Incoming)
+                } else {
+                    Ok(Direction::Outgoing)
+                }
+            }
+            (Some(from), None) => {
+                if from == &bare_account {
+                    Ok(Direction::Outgoing)
+                } else {
+                    Ok(Direction::Incoming)
+                }
+            }
+            (None, None) => Err("Message as no 'from' nor 'to' attributes".to_string()),
         }
     }
 
