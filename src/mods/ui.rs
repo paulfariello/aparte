@@ -340,7 +340,7 @@ impl fmt::Display for Message {
 
                 let mut attributes = "".to_string();
                 if message.has_multiple_version() {
-                    attributes.push_str("🖉  ");
+                    attributes.push_str("✎ ");
                 }
 
                 match me {
