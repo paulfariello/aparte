@@ -567,6 +567,103 @@ Examples:
     }
 });
 
+mod me {
+    use chrono::Local as LocalTz;
+    use std::collections::HashMap;
+    use std::str::FromStr;
+    use uuid::Uuid;
+    use xmpp_parsers::{BareJid, Jid};
+
+    use crate::account::Account;
+    use crate::command::*;
+    use crate::conversation::Conversation;
+    use crate::core::{Aparte, Event};
+    use crate::message::Message;
+    use crate::mods;
+
+    fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command, String> {
+        Ok(Command {
+            account: account.clone(),
+            context: context.to_string(),
+            args: vec![buf.to_string()],
+            cursor: 0,
+        })
+    }
+
+    fn exec(aparte: &mut Aparte, command: Command) -> Result<(), String> {
+        let account = command
+            .account
+            .ok_or("Can't use /me in non XMPP window".to_string())?;
+        let jid = BareJid::from_str(&command.context)
+            .map_err(|_| "Can't use /me in non XMPP window".to_string())?;
+        let message = {
+            let conversation = aparte.get_mod::<mods::conversation::ConversationMod>();
+            if let Some(conversation) = conversation.get(&account, &jid) {
+                match conversation {
+                    Conversation::Chat(chat) => {
+                        let account = &chat.account;
+                        let us = account.clone().into();
+                        let from: Jid = us;
+                        let to: Jid = chat.contact.clone().into();
+                        let id = Uuid::new_v4();
+                        let timestamp = LocalTz::now().into();
+                        let mut bodies = HashMap::new();
+                        bodies.insert("".to_string(), command.args[0].clone());
+                        Ok(Message::outgoing_chat(
+                            id.to_string(),
+                            timestamp,
+                            &from,
+                            &to,
+                            &bodies,
+                        ))
+                    }
+                    Conversation::Channel(channel) => {
+                        let account = &channel.account;
+                        let mut us = account.clone();
+                        us.resource = channel.nick.clone();
+                        let from: Jid = us.into();
+                        let to: Jid = channel.jid.clone().into();
+                        let id = Uuid::new_v4();
+                        let timestamp = LocalTz::now().into();
+                        let mut bodies = HashMap::new();
+                        bodies.insert("".to_string(), command.args[0].clone());
+                        Ok(Message::outgoing_channel(
+                            id.to_string(),
+                            timestamp,
+                            &from,
+                            &to,
+                            &bodies,
+                        ))
+                    }
+                }
+            } else {
+                Err(format!("Unknown context {}", command.context))
+            }
+        }?;
+        aparte.schedule(Event::SendMessage(account, message));
+        Ok(())
+    }
+
+    pub fn new() -> CommandParser {
+        CommandParser {
+            name: "me",
+            help: r#"/me message
+
+    message       Message to be sent
+
+Description:
+    Send a /me message
+
+Examples:
+    /me loves Aparté"#
+                .to_string(),
+            parse,
+            exec,
+            autocompletions: vec![],
+        }
+    }
+}
+
 impl Aparte {
     pub fn new(config_path: PathBuf) -> Self {
         let mut config_file = match OpenOptions::new()
@@ -770,6 +867,7 @@ impl Aparte {
         self.add_command(msg::new());
         self.add_command(join::new());
         self.add_command(quit::new());
+        self.add_command(me::new());
 
         let mods = Rc::clone(&self.mods);
         for (_, r#mod) in mods.iter() {
