@@ -35,6 +35,7 @@ use xmpp_parsers::pubsub::event::PubSubEvent;
 use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
 use crate::account::{Account, ConnectionInfo};
+use crate::color;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::cursor::Cursor;
@@ -942,7 +943,7 @@ impl Aparte {
     }
 
     pub fn start(&mut self) {
-        self.log(WELCOME.to_string());
+        self.log(color::rainbow(WELCOME));
         self.log(format!("Version: {}", VERSION));
 
         for (_, account) in self.config.accounts.clone() {

@@ -349,7 +349,7 @@ impl fmt::Display for Message {
                         "{}{} - {}\n",
                         color::Fg(color::White),
                         timestamp.format("%T"),
-                        terminus::clean(line)
+                        line
                     )?;
                 }
 
