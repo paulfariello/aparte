@@ -6,7 +6,7 @@ Simple XMPP console client written in Rust and inspired by Profanity.
 Demo
 ====
 
-[![asciicast](https://asciinema.org/a/389329.png)](https://asciinema.org/a/389323)
+[![asciicast](https://asciinema.org/a/389329.png)](https://asciinema.org/a/389329)
 
 Features
 ========
