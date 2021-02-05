@@ -52,9 +52,39 @@ pub fn term_string_visible_len(string: &str) -> usize {
     len
 }
 
-/// Remove all terminal specific chars sequences and truncate the resulting string to max visible
-/// chars. Optionnaly appending the (already clean) append string.
-pub fn term_string_clean_and_truncate(string: &str, max: usize, append: Option<&str>) -> String {
+/// Remove all terminal specific chars sequences
+pub fn clean(string: &str) -> String {
+    let mut output = String::new();
+    let mut iter = string.chars();
+
+    while let Some(c) = iter.next() {
+        match c {
+            '\x1b' => {
+                if let Some(c) = iter.next() {
+                    match c {
+                        '[' => {
+                            while let Some(c) = iter.next() {
+                                match c {
+                                    '\x30'..='\x3f' => {}     // parameter bytes
+                                    '\x20'..='\x2f' => {}     // intermediate bytes
+                                    '\x40'..='\x7e' => break, // final byte
+                                    _ => output.push(c),
+                                }
+                            }
+                        }
+                        _ => output.push(c),
+                    }
+                }
+            }
+            _ => output.push(c),
+        }
+    }
+
+    output
+}
+
+/// Truncate the string to max visible chars. Optionnaly appending the (already clean) 'append' string.
+pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&str>) -> String {
     let mut iter = string.graphemes(true);
     let mut remaining = max;
     if let Some(append) = append {
@@ -63,11 +93,14 @@ pub fn term_string_clean_and_truncate(string: &str, max: usize, append: Option<&
     let mut output = String::new();
 
     while let Some(grapheme) = iter.next() {
+        output.push_str(grapheme);
         match grapheme {
             "\x1b" => {
                 if let Some(grapheme) = iter.next() {
+                    output.push_str(grapheme);
                     if grapheme == "[" {
                         while let Some(grapheme) = iter.next() {
+                            output.push_str(grapheme);
                             let chars = grapheme.chars().collect::<Vec<_>>();
                             if chars.len() == 1 {
                                 match chars[0] {
@@ -77,7 +110,6 @@ pub fn term_string_clean_and_truncate(string: &str, max: usize, append: Option<&
                                     _ => break,
                                 }
                             } else {
-                                output.push_str(grapheme);
                                 remaining -= 1;
                                 break;
                             }
@@ -86,7 +118,6 @@ pub fn term_string_clean_and_truncate(string: &str, max: usize, append: Option<&
                 }
             }
             _ => {
-                output.push_str(grapheme);
                 remaining -= 1;
             }
         }
@@ -1682,33 +1713,33 @@ mod tests {
         let input = "test \x1b[5mBlink";
 
         // When
-        let clean = term_string_clean_and_truncate(input, 100, None);
+        let cleaned = clean(input);
 
         // Then
-        assert_eq!(clean, "test Blink");
+        assert_eq!(cleaned, "test Blink");
     }
 
     #[test]
-    fn test_term_string_clean_and_truncate() {
+    fn test_term_string_visible_truncate() {
         // Given
         let input = "test \x1b[5mBlink";
 
         // When
-        let clean = term_string_clean_and_truncate(input, 6, None);
+        let truncated = term_string_visible_truncate(input, 6, None);
 
         // Then
-        assert_eq!(clean, "test B");
+        assert_eq!(truncated, "test \x1b[5mB");
     }
 
     #[test]
-    fn test_term_string_clean_and_truncate_and_append() {
+    fn test_term_string_visible_truncate_and_append() {
         // Given
         let input = "test \x1b[5mBlink";
 
         // When
-        let clean = term_string_clean_and_truncate(input, 6, Some("…"));
+        let truncated = term_string_visible_truncate(input, 6, Some("…"));
 
         // Then
-        assert_eq!(clean, "test …");
+        assert_eq!(truncated, "test …");
     }
 }

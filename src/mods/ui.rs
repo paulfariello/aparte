@@ -104,7 +104,7 @@ where
         );
 
         if let Some(name) = &self.name {
-            let clean_name = terminus::term_string_clean_and_truncate(
+            let clean_name = terminus::term_string_visible_truncate(
                 name,
                 dimension.w.unwrap().into(),
                 Some("…"),
@@ -118,7 +118,7 @@ where
                 let subjects = self.subjects.get(name).unwrap();
                 if !subjects.is_empty() {
                     if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
-                        let clean_subject = terminus::term_string_clean_and_truncate(
+                        let clean_subject = terminus::term_string_visible_truncate(
                             subject,
                             remaining.into(),
                             Some("…"),
@@ -152,7 +152,13 @@ where
             }
             UIEvent::Core(Event::Subject(_, jid, subjects)) => {
                 let window: BareJid = jid.clone().into();
-                self.add_subjects(window.to_string(), subjects.clone());
+                self.add_subjects(
+                    window.to_string(),
+                    subjects
+                        .iter()
+                        .map(|(lang, subject)| (lang.clone(), terminus::clean(subject)))
+                        .collect(),
+                );
             }
             _ => {}
         }
@@ -185,8 +191,8 @@ impl WinBar {
         }
     }
 
-    pub fn add_window(&mut self, window: &str) {
-        self.windows.push(window.to_string());
+    pub fn add_window(&mut self, window: String) {
+        self.windows.push(window);
         self.dirty = true;
     }
 
@@ -298,21 +304,20 @@ where
     fn event(&mut self, event: &mut UIEvent) {
         match event {
             UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_current_window(name);
+                self.set_current_window(&terminus::clean(name));
             }
             UIEvent::AddWindow(name, _) => {
-                self.add_window(name);
+                self.add_window(terminus::clean(name));
             }
             UIEvent::Core(Event::Connected(account, _)) => {
-                self.connection = Some(account.to_string());
+                self.connection = Some(terminus::clean(&account.to_string()));
                 self.dirty = true;
             }
             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                 let mut highlighted = None;
+                let messaged_window = terminus::clean(&message.from.to_string());
                 for window in &self.windows {
-                    if &message.from.to_string() == window
-                        && Some(window) != self.current_window.as_ref()
-                    {
+                    if &messaged_window == window && Some(window) != self.current_window.as_ref() {
                         highlighted = Some(window.clone());
                     }
                 }
@@ -344,20 +349,23 @@ impl fmt::Display for Message {
                         "{}{} - {}\n",
                         color::Fg(color::White),
                         timestamp.format("%T"),
-                        line
+                        terminus::clean(line)
                     )?;
                 }
 
                 Ok(())
             }
             Message::Xmpp(message) => {
-                let author = match &message.type_ {
-                    XmppMessageType::Channel => match &message.from_full {
-                        Jid::Full(from) => from.resource.clone(),
-                        Jid::Bare(from) => from.to_string(),
-                    },
-                    XmppMessageType::Chat => message.from.to_string(),
-                };
+                let author = terminus::clean(
+                    &match &message.type_ {
+                        XmppMessageType::Channel => match &message.from_full {
+                            Jid::Full(from) => from.resource.clone(),
+                            Jid::Bare(from) => from.to_string(),
+                        },
+                        XmppMessageType::Chat => message.from.to_string(),
+                    }
+                    .to_string(),
+                );
 
                 let timestamp =
                     Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
@@ -369,7 +377,7 @@ impl fmt::Display for Message {
                 };
                 let padding = " ".repeat(padding_len);
 
-                let (r, g, b) = id_to_rgb(&author.to_string());
+                let (r, g, b) = id_to_rgb(&author);
 
                 let mut attributes = "".to_string();
                 if message.has_multiple_version() {
@@ -405,10 +413,10 @@ impl fmt::Display for Message {
                 };
 
                 if let Some(line) = iter.next() {
-                    write!(f, "{}", line)?;
+                    write!(f, "{}", terminus::clean(line))?;
                 }
                 while let Some(line) = iter.next() {
-                    write!(f, "\n{}{}", padding, line)?;
+                    write!(f, "\n{}{}", padding, terminus::clean(line))?;
                 }
 
                 Ok(())
@@ -423,7 +431,7 @@ impl fmt::Display for contact::Group {
             f,
             "{}{}{}",
             color::Fg(color::Yellow),
-            self.0,
+            terminus::clean(&self.0),
             color::Fg(color::White)
         )
     }
@@ -442,8 +450,19 @@ impl fmt::Display for contact::Contact {
         };
 
         match &self.name {
-            Some(name) => write!(f, "{} ({}){}", name, self.jid, color::Fg(color::White)),
-            None => write!(f, "{}{}", self.jid, color::Fg(color::White)),
+            Some(name) => write!(
+                f,
+                "{} ({}){}",
+                terminus::clean(name),
+                terminus::clean(&self.jid.to_string()),
+                color::Fg(color::White)
+            ),
+            None => write!(
+                f,
+                "{}{}",
+                terminus::clean(&self.jid.to_string()),
+                color::Fg(color::White)
+            ),
         }
     }
 }
@@ -451,8 +470,13 @@ impl fmt::Display for contact::Contact {
 impl fmt::Display for contact::Bookmark {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.name {
-            Some(name) => write!(f, "{}{}", name, color::Fg(color::White)),
-            None => write!(f, "{}{}", self.jid, color::Fg(color::White)),
+            Some(name) => write!(f, "{}{}", terminus::clean(name), color::Fg(color::White)),
+            None => write!(
+                f,
+                "{}{}",
+                terminus::clean(&self.jid.to_string()),
+                color::Fg(color::White)
+            ),
         }
     }
 }
@@ -492,7 +516,7 @@ impl fmt::Display for RosterItem {
         match &self {
             Self::Contact(contact) => contact.fmt(f),
             Self::Bookmark(bookmark) => bookmark.fmt(f),
-            Self::Window(window) => write!(f, "{}", window),
+            Self::Window(window) => write!(f, "{}", terminus::clean(window)),
         }
     }
 }
@@ -504,7 +528,7 @@ impl fmt::Display for conversation::Occupant {
             f,
             "{}{}{}",
             color::Fg(color::Rgb(r, g, b)),
-            self.nick,
+            terminus::clean(&self.nick),
             color::Fg(color::White)
         )
     }
