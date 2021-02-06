@@ -1,4 +1,4 @@
-Aparté [![Build Status](https://www.travis-ci.org/paulfariello/aparte.svg?branch=master)](https://www.travis-ci.org/paulfariello/aparte)
+Aparté [![Build Status](https://www.travis-ci.com/paulfariello/aparte.svg?branch=master)](https://www.travis-ci.com/paulfariello/aparte)
 ======
 
 Simple XMPP console client written in Rust and inspired by Profanity.
@@ -44,6 +44,38 @@ Or with your favorite aur-helper:
 
 ```
 paru aparte-git
+```
+
+Windows with WSL
+----------------
+
+Aparté should be available inside the Windows subsystem for Linux.
+The following instruction are made for a Debian based subsystem (debian or ubuntu for example).
+
+First enter the WSL:
+
+```
+PS C:\> debian
+```
+
+Then ensure the required dependencies are installed.
+
+```
+sudo apt update
+sudo apt install libssl-dev pkg-config curl
+```
+
+Rust can be installed with rustup.
+
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+Finally install Aparté.
+
+```
+cargo install --git https://github.com/paulfariello/aparte --branch develop
 ```
 
 Contact
