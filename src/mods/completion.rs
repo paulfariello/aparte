@@ -148,11 +148,11 @@ impl CompletionMod {
             }
         } else {
             let conversation = BareJid::from_str(context);
-            match (account, conversation) {
+            match (account, &conversation) {
                 (Some(account), Ok(conversation)) => {
                     let conversation_mod = aparte.get_mod::<ConversationMod>();
                     if let Some(Conversation::Channel(channel)) =
-                        conversation_mod.get(account, &conversation)
+                        conversation_mod.get(account, conversation)
                     {
                         let words =
                             Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
