@@ -1372,6 +1372,7 @@ where
     items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
     sort_item: Option<Box<dyn FnMut(&V, &V) -> cmp::Ordering>>,
+    #[allow(dead_code)]
     sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     dirty: bool,
