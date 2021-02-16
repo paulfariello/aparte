@@ -7,7 +7,7 @@ where
     L: PartialEq<&'b str>,
 {
     prefered_langs.push("");
-    let max_rank = prefered_langs.len();
+    let max_rank = prefered_langs.len() - 1;
     items
         .into_iter()
         .fold(None, |prefered, item| match prefered {
