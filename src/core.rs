@@ -986,6 +986,7 @@ impl Aparte {
                 let rand_string: String = rand::thread_rng()
                     .sample_iter(&rand::distributions::Alphanumeric)
                     .take(5)
+                    .map(char::from)
                     .collect();
                 jid.with_resource(format!("aparte_{}", rand_string))
             }
