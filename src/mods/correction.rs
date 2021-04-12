@@ -65,7 +65,9 @@ impl CorrectionMod {
 impl ModTrait for CorrectionMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
-        disco.add_feature(ns::MESSAGE_CORRECT)
+        disco.add_feature(ns::MESSAGE_CORRECT);
+
+        Ok(())
     }
 
     fn can_handle_xmpp_message(

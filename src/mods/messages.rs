@@ -54,7 +54,11 @@ impl MessagesMod {
         for payload in message.payloads.iter().cloned() {
             if let Ok(pubsub_event) = xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload) {
                 // TODO move to pubsub mod
-                aparte.schedule(Event::PubSub(account.clone(), pubsub_event));
+                aparte.schedule(Event::PubSub {
+                    account: account.clone(),
+                    from: message.from.clone(),
+                    event: pubsub_event
+                });
             }
         }
     }
@@ -63,7 +67,9 @@ impl MessagesMod {
 impl ModTrait for MessagesMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
-        disco.add_feature(ns::MESSAGE_CORRECT)
+        disco.add_feature(ns::MESSAGE_CORRECT);
+
+        Ok(())
     }
 
     fn can_handle_xmpp_message(

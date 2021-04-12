@@ -11,3 +11,4 @@ pub mod disco;
 pub mod mam;
 pub mod messages;
 pub mod ui;
+pub mod omemo;
