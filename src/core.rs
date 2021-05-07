@@ -35,6 +35,7 @@ use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
 use xmpp_parsers::pubsub::event::PubSubEvent;
+use xmpp_parsers::stanza_error::StanzaError;
 use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
 use crate::account::{Account, ConnectionInfo};
@@ -93,6 +94,8 @@ pub enum Event {
     },
     Leave(Channel),
     Iq(Account, iq::Iq),
+    IqResult { account: Account, uuid: Uuid, from: Option<Jid>, payload: Option<Element> },
+    IqError { account: Account, uuid: Uuid, from: Option<Jid>, payload: StanzaError },
     Disco(Account),
     PubSub {
         account: Account,
@@ -378,9 +381,10 @@ pub struct Aparte {
     mods: Rc<LinkedHashMap<TypeId, RefCell<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
-    event_queue: Vec<Event>,
+    event_queue: Vec<(Event, Option<TypeId>)>,
     send_queue: VecDeque<(Account, Element)>,
     event_channel: Option<mpsc::Sender<Event>>,
+    pending_iq: HashMap<Uuid, TypeId>,
     /// Aparté main configuration
     pub config: Config,
 }
@@ -840,6 +844,7 @@ impl Aparte {
             send_queue: VecDeque::new(),
             event_channel: None,
             config: config.clone(),
+            pending_iq: HashMap::new(),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
@@ -1101,6 +1106,14 @@ impl Aparte {
         self.send_queue.push_back((account.clone(), stanza));
     }
 
+    pub fn iq<T>(&mut self, account: &Account, iq: Iq)
+    where
+        T: 'static,
+    {
+        self.pending_iq.insert(Uuid::from_str(&iq.id).unwrap(), TypeId::of::<T>());
+        self.send(account, iq.into());
+    }
+
     async fn send_loop(&mut self) {
         for (account, stanza) in self.send_queue.drain(..) {
             let mut raw = Vec::<u8>::new();
@@ -1230,12 +1243,21 @@ impl Aparte {
 
     pub async fn event_loop(&mut self) -> Result<(), ()> {
         while !self.event_queue.is_empty() {
-            let event = self.event_queue.remove(0);
+            let (event, mod_id) = self.event_queue.remove(0);
             log::debug!("Event: {:?}", event);
             {
                 let mods = Rc::clone(&self.mods);
-                for (_, r#mod) in mods.iter() {
-                    r#mod.borrow_mut().on_event(self, &event);
+                if let Some(mod_id) = mod_id {
+                    let r#mod = mods.get(&mod_id);
+                    if let Some(r#mod) = r#mod {
+                        r#mod.borrow_mut().on_event(self, &event);
+                    } else {
+                        warn!("Event directed to unknown mod: {:?} -> {:?}", event, mod_id);
+                    }
+                } else {
+                    for (_, r#mod) in mods.iter() {
+                        r#mod.borrow_mut().on_event(self, &event);
+                    }
                 }
                 self.send_loop().await;
             }
@@ -1341,7 +1363,11 @@ impl Aparte {
     }
 
     pub fn schedule(&mut self, event: Event) {
-        self.event_queue.push(event);
+        self.event_queue.push((event, None));
+    }
+
+    pub fn schedule_directed(&mut self, event: Event, mod_id: TypeId) {
+        self.event_queue.push((event, Some(mod_id)));
     }
 
     pub fn log(&mut self, message: String) {
@@ -1353,14 +1379,8 @@ impl Aparte {
         if let Ok(message) = XmppParsersMessage::try_from(stanza.clone()) {
             self.handle_xmpp_message(account, message, None, false);
         } else if let Ok(iq) = Iq::try_from(stanza.clone()) {
-            if let IqType::Error(stanza) = iq.payload.clone() {
-                if let Some(text) = stanza.texts.get("en") {
-                    let message = Message::log(text.clone());
-                    self.schedule(Event::Message(Some(account.clone()), message));
-                }
-            }
-            self.schedule(Event::Iq(account, iq));
-        } else if let Ok(presence) = Presence::try_from(stanza) {
+            self.handle_iq(account, iq);
+        } else if let Ok(presence) = Presence::try_from(stanza.clone()) {
             self.schedule(Event::Presence(account, presence));
         }
     }
@@ -1393,6 +1413,33 @@ impl Aparte {
                 .handle_xmpp_message(self, &account, &message, &delay, archive);
         } else {
             log::info!("Don't know how to handle message: {:?}", message);
+        }
+    }
+
+    fn handle_iq(&mut self, account: Account, iq: Iq) {
+        match iq.payload {
+            IqType::Error(payload) => {
+                if let Ok(uuid) = Uuid::from_str(&iq.id) {
+                    if let Some(mod_id) = self.pending_iq.remove(&uuid) {
+                        self.schedule_directed(Event::IqError { account, uuid, from: iq.from.clone(), payload }, mod_id);
+                    }
+                } else {
+                    if let Some(text) = payload.texts.get("en") {
+                        let message = Message::log(text.clone());
+                        self.schedule(Event::Message(Some(account.clone()), message));
+                    }
+                }
+            }
+            IqType::Result(payload) => {
+                if let Ok(uuid) = Uuid::from_str(&iq.id) {
+                    if let Some(mod_id) = self.pending_iq.remove(&uuid) {
+                        self.schedule_directed(Event::IqResult { account, uuid, from: iq.from.clone(), payload }, mod_id);
+                    }
+                }
+            }
+            _ => {
+                self.schedule(Event::Iq(account, iq));
+            }
         }
     }
 }
