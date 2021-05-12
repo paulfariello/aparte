@@ -524,11 +524,17 @@ impl fmt::Display for RosterItem {
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (r, g, b) = id_to_rgb(&self.nick);
+        let mut nick = self.nick.clone();
+        if nick.len() > 40 {
+            nick.truncate(39);
+            nick.push('…');
+        };
+
         write!(
             f,
             "{}{}{}",
             color::Fg(color::Rgb(r, g, b)),
-            terminus::clean(&self.nick),
+            terminus::clean(&nick),
             color::Fg(color::White)
         )
     }
