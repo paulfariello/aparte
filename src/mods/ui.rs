@@ -1245,9 +1245,14 @@ impl TermionEventStream {
 
         let waker_for_tty = waker.clone();
         thread::spawn(move || {
-            for i in get_tty().unwrap().bytes() {
-                if send.send(i).is_err() {
-                    return;
+            let mut input = get_tty().expect("cannot get tty for stdin reading");
+            let mut buf = [0u8; 256];
+            while let Ok(n) = input.read(&mut buf[..]) {
+                for byte in buf[..n].iter() {
+                    if send.send(Ok(*byte)).is_err() {
+                        // channel has been closed, get out
+                        return;
+                    }
                 }
                 waker_for_tty.wake();
             }
