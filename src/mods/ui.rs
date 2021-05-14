@@ -1246,10 +1246,10 @@ impl TermionEventStream {
         let waker_for_tty = waker.clone();
         thread::spawn(move || {
             for i in get_tty().unwrap().bytes() {
-                waker_for_tty.wake();
                 if send.send(i).is_err() {
                     return;
                 }
+                waker_for_tty.wake();
             }
         });
 
