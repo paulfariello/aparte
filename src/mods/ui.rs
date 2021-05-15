@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::io::Error as IoError;
+use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::io::{Read, Stdout, Write};
 use std::pin::Pin;
 use std::rc::Rc;
@@ -1247,14 +1247,25 @@ impl TermionEventStream {
         thread::spawn(move || {
             let mut input = get_tty().expect("cannot get tty for stdin reading");
             let mut buf = [0u8; 256];
-            while let Ok(n) = input.read(&mut buf[..]) {
-                for byte in buf[..n].iter() {
-                    if send.send(Ok(*byte)).is_err() {
-                        // channel has been closed, get out
-                        return;
+            loop {
+                match input.read(&mut buf[..]) {
+                    Ok(n) => {
+                        for byte in buf[..n].iter() {
+                            if send.send(Ok(*byte)).is_err() {
+                                // channel has been closed, get out
+                                return;
+                            }
+                        }
+                        waker_for_tty.wake();
                     }
+                    Err(err) => match err.kind() {
+                        IoErrorKind::Interrupted => continue,
+                        _ => {
+                            error!("Cannot read input pipe: {}", err);
+                            break;
+                        }
+                    },
                 }
-                waker_for_tty.wake();
             }
         });
 
