@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use backtrace::Backtrace;
 use chrono::offset::{Local, TimeZone};
 use chrono::Local as LocalTz;
 use futures::task::{AtomicWaker, Context, Poll};
@@ -12,10 +13,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::io::{Read, Stdout, Write};
+use std::panic;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use termion::color;
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
@@ -582,6 +584,61 @@ impl Scheduler {
     }
 }
 
+struct PanicHandler {
+    panic: Arc<Mutex<Option<String>>>,
+    backtrace: Arc<Mutex<Option<Backtrace>>>,
+}
+
+impl PanicHandler {
+    pub fn new() -> Self {
+        let panic = Arc::new(Mutex::new(None));
+        let backtrace = Arc::new(Mutex::new(None));
+
+        let panic_for_hook = panic.clone();
+        let backtrace_for_hook = backtrace.clone();
+        panic::set_hook(Box::new(move |info| {
+            let panic = format!("{}", info);
+            panic_for_hook
+                .lock()
+                .expect("cannot lock panic")
+                .replace(panic);
+
+            let backtrace = Backtrace::new_unresolved();
+            backtrace_for_hook
+                .lock()
+                .expect("cannot lock backtrace")
+                .replace(backtrace);
+        }));
+
+        Self { panic, backtrace }
+    }
+}
+
+impl Drop for PanicHandler {
+    fn drop(&mut self) {
+        if let Some(panic) = self.panic.lock().expect("cannot lock panic").as_ref() {
+            println!("Oops Aparté {}", panic);
+            error!("Oops Aparté {}", panic);
+            println!("This isn’t normal behavior. Please report issue.");
+            error!("This isn’t normal behavior. Please report issue.");
+            if let Some(backtrace) = self
+                .backtrace
+                .lock()
+                .expect("cannot lock backtrace")
+                .as_mut()
+            {
+                println!("Aparté is gathering more info in logfile…");
+                backtrace.resolve();
+                error!("{:?}", backtrace);
+                println!("All done.");
+                let data_dir = dirs::data_dir().unwrap();
+                let aparte_data = data_dir.join("aparte").join("aparte.log");
+                println!("Please check {}", aparte_data.to_str().unwrap());
+            }
+        }
+    }
+}
+
 pub struct UIMod {
     screen: Screen<Stdout>,
     windows: Vec<String>,
@@ -592,11 +649,17 @@ pub struct UIMod {
     dimension: Option<Dimension>,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
+    #[allow(dead_code)]
+    panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
 }
 
 impl UIMod {
     pub fn new() -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
+        let screen = AlternateScreen::from(stdout);
+
+        let panic_handler = PanicHandler::new();
+
         let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Vertical).with_event(
             |layout, event| {
                 for child in layout.iter_children_mut() {
@@ -675,7 +738,7 @@ impl UIMod {
         layout.push(input);
 
         Self {
-            screen: AlternateScreen::from(stdout),
+            screen,
             root: layout,
             dimension: None,
             windows: Vec::new(),
@@ -684,6 +747,7 @@ impl UIMod {
             conversations: HashMap::new(),
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
+            panic_handler,
         }
     }
 
