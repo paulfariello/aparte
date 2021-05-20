@@ -264,11 +264,19 @@ where
         }
 
         let mut first = true;
+        let mut remaining = self.highlighted.len();
+
         for window in &self.highlighted {
-            // Keep space for at least ", …]"
-            if window.len() + written + 4 > dimension.w.unwrap() as usize {
+            // Keep space for at least ", +X]"
+            let remaining_len = if remaining > 1 {
+                format!("{}", remaining).len() + 4
+            } else {
+                0
+            };
+
+            if window.len() + written + remaining_len > dimension.w.unwrap() as usize {
                 if !first {
-                    vprint!(screen, ", …");
+                    vprint!(screen, ", +{}", remaining);
                 }
                 break;
             }
@@ -289,6 +297,7 @@ where
                 termion::style::NoBold
             );
             written += window.len();
+            remaining -= 1;
         }
 
         if !first {
