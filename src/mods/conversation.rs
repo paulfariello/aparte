@@ -135,7 +135,41 @@ impl ModTrait for ConversationMod {
                     }
                 }
             }
+            Event::Leave(channel) => {
+                self.conversations.remove(&channel.clone().into());
+            }
             _ => {}
+        }
+    }
+}
+
+impl Into<ConversationIndex> for conversation::Channel {
+    fn into(self) -> ConversationIndex {
+        ConversationIndex {
+            account: self.account,
+            jid: self.jid,
+        }
+    }
+}
+
+impl Into<ConversationIndex> for conversation::Chat {
+    fn into(self) -> ConversationIndex {
+        ConversationIndex {
+            account: self.account,
+            jid: self.contact,
+        }
+    }
+}
+
+impl Into<ConversationIndex> for conversation::Conversation {
+    fn into(self) -> ConversationIndex {
+        match self {
+            conversation::Conversation::Channel(channel) => {
+                channel.into()
+            }
+            conversation::Conversation::Chat(chat) => {
+                chat.into()
+            }
         }
     }
 }

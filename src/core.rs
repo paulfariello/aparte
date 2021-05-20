@@ -37,6 +37,7 @@ use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 use crate::account::{Account, ConnectionInfo};
 use crate::color;
 use crate::command::{Command, CommandParser};
+use crate::conversation::{Channel, Conversation};
 use crate::config::Config;
 use crate::cursor::Cursor;
 use crate::message::Message;
@@ -82,6 +83,7 @@ pub enum Event {
         channel: FullJid,
         user_request: bool,
     },
+    Leave(Channel),
     Iq(Account, iq::Iq),
     Disco(Account),
     PubSub(Account, PubSubEvent),
@@ -436,7 +438,21 @@ Examples:
     };
     let window = window.or(current).clone();
     if let Some(window) = window {
-        aparte.schedule(Event::Close(window));
+        // Close window
+        aparte.schedule(Event::Close(window.clone()));
+
+        // Leave channel if windows is a channel
+        if let Some(account) = aparte.current_account() {
+            if let Ok(jid) = BareJid::from_str(&window) {
+                let conversation =  {
+                    let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
+                    conversation_mod.get(&account, &jid).cloned()
+                };
+                if let Some(Conversation::Channel(channel)) = conversation {
+                    aparte.schedule(Event::Leave(channel));
+                }
+            }
+        }
     }
     Ok(())
 });
@@ -1189,7 +1205,6 @@ impl Aparte {
                     };
                     let from: Jid = account.clone().into();
 
-                    // Send presence in the channel
                     let mut presence = Presence::new(PresenceType::None);
                     presence = presence.with_to(Jid::Full(to.clone()));
                     presence = presence.with_from(from);
@@ -1203,6 +1218,14 @@ impl Aparte {
                         channel: to,
                         user_request,
                     });
+                }
+                Event::Leave(channel) => {
+                    // Send presence in the channel
+                    let mut presence = Presence::new(PresenceType::Unavailable);
+                    presence = presence.with_to(channel.jid.clone());
+                    presence = presence.with_from(channel.account.clone());
+                    presence.add_payload(Muc::new());
+                    self.send(&channel.account, presence.into());
                 }
                 Event::Quit => {
                     return Err(());
