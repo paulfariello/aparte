@@ -88,6 +88,7 @@ pub enum Event {
     Presence(Account, presence::Presence),
     ReadPassword(Command),
     Win(String),
+    Close(String),
     Contact(Account, contact::Contact),
     ContactUpdate(Account, contact::Contact),
     Bookmark(contact::Bookmark),
@@ -406,6 +407,37 @@ Examples:
 },
 |aparte, _command| {
     aparte.schedule(Event::Win(window.clone()));
+    Ok(())
+});
+
+command_def!(close,
+r#"Usage: /close [<window>]
+
+    window        Name of the window to close
+
+Description:
+    Close the current or a given window.
+
+Examples:
+    /close
+    /close contact@server.tld"#,
+{
+    window: Option<String> = {
+        completion: (|aparte, _command| {
+            let ui = aparte.get_mod::<mods::ui::UIMod>();
+            ui.get_windows()
+        })
+    }
+},
+|aparte, _command| {
+    let current =  {
+        let ui = aparte.get_mod::<mods::ui::UIMod>();
+        ui.current_window().cloned()
+    };
+    let window = window.or(current).clone();
+    if let Some(window) = window {
+        aparte.schedule(Event::Close(window));
+    }
     Ok(())
 });
 
@@ -866,6 +898,7 @@ impl Aparte {
         self.add_command(help::new());
         self.add_command(connect::new());
         self.add_command(win::new());
+        self.add_command(close::new());
         self.add_command(msg::new());
         self.add_command(join::new());
         self.add_command(quit::new());

@@ -430,7 +430,7 @@ impl<E, W> dyn View<E, W> where W: Write {}
 
 pub struct FrameLayout<E, W, K>
 where
-    K: Hash + Eq,
+    K: Hash + Eq + Clone,
     W: Write,
 {
     children: HashMap<K, (Dimension, Box<dyn View<E, W>>)>,
@@ -442,7 +442,7 @@ where
 
 impl<E, W, K> FrameLayout<E, W, K>
 where
-    K: Hash + Eq,
+    K: Hash + Eq + Clone,
     W: Write,
 {
     pub fn new() -> Self {
@@ -503,6 +503,11 @@ where
     }
 
     #[allow(unused)]
+    pub fn get_current_key<'a>(&'a self) -> Option<&'a K> {
+        self.current.as_ref()
+    }
+
+    #[allow(unused)]
     pub fn insert<T>(&mut self, key: K, view: T)
     where
         T: View<E, W> + 'static,
@@ -514,6 +519,14 @@ where
     pub fn insert_boxed(&mut self, key: K, view: Box<dyn View<E, W> + 'static>) {
         let child_dimension = Dimension::new();
         self.children.insert(key, (child_dimension, view));
+    }
+
+    pub fn remove(&mut self, key: &K)
+    {
+        self.children.remove(key);
+        if Some(key) == self.current.as_ref() {
+            self.current = self.children.keys().next().cloned();
+        }
     }
 
     pub fn iter_children_mut<'a>(
@@ -532,7 +545,7 @@ where
 
 impl<E, W, K> View<E, W> for FrameLayout<E, W, K>
 where
-    K: Hash + Eq,
+    K: Hash + Eq + Clone,
     W: Write,
 {
     fn measure(
@@ -1646,7 +1659,7 @@ where
         match self.items.entry(group) {
             Entry::Vacant(_) => Err(()),
             Entry::Occupied(mut occupied) => {
-                self.dirty = occupied.get_mut().remove(&item);
+                self.dirty |= occupied.get_mut().remove(&item);
                 Ok(())
             }
         }

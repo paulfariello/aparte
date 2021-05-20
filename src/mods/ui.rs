@@ -198,6 +198,10 @@ impl WinBar {
         self.dirty = true;
     }
 
+    pub fn del_window(&mut self, window: &str) {
+        self.windows.retain(|w| *w == window);
+    }
+
     pub fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
         // could use self.highlighted.drain_filter(|w| w == &window);
@@ -310,6 +314,9 @@ where
             }
             UIEvent::AddWindow(name, _) => {
                 self.add_window(terminus::clean(name));
+            }
+            UIEvent::Core(Event::Close(window)) => {
+                self.del_window(&window);
             }
             UIEvent::Core(Event::Connected(account, _)) => {
                 self.connection = Some(terminus::clean(&account.to_string()));
@@ -669,6 +676,15 @@ impl UIMod {
                         child.event(&mut UIEvent::AddWindow(name.to_string(), None));
                     }
                 }
+                UIEvent::Core(Event::Close(window)) => {
+                    frame.remove(&window);
+
+                    // propagate Close with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::Core(Event::Close(window.clone())));
+                    }
+                }
                 UIEvent::Core(Event::Key(Key::PageUp))
                 | UIEvent::Core(Event::Key(Key::PageDown)) => {
                     if let Some(current) = frame.get_current_mut() {
@@ -908,6 +924,10 @@ impl UIMod {
     pub fn get_windows(&self) -> Vec<String> {
         self.windows.clone()
     }
+
+    pub fn current_window<'a>(&'a self) -> Option<&'a String> {
+        self.current_window.as_ref()
+    }
 }
 
 impl ModTrait for UIMod {
@@ -985,6 +1005,10 @@ impl ModTrait for UIMod {
                 UIEvent::AddWindow(name, _) => {
                     let group = contact::Group(String::from("Windows"));
                     view.insert(RosterItem::Window(name.clone()), Some(group));
+                }
+                UIEvent::Core(Event::Close(window)) => {
+                    let group = contact::Group(String::from("Windows"));
+                    let _ = view.remove(RosterItem::Window(window.clone()), Some(group));
                 }
                 _ => {}
             });
@@ -1124,6 +1148,19 @@ impl ModTrait for UIMod {
                 self.root.layout(&mut dimension, 1, 1);
                 self.root.render(&dimension, &mut self.screen);
                 self.dimension = Some(dimension);
+            }
+            Event::Close(window) => {
+                if window != "console" {
+                    self.windows.retain(|win| win != window);
+                    self.unread_windows.remove(window);
+                    if Some(window) == self.current_window.as_ref() {
+                        let current = self.windows.iter().next().cloned();
+                        if let Some(current) = current {
+                            self.change_window(&current);
+                        }
+                    }
+                    self.root.event(&mut UIEvent::Core(Event::Close(window.clone())))
+                }
             }
             Event::Key(key) => {
                 match key {
