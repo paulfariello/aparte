@@ -92,9 +92,10 @@ where
         );
         vprint!(
             screen,
-            "{}{}",
+            "{}{}{}",
             color::Bg(color::Blue),
-            color::Fg(color::White)
+            color::Fg(color::White),
+            termion::style::Bold,
         );
 
         vprint!(screen, "{}", " ".repeat(dimension.w.unwrap().into()));
@@ -133,9 +134,10 @@ where
 
         vprint!(
             screen,
-            "{}{}",
+            "{}{}{}",
             color::Bg(color::Reset),
-            color::Fg(color::Reset)
+            color::Fg(color::Reset),
+            termion::style::NoBold
         );
 
         restore_cursor!(screen);
