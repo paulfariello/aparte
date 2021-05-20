@@ -201,7 +201,9 @@ impl WinBar {
     }
 
     pub fn del_window(&mut self, window: &str) {
-        self.windows.retain(|w| *w == window);
+        self.windows.retain(|win| win != window);
+        self.highlighted.retain(|win| win != window);
+        self.dirty = true;
     }
 
     pub fn set_current_window(&mut self, window: &str) {
