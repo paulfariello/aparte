@@ -82,7 +82,9 @@ Configuration
 =============
 
 Aparté can be configured with a configuration file.
-The configuration file should be placed in `$XDG_CONFIG/aparte/config.toml`.
+The configuration file should be placed in
+`$XDG_CONFIG_HOME/aparte/config.toml`. If `$XDG_CONFIG_HOME` is not set,
+Aparte will fallback to `$HOME/.config/aparte/config.toml`.
 
 The configuration file should look like the following:
 
