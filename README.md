@@ -78,6 +78,22 @@ Finally install Aparté.
 cargo install --git https://github.com/paulfariello/aparte --branch develop
 ```
 
+Configuration
+=============
+
+Aparté can be configured with a configuration file.
+The configuration file should be placed in `$XDG_CONFIG/aparte/config.toml`.
+
+The configuration file should look like the following:
+
+```
+[accounts]
+
+[accounts.example]
+jid = "me@example.org/aparte"
+autoconnect = true
+```
+
 Contact
 -------
 
