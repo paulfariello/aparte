@@ -439,50 +439,6 @@ impl fmt::Display for contact::Group {
     }
 }
 
-impl fmt::Display for contact::Contact {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.presence {
-            contact::Presence::Available | contact::Presence::Chat => {
-                write!(f, "{}", color::Fg(color::Green))?
-            }
-            contact::Presence::Away
-            | contact::Presence::Dnd
-            | contact::Presence::Xa
-            | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
-        };
-
-        match &self.name {
-            Some(name) => write!(
-                f,
-                "{} ({}){}",
-                terminus::clean(name),
-                terminus::clean(&self.jid.to_string()),
-                color::Fg(color::White)
-            ),
-            None => write!(
-                f,
-                "{}{}",
-                terminus::clean(&self.jid.to_string()),
-                color::Fg(color::White)
-            ),
-        }
-    }
-}
-
-impl fmt::Display for contact::Bookmark {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.name {
-            Some(name) => write!(f, "{}{}", terminus::clean(name), color::Fg(color::White)),
-            None => write!(
-                f,
-                "{}{}",
-                terminus::clean(&self.jid.to_string()),
-                color::Fg(color::White)
-            ),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Ord, PartialOrd)]
 pub enum RosterItem {
     Contact(contact::Contact),
@@ -516,9 +472,57 @@ impl Eq for RosterItem {}
 impl fmt::Display for RosterItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Self::Contact(contact) => contact.fmt(f),
-            Self::Bookmark(bookmark) => bookmark.fmt(f),
-            Self::Window(window) => write!(f, "{}", terminus::clean(window)),
+            Self::Contact(contact) => {
+                match contact.presence {
+                    contact::Presence::Available | contact::Presence::Chat => {
+                        write!(f, "{}", color::Fg(color::Green))?
+                    }
+                    contact::Presence::Away
+                    | contact::Presence::Dnd
+                    | contact::Presence::Xa
+                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
+                };
+
+                let mut disp = match &contact.name {
+                    Some(name) => format!(
+                        "{} ({})",
+                        terminus::clean(name),
+                        terminus::clean(&contact.jid.to_string()),
+                    ),
+                    None => terminus::clean(&contact.jid.to_string()),
+                };
+
+                if disp.len() > 40 {
+                    disp.truncate(39);
+                    disp.push('…');
+                }
+
+                write!(f, "{}{}", disp, color::Fg(color::White))
+            },
+
+            Self::Bookmark(bookmark) => {
+                let mut disp = match &bookmark.name {
+                    Some(name) => terminus::clean(name),
+                    None => terminus::clean(&bookmark.jid.to_string()),
+                };
+
+                if disp.len() > 40 {
+                    disp.truncate(39);
+                    disp.push('…');
+                }
+
+                write!(f, "{}{}", disp, color::Fg(color::White))
+            },
+            Self::Window(window) => {
+                let mut disp = terminus::clean(window);
+
+                if disp.len() > 40 {
+                    disp.truncate(39);
+                    disp.push('…');
+                }
+
+                write!(f, "{}", disp)
+            }
         }
     }
 }
@@ -530,7 +534,7 @@ impl fmt::Display for conversation::Occupant {
         if nick.len() > 40 {
             nick.truncate(39);
             nick.push('…');
-        };
+        }
 
         write!(
             f,
