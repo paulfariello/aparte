@@ -168,8 +168,8 @@ where
 
     fn get_layouts(&self) -> Layouts {
         Layouts {
-            width: Layout::MatchParent,
-            height: Layout::Absolute(1),
+            width: Layout::match_parent(),
+            height: Layout::absolute(1),
         }
     }
 }
@@ -334,8 +334,8 @@ where
 
     fn get_layouts(&self) -> Layouts {
         Layouts {
-            width: Layout::MatchParent,
-            height: Layout::Absolute(1),
+            width: Layout::match_parent(),
+            height: Layout::absolute(1),
         }
     }
 }
@@ -483,7 +483,7 @@ impl fmt::Display for RosterItem {
                     | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
                 };
 
-                let mut disp = match &contact.name {
+                let disp = match &contact.name {
                     Some(name) => format!(
                         "{} ({})",
                         terminus::clean(name),
@@ -492,34 +492,19 @@ impl fmt::Display for RosterItem {
                     None => terminus::clean(&contact.jid.to_string()),
                 };
 
-                if disp.len() > 40 {
-                    disp.truncate(39);
-                    disp.push('…');
-                }
-
                 write!(f, "{}{}", disp, color::Fg(color::White))
-            },
+            }
 
             Self::Bookmark(bookmark) => {
-                let mut disp = match &bookmark.name {
+                let disp = match &bookmark.name {
                     Some(name) => terminus::clean(name),
                     None => terminus::clean(&bookmark.jid.to_string()),
                 };
 
-                if disp.len() > 40 {
-                    disp.truncate(39);
-                    disp.push('…');
-                }
-
                 write!(f, "{}{}", disp, color::Fg(color::White))
-            },
+            }
             Self::Window(window) => {
-                let mut disp = terminus::clean(window);
-
-                if disp.len() > 40 {
-                    disp.truncate(39);
-                    disp.push('…');
-                }
+                let disp = terminus::clean(window);
 
                 write!(f, "{}", disp)
             }
@@ -530,11 +515,7 @@ impl fmt::Display for RosterItem {
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (r, g, b) = id_to_rgb(&self.nick);
-        let mut nick = self.nick.clone();
-        if nick.len() > 40 {
-            nick.truncate(39);
-            nick.push('…');
-        }
+        let nick = self.nick.clone();
 
         write!(
             f,
@@ -862,8 +843,8 @@ impl UIMod {
                 let roster =
                     ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
                         .with_layouts(Layouts {
-                            width: Layout::WrapContent,
-                            height: Layout::MatchParent,
+                            width: Layout::wrap_content(),
+                            height: Layout::match_parent(),
                         })
                         .with_none_group()
                         .with_unique_item()
@@ -963,8 +944,8 @@ impl ModTrait for UIMod {
         );
         let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
             .with_layouts(Layouts {
-                width: Layout::WrapContent,
-                height: Layout::MatchParent,
+                width: Layout::wrap_content().with_relative_max(0.01),
+                height: Layout::match_parent(),
             })
             .with_none_group()
             .with_sort_item()
@@ -1171,7 +1152,7 @@ impl ModTrait for UIMod {
                                 account,
                                 context: window,
                                 raw_buf,
-                                cursor: cursor,
+                                cursor,
                             });
                         }
                     }
@@ -1339,7 +1320,7 @@ impl TermionEventStream {
 
         Self {
             channel: recv,
-            waker: waker,
+            waker,
         }
     }
 }
@@ -1350,7 +1331,7 @@ struct IterWrapper<'a, T> {
 
 impl<'a, T> IterWrapper<'a, T> {
     fn new(inner: &'a mut mpsc::Receiver<T>) -> Self {
-        Self { inner: inner }
+        Self { inner }
     }
 }
 

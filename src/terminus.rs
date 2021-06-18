@@ -134,10 +134,141 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
 }
 
 #[derive(Debug, Clone)]
-pub enum Layout {
-    MatchParent,
-    WrapContent,
+pub enum LayoutConstraint {
+    #[allow(dead_code)]
     Absolute(u16),
+    #[allow(dead_code)]
+    Relative(f32),
+}
+
+#[derive(Debug, Clone)]
+pub struct LayoutConstraints {
+    max: Option<LayoutConstraint>,
+    min: Option<LayoutConstraint>,
+}
+
+#[derive(Debug, Clone)]
+pub enum LayoutBehavior {
+    MatchParent,
+    WrapContent(LayoutConstraints),
+    Absolute(u16),
+}
+
+#[derive(Debug, Clone)]
+pub struct Layout {
+    behavior: LayoutBehavior,
+}
+
+impl Layout {
+    pub fn match_parent() -> Self {
+        Self {
+            behavior: LayoutBehavior::MatchParent,
+        }
+    }
+
+    pub fn wrap_content() -> Self {
+        Self {
+            behavior: LayoutBehavior::WrapContent(LayoutConstraints {
+                max: None,
+                min: None,
+            }),
+        }
+    }
+
+    pub fn absolute(value: u16) -> Self {
+        Self {
+            behavior: LayoutBehavior::Absolute(value),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_absolute_max(mut self, value: u16) -> Self {
+        if let LayoutBehavior::WrapContent(ref mut constraint) = self.behavior {
+            constraint.max = Some(LayoutConstraint::Absolute(value));
+        } else {
+            unreachable!();
+        }
+
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_absolute_min(mut self, value: u16) -> Self {
+        if let LayoutBehavior::WrapContent(ref mut constraint) = self.behavior {
+            constraint.min = Some(LayoutConstraint::Absolute(value));
+        } else {
+            unreachable!();
+        }
+
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_relative_max(mut self, value: f32) -> Self {
+        if let LayoutBehavior::WrapContent(ref mut constraint) = self.behavior {
+            constraint.max = Some(LayoutConstraint::Relative(value));
+        } else {
+            unreachable!();
+        }
+
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_relative_min(mut self, value: f32) -> Self {
+        if let LayoutBehavior::WrapContent(ref mut constraint) = self.behavior {
+            constraint.min = Some(LayoutConstraint::Relative(value));
+        } else {
+            unreachable!();
+        }
+
+        self
+    }
+}
+
+pub fn apply_constraints(
+    value: Option<u16>,
+    spec: Option<u16>,
+    constraints: LayoutConstraints,
+) -> Option<u16> {
+    if let Some(value) = value {
+        let mut value = value;
+        if let Some(min) = constraints.min {
+            let min = match min {
+                LayoutConstraint::Absolute(min) => min,
+                LayoutConstraint::Relative(min) => match spec {
+                    Some(spec) => (spec as f32 * min).floor() as u16,
+                    None => value,
+                },
+            };
+            value = cmp::max(min, value);
+        }
+
+        let max = {
+            if let Some(max) = constraints.max {
+                match max {
+                    LayoutConstraint::Absolute(max) => match spec {
+                        Some(spec) => cmp::min(max, spec),
+                        None => max,
+                    },
+                    LayoutConstraint::Relative(max) => match spec {
+                        Some(spec) => (spec as f32 * max).floor() as u16,
+                        None => value,
+                    },
+                }
+            } else {
+                match spec {
+                    Some(spec) => spec,
+                    None => value,
+                }
+            }
+        };
+        value = cmp::min(max, value);
+
+        Some(value)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -183,19 +314,19 @@ where
         height_spec: Option<u16>,
     ) {
         let layout = self.get_layouts();
-        dimension.w = match layout.width {
-            Layout::MatchParent => width_spec,
-            Layout::WrapContent => unreachable!(),
-            Layout::Absolute(width) => match width_spec {
+        dimension.w = match layout.width.behavior {
+            LayoutBehavior::MatchParent => width_spec,
+            LayoutBehavior::WrapContent(_) => unreachable!(),
+            LayoutBehavior::Absolute(width) => match width_spec {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        dimension.h = match layout.height {
-            Layout::MatchParent => height_spec,
-            Layout::WrapContent => unreachable!(),
-            Layout::Absolute(height) => match height_spec {
+        dimension.h = match layout.height.behavior {
+            LayoutBehavior::MatchParent => height_spec,
+            LayoutBehavior::WrapContent(_) => unreachable!(),
+            LayoutBehavior::Absolute(height) => match height_spec {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
@@ -213,11 +344,19 @@ where
     fn is_layout_dirty(&self) -> bool {
         match self.get_layouts() {
             Layouts {
-                width: Layout::WrapContent,
+                width:
+                    Layout {
+                        behavior: LayoutBehavior::WrapContent(_),
+                        ..
+                    },
                 ..
             } => self.is_dirty(),
             Layouts {
-                height: Layout::WrapContent,
+                height:
+                    Layout {
+                        behavior: LayoutBehavior::WrapContent(_),
+                        ..
+                    },
                 ..
             } => self.is_dirty(),
             _ => false,
@@ -323,8 +462,8 @@ where
             event_handler: None,
             dirty: true,
             layouts: Layouts {
-                width: Layout::MatchParent,
-                height: Layout::MatchParent,
+                width: Layout::match_parent(),
+                height: Layout::match_parent(),
             },
         }
     }
@@ -501,13 +640,13 @@ where
 {
     pub fn new(orientation: Orientation) -> Self {
         Self {
-            orientation: orientation,
+            orientation,
             children: Vec::new(),
             event_handler: None,
             dirty: true,
             layouts: Layouts {
-                width: Layout::MatchParent,
-                height: Layout::MatchParent,
+                width: Layout::match_parent(),
+                height: Layout::match_parent(),
             },
         }
     }
@@ -565,19 +704,23 @@ where
          *  - Set dimension for each children
          */
         let layouts = self.get_layouts();
-        let max_width = match layouts.width {
-            Layout::MatchParent => width_spec,
-            Layout::WrapContent => width_spec,
-            Layout::Absolute(width) => match width_spec {
+        let max_width = match layouts.width.behavior {
+            LayoutBehavior::MatchParent => width_spec,
+            LayoutBehavior::WrapContent(constraints) => {
+                apply_constraints(width_spec, width_spec, constraints)
+            }
+            LayoutBehavior::Absolute(width) => match width_spec {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        let max_height = match layouts.height {
-            Layout::MatchParent => height_spec,
-            Layout::WrapContent => height_spec,
-            Layout::Absolute(height) => match height_spec {
+        let max_height = match layouts.height.behavior {
+            LayoutBehavior::MatchParent => height_spec,
+            LayoutBehavior::WrapContent(constraints) => {
+                apply_constraints(height_spec, height_spec, constraints)
+            }
+            LayoutBehavior::Absolute(height) => match height_spec {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
@@ -1078,8 +1221,8 @@ where
 
     fn get_layouts(&self) -> Layouts {
         Layouts {
-            width: Layout::MatchParent,
-            height: Layout::Absolute(1),
+            width: Layout::match_parent(),
+            height: Layout::absolute(1),
         }
     }
 }
@@ -1125,8 +1268,8 @@ where
             width: 0,
             height: 0,
             layouts: Layouts {
-                width: Layout::MatchParent,
-                height: Layout::MatchParent,
+                width: Layout::match_parent(),
+                height: Layout::match_parent(),
             },
         }
     }
@@ -1393,8 +1536,8 @@ where
             event_handler: None,
             dirty: true,
             layouts: Layouts {
-                width: Layout::MatchParent,
-                height: Layout::MatchParent,
+                width: Layout::match_parent(),
+                height: Layout::match_parent(),
             },
         }
     }
@@ -1512,9 +1655,9 @@ where
         height_spec: Option<u16>,
     ) {
         let layouts = self.get_layouts();
-        dimension.w = match layouts.width {
-            Layout::MatchParent => width_spec,
-            Layout::WrapContent => {
+        dimension.w = match layouts.width.behavior {
+            LayoutBehavior::MatchParent => width_spec,
+            LayoutBehavior::WrapContent(constraints) => {
                 let mut width: u16 = 0;
                 for (group, items) in &self.items {
                     if let Some(group) = group {
@@ -1534,20 +1677,17 @@ where
                         );
                     }
                 }
-                match width_spec {
-                    Some(width_spec) => Some(cmp::min(width, width_spec)),
-                    None => Some(width),
-                }
+                apply_constraints(Some(width), width_spec, constraints)
             }
-            Layout::Absolute(width) => match width_spec {
+            LayoutBehavior::Absolute(width) => match width_spec {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        dimension.h = match layouts.height {
-            Layout::MatchParent => height_spec,
-            Layout::WrapContent => {
+        dimension.h = match layouts.height.behavior {
+            LayoutBehavior::MatchParent => height_spec,
+            LayoutBehavior::WrapContent(constraints) => {
                 let mut height: u16 = 0;
                 for (group, items) in &self.items {
                     if group.is_some() {
@@ -1556,12 +1696,9 @@ where
 
                     height += items.len() as u16;
                 }
-                match height_spec {
-                    Some(height_spec) => Some(cmp::min(height, height_spec)),
-                    None => Some(height),
-                }
+                apply_constraints(Some(height), height_spec, constraints)
             }
-            Layout::Absolute(height) => match height_spec {
+            LayoutBehavior::Absolute(height) => match height_spec {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
