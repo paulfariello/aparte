@@ -944,7 +944,7 @@ impl ModTrait for UIMod {
         );
         let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
             .with_layouts(Layouts {
-                width: Layout::wrap_content().with_relative_max(0.01),
+                width: Layout::wrap_content().with_relative_max(0.3),
                 height: Layout::match_parent(),
             })
             .with_none_group()
