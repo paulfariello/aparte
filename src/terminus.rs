@@ -226,11 +226,7 @@ impl Layout {
     }
 }
 
-pub fn apply_constraints(
-    value: u16,
-    parent: Option<u16>,
-    constraints: &LayoutConstraints,
-) -> u16 {
+pub fn apply_constraints(value: u16, parent: Option<u16>, constraints: &LayoutConstraints) -> u16 {
     let mut value = value;
     if let Some(min) = constraints.min.clone() {
         let min = match min {
@@ -723,10 +719,11 @@ where
             let child_layouts = child_view.get_layouts();
             let requested_width = match &child_layouts {
                 Layouts {
-                    width: Layout {
-                        behavior: LayoutBehavior::WrapContent(constraints),
-                        ..
-                    },
+                    width:
+                        Layout {
+                            behavior: LayoutBehavior::WrapContent(constraints),
+                            ..
+                        },
                     ..
                 } => apply_constraints(child_dimension.w.unwrap_or(0), max_width, constraints),
                 _ => child_dimension.w.unwrap_or(0),
@@ -734,10 +731,11 @@ where
 
             let requested_height = match &child_layouts {
                 Layouts {
-                    height: Layout {
-                        behavior: LayoutBehavior::WrapContent(constraints),
-                        ..
-                    },
+                    height:
+                        Layout {
+                            behavior: LayoutBehavior::WrapContent(constraints),
+                            ..
+                        },
                     ..
                 } => apply_constraints(child_dimension.h.unwrap_or(0), max_height, constraints),
                 _ => child_dimension.h.unwrap_or(0),
@@ -1730,6 +1728,7 @@ where
         save_cursor!(screen);
 
         let mut y = dimension.y;
+        let width: usize = dimension.w.unwrap().into();
 
         for y in dimension.y..dimension.y + dimension.h.unwrap() {
             goto!(screen, dimension.x, y);
@@ -1748,7 +1747,11 @@ where
             goto!(screen, dimension.x, y);
 
             if group.is_some() {
-                vprint!(screen, "{}", group.as_ref().unwrap());
+                let mut disp = format!("{}", group.as_ref().unwrap());
+                if term_string_visible_len(&disp) > width {
+                    disp = term_string_visible_truncate(&disp, width, Some("…"));
+                }
+                vprint!(screen, "{}", disp);
                 y += 1;
             }
 
@@ -1764,10 +1767,14 @@ where
 
                 goto!(screen, dimension.x, y);
 
-                match group {
-                    Some(_) => vprint!(screen, "  {}", item),
-                    None => vprint!(screen, "{}", item),
+                let mut disp = match group {
+                    Some(_) => format!("  {}", item),
+                    None => format!("{}", item),
                 };
+                if term_string_visible_len(&disp) > width {
+                    disp = term_string_visible_truncate(&disp, width, Some("…"));
+                }
+                vprint!(screen, "{}", disp);
 
                 y += 1;
             }
