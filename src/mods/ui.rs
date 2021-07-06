@@ -92,9 +92,10 @@ where
         );
         vprint!(
             screen,
-            "{}{}",
+            "{}{}{}",
             color::Bg(color::Blue),
-            color::Fg(color::White)
+            color::Fg(color::White),
+            termion::style::Bold,
         );
 
         vprint!(screen, "{}", " ".repeat(dimension.w.unwrap().into()));
@@ -133,9 +134,10 @@ where
 
         vprint!(
             screen,
-            "{}{}",
+            "{}{}{}",
             color::Bg(color::Reset),
-            color::Fg(color::Reset)
+            color::Fg(color::Reset),
+            termion::style::NoBold
         );
 
         restore_cursor!(screen);
@@ -168,8 +170,8 @@ where
 
     fn get_layouts(&self) -> Layouts {
         Layouts {
-            width: Layout::MatchParent,
-            height: Layout::Absolute(1),
+            width: Layout::match_parent(),
+            height: Layout::absolute(1),
         }
     }
 }
@@ -195,6 +197,12 @@ impl WinBar {
 
     pub fn add_window(&mut self, window: String) {
         self.windows.push(window);
+        self.dirty = true;
+    }
+
+    pub fn del_window(&mut self, window: &str) {
+        self.windows.retain(|win| win != window);
+        self.highlighted.retain(|win| win != window);
         self.dirty = true;
     }
 
@@ -256,11 +264,19 @@ where
         }
 
         let mut first = true;
+        let mut remaining = self.highlighted.len();
+
         for window in &self.highlighted {
-            // Keep space for at least ", …]"
-            if window.len() + written + 4 > dimension.w.unwrap() as usize {
+            // Keep space for at least ", +X]"
+            let remaining_len = if remaining > 1 {
+                format!("{}", remaining).len() + 4
+            } else {
+                0
+            };
+
+            if window.len() + written + remaining_len > dimension.w.unwrap() as usize {
                 if !first {
-                    vprint!(screen, ", …");
+                    vprint!(screen, ", +{}", remaining);
                 }
                 break;
             }
@@ -281,6 +297,7 @@ where
                 termion::style::NoBold
             );
             written += window.len();
+            remaining -= 1;
         }
 
         if !first {
@@ -311,6 +328,9 @@ where
             UIEvent::AddWindow(name, _) => {
                 self.add_window(terminus::clean(name));
             }
+            UIEvent::Core(Event::Close(window)) => {
+                self.del_window(&window);
+            }
             UIEvent::Core(Event::Connected(account, _)) => {
                 self.connection = Some(terminus::clean(&account.to_string()));
                 self.dirty = true;
@@ -334,8 +354,8 @@ where
 
     fn get_layouts(&self) -> Layouts {
         Layouts {
-            width: Layout::MatchParent,
-            height: Layout::Absolute(1),
+            width: Layout::match_parent(),
+            height: Layout::absolute(1),
         }
     }
 }
@@ -439,50 +459,6 @@ impl fmt::Display for contact::Group {
     }
 }
 
-impl fmt::Display for contact::Contact {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.presence {
-            contact::Presence::Available | contact::Presence::Chat => {
-                write!(f, "{}", color::Fg(color::Green))?
-            }
-            contact::Presence::Away
-            | contact::Presence::Dnd
-            | contact::Presence::Xa
-            | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
-        };
-
-        match &self.name {
-            Some(name) => write!(
-                f,
-                "{} ({}){}",
-                terminus::clean(name),
-                terminus::clean(&self.jid.to_string()),
-                color::Fg(color::White)
-            ),
-            None => write!(
-                f,
-                "{}{}",
-                terminus::clean(&self.jid.to_string()),
-                color::Fg(color::White)
-            ),
-        }
-    }
-}
-
-impl fmt::Display for contact::Bookmark {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.name {
-            Some(name) => write!(f, "{}{}", terminus::clean(name), color::Fg(color::White)),
-            None => write!(
-                f,
-                "{}{}",
-                terminus::clean(&self.jid.to_string()),
-                color::Fg(color::White)
-            ),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Ord, PartialOrd)]
 pub enum RosterItem {
     Contact(contact::Contact),
@@ -516,9 +492,42 @@ impl Eq for RosterItem {}
 impl fmt::Display for RosterItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Self::Contact(contact) => contact.fmt(f),
-            Self::Bookmark(bookmark) => bookmark.fmt(f),
-            Self::Window(window) => write!(f, "{}", terminus::clean(window)),
+            Self::Contact(contact) => {
+                match contact.presence {
+                    contact::Presence::Available | contact::Presence::Chat => {
+                        write!(f, "{}", color::Fg(color::Green))?
+                    }
+                    contact::Presence::Away
+                    | contact::Presence::Dnd
+                    | contact::Presence::Xa
+                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
+                };
+
+                let disp = match &contact.name {
+                    Some(name) => format!(
+                        "{} ({})",
+                        terminus::clean(name),
+                        terminus::clean(&contact.jid.to_string()),
+                    ),
+                    None => terminus::clean(&contact.jid.to_string()),
+                };
+
+                write!(f, "{}{}", disp, color::Fg(color::White))
+            }
+
+            Self::Bookmark(bookmark) => {
+                let disp = match &bookmark.name {
+                    Some(name) => terminus::clean(name),
+                    None => terminus::clean(&bookmark.jid.to_string()),
+                };
+
+                write!(f, "{}{}", disp, color::Fg(color::White))
+            }
+            Self::Window(window) => {
+                let disp = terminus::clean(window);
+
+                write!(f, "{}", disp)
+            }
         }
     }
 }
@@ -526,11 +535,7 @@ impl fmt::Display for RosterItem {
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (r, g, b) = id_to_rgb(&self.nick);
-        let mut nick = self.nick.clone();
-        if nick.len() > 40 {
-            nick.truncate(39);
-            nick.push('…');
-        };
+        let nick = self.nick.clone();
 
         write!(
             f,
@@ -682,6 +687,15 @@ impl UIMod {
                     // required at least for console view
                     for child in frame.iter_children_mut() {
                         child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                    }
+                }
+                UIEvent::Core(Event::Close(window)) => {
+                    frame.remove(&window);
+
+                    // propagate Close with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::Core(Event::Close(window.clone())));
                     }
                 }
                 UIEvent::Core(Event::Key(Key::PageUp))
@@ -858,8 +872,8 @@ impl UIMod {
                 let roster =
                     ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
                         .with_layouts(Layouts {
-                            width: Layout::WrapContent,
-                            height: Layout::MatchParent,
+                            width: Layout::wrap_content(),
+                            height: Layout::match_parent(),
                         })
                         .with_none_group()
                         .with_unique_item()
@@ -923,6 +937,10 @@ impl UIMod {
     pub fn get_windows(&self) -> Vec<String> {
         self.windows.clone()
     }
+
+    pub fn current_window<'a>(&'a self) -> Option<&'a String> {
+        self.current_window.as_ref()
+    }
 }
 
 impl ModTrait for UIMod {
@@ -959,8 +977,8 @@ impl ModTrait for UIMod {
         );
         let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
             .with_layouts(Layouts {
-                width: Layout::WrapContent,
-                height: Layout::MatchParent,
+                width: Layout::wrap_content().with_relative_max(0.3),
+                height: Layout::match_parent(),
             })
             .with_none_group()
             .with_sort_item()
@@ -1000,6 +1018,10 @@ impl ModTrait for UIMod {
                 UIEvent::AddWindow(name, _) => {
                     let group = contact::Group(String::from("Windows"));
                     view.insert(RosterItem::Window(name.clone()), Some(group));
+                }
+                UIEvent::Core(Event::Close(window)) => {
+                    let group = contact::Group(String::from("Windows"));
+                    let _ = view.remove(RosterItem::Window(window.clone()), Some(group));
                 }
                 _ => {}
             });
@@ -1091,7 +1113,7 @@ impl ModTrait for UIMod {
             Event::Chat { account, contact } => {
                 // Should we store account association?
                 let win_name = contact.to_string();
-                if !self.conversations.contains_key(&win_name) {
+                if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
                         Conversation::Chat(Chat {
@@ -1109,7 +1131,7 @@ impl ModTrait for UIMod {
             } => {
                 let bare: BareJid = channel.clone().into();
                 let win_name = bare.to_string();
-                if !self.conversations.contains_key(&win_name) {
+                if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
                         Conversation::Channel(Channel {
@@ -1140,6 +1162,20 @@ impl ModTrait for UIMod {
                 self.root.render(&dimension, &mut self.screen);
                 self.dimension = Some(dimension);
             }
+            Event::Close(window) => {
+                if window != "console" {
+                    self.windows.retain(|win| win != window);
+                    self.unread_windows.remove(window);
+                    if Some(window) == self.current_window.as_ref() {
+                        let current = self.windows.iter().next().cloned();
+                        if let Some(current) = current {
+                            self.change_window(&current);
+                        }
+                    }
+                    self.root
+                        .event(&mut UIEvent::Core(Event::Close(window.clone())))
+                }
+            }
             Event::Key(key) => {
                 match key {
                     Key::Char('\t') => {
@@ -1167,7 +1203,7 @@ impl ModTrait for UIMod {
                                 account,
                                 context: window,
                                 raw_buf,
-                                cursor: cursor,
+                                cursor,
                             });
                         }
                     }
@@ -1335,7 +1371,7 @@ impl TermionEventStream {
 
         Self {
             channel: recv,
-            waker: waker,
+            waker,
         }
     }
 }
@@ -1346,7 +1382,7 @@ struct IterWrapper<'a, T> {
 
 impl<'a, T> IterWrapper<'a, T> {
     fn new(inner: &'a mut mpsc::Receiver<T>) -> Self {
-        Self { inner: inner }
+        Self { inner }
     }
 }
 

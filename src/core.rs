@@ -38,6 +38,7 @@ use crate::account::{Account, ConnectionInfo};
 use crate::color;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
+use crate::conversation::{Channel, Conversation};
 use crate::cursor::Cursor;
 use crate::message::Message;
 use crate::mods;
@@ -82,12 +83,14 @@ pub enum Event {
         channel: FullJid,
         user_request: bool,
     },
+    Leave(Channel),
     Iq(Account, iq::Iq),
     Disco(Account),
     PubSub(Account, PubSubEvent),
     Presence(Account, presence::Presence),
     ReadPassword(Command),
     Win(String),
+    Close(String),
     Contact(Account, contact::Contact),
     ContactUpdate(Account, contact::Contact),
     Bookmark(contact::Bookmark),
@@ -406,6 +409,96 @@ Examples:
 },
 |aparte, _command| {
     aparte.schedule(Event::Win(window.clone()));
+    Ok(())
+});
+
+command_def!(close,
+r#"Usage: /close [<window>]
+
+    window        Name of the window to close
+
+Description:
+    Close the current or a given window.
+
+Examples:
+    /close
+    /close contact@server.tld"#,
+{
+    window: Option<String> = {
+        completion: (|aparte, _command| {
+            let ui = aparte.get_mod::<mods::ui::UIMod>();
+            ui.get_windows()
+        })
+    }
+},
+|aparte, _command| {
+    let current =  {
+        let ui = aparte.get_mod::<mods::ui::UIMod>();
+        ui.current_window().cloned()
+    };
+    let window = window.or(current).clone();
+    if let Some(window) = window {
+        // Close window
+        aparte.schedule(Event::Close(window.clone()));
+    }
+    Ok(())
+});
+
+command_def!(leave,
+r#"Usage: /leave [<window>]
+
+    window        Name of the channel to leave
+
+Description:
+    Close the current or a given channel.
+
+Examples:
+    /leave
+    /leave channel@conversation.server.tld"#,
+{
+    window: Option<String> = {
+        completion: (|aparte, _command| {
+            let ui = aparte.get_mod::<mods::ui::UIMod>();
+            ui.get_windows().iter().map(|window| {
+                if let Some(account) = aparte.current_account() {
+                    if let Ok(jid) = BareJid::from_str(&window) {
+                        let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
+                        conversation_mod.get(&account, &jid).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }).filter_map(|conversation| {
+                if let Some(Conversation::Channel(channel)) = conversation {
+                    Some(channel.jid.into())
+                } else {
+                    None
+                }
+            }).collect()
+        })
+    }
+},
+|aparte, _command| {
+    let current =  {
+        let ui = aparte.get_mod::<mods::ui::UIMod>();
+        ui.current_window().cloned()
+    };
+    let window = window.or(current).clone();
+    if let Some(window) = window {
+        if let Some(account) = aparte.current_account() {
+            if let Ok(jid) = BareJid::from_str(&window) {
+                let conversation =  {
+                    let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
+                    conversation_mod.get(&account, &jid).cloned()
+                };
+                if let Some(Conversation::Channel(channel)) = conversation {
+                    aparte.schedule(Event::Leave(channel));
+                }
+            }
+        }
+    }
     Ok(())
 });
 
@@ -866,6 +959,8 @@ impl Aparte {
         self.add_command(help::new());
         self.add_command(connect::new());
         self.add_command(win::new());
+        self.add_command(close::new());
+        self.add_command(leave::new());
         self.add_command(msg::new());
         self.add_command(join::new());
         self.add_command(quit::new());
@@ -1156,7 +1251,6 @@ impl Aparte {
                     };
                     let from: Jid = account.clone().into();
 
-                    // Send presence in the channel
                     let mut presence = Presence::new(PresenceType::None);
                     presence = presence.with_to(Jid::Full(to.clone()));
                     presence = presence.with_from(from);
@@ -1170,6 +1264,14 @@ impl Aparte {
                         channel: to,
                         user_request,
                     });
+                }
+                Event::Leave(channel) => {
+                    // Send presence in the channel
+                    let mut presence = Presence::new(PresenceType::Unavailable);
+                    presence = presence.with_to(channel.jid.clone());
+                    presence = presence.with_from(channel.account.clone());
+                    presence.add_payload(Muc::new());
+                    self.send(&channel.account, presence.into());
                 }
                 Event::Quit => {
                     return Err(());

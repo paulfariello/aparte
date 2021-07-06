@@ -4,10 +4,11 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 use xmpp_parsers::disco;
 use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::Element;
+use xmpp_parsers::{Element, Jid};
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
@@ -40,10 +41,10 @@ impl DiscoMod {
             .any(|i| i == feature)
     }
 
-    pub fn disco(&mut self) -> Element {
+    pub fn disco(&mut self, jid: Jid) -> Element {
         let id = Uuid::new_v4().to_hyphenated().to_string();
         let query = disco::DiscoInfoQuery { node: None };
-        let iq = Iq::from_get(id, query);
+        let iq = Iq::from_get(id, query).with_to(Jid::from_str(&jid.domain()).unwrap());
         iq.into()
     }
 }
@@ -55,9 +56,9 @@ impl ModTrait for DiscoMod {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(account, _jid) => {
+            Event::Connected(account, jid) => {
                 self.server_features.insert(account.clone(), Vec::new());
-                aparte.send(account, self.disco());
+                aparte.send(account, self.disco(jid.clone()));
             }
             Event::Iq(account, iq) => match iq.payload.clone() {
                 IqType::Result(Some(el)) => {
