@@ -1172,7 +1172,8 @@ impl ModTrait for UIMod {
                             self.change_window(&current);
                         }
                     }
-                    self.root.event(&mut UIEvent::Core(Event::Close(window.clone())))
+                    self.root
+                        .event(&mut UIEvent::Core(Event::Close(window.clone())))
                 }
             }
             Event::Key(key) => {

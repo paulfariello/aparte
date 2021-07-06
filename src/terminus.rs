@@ -521,8 +521,7 @@ where
         self.children.insert(key, (child_dimension, view));
     }
 
-    pub fn remove(&mut self, key: &K)
-    {
+    pub fn remove(&mut self, key: &K) {
         self.children.remove(key);
         if Some(key) == self.current.as_ref() {
             self.current = self.children.keys().next().cloned();

@@ -37,8 +37,8 @@ use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 use crate::account::{Account, ConnectionInfo};
 use crate::color;
 use crate::command::{Command, CommandParser};
-use crate::conversation::{Channel, Conversation};
 use crate::config::Config;
+use crate::conversation::{Channel, Conversation};
 use crate::cursor::Cursor;
 use crate::message::Message;
 use crate::mods;
@@ -501,7 +501,6 @@ Examples:
     }
     Ok(())
 });
-
 
 command_def!(msg,
 r#"/msg <contact> [<message>]

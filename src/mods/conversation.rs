@@ -164,12 +164,8 @@ impl Into<ConversationIndex> for conversation::Chat {
 impl Into<ConversationIndex> for conversation::Conversation {
     fn into(self) -> ConversationIndex {
         match self {
-            conversation::Conversation::Channel(channel) => {
-                channel.into()
-            }
-            conversation::Conversation::Chat(chat) => {
-                chat.into()
-            }
+            conversation::Conversation::Channel(channel) => channel.into(),
+            conversation::Conversation::Chat(chat) => chat.into(),
         }
     }
 }
