@@ -440,8 +440,53 @@ Examples:
     if let Some(window) = window {
         // Close window
         aparte.schedule(Event::Close(window.clone()));
+    }
+    Ok(())
+});
 
-        // Leave channel if windows is a channel
+command_def!(leave,
+r#"Usage: /leave [<window>]
+
+    window        Name of the channel to leave
+
+Description:
+    Close the current or a given channel.
+
+Examples:
+    /leave
+    /leave channel@conversation.server.tld"#,
+{
+    window: Option<String> = {
+        completion: (|aparte, _command| {
+            let ui = aparte.get_mod::<mods::ui::UIMod>();
+            ui.get_windows().iter().map(|window| {
+                if let Some(account) = aparte.current_account() {
+                    if let Ok(jid) = BareJid::from_str(&window) {
+                        let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
+                        conversation_mod.get(&account, &jid).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }).filter_map(|conversation| {
+                if let Some(Conversation::Channel(channel)) = conversation {
+                    Some(channel.jid.into())
+                } else {
+                    None
+                }
+            }).collect()
+        })
+    }
+},
+|aparte, _command| {
+    let current =  {
+        let ui = aparte.get_mod::<mods::ui::UIMod>();
+        ui.current_window().cloned()
+    };
+    let window = window.or(current).clone();
+    if let Some(window) = window {
         if let Some(account) = aparte.current_account() {
             if let Ok(jid) = BareJid::from_str(&window) {
                 let conversation =  {
@@ -456,6 +501,7 @@ Examples:
     }
     Ok(())
 });
+
 
 command_def!(msg,
 r#"/msg <contact> [<message>]
@@ -915,6 +961,7 @@ impl Aparte {
         self.add_command(connect::new());
         self.add_command(win::new());
         self.add_command(close::new());
+        self.add_command(leave::new());
         self.add_command(msg::new());
         self.add_command(join::new());
         self.add_command(quit::new());
