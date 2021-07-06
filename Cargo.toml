@@ -39,3 +39,6 @@ fuzzy-matcher = "^0.3"
 
 [dev-dependencies]
 mockall = "^0.9"
+
+[profile.release]
+debug = true
