@@ -1113,7 +1113,7 @@ impl ModTrait for UIMod {
             Event::Chat { account, contact } => {
                 // Should we store account association?
                 let win_name = contact.to_string();
-                if !self.conversations.contains_key(&win_name) {
+                if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
                         Conversation::Chat(Chat {
@@ -1131,7 +1131,7 @@ impl ModTrait for UIMod {
             } => {
                 let bare: BareJid = channel.clone().into();
                 let win_name = bare.to_string();
-                if !self.conversations.contains_key(&win_name) {
+                if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
                         Conversation::Channel(Channel {
