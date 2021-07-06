@@ -29,6 +29,15 @@ From sources
 cargo install --git https://github.com/paulfariello/aparte --branch develop
 ```
 
+From sources with GNU/guix
+--------------------------
+
+```
+git clone https://github.com/paulfariello/aparte --branch develop
+cd aparte
+guix package -f guix.scm
+```
+
 Package for Archlinux
 ---------------------
 
