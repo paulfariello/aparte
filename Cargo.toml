@@ -6,6 +6,9 @@ authors = ["Paul Fariello <paul@fariello.eu>"]
 edition = "2018"
 license = "MPL-2.0"
 repository = "https://github.com/paulfariello/aparte"
+exclude = [
+    ".travis.yml",
+]
 
 [features]
 no-cursor-save = []
