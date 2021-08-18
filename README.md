@@ -26,7 +26,7 @@ From sources
 ------------
 
 ```
-cargo install --git https://github.com/paulfariello/aparte --branch develop
+cargo install aparte
 ```
 
 Package for Archlinux
