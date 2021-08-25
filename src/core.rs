@@ -39,6 +39,7 @@ use xmpp_parsers::stanza_error::StanzaError;
 use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
 use crate::account::{Account, ConnectionInfo};
+use crate::async_iq::IqFuture;
 use crate::color;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
@@ -384,7 +385,7 @@ pub struct Aparte {
     event_queue: Vec<(Event, Option<TypeId>)>,
     send_queue: VecDeque<(Account, Element)>,
     event_channel: Option<mpsc::Sender<Event>>,
-    pending_iq: HashMap<Uuid, TypeId>,
+    pending_iq: HashMap<Uuid, Waker>,
     /// Aparté main configuration
     pub config: Config,
 }
@@ -1106,12 +1107,8 @@ impl Aparte {
         self.send_queue.push_back((account.clone(), stanza));
     }
 
-    pub fn iq<T>(&mut self, account: &Account, iq: Iq)
-    where
-        T: 'static,
-    {
-        self.pending_iq.insert(Uuid::from_str(&iq.id).unwrap(), TypeId::of::<T>());
-        self.send(account, iq.into());
+    pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
+        return IqFuture::new(account.clone(), iq);
     }
 
     async fn send_loop(&mut self) {
