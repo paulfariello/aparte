@@ -8,15 +8,17 @@ use futures::stream::StreamExt;
 use linked_hash_map::LinkedHashMap;
 use rand::{self, Rng};
 use std::any::TypeId;
-use std::cell::{Ref, RefCell, RefMut};
-use std::collections::{HashMap, VecDeque};
+use std::cell::{Ref, RefMut};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use std::future::Future;
+use std::task::Waker;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -375,19 +377,6 @@ impl<T: FromStr> FromStr for Password<T> {
 pub struct Connection {
     pub sink: mpsc::Sender<Element>,
     pub account: FullJid,
-}
-
-pub struct Aparte {
-    pub command_parsers: Rc<HashMap<String, CommandParser>>,
-    mods: Rc<LinkedHashMap<TypeId, RefCell<Mod>>>,
-    connections: HashMap<Account, Connection>,
-    current_connection: Option<Account>,
-    event_queue: Vec<(Event, Option<TypeId>)>,
-    send_queue: VecDeque<(Account, Element)>,
-    event_channel: Option<mpsc::Sender<Event>>,
-    pending_iq: HashMap<Uuid, Waker>,
-    /// Aparté main configuration
-    pub config: Config,
 }
 
 command_def!(connect,
@@ -808,7 +797,21 @@ Examples:
     }
 }
 
-impl Aparte {
+pub struct AparteCore {
+    pub command_parsers: Arc<HashMap<String, CommandParser>>,
+    mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
+    connections: HashMap<Account, Connection>,
+    current_connection: Option<Account>,
+    event_tx: mpsc::Sender<Event>,
+    event_rx: mpsc::Receiver<Event>,
+    send_tx: mpsc::Sender<(Account, Element)>,
+    send_rx: mpsc::Receiver<(Account, Element)>,
+    pending_iq: HashMap<Uuid, Waker>,
+    /// Aparté main configuration
+    pub config: Config,
+}
+
+impl AparteCore {
     pub fn new(config_path: PathBuf) -> Self {
         let mut config_file = match OpenOptions::new()
             .read(true)
@@ -836,35 +839,39 @@ impl Aparte {
             },
         };
 
-        let mut aparte = Self {
-            command_parsers: Rc::new(HashMap::new()),
-            mods: Rc::new(LinkedHashMap::new()),
+        let (event_tx, event_rx) = mpsc::channel(256);
+        let (send_tx, send_rx) = mpsc::channel(256);
+
+        let mut core = Self {
+            command_parsers: Arc::new(HashMap::new()),
+            mods: Arc::new(HashMap::new()),
             connections: HashMap::new(),
             current_connection: None,
-            event_queue: Vec::new(),
-            send_queue: VecDeque::new(),
-            event_channel: None,
-            config: config.clone(),
+            event_tx,
+            event_rx,
+            send_tx,
+            send_rx,
+            config,
             pending_iq: HashMap::new(),
         };
 
-        aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
-        aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
-        aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
-        aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
-        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
-        aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
-        aparte.add_mod(Mod::UI(mods::ui::UIMod::new(&config)));
-        aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
-        aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
-        aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
-        aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
+        core.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
+        core.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
+        core.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
+        core.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
+        core.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
+        core.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
+        core.add_mod(Mod::UI(mods::ui::UIMod::new()));
+        core.add_mod(Mod::Mam(mods::mam::MamMod::new()));
+        core.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
+        core.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
+        core.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
 
-        aparte
+        core
     }
 
     pub fn add_command(&mut self, command_parser: CommandParser) {
-        let command_parsers = Rc::get_mut(&mut self.command_parsers).unwrap();
+        let command_parsers = Arc::get_mut(&mut self.command_parsers).unwrap();
         command_parsers.insert(command_parser.name.to_string(), command_parser);
     }
 
@@ -884,7 +891,7 @@ impl Aparte {
         };
 
         let command = (parser.parse)(account, context, buf)?;
-        (parser.exec)(self, command)
+        (parser.exec)(&mut self.aparte(), command)
     }
 
     pub fn handle_command(&mut self, command: Command) -> Result<(), String> {
@@ -895,102 +902,80 @@ impl Aparte {
             }
         };
 
-        (parser.exec)(self, command)
+        (parser.exec)(&mut self.aparte(), command)
     }
 
     pub fn add_mod(&mut self, r#mod: Mod) {
         log::info!("Add mod `{}`", r#mod);
-        let mods = Rc::get_mut(&mut self.mods).unwrap();
+        let mods = Arc::get_mut(&mut self.mods).unwrap();
         // TODO ensure mod is not inserted twice
         match r#mod {
             Mod::Completion(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::completion::CompletionMod>(),
-                    RefCell::new(Mod::Completion(r#mod)),
+                    RwLock::new(Mod::Completion(r#mod)),
                 );
             }
             Mod::Carbons(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::carbons::CarbonsMod>(),
-                    RefCell::new(Mod::Carbons(r#mod)),
+                    RwLock::new(Mod::Carbons(r#mod)),
                 );
             }
             Mod::Contact(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::contact::ContactMod>(),
-                    RefCell::new(Mod::Contact(r#mod)),
+                    RwLock::new(Mod::Contact(r#mod)),
                 );
             }
             Mod::Conversation(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::conversation::ConversationMod>(),
-                    RefCell::new(Mod::Conversation(r#mod)),
+                    RwLock::new(Mod::Conversation(r#mod)),
                 );
             }
             Mod::Disco(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::disco::DiscoMod>(),
-                    RefCell::new(Mod::Disco(r#mod)),
+                    RwLock::new(Mod::Disco(r#mod)),
                 );
             }
             Mod::Bookmarks(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::bookmarks::BookmarksMod>(),
-                    RefCell::new(Mod::Bookmarks(r#mod)),
+                    RwLock::new(Mod::Bookmarks(r#mod)),
                 );
             }
             Mod::UI(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::ui::UIMod>(),
-                    RefCell::new(Mod::UI(r#mod)),
+                    RwLock::new(Mod::UI(r#mod)),
                 );
             }
             Mod::Mam(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::mam::MamMod>(),
-                    RefCell::new(Mod::Mam(r#mod)),
+                    RwLock::new(Mod::Mam(r#mod)),
                 );
             }
             Mod::Messages(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::messages::MessagesMod>(),
-                    RefCell::new(Mod::Messages(r#mod)),
+                    RwLock::new(Mod::Messages(r#mod)),
                 );
             }
             Mod::Correction(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::correction::CorrectionMod>(),
-                    RefCell::new(Mod::Correction(r#mod)),
+                    RwLock::new(Mod::Correction(r#mod)),
                 );
             }
             Mod::Omemo(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::omemo::OmemoMod>(),
-                    RefCell::new(Mod::Omemo(r#mod)),
+                    RwLock::new(Mod::Omemo(r#mod)),
                 );
             }
-        }
-    }
-
-    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
-    where
-        T: 'static,
-        for<'b> &'b T: From<&'b Mod>,
-    {
-        match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => Ref::map(r#mod.borrow(), |m| m.into()),
-            None => unreachable!(),
-        }
-    }
-
-    pub fn get_mod_mut<T: 'static>(&self) -> RefMut<T>
-    where
-        T: 'static,
-        for<'b> &'b mut T: From<&'b mut Mod>,
-    {
-        match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RefMut::map(r#mod.borrow_mut(), |m| m.into()),
-            None => unreachable!(),
         }
     }
 
@@ -1009,6 +994,7 @@ impl Aparte {
     }
 
     pub fn init(&mut self) -> Result<(), ()> {
+        let mut aparte = self.aparte();
         self.add_command(help::new());
         self.add_command(connect::new());
         self.add_command(win::new());
@@ -1019,9 +1005,9 @@ impl Aparte {
         self.add_command(quit::new());
         self.add_command(me::new());
 
-        let mods = Rc::clone(&self.mods);
+        let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
-            r#mod.borrow_mut().init(self)?
+            r#mod.write().unwrap().init(&mut aparte)?
         }
 
         Ok(())
@@ -1033,13 +1019,9 @@ impl Aparte {
             ui.event_stream()
         };
 
-        let (tx, mut rx) = mpsc::channel(32);
-        let tx_for_signal = tx.clone();
-        let tx_for_event = tx.clone();
-        self.event_channel = Some(tx);
-
         let mut rt = TokioRuntime::new().unwrap();
 
+        let tx_for_signal = self.event_tx.clone();
         rt.spawn(async move {
             let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
             loop {
@@ -1051,6 +1033,7 @@ impl Aparte {
             }
         });
 
+        let tx_for_event = self.event_tx.clone();
         rt.spawn(async move {
             loop {
                 match input_event_stream.next().await {
@@ -1073,18 +1056,7 @@ impl Aparte {
         let local_set = tokio::task::LocalSet::new();
         local_set.block_on(&mut rt, async move {
             self.schedule(Event::Start);
-            if self.event_loop().await.is_err() {
-                // Quit event return err
-                return;
-            }
-
-            while let Some(event) = rx.recv().await {
-                self.schedule(event);
-                if self.event_loop().await.is_err() {
-                    // Quit event return err
-                    break;
-                }
-            }
+            self.event_loop().await;
         });
     }
 
@@ -1103,16 +1075,8 @@ impl Aparte {
         }
     }
 
-    pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_queue.push_back((account.clone(), stanza));
-    }
-
-    pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
-        return IqFuture::new(account.clone(), iq);
-    }
-
     async fn send_loop(&mut self) {
-        for (account, stanza) in self.send_queue.drain(..) {
+        while let Some((account, stanza)) = self.send_rx.recv().await {
             let mut raw = Vec::<u8>::new();
             stanza.write_to(&mut raw).unwrap();
             log::debug!("SEND: {}", String::from_utf8(raw).unwrap());
@@ -1160,7 +1124,7 @@ impl Aparte {
 
         client.set_reconnect(true);
 
-        let (connection_channel, mut rx) = mpsc::channel(32);
+        let (connection_channel, mut rx) = mpsc::channel(256);
 
         self.add_connection(account.clone(), connection_channel);
 
@@ -1175,10 +1139,7 @@ impl Aparte {
             }
         });
 
-        let event_channel = match &self.event_channel {
-            Some(event_channel) => event_channel.clone(),
-            None => unreachable!(),
-        };
+        let event_tx = self.event_tx.clone();
 
         let reconnect = true;
         task::spawn_local(async move {
@@ -1186,7 +1147,7 @@ impl Aparte {
                 log::debug!("XMPP Event: {:?}", event);
                 match event {
                     XmppEvent::Disconnected(XmppError::Auth(e)) => {
-                        if let Err(err) = event_channel
+                        if let Err(err) = event_tx
                             .send(Event::AuthError(account.clone(), format!("{e}")))
                             .await
                         {
@@ -1195,7 +1156,7 @@ impl Aparte {
                         break;
                     }
                     XmppEvent::Disconnected(e) => {
-                        if let Err(err) = event_channel
+                        if let Err(err) = event_tx
                             .send(Event::Disconnected(account.clone(), format!("{e}")))
                             .await
                         {
@@ -1215,7 +1176,7 @@ impl Aparte {
                         bound_jid: jid,
                         resumed: false,
                     } => {
-                        if let Err(err) = event_channel
+                        if let Err(err) = event_tx
                             .send(Event::Connected(account.clone(), jid))
                             .await
                         {
@@ -1225,7 +1186,7 @@ impl Aparte {
                     }
                     XmppEvent::Stanza(stanza) => {
                         log::debug!("RECV: {}", String::from(&stanza));
-                        if let Err(err) = event_channel
+                        if let Err(err) = event_tx
                             .send(Event::Stanza(account.clone(), stanza))
                             .await
                         {
@@ -1239,22 +1200,13 @@ impl Aparte {
     }
 
     pub async fn event_loop(&mut self) -> Result<(), ()> {
-        while !self.event_queue.is_empty() {
-            let (event, mod_id) = self.event_queue.remove(0);
+        let mut aparte = self.aparte();
+        while let Some(event) = self.event_rx.recv().await {
             log::debug!("Event: {:?}", event);
             {
-                let mods = Rc::clone(&self.mods);
-                if let Some(mod_id) = mod_id {
-                    let r#mod = mods.get(&mod_id);
-                    if let Some(r#mod) = r#mod {
-                        r#mod.borrow_mut().on_event(self, &event);
-                    } else {
-                        warn!("Event directed to unknown mod: {:?} -> {:?}", event, mod_id);
-                    }
-                } else {
-                    for (_, r#mod) in mods.iter() {
-                        r#mod.borrow_mut().on_event(self, &event);
-                    }
+                let mods = self.mods.clone();
+                for (_, r#mod) in mods.iter() {
+                    r#mod.write().unwrap().on_event(&mut aparte, &event);
                 }
                 self.send_loop().await;
             }
@@ -1359,19 +1311,6 @@ impl Aparte {
         Ok(())
     }
 
-    pub fn schedule(&mut self, event: Event) {
-        self.event_queue.push((event, None));
-    }
-
-    pub fn schedule_directed(&mut self, event: Event, mod_id: TypeId) {
-        self.event_queue.push((event, Some(mod_id)));
-    }
-
-    pub fn log(&mut self, message: String) {
-        let message = Message::log(message);
-        self.schedule(Event::Message(None, message));
-    }
-
     fn handle_stanza(&mut self, account: Account, stanza: Element) {
         if let Ok(message) = XmppParsersMessage::try_from(stanza.clone()) {
             self.handle_xmpp_message(account, message, None, false);
@@ -1392,11 +1331,12 @@ impl Aparte {
         let mut best_match = 0f64;
         let mut matched_mod = None;
 
-        let mods = Rc::clone(&self.mods);
+        let mut aparte = self.aparte();
+        let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
             let message_match = r#mod
-                .borrow_mut()
-                .can_handle_xmpp_message(self, &account, &message, &delay);
+                .write().unwrap()
+                .can_handle_xmpp_message(&mut aparte, &account, &message, &delay);
             if message_match > best_match {
                 matched_mod = Some(r#mod);
                 best_match = message_match;
@@ -1406,8 +1346,8 @@ impl Aparte {
         if let Some(r#mod) = matched_mod {
             log::debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
-                .borrow_mut()
-                .handle_xmpp_message(self, &account, &message, &delay, archive);
+                .write().unwrap()
+                .handle_xmpp_message(&mut aparte, &account, &message, &delay, archive);
         } else {
             log::info!("Don't know how to handle message: {:?}", message);
         }
@@ -1418,7 +1358,7 @@ impl Aparte {
             IqType::Error(payload) => {
                 if let Ok(uuid) = Uuid::from_str(&iq.id) {
                     if let Some(mod_id) = self.pending_iq.remove(&uuid) {
-                        self.schedule_directed(Event::IqError { account, uuid, from: iq.from.clone(), payload }, mod_id);
+                        todo!();
                     }
                 } else {
                     if let Some(text) = payload.texts.get("en") {
@@ -1430,7 +1370,7 @@ impl Aparte {
             IqType::Result(payload) => {
                 if let Ok(uuid) = Uuid::from_str(&iq.id) {
                     if let Some(mod_id) = self.pending_iq.remove(&uuid) {
-                        self.schedule_directed(Event::IqResult { account, uuid, from: iq.from.clone(), payload }, mod_id);
+                        todo!();
                     }
                 }
             }
@@ -1438,5 +1378,116 @@ impl Aparte {
                 self.schedule(Event::Iq(account, iq));
             }
         }
+    }
+
+    // TODO maybe use From<>
+    pub fn aparte(&self) -> Aparte {
+        Aparte {
+            command_parsers: self.command_parsers.clone(),
+            current_connection: self.current_connection.clone(),
+            mods: self.mods.clone(),
+            event_tx: self.event_tx.clone(),
+            send_tx: self.send_tx.clone(),
+            config: self.config.clone(),
+        }
+    }
+
+    // Common function for AparteCore and Aparte, maybe share it in Trait
+    pub fn send(&mut self, account: &Account, stanza: Element) {
+        self.send_tx.send((account.clone(), stanza));
+    }
+
+    pub fn schedule(&mut self, event: Event) {
+        self.event_tx.send(event);
+    }
+
+    pub fn log(&mut self, message: String) {
+        let message = Message::log(message);
+        self.schedule(Event::Message(None, message));
+    }
+
+    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
+    where
+        T: 'static,
+        for<'b> &'b T: From<&'b Mod>,
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => Ref::map(r#mod.read().unwrap(), |m| m.into()),
+            None => unreachable!(),
+        }
+    }
+
+    pub fn get_mod_mut<T: 'static>(&self) -> RefMut<T>
+    where
+        T: 'static,
+        for<'b> &'b mut T: From<&'b mut Mod>,
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => RefMut::map(r#mod.write().unwrap(), |m| m.into()),
+            None => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Aparte {
+    pub command_parsers: Arc<HashMap<String, CommandParser>>,
+    current_connection: Option<Account>,
+    mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
+    event_tx: mpsc::Sender<Event>,
+    send_tx: mpsc::Sender<(Account, Element)>,
+    pub config: Config,
+}
+
+impl Aparte {
+    pub fn send(&mut self, account: &Account, stanza: Element) {
+        self.send_tx.send((account.clone(), stanza));
+    }
+
+    pub fn spawn<F>(future: F)
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        tokio::spawn(future);
+    }
+
+    pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
+        return IqFuture::new(account.clone(), iq);
+    }
+
+    pub fn schedule(&mut self, event: Event) {
+        self.event_tx.send(event);
+    }
+
+    pub fn log(&mut self, message: String) {
+        let message = Message::log(message);
+        self.schedule(Event::Message(None, message));
+    }
+
+    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
+    where
+        T: 'static,
+        for<'b> &'b T: From<&'b Mod>,
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => Ref::map(r#mod.read().unwrap(), |m| m.into()),
+            None => unreachable!(),
+        }
+    }
+
+    pub fn get_mod_mut<T: 'static>(&self) -> RefMut<T>
+    where
+        T: 'static,
+        for<'b> &'b mut T: From<&'b mut Mod>,
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => RefMut::map(r#mod.write().unwrap(), |m| m.into()),
+            None => unreachable!(),
+        }
+    }
+
+    pub fn current_account(&self) -> Option<Account> {
+        self.current_connection.clone()
     }
 }

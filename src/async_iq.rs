@@ -5,18 +5,20 @@ use std::task::{Poll, Context};
 use xmpp_parsers::iq::Iq;
 
 use crate::account::Account;
+use crate::core::Aparte;
 
 pub struct IqFuture {
+    aparte: Aparte,
     account: Account,
     id: String,
-    aparte: Aparte,
 }
 
 impl IqFuture {
-    pub fn new(account: Account, iq: Iq) -> Self {
+    pub fn new(aparte: Aparte, account: Account, iq: Iq) -> Self {
         Self {
+            aparte,
             account,
-            iq
+            id: iq.id,
         }
     }
 }
@@ -25,12 +27,13 @@ impl Future for IqFuture {
     type Output = Iq;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self.aparte.get_iq_response(&self.id) {
-            None => {
-                self.aparte.set_pending_iq_waker(self.request.uuid, cx.waker().clone());
-                Poll::Pending
-            },
-            Some(iq) => Poll::Ready(iq),
-        }
+        todo!()
+        //match self.aparte.get_iq_response(&self.id) {
+        //    None => {
+        //        self.aparte.set_pending_iq_waker(self.request.uuid, cx.waker().clone());
+        //        Poll::Pending
+        //    },
+        //    Some(iq) => Poll::Ready(iq),
+        //}
     }
 }
