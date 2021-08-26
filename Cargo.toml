@@ -19,7 +19,7 @@ log = "^0.4"
 flexi_logger = "^0.15"
 backtrace = "^0.3"
 futures = "^0.3"
-tokio = { version = "^1.0", features = ["full"] }
+tokio = { version = "^1.10", features = ["full"] }
 tokio-xmpp = "^3.0"
 xmpp-parsers = "^0.19"
 rpassword = "^3.0"

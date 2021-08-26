@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::collections::HashMap;
+//use std::collections::HashMap;
 //use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
@@ -19,22 +19,20 @@ use crate::core::{Aparte, Event, ModTrait};
 
 pub struct OmemoMod {
     //devices_cache: HashMap<BareJid, Vec<omemo::Device>>,
-    pending_device_query: HashMap<Uuid, BareJid>,
 }
 
 impl OmemoMod {
     pub fn new() -> Self {
         Self {
             //devices_cache: HashMap::new(),
-            pending_device_query: HashMap::new(),
         }
     }
 
-    fn configure(&self, aparte: &mut Aparte, account: &Account) {
-        let aparte = aparte.clone();
+    fn configure(&self, aparte: &mut Aparte, _account: &Account) {
+        let _aparte = aparte.proxy();
         Aparte::spawn(async {
-            let response = aparte.iq(&account.clone(), self.get_devices(account.clone().into())).await;
-            info!("{:?}", response);
+            //let response = aparte.iq(&account.clone(), self.get_devices(account.clone().into())).await;
+            //info!("{:?}", response);
         });
     }
 
@@ -50,9 +48,9 @@ impl OmemoMod {
     //    Iq::from_set(id, pubsub).with_to(Jid::Bare(contact.clone()))
     //}
 
+    #[allow(unused)]
     fn get_devices(&mut self, contact: &BareJid) -> Iq {
         let id = Uuid::new_v4();
-        self.pending_device_query.insert(id.clone(), contact.clone());
 
         let id = id.to_hyphenated().to_string();
         let items = pubsub::pubsub::Items {
@@ -74,7 +72,7 @@ impl OmemoMod {
 
 
 impl ModTrait for OmemoMod {
-    fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
+    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         //let mut disco = aparte.get_mod_mut::<DiscoMod>();
         //disco.add_feature(ns::OMEMO_DEVICES);
         //disco.add_feature(format!("{}+notify", ns::OMEMO_DEVICES));
@@ -84,7 +82,7 @@ impl ModTrait for OmemoMod {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(account, jid) => {
+            Event::Connected(account, _jid) => {
                 self.configure(aparte, account);
             }
             //Event::PubSub { account: _, from: Some(from), event } => match event {

@@ -1,11 +1,12 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::fmt;
+use std::sync::Arc;
+use std::str::FromStr;
+
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use std::fmt;
-use std::rc::Rc;
-use std::str::FromStr;
 use xmpp_parsers::BareJid;
 
 use crate::account::Account;
@@ -117,7 +118,7 @@ impl CompletionMod {
                         .map(|c| c.0.to_string())
                         .collect()
                 } else {
-                    let command_parsers = Rc::clone(&aparte.command_parsers);
+                    let command_parsers = Arc::clone(&aparte.command_parsers);
                     if let Some(parser) = command_parsers.get(&command.args[0]) {
                         if command.cursor - 1 < parser.autocompletions.len() {
                             if let Some(completion) = &parser.autocompletions[command.cursor - 1] {
