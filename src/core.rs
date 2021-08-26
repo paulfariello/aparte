@@ -374,7 +374,7 @@ impl<T: FromStr> FromStr for Password<T> {
 }
 
 pub struct Connection {
-    pub sink: mpsc::Sender<Element>,
+    pub sink: mpsc::UnboundedSender<Element>,
     pub account: FullJid,
 }
 
@@ -801,10 +801,10 @@ pub struct Aparte {
     mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
-    event_tx: mpsc::Sender<Event>,
-    event_rx: Option<mpsc::Receiver<Event>>,
-    send_tx: mpsc::Sender<(Account, Element)>,
-    send_rx: Option<mpsc::Receiver<(Account, Element)>>,
+    event_tx: mpsc::UnboundedSender<Event>,
+    event_rx: Option<mpsc::UnboundedReceiver<Event>>,
+    send_tx: mpsc::UnboundedSender<(Account, Element)>,
+    send_rx: Option<mpsc::UnboundedReceiver<(Account, Element)>>,
     pending_iq: HashMap<Uuid, Waker>,
     /// Aparté main configuration
     pub config: Config,
@@ -838,8 +838,8 @@ impl Aparte {
             },
         };
 
-        let (event_tx, event_rx) = mpsc::channel(4096);
-        let (send_tx, send_rx) = mpsc::channel(4096);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (send_tx, send_rx) = mpsc::unbounded_channel();
 
         let mut aparte = Self {
             command_parsers: Arc::new(HashMap::new()),
@@ -973,7 +973,7 @@ impl Aparte {
         }
     }
 
-    pub fn add_connection(&mut self, account: Account, sink: mpsc::Sender<Element>) {
+    pub fn add_connection(&mut self, account: Account, sink: mpsc::UnboundedSender<Element>) {
         let connection = Connection {
             account: account.clone(),
             sink,
@@ -1015,7 +1015,7 @@ impl Aparte {
             let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
             loop {
                 sigwinch.recv().await;
-                if let Err(err) = tx_for_signal.send(Event::WindowChange).await {
+                if let Err(err) = tx_for_signal.send(Event::WindowChange) {
                     log::error!("Cannot send signal to internal channel: {}", err);
                     break;
                 }
@@ -1027,13 +1027,13 @@ impl Aparte {
             loop {
                 match input_event_stream.next().await {
                     Some(event) => {
-                        if let Err(err) = tx_for_event.send(event).await {
+                        if let Err(err) = tx_for_event.send(event) {
                             log::error!("Cannot send event to internal channel: {}", err);
                             break;
                         }
                     }
                     None => {
-                        if let Err(err) = tx_for_event.send(Event::Quit).await {
+                        if let Err(err) = tx_for_event.send(Event::Quit) {
                             log::error!("Cannot send Quit event to internal channel: {}", err);
                         }
                         break;
@@ -1060,7 +1060,7 @@ impl Aparte {
                         }
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
-                        Some((account, stanza)) => self.send_stanza(account, stanza).await,
+                        Some((account, stanza)) => self.send_stanza(account, stanza),
                         None => {
                             debug!("Broken send channel");
                             break;
@@ -1086,13 +1086,13 @@ impl Aparte {
         }
     }
 
-    async fn send_stanza(&mut self, account: Account, stanza: Element) {
+    fn send_stanza(&mut self, account: Account, stanza: Element) {
         let mut raw = Vec::<u8>::new();
         stanza.write_to(&mut raw).unwrap();
         log::debug!("SEND: {}", String::from_utf8(raw).unwrap());
         match self.connections.get_mut(&account) {
             Some(connection) => {
-                if let Err(e) = connection.sink.send(stanza).await {
+                if let Err(e) = connection.sink.send(stanza) {
                     log::warn!("Cannot send stanza: {}", e);
                 }
             }
@@ -1133,7 +1133,7 @@ impl Aparte {
 
         client.set_reconnect(true);
 
-        let (connection_channel, mut rx) = mpsc::channel(256);
+        let (connection_channel, mut rx) = mpsc::unbounded_channel();
 
         self.add_connection(account.clone(), connection_channel);
 
@@ -1158,7 +1158,6 @@ impl Aparte {
                     XmppEvent::Disconnected(XmppError::Auth(e)) => {
                         if let Err(err) = event_tx
                             .send(Event::AuthError(account.clone(), format!("{e}")))
-                            .await
                         {
                             log::error!("Cannot send event to internal channel: {}", err);
                         };
@@ -1167,7 +1166,6 @@ impl Aparte {
                     XmppEvent::Disconnected(e) => {
                         if let Err(err) = event_tx
                             .send(Event::Disconnected(account.clone(), format!("{e}")))
-                            .await
                         {
                             log::error!("Cannot send event to internal channel: {}", err);
                         };
@@ -1187,7 +1185,6 @@ impl Aparte {
                     } => {
                         if let Err(err) = event_tx
                             .send(Event::Connected(account.clone(), jid))
-                            .await
                         {
                             log::error!("Cannot send event to internal channel: {}", err);
                             break;
@@ -1197,7 +1194,6 @@ impl Aparte {
                         log::debug!("RECV: {}", String::from(&stanza));
                         if let Err(err) = event_tx
                             .send(Event::Stanza(account.clone(), stanza))
-                            .await
                         {
                             log::error!("Cannot send stanza to internal channel: {}", err);
                             break;
@@ -1404,11 +1400,11 @@ impl Aparte {
     }
 
     pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.blocking_send((account.clone(), stanza)).unwrap();
+        self.send_tx.send((account.clone(), stanza)).unwrap();
     }
 
     pub fn schedule(&mut self, event: Event) {
-        self.event_tx.blocking_send(event).unwrap();
+        self.event_tx.send(event).unwrap();
     }
 
     pub fn log(&mut self, message: String) {
@@ -1448,14 +1444,14 @@ impl Aparte {
 pub struct AparteAsync {
     current_connection: Option<Account>,
     mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
-    event_tx: mpsc::Sender<Event>,
-    send_tx: mpsc::Sender<(Account, Element)>,
+    event_tx: mpsc::UnboundedSender<Event>,
+    send_tx: mpsc::UnboundedSender<(Account, Element)>,
     pub config: Config,
 }
 
 impl AparteAsync {
     pub async fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.send((account.clone(), stanza)).await.unwrap();
+        self.send_tx.send((account.clone(), stanza)).unwrap();
     }
 
     pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
@@ -1463,7 +1459,7 @@ impl AparteAsync {
     }
 
     pub async fn schedule(&mut self, event: Event) {
-        self.event_tx.send(event).await.unwrap();
+        self.event_tx.send(event).unwrap();
     }
 
     pub async fn log(&mut self, message: String) {
