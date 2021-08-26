@@ -31,9 +31,10 @@ impl OmemoMod {
     }
 
     fn configure(&self, aparte: &mut Aparte, account: &Account) {
-        aparte.spawn(async {
+        let aparte = aparte.clone();
+        Aparte::spawn(async {
             let response = aparte.iq(&account.clone(), self.get_devices(account.clone().into())).await;
-            info!("{}", response);
+            info!("{:?}", response);
         });
     }
 
