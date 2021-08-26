@@ -1404,11 +1404,11 @@ impl Aparte {
     }
 
     pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.try_send((account.clone(), stanza)).unwrap();
+        self.send_tx.blocking_send((account.clone(), stanza)).unwrap();
     }
 
     pub fn schedule(&mut self, event: Event) {
-        self.event_tx.try_send(event).unwrap();
+        self.event_tx.blocking_send(event).unwrap();
     }
 
     pub fn log(&mut self, message: String) {
