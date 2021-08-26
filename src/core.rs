@@ -1027,7 +1027,6 @@ impl Aparte {
             loop {
                 match input_event_stream.next().await {
                     Some(event) => {
-                        debug!("Event {:?}", event);
                         if let Err(err) = tx_for_event.send(event).await {
                             log::error!("Cannot send event to internal channel: {}", err);
                             break;
@@ -1056,14 +1055,14 @@ impl Aparte {
                             break;
                         },
                         None => {
-                            debug!("Broken event loop");
+                            debug!("Broken event channel");
                             break;
                         }
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
                         Some((account, stanza)) => self.send_stanza(account, stanza).await,
                         None => {
-                            debug!("Broken send loop");
+                            debug!("Broken send channel");
                             break;
                         }
                     }
