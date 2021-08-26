@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
+
 use uuid::Uuid;
 use xmpp_parsers::bookmarks;
 use xmpp_parsers::bookmarks2;

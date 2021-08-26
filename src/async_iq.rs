@@ -5,16 +5,19 @@ use std::task::{Poll, Context};
 use xmpp_parsers::iq::Iq;
 
 use crate::account::Account;
-use crate::core::Aparte;
+use crate::core::AparteAsync;
 
 pub struct IqFuture {
-    aparte: Aparte,
+    #[allow(dead_code)]
+    aparte: AparteAsync,
+    #[allow(dead_code)]
     account: Account,
+    #[allow(dead_code)]
     id: String,
 }
 
 impl IqFuture {
-    pub fn new(aparte: Aparte, account: Account, iq: Iq) -> Self {
+    pub fn new(aparte: AparteAsync, account: Account, iq: Iq) -> Self {
         Self {
             aparte,
             account,
@@ -26,7 +29,7 @@ impl IqFuture {
 impl Future for IqFuture {
     type Output = Iq;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Self::Output> {
         todo!()
         //match self.aparte.get_iq_response(&self.id) {
         //    None => {

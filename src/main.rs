@@ -23,7 +23,7 @@ mod i18n;
 mod mods;
 mod word;
 
-use crate::core::AparteCore;
+use crate::core::Aparte;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -78,7 +78,7 @@ fn main() {
 
     log::info!("Starting aparté");
 
-    let mut aparte = AparteCore::new(config);
+    let mut aparte = Aparte::new(config);
 
     aparte.init().unwrap();
 

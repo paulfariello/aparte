@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+
 use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::{ns, presence, roster, BareJid, Element, Jid};

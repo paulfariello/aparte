@@ -90,7 +90,7 @@ impl ModTrait for DiscoMod {
                     }
                 }
                 IqType::Get(el) => {
-                    if let Ok(disco) = disco::DiscoInfoQuery::try_from(el) {
+                    if let Ok(_disco) = disco::DiscoInfoQuery::try_from(el) {
                         let id = iq.id.clone();
                         let disco = self.get_disco();
                         let iq = Iq::from_result(id, Some(disco));

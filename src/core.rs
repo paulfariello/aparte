@@ -8,7 +8,6 @@ use futures::stream::StreamExt;
 use linked_hash_map::LinkedHashMap;
 use rand::{self, Rng};
 use std::any::TypeId;
-use std::cell::{Ref, RefMut};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
@@ -18,11 +17,11 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock, RwLockReadGuard, RwLockWriteGuard, RwLockMappedWriteGuard};
 use tokio::task;
 use tokio_xmpp::{
     AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket,
@@ -495,10 +494,10 @@ Examples:
     window: Option<String> = {
         completion: (|aparte, _command| {
             let ui = aparte.get_mod::<mods::ui::UIMod>();
+            let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
             ui.get_windows().iter().map(|window| {
                 if let Some(account) = aparte.current_account() {
-                    if let Ok(jid) = BareJid::from_str(window) {
-                        let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
+                    if let Ok(jid) = BareJid::from_str(&window) {
                         conversation_mod.get(&account, &jid).cloned()
                     } else {
                         None
@@ -797,21 +796,21 @@ Examples:
     }
 }
 
-pub struct AparteCore {
+pub struct Aparte {
     pub command_parsers: Arc<HashMap<String, CommandParser>>,
     mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
     event_tx: mpsc::Sender<Event>,
-    event_rx: mpsc::Receiver<Event>,
+    event_rx: Option<mpsc::Receiver<Event>>,
     send_tx: mpsc::Sender<(Account, Element)>,
-    send_rx: mpsc::Receiver<(Account, Element)>,
+    send_rx: Option<mpsc::Receiver<(Account, Element)>>,
     pending_iq: HashMap<Uuid, Waker>,
     /// Aparté main configuration
     pub config: Config,
 }
 
-impl AparteCore {
+impl Aparte {
     pub fn new(config_path: PathBuf) -> Self {
         let mut config_file = match OpenOptions::new()
             .read(true)
@@ -842,37 +841,32 @@ impl AparteCore {
         let (event_tx, event_rx) = mpsc::channel(256);
         let (send_tx, send_rx) = mpsc::channel(256);
 
-        let mut core = Self {
+        let mut aparte = Self {
             command_parsers: Arc::new(HashMap::new()),
             mods: Arc::new(HashMap::new()),
             connections: HashMap::new(),
             current_connection: None,
             event_tx,
-            event_rx,
+            event_rx: Some(event_rx),
             send_tx,
-            send_rx,
+            send_rx: Some(send_rx),
             config,
             pending_iq: HashMap::new(),
         };
 
-        core.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
-        core.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
-        core.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
-        core.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
-        core.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
-        core.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
-        core.add_mod(Mod::UI(mods::ui::UIMod::new()));
-        core.add_mod(Mod::Mam(mods::mam::MamMod::new()));
-        core.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
-        core.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
-        core.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
+        aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
+        aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
+        aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
+        aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
+        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
+        aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
+        aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
+        aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
+        aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
+        aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
+        aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
 
-        core
-    }
-
-    pub fn add_command(&mut self, command_parser: CommandParser) {
-        let command_parsers = Arc::get_mut(&mut self.command_parsers).unwrap();
-        command_parsers.insert(command_parser.name.to_string(), command_parser);
+        aparte
     }
 
     pub fn handle_raw_command(
@@ -891,7 +885,7 @@ impl AparteCore {
         };
 
         let command = (parser.parse)(account, context, buf)?;
-        (parser.exec)(&mut self.aparte(), command)
+        (parser.exec)(self, command)
     }
 
     pub fn handle_command(&mut self, command: Command) -> Result<(), String> {
@@ -902,7 +896,7 @@ impl AparteCore {
             }
         };
 
-        (parser.exec)(&mut self.aparte(), command)
+        (parser.exec)(self, command)
     }
 
     pub fn add_mod(&mut self, r#mod: Mod) {
@@ -989,12 +983,7 @@ impl AparteCore {
         self.current_connection = Some(account);
     }
 
-    pub fn current_account(&self) -> Option<Account> {
-        self.current_connection.clone()
-    }
-
     pub fn init(&mut self) -> Result<(), ()> {
-        let mut aparte = self.aparte();
         self.add_command(help::new());
         self.add_command(connect::new());
         self.add_command(win::new());
@@ -1007,7 +996,7 @@ impl AparteCore {
 
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
-            r#mod.write().unwrap().init(&mut aparte)?
+            r#mod.try_write().unwrap().init(self)?;
         }
 
         Ok(())
@@ -1038,6 +1027,7 @@ impl AparteCore {
             loop {
                 match input_event_stream.next().await {
                     Some(event) => {
+                        debug!("Event {:?}", event);
                         if let Err(err) = tx_for_event.send(event).await {
                             log::error!("Cannot send event to internal channel: {}", err);
                             break;
@@ -1056,7 +1046,27 @@ impl AparteCore {
         let local_set = tokio::task::LocalSet::new();
         local_set.block_on(&mut rt, async move {
             self.schedule(Event::Start);
-            self.event_loop().await;
+            let mut event_rx = self.event_rx.take().unwrap();
+            let mut send_rx = self.send_rx.take().unwrap();
+
+            loop {
+                tokio::select! {
+                    event = event_rx.recv() => match event {
+                        Some(event) => self.handle_event(event),
+                        None => {
+                            debug!("Broken event loop");
+                            break;
+                        }
+                    },
+                    account_and_stanza = send_rx.recv() => match account_and_stanza {
+                        Some((account, stanza)) => self.send_stanza(account, stanza).await,
+                        None => {
+                            debug!("Broken send loop");
+                            break;
+                        }
+                    }
+                };
+            }
         });
     }
 
@@ -1075,25 +1085,23 @@ impl AparteCore {
         }
     }
 
-    async fn send_loop(&mut self) {
-        while let Some((account, stanza)) = self.send_rx.recv().await {
-            let mut raw = Vec::<u8>::new();
-            stanza.write_to(&mut raw).unwrap();
-            log::debug!("SEND: {}", String::from_utf8(raw).unwrap());
-            match self.connections.get_mut(&account) {
-                Some(connection) => {
-                    if let Err(e) = connection.sink.send(stanza).await {
-                        log::warn!("Cannot send stanza: {}", e);
-                    }
+    async fn send_stanza(&mut self, account: Account, stanza: Element) {
+        let mut raw = Vec::<u8>::new();
+        stanza.write_to(&mut raw).unwrap();
+        log::debug!("SEND: {}", String::from_utf8(raw).unwrap());
+        match self.connections.get_mut(&account) {
+            Some(connection) => {
+                if let Err(e) = connection.sink.send(stanza).await {
+                    log::warn!("Cannot send stanza: {}", e);
                 }
-                None => {
-                    log::warn!("No connection found for {}", account);
-                }
+            }
+            None => {
+                log::warn!("No connection found for {}", account);
             }
         }
     }
 
-    pub async fn connect(&mut self, connection_info: &ConnectionInfo, password: Password<String>) {
+    pub fn connect(&mut self, connection_info: &ConnectionInfo, password: Password<String>) {
         let account: Account = match Jid::from_str(&connection_info.jid) {
             Ok(Jid::Full(jid)) => jid,
             Ok(Jid::Bare(jid)) => {
@@ -1199,121 +1207,109 @@ impl AparteCore {
         });
     }
 
-    pub async fn event_loop(&mut self) -> Result<(), ()> {
-        let mut aparte = self.aparte();
-        while let Some(event) = self.event_rx.recv().await {
-            log::debug!("Event: {:?}", event);
-            {
-                let mods = self.mods.clone();
-                for (_, r#mod) in mods.iter() {
-                    r#mod.write().unwrap().on_event(&mut aparte, &event);
-                }
-                self.send_loop().await;
+    pub fn handle_event(&mut self, event: Event) {
+        log::debug!("Event: {:?}", event);
+        {
+            let mods = self.mods.clone();
+            for (_, r#mod) in mods.iter() {
+                r#mod.try_write().unwrap().on_event(self, &event);
             }
-
-            match event {
-                Event::Start => {
-                    self.start();
-                }
-                Event::Command(command) => match self.handle_command(command) {
-                    Err(err) => self.log(err),
-                    Ok(()) => {}
-                },
-                Event::RawCommand(account, context, buf) => {
-                    match self.handle_raw_command(&account, &context, &buf) {
-                        Err(err) => self.log(err),
-                        Ok(()) => {}
-                    }
-                }
-                Event::SendMessage(account, message) => {
-                    self.schedule(Event::Message(Some(account.clone()), message.clone()));
-                    if let Ok(xmpp_message) = Element::try_from(message) {
-                        self.send(&account, xmpp_message);
-                    }
-                }
-                Event::Connect(account, password) => {
-                    self.connect(&account, password).await;
-                }
-                Event::Connected(account, _) => {
-                    self.log(format!("Connected as {account}"));
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence.show = Some(PresenceShow::Chat);
-
-                    let disco = self.get_mod::<mods::disco::DiscoMod>().get_disco();
-                    let disco = caps::compute_disco(&disco);
-                    let verification_string = caps::hash_caps(&disco, xmpp_hashes::Algo::Blake2b_512).unwrap();
-                    let caps = Caps::new("aparté", verification_string);
-                    presence.add_payload(caps);
-
-                    self.send(&account, presence.into());
-                }
-                Event::Disconnected(account, err) => {
-                    self.log(format!("Connection lost for {account}: {err}"));
-                }
-                Event::AuthError(account, err) => {
-                    self.log(format!("Authentication error for {account}: {err}"));
-                }
-                Event::Stanza(account, stanza) => {
-                    self.handle_stanza(account, stanza);
-                }
-                Event::RawMessage {
-                    account,
-                    message,
-                    delay,
-                    archive,
-                } => {
-                    self.handle_xmpp_message(account, message, delay, archive);
-                }
-                Event::Join {
-                    account,
-                    channel,
-                    user_request,
-                } => {
-                    let to = match channel.clone() {
-                        Jid::Full(jid) => jid,
-                        Jid::Bare(jid) => {
-                            let node = account.node.clone().unwrap();
-                            jid.with_resource(node)
-                        }
-                    };
-                    let from: Jid = account.clone().into();
-
-                    let mut presence = Presence::new(PresenceType::None);
-                    presence = presence.with_to(Jid::Full(to.clone()));
-                    presence = presence.with_from(from);
-                    presence.add_payload(Muc::new());
-                    self.send(&account, presence.into());
-
-                    // Successful join
-                    self.log(format!("Joined {channel}"));
-                    self.schedule(Event::Joined {
-                        account: account.clone(),
-                        channel: to,
-                        user_request,
-                    });
-                }
-                Event::Leave(channel) => {
-                    // Send presence in the channel
-                    let mut presence = Presence::new(PresenceType::Unavailable);
-                    presence = presence.with_to(channel.jid.clone());
-                    presence = presence.with_from(channel.account.clone());
-                    presence.add_payload(Muc::new());
-                    self.send(&channel.account, presence.into());
-                }
-                Event::Quit => {
-                    return Err(());
-                }
-                _ => {}
-            }
-            self.send_loop().await;
         }
 
-        Ok(())
+        match event {
+            Event::Start => {
+                self.start();
+            }
+            Event::Command(command) => match self.handle_command(command) {
+                Err(err) => self.log(err),
+                Ok(()) => {}
+            },
+            Event::RawCommand(account, context, buf) => {
+                match self.handle_raw_command(&account, &context, &buf) {
+                    Err(err) => self.log(err),
+                    Ok(()) => {}
+                }
+            }
+            Event::SendMessage(account, message) => {
+                self.schedule(Event::Message(Some(account.clone()), message.clone()));
+                if let Ok(xmpp_message) = Element::try_from(message) {
+                    self.send(&account, xmpp_message);
+                }
+            }
+            Event::Connect(account, password) => {
+                self.connect(&account, password);
+            }
+            Event::Connected(account, _) => {
+                self.log(format!("Connected as {}", account));
+                let mut presence = Presence::new(PresenceType::None);
+                presence.show = Some(PresenceShow::Chat);
+
+                let disco = self.get_mod::<mods::disco::DiscoMod>().get_disco();
+                let disco = caps::compute_disco(&disco);
+                let verification_string = caps::hash_caps(&disco, xmpp_hashes::Algo::Blake2b_512).unwrap();
+                let caps = Caps::new("aparté", verification_string);
+                presence.add_payload(caps);
+
+                self.send(&account, presence.into());
+            }
+            Event::Disconnected(account, err) => {
+                self.log(format!("Connection lost for {}: {}", account, err));
+            }
+            Event::AuthError(account, err) => {
+                self.log(format!("Authentication error for {}: {}", account, err));
+            }
+            Event::Stanza(account, stanza) => {
+                self.handle_stanza(account, stanza);
+            }
+            Event::RawMessage(account, message, delay) => {
+                self.handle_xmpp_message(account, message, delay, archive);
+            }
+            Event::Join {
+                account,
+                channel,
+                user_request,
+            } => {
+                let to = match channel.clone() {
+                    Jid::Full(jid) => jid,
+                    Jid::Bare(jid) => {
+                        let node = account.node.clone().unwrap();
+                        jid.with_resource(node)
+                    }
+                };
+                let from: Jid = account.clone().into();
+
+                let mut presence = Presence::new(PresenceType::None);
+                presence = presence.with_to(Jid::Full(to.clone()));
+                presence = presence.with_from(from);
+                presence.add_payload(Muc::new());
+                self.send(&account, presence.into());
+
+                // Successful join
+                self.log(format!("Joined {}", channel));
+                self.schedule(Event::Joined {
+                    account: account.clone(),
+                    channel: to,
+                    user_request,
+                });
+            }
+            Event::Leave(channel) => {
+                // Send presence in the channel
+                let mut presence = Presence::new(PresenceType::Unavailable);
+                presence = presence.with_to(channel.jid.clone());
+                presence = presence.with_from(channel.account.clone());
+                presence.add_payload(Muc::new());
+                self.send(&channel.account, presence.into());
+            }
+            Event::Quit => {
+                return;
+            }
+            _ => {}
+        }
     }
 
     fn handle_stanza(&mut self, account: Account, stanza: Element) {
         if let Ok(message) = XmppParsersMessage::try_from(stanza.clone()) {
-            self.handle_xmpp_message(account, message, None, false);
+            self.handle_xmpp_message(account, message, None, false)
         } else if let Ok(iq) = Iq::try_from(stanza.clone()) {
             self.handle_iq(account, iq);
         } else if let Ok(presence) = Presence::try_from(stanza.clone()) {
@@ -1331,12 +1327,11 @@ impl AparteCore {
         let mut best_match = 0f64;
         let mut matched_mod = None;
 
-        let mut aparte = self.aparte();
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
             let message_match = r#mod
-                .write().unwrap()
-                .can_handle_xmpp_message(&mut aparte, &account, &message, &delay);
+                .try_write().unwrap()
+                .can_handle_xmpp_message(self, &account, &message, &delay);
             if message_match > best_match {
                 matched_mod = Some(r#mod);
                 best_match = message_match;
@@ -1346,8 +1341,8 @@ impl AparteCore {
         if let Some(r#mod) = matched_mod {
             log::debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
-                .write().unwrap()
-                .handle_xmpp_message(&mut aparte, &account, &message, &delay, archive);
+                .try_write().unwrap()
+                .handle_xmpp_message(self, &account, &message, &delay, archive);
         } else {
             log::info!("Don't know how to handle message: {:?}", message);
         }
@@ -1357,7 +1352,7 @@ impl AparteCore {
         match iq.payload {
             IqType::Error(payload) => {
                 if let Ok(uuid) = Uuid::from_str(&iq.id) {
-                    if let Some(mod_id) = self.pending_iq.remove(&uuid) {
+                    if let Some(_mod_id) = self.pending_iq.remove(&uuid) {
                         todo!();
                     }
                 } else {
@@ -1367,9 +1362,9 @@ impl AparteCore {
                     }
                 }
             }
-            IqType::Result(payload) => {
+            IqType::Result(_payload) => {
                 if let Ok(uuid) = Uuid::from_str(&iq.id) {
-                    if let Some(mod_id) = self.pending_iq.remove(&uuid) {
+                    if let Some(_mod_id) = self.pending_iq.remove(&uuid) {
                         todo!();
                     }
                 }
@@ -1381,67 +1376,14 @@ impl AparteCore {
     }
 
     // TODO maybe use From<>
-    pub fn aparte(&self) -> Aparte {
-        Aparte {
-            command_parsers: self.command_parsers.clone(),
+    pub fn proxy(&self) -> AparteAsync {
+        AparteAsync {
             current_connection: self.current_connection.clone(),
             mods: self.mods.clone(),
             event_tx: self.event_tx.clone(),
             send_tx: self.send_tx.clone(),
             config: self.config.clone(),
         }
-    }
-
-    // Common function for AparteCore and Aparte, maybe share it in Trait
-    pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.send((account.clone(), stanza));
-    }
-
-    pub fn schedule(&mut self, event: Event) {
-        self.event_tx.send(event);
-    }
-
-    pub fn log(&mut self, message: String) {
-        let message = Message::log(message);
-        self.schedule(Event::Message(None, message));
-    }
-
-    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
-    where
-        T: 'static,
-        for<'b> &'b T: From<&'b Mod>,
-    {
-        match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => Ref::map(r#mod.read().unwrap(), |m| m.into()),
-            None => unreachable!(),
-        }
-    }
-
-    pub fn get_mod_mut<T: 'static>(&self) -> RefMut<T>
-    where
-        T: 'static,
-        for<'b> &'b mut T: From<&'b mut Mod>,
-    {
-        match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RefMut::map(r#mod.write().unwrap(), |m| m.into()),
-            None => unreachable!(),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Aparte {
-    pub command_parsers: Arc<HashMap<String, CommandParser>>,
-    current_connection: Option<Account>,
-    mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
-    event_tx: mpsc::Sender<Event>,
-    send_tx: mpsc::Sender<(Account, Element)>,
-    pub config: Config,
-}
-
-impl Aparte {
-    pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.send((account.clone(), stanza));
     }
 
     pub fn spawn<F>(future: F)
@@ -1452,12 +1394,18 @@ impl Aparte {
         tokio::spawn(future);
     }
 
-    pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
-        return IqFuture::new(account.clone(), iq);
+    // Common function for AparteAsync and Aparte, maybe share it in Trait
+    pub fn add_command(&mut self, command_parser: CommandParser) {
+        let command_parsers = Arc::get_mut(&mut self.command_parsers).unwrap();
+        command_parsers.insert(command_parser.name.to_string(), command_parser);
+    }
+
+    pub fn send(&mut self, account: &Account, stanza: Element) {
+        self.send_tx.try_send((account.clone(), stanza)).unwrap();
     }
 
     pub fn schedule(&mut self, event: Event) {
-        self.event_tx.send(event);
+        self.event_tx.try_send(event).unwrap();
     }
 
     pub fn log(&mut self, message: String) {
@@ -1465,24 +1413,79 @@ impl Aparte {
         self.schedule(Event::Message(None, message));
     }
 
-    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
+    pub fn get_mod<'a, T>(&'a self) -> RwLockReadGuard<'a, T>
     where
         T: 'static,
         for<'b> &'b T: From<&'b Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => Ref::map(r#mod.read().unwrap(), |m| m.into()),
+            Some(r#mod) => RwLockReadGuard::map(r#mod.try_read().unwrap(), |m| m.into()),
             None => unreachable!(),
         }
     }
 
-    pub fn get_mod_mut<T: 'static>(&self) -> RefMut<T>
+    #[allow(unused)]
+    pub fn get_mod_mut<'a, T>(&'a self) -> RwLockMappedWriteGuard<'a, T>
     where
         T: 'static,
         for<'b> &'b mut T: From<&'b mut Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RefMut::map(r#mod.write().unwrap(), |m| m.into()),
+            Some(r#mod) => RwLockWriteGuard::map(r#mod.try_write().unwrap(), |m| m.into()),
+            None => unreachable!(),
+        }
+    }
+
+    pub fn current_account(&self) -> Option<Account> {
+        self.current_connection.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct AparteAsync {
+    current_connection: Option<Account>,
+    mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
+    event_tx: mpsc::Sender<Event>,
+    send_tx: mpsc::Sender<(Account, Element)>,
+    pub config: Config,
+}
+
+impl AparteAsync {
+    pub async fn send(&mut self, account: &Account, stanza: Element) {
+        self.send_tx.send((account.clone(), stanza)).await.unwrap();
+    }
+
+    pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
+        return IqFuture::new(self.clone(), account.clone(), iq);
+    }
+
+    pub async fn schedule(&mut self, event: Event) {
+        self.event_tx.send(event).await.unwrap();
+    }
+
+    pub async fn log(&mut self, message: String) {
+        let message = Message::log(message);
+        self.schedule(Event::Message(None, message)).await;
+    }
+
+    pub async fn get_mod<'a, T>(&'a self) -> RwLockReadGuard<'a, T>
+    where
+        T: 'static,
+        for<'b> &'b T: From<&'b Mod>,
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => RwLockReadGuard::map(r#mod.read().await, |m| m.into()),
+            None => unreachable!(),
+        }
+    }
+
+    pub async fn get_mod_mut<'a, T>(&'a self) -> RwLockMappedWriteGuard<'a, T>
+    where
+        T: 'static,
+        for<'b> &'b mut T: From<&'b mut Mod>,
+    {
+        match self.mods.get(&TypeId::of::<T>()) {
+            Some(r#mod) => RwLockWriteGuard::map(r#mod.write().await, |m| m.into()),
             None => unreachable!(),
         }
     }
