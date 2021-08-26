@@ -838,8 +838,8 @@ impl Aparte {
             },
         };
 
-        let (event_tx, event_rx) = mpsc::channel(256);
-        let (send_tx, send_rx) = mpsc::channel(256);
+        let (event_tx, event_rx) = mpsc::channel(4096);
+        let (send_tx, send_rx) = mpsc::channel(4096);
 
         let mut aparte = Self {
             command_parsers: Arc::new(HashMap::new()),
