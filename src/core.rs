@@ -12,12 +12,11 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::future::Future;
-use std::task::Waker;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc};
+use std::sync::{Arc, Mutex};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -40,7 +39,7 @@ use xmpp_parsers::stanza_error::StanzaError;
 use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
 use crate::account::{Account, ConnectionInfo};
-use crate::async_iq::IqFuture;
+use crate::async_iq::{IqFuture, PendingIqState};
 use crate::color;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
@@ -805,7 +804,7 @@ pub struct Aparte {
     event_rx: Option<mpsc::UnboundedReceiver<Event>>,
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
     send_rx: Option<mpsc::UnboundedReceiver<(Account, Element)>>,
-    pending_iq: HashMap<Uuid, Waker>,
+    pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     /// Aparté main configuration
     pub config: Config,
 }
@@ -851,7 +850,7 @@ impl Aparte {
             send_tx,
             send_rx: Some(send_rx),
             config,
-            pending_iq: HashMap::new(),
+            pending_iq: Arc::new(Mutex::new(HashMap::new())),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
@@ -1348,25 +1347,36 @@ impl Aparte {
     }
 
     fn handle_iq(&mut self, account: Account, iq: Iq) {
+        // Try to match to pending Iq
+        if let Ok(uuid) = Uuid::from_str(&iq.id) {
+            if let Some(state) = self.pending_iq.lock().unwrap().remove(&uuid) {
+                match state {
+                    PendingIqState::Waiting(waker) => {
+                        self.pending_iq.lock().unwrap().insert(uuid, PendingIqState::Finished(iq));
+                        if let Some(waker) = waker {
+                            waker.wake();
+                        }
+                    },
+                    PendingIqState::Finished(iq) => {
+                        info!("Received multiple response for Iq: {}", uuid);
+                        // Reinsert original result
+                        self.pending_iq.lock().unwrap().insert(uuid, PendingIqState::Finished(iq));
+                    }
+                }
+                return;
+            }
+        }
+
+        // Unkwon iq
         match iq.payload {
             IqType::Error(payload) => {
-                if let Ok(uuid) = Uuid::from_str(&iq.id) {
-                    if let Some(_mod_id) = self.pending_iq.remove(&uuid) {
-                        todo!();
-                    }
-                } else {
-                    if let Some(text) = payload.texts.get("en") {
-                        let message = Message::log(text.clone());
-                        self.schedule(Event::Message(Some(account.clone()), message));
-                    }
+                if let Some(text) = payload.texts.get("en") {
+                    let message = Message::log(text.clone());
+                    self.schedule(Event::Message(Some(account.clone()), message));
                 }
             }
-            IqType::Result(_payload) => {
-                if let Ok(uuid) = Uuid::from_str(&iq.id) {
-                    if let Some(_mod_id) = self.pending_iq.remove(&uuid) {
-                        todo!();
-                    }
-                }
+            IqType::Result(payload) => {
+                info!("Received unexpected Iq result {:?}", payload);
             }
             _ => {
                 self.schedule(Event::Iq(account, iq));
@@ -1378,9 +1388,9 @@ impl Aparte {
     pub fn proxy(&self) -> AparteAsync {
         AparteAsync {
             current_connection: self.current_connection.clone(),
-            mods: self.mods.clone(),
             event_tx: self.event_tx.clone(),
             send_tx: self.send_tx.clone(),
+            pending_iq: self.pending_iq.clone(),
             config: self.config.clone(),
         }
     }
@@ -1443,50 +1453,28 @@ impl Aparte {
 #[derive(Clone)]
 pub struct AparteAsync {
     current_connection: Option<Account>,
-    mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
     event_tx: mpsc::UnboundedSender<Event>,
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
+    pub(crate) pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     pub config: Config,
 }
 
 impl AparteAsync {
-    pub async fn send(&mut self, account: &Account, stanza: Element) {
+    pub fn send(&mut self, account: &Account, stanza: Element) {
         self.send_tx.send((account.clone(), stanza)).unwrap();
     }
 
     pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
-        return IqFuture::new(self.clone(), account.clone(), iq);
+        IqFuture::new(self.clone(), account, iq)
     }
 
-    pub async fn schedule(&mut self, event: Event) {
+    pub fn schedule(&mut self, event: Event) {
         self.event_tx.send(event).unwrap();
     }
 
-    pub async fn log(&mut self, message: String) {
+    pub fn log(&mut self, message: String) {
         let message = Message::log(message);
-        self.schedule(Event::Message(None, message)).await;
-    }
-
-    pub async fn get_mod<'a, T>(&'a self) -> RwLockReadGuard<'a, T>
-    where
-        T: 'static,
-        for<'b> &'b T: From<&'b Mod>,
-    {
-        match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RwLockReadGuard::map(r#mod.read().await, |m| m.into()),
-            None => unreachable!(),
-        }
-    }
-
-    pub async fn get_mod_mut<'a, T>(&'a self) -> RwLockMappedWriteGuard<'a, T>
-    where
-        T: 'static,
-        for<'b> &'b mut T: From<&'b mut Mod>,
-    {
-        match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RwLockWriteGuard::map(r#mod.write().await, |m| m.into()),
-            None => unreachable!(),
-        }
+        self.schedule(Event::Message(None, message));
     }
 
     pub fn current_account(&self) -> Option<Account> {
