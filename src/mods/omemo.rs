@@ -28,11 +28,13 @@ impl OmemoMod {
         }
     }
 
-    fn configure(&self, aparte: &mut Aparte, _account: &Account) {
-        let _aparte = aparte.proxy();
-        Aparte::spawn(async {
-            //let response = aparte.iq(&account.clone(), self.get_devices(account.clone().into())).await;
-            //info!("{:?}", response);
+    fn configure(&self, aparte: &mut Aparte, account: &Account) {
+        let mut aparte = aparte.proxy();
+        let account = account.clone();
+
+        Aparte::spawn(async move {
+            let response = aparte.iq(&account, Self::get_devices(&account.clone().into())).await;
+            info!("{:?}", response);
         });
     }
 
@@ -48,8 +50,7 @@ impl OmemoMod {
     //    Iq::from_set(id, pubsub).with_to(Jid::Bare(contact.clone()))
     //}
 
-    #[allow(unused)]
-    fn get_devices(&mut self, contact: &BareJid) -> Iq {
+    fn get_devices(contact: &BareJid) -> Iq {
         let id = Uuid::new_v4();
 
         let id = id.to_hyphenated().to_string();
