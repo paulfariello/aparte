@@ -38,6 +38,17 @@ cd aparte
 guix package -f guix.scm
 ```
 
+Package with GuixRUS
+
+The [GuixRUs](https://git.sr.ht/~whereiseveryone/guixrus) channel also provides `aparte`.
+
+After [subscribing](https://git.sr.ht/~whereiseveryone/guixrus#subscribing) to `GuixRUs` by adding the channel entry to your [channels.scm](https://guix.gnu.org/manual/en/html_node/Using-a-Custom-Guix-Channel.html), run the following two commands:
+
+  ```
+  guix pull
+  guix install aparte
+  ```
+
 Package for Archlinux
 ---------------------
 
