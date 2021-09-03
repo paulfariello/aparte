@@ -777,15 +777,11 @@ impl Aparte {
         }
 
         let config = match config_str.len() {
-            0 => Config {
-                accounts: HashMap::new(),
-            },
+            0 => Default::default(),
             _ => match toml::from_str(&config_str) {
                 Err(err) => {
                     error!("Malformed config file: {}", err);
-                    Config {
-                        accounts: HashMap::new(),
-                    }
+                    Default::default()
                 }
                 Ok(config) => config,
             },

@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use crate::account::ConnectionInfo;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     pub accounts: HashMap<String, ConnectionInfo>,
+    pub bell: Option<bool>,
 }
