@@ -24,6 +24,7 @@ use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, 
 use termion::get_tty;
 use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
+use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -34,6 +35,7 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::i18n;
 use crate::message::{Direction, Message, XmppMessageType};
+use crate::mods;
 use crate::terminus::{
     self, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
     Orientation, Screen, View, Window as _,
@@ -1099,7 +1101,36 @@ impl ModTrait for UIMod {
                             if unread.is_some() {
                                 self.unread_windows.insert(unread.unwrap());
                             }
-                            aparte.schedule(Event::Notification(String::from("")));
+                            match message.type_ {
+                                XmppMessageType::Chat => {
+                                    aparte.schedule(Event::Notification(String::from("")))
+                                }
+                                XmppMessageType::Channel => {
+                                    // Look for mentions
+                                    let nick = {
+                                        let conversations =
+                                            aparte.get_mod::<mods::conversation::ConversationMod>();
+                                        if let Some(Conversation::Channel(conversation)) =
+                                            conversations
+                                                .get(account.as_ref().unwrap(), &message.from)
+                                        {
+                                            Some(conversation.nick.clone())
+                                        } else {
+                                            None
+                                        }
+                                    };
+
+                                    if let Some(nick) = nick {
+                                        let body = message.get_last_body();
+                                        for word in body.split_word_bounds() {
+                                            if nick == word {
+                                                aparte
+                                                    .schedule(Event::Notification(String::from("")))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     Message::Log(_message) => {}

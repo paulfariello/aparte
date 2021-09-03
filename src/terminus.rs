@@ -997,6 +997,7 @@ impl<E> Input<E> {
     }
 
     pub fn backward_delete_word(&mut self) {
+        // XXX utf char boundary?
         enum WordParserState {
             Init,
             Space,
