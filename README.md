@@ -109,6 +109,8 @@ Aparte will fallback to `$HOME/.config/aparte/config.toml`.
 The configuration file should look like the following:
 
 ```
+bell = true
+
 [accounts]
 
 [accounts.example]

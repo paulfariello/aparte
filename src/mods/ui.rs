@@ -1300,8 +1300,10 @@ impl ModTrait for UIMod {
                 )));
             }
             Event::Notification(_) => {
-                vprint!(self.screen, "\x07");
-                flush!(self.screen);
+                if aparte.config.bell.unwrap_or(true) {
+                    vprint!(self.screen, "\x07");
+                    flush!(self.screen);
+                }
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
