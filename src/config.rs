@@ -3,11 +3,33 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use serde::Deserialize;
 use std::collections::HashMap;
+use termion::color;
 
 use crate::account::ConnectionInfo;
+use crate::color::ColorTuple;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     pub accounts: HashMap<String, ConnectionInfo>,
     pub bell: Option<bool>,
+    pub theme: Theme,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Theme {
+    pub title_bar: ColorTuple,
+    pub win_bar: ColorTuple,
+    pub roster: ColorTuple,
+    pub occupants: ColorTuple,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            title_bar: ColorTuple::new(color::Blue, color::White),
+            win_bar: ColorTuple::new(color::Blue, color::White),
+            roster: ColorTuple::new(color::Blue, color::White),
+            occupants: ColorTuple::new(color::Blue, color::White),
+        }
+    }
 }

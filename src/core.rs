@@ -776,7 +776,7 @@ impl Aparte {
             panic!("Cannot read config file {}", e);
         }
 
-        let config = match config_str.len() {
+        let config: Config = match config_str.len() {
             0 => Default::default(),
             _ => match toml::from_str(&config_str) {
                 Err(err) => {
@@ -795,7 +795,7 @@ impl Aparte {
             event_queue: Vec::new(),
             send_queue: VecDeque::new(),
             event_channel: None,
-            config: config,
+            config: config.clone(),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
@@ -804,7 +804,7 @@ impl Aparte {
         aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
         aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new()));
         aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
-        aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
+        aparte.add_mod(Mod::UI(mods::ui::UIMod::new(&config)));
         aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
         aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
         aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));

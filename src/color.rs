@@ -1,8 +1,24 @@
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use hsluv::hsluv_to_rgb;
+use serde::Deserialize;
 use std::convert::TryInto;
 use termion::color;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ColorTuple {
+    pub bg: String,
+    pub fg: String,
+}
+
+impl ColorTuple {
+    pub fn new<B: color::Color, F: color::Color>(bg: B, fg: F) -> Self {
+       Self {
+           bg: color::Bg(bg).to_string(),
+           fg: color::Fg(fg).to_string(),
+       }
+    }
+}
 
 pub fn id_to_rgb(identifier: &str) -> (u8, u8, u8) {
     // Follow xep 0392 for color generation
