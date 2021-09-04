@@ -28,7 +28,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::color::id_to_rgb;
+use crate::color::{ColorTuple, id_to_rgb};
+use crate::config::Config;
 use crate::command::Command;
 use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
@@ -53,14 +54,16 @@ struct TitleBar {
     name: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
     dirty: bool,
+    pub color: ColorTuple,
 }
 
 impl TitleBar {
-    fn new() -> Self {
+    fn new(color: &ColorTuple) -> Self {
         Self {
             name: None,
             subjects: HashMap::new(),
             dirty: true,
+            color: color.clone(),
         }
     }
 
@@ -95,8 +98,8 @@ where
         vprint!(
             screen,
             "{}{}{}",
-            color::Bg(color::Blue),
-            color::Fg(color::White),
+            self.color.bg,
+            self.color.fg,
             termion::style::Bold,
         );
 
@@ -184,16 +187,18 @@ struct WinBar {
     current_window: Option<String>,
     highlighted: Vec<String>,
     dirty: bool,
+    pub color: ColorTuple,
 }
 
 impl WinBar {
-    pub fn new() -> Self {
+    pub fn new(color: &ColorTuple) -> Self {
         Self {
             connection: None,
             windows: Vec::new(),
             current_window: None,
             highlighted: Vec::new(),
             dirty: true,
+            color: color.clone(),
         }
     }
 
@@ -247,8 +252,8 @@ where
         vprint!(
             screen,
             "{}{}",
-            color::Bg(color::Blue),
-            color::Fg(color::White)
+            self.color.bg,
+            self.color.fg,
         );
 
         for _ in 0..dimension.w.unwrap() {
@@ -370,8 +375,9 @@ impl fmt::Display for Message {
                 for line in message.body.lines() {
                     write!(
                         f,
-                        "{}{} - {}\n",
-                        color::Fg(color::White),
+                        "{}{}{} - {}\n",
+                        color::Bg(color::Reset),
+                        color::Fg(color::Reset),
                         timestamp.format("%T"),
                         line
                     )?;
@@ -411,23 +417,25 @@ impl fmt::Display for Message {
                 match me {
                     true => write!(
                         f,
-                        "{}{} - {}* {}{}{}",
-                        color::Fg(color::White),
+                        "{}{}{} - {}* {}{}{}",
+                        color::Bg(color::Reset),
+                        color::Fg(color::Reset),
                         timestamp.format("%T"),
                         attributes,
                         color::Fg(color::Rgb(r, g, b)),
                         author,
-                        color::Fg(color::White)
+                        color::Fg(color::Reset)
                     ),
                     false => write!(
                         f,
-                        "{}{} - {}{}{}:{} ",
-                        color::Fg(color::White),
+                        "{}{}{} - {}{}{}:{} ",
+                        color::Bg(color::Reset),
+                        color::Fg(color::Reset),
                         timestamp.format("%T"),
                         attributes,
                         color::Fg(color::Rgb(r, g, b)),
                         author,
-                        color::Fg(color::White)
+                        color::Fg(color::Reset)
                     ),
                 }?;
 
@@ -453,10 +461,12 @@ impl fmt::Display for contact::Group {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{}{}{}",
+            "{}{}{}{}{}",
+            color::Bg(color::Reset),
             color::Fg(color::Yellow),
             terminus::clean(&self.0),
-            color::Fg(color::White)
+            color::Bg(color::Reset),
+            color::Fg(color::Reset)
         )
     }
 }
@@ -544,7 +554,7 @@ impl fmt::Display for conversation::Occupant {
             "{}{}{}",
             color::Fg(color::Rgb(r, g, b)),
             terminus::clean(&nick),
-            color::Fg(color::White)
+            color::Fg(color::Reset)
         )
     }
 }
@@ -556,25 +566,25 @@ impl fmt::Display for conversation::Role {
                 f,
                 "{}Moderators{}",
                 color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
+                color::Fg(color::Reset)
             ),
             conversation::Role::Participant => write!(
                 f,
                 "{}Participants{}",
                 color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
+                color::Fg(color::Reset)
             ),
             conversation::Role::Visitor => write!(
                 f,
                 "{}Visitors{}",
                 color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
+                color::Fg(color::Reset)
             ),
             conversation::Role::None => write!(
                 f,
                 "{}Others{}",
                 color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
+                color::Fg(color::Reset)
             ),
         }
     }
@@ -661,7 +671,7 @@ pub struct UIMod {
 }
 
 impl UIMod {
-    pub fn new() -> Self {
+    pub fn new(config: &Config) -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let screen = AlternateScreen::from(stdout);
 
@@ -675,7 +685,7 @@ impl UIMod {
             },
         );
 
-        let title_bar = TitleBar::new();
+        let title_bar = TitleBar::new(&config.theme.title_bar);
         let frame =
             FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| match event {
                 UIEvent::Core(Event::ChangeWindow(name)) => {
@@ -712,7 +722,7 @@ impl UIMod {
                     }
                 }
             });
-        let win_bar = WinBar::new();
+        let win_bar = WinBar::new(&config.theme.win_bar);
         let input = Input::new().with_event(|input, event| match event {
             UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
             UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
