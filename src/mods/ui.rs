@@ -512,7 +512,7 @@ impl fmt::Display for RosterItem {
                     contact::Presence::Away
                     | contact::Presence::Dnd
                     | contact::Presence::Xa
-                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
+                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::Reset))?,
                 };
 
                 let disp = match &contact.name {
@@ -524,7 +524,7 @@ impl fmt::Display for RosterItem {
                     None => terminus::clean(&contact.jid.to_string()),
                 };
 
-                write!(f, "{}{}", disp, color::Fg(color::White))
+                write!(f, "{}{}", disp, color::Fg(color::Reset))
             }
 
             Self::Bookmark(bookmark) => {
@@ -533,7 +533,7 @@ impl fmt::Display for RosterItem {
                     None => terminus::clean(&bookmark.jid.to_string()),
                 };
 
-                write!(f, "{}{}", disp, color::Fg(color::White))
+                write!(f, "{}{}", disp, color::Fg(color::Reset))
             }
             Self::Window(window) => {
                 let disp = terminus::clean(window);
