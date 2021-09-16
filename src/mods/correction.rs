@@ -27,12 +27,18 @@ impl CorrectionMod {
         account: &Account,
         message: &XmppParsersMessage,
         replace: Replace,
+        archive: bool,
     ) {
         let event = {
             let mut messages = aparte.get_mod_mut::<messages::MessagesMod>();
             if let Some(original) = messages.get_mut(&Some(account.clone()), &replace.id) {
                 match original {
-                    Message::Xmpp(original) => original.add_version_from_xmpp(message),
+                    Message::Xmpp(original) => {
+                        original.add_version_from_xmpp(message);
+                        if !archive {
+                            original.archive = archive;
+                        }
+                    }
                     Message::Log(_) => error!(
                         "Can't replace a log message (conflicting id? {})",
                         replace.id
@@ -47,7 +53,12 @@ impl CorrectionMod {
                     .filter(|payload| !payload.is("replace", ns::MESSAGE_CORRECT))
                     .cloned()
                     .collect();
-                Event::RawMessage(account.clone(), message, None)
+                Event::RawMessage {
+                    account: account.clone(),
+                    message: message,
+                    delay: None,
+                    archive,
+                }
             }
         };
         aparte.schedule(event);
@@ -82,20 +93,26 @@ impl ModTrait for CorrectionMod {
         account: &Account,
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
+        archive: bool,
     ) {
         for payload in message.payloads.iter().cloned() {
             if let Ok(replace) = Replace::try_from(payload.clone()) {
-                self.handle_replace(aparte, account, message, replace);
+                self.handle_replace(aparte, account, message, replace, archive);
             }
         }
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::RawMessage(account, message, _delay) => {
+            Event::RawMessage {
+                account,
+                message,
+                delay: _,
+                archive,
+            } => {
                 for payload in message.payloads.iter().cloned() {
                     if let Ok(replace) = Replace::try_from(payload.clone()) {
-                        self.handle_replace(aparte, account, message, replace);
+                        self.handle_replace(aparte, account, message, replace, *archive);
                     }
                 }
             }

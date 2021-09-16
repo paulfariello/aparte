@@ -23,7 +23,6 @@ use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, 
 use termion::get_tty;
 use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
-use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -35,7 +34,6 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::i18n;
 use crate::message::{Direction, Message, XmppMessageType};
-use crate::mods;
 use crate::terminus::{
     self, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
     Orientation, Screen, View, Window as _,
@@ -1116,35 +1114,6 @@ impl ModTrait for UIMod {
                                     *important += 1;
                                 }
                             }
-
-                            let conversation = {
-                                let conversations =
-                                    aparte.get_mod::<mods::conversation::ConversationMod>();
-                                conversations
-                                    .get(account.as_ref().unwrap(), &message.from)
-                                    .cloned()
-                            };
-
-                            if let Some(conversation) = conversation {
-                                let important = match &conversation {
-                                    conversation::Conversation::Chat(_) => true,
-                                    conversation::Conversation::Channel(channel) => {
-                                        // Look for mentions
-                                        let mut mention = false;
-                                        let body = message.get_last_body();
-                                        for word in body.split_word_bounds() {
-                                            if channel.nick == word {
-                                                mention = true;
-                                            }
-                                        }
-                                        mention
-                                    }
-                                };
-                                aparte.schedule(Event::Notification {
-                                    conversation: conversation.clone(),
-                                    important,
-                                })
-                            }
                         }
                     }
                     Message::Log(_message) => {}
@@ -1294,6 +1263,7 @@ impl ModTrait for UIMod {
                                                 &from,
                                                 &to,
                                                 &bodies,
+                                                false,
                                             );
                                             aparte.schedule(Event::SendMessage(
                                                 account.clone(),
@@ -1316,6 +1286,7 @@ impl ModTrait for UIMod {
                                                 &from,
                                                 &to,
                                                 &bodies,
+                                                false,
                                             );
                                             aparte.schedule(Event::SendMessage(
                                                 account.clone(),

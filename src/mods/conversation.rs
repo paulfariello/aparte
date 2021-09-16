@@ -4,14 +4,15 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use unicode_segmentation::UnicodeSegmentation;
 use xmpp_parsers::{muc, BareJid, Jid};
 
 use crate::account::Account;
 use crate::conversation;
-use crate::message;
 use crate::core::{Aparte, Event, ModTrait};
+use crate::message;
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 struct ConversationIndex {
     account: Account,
     jid: BareJid,
@@ -87,18 +88,47 @@ impl ModTrait for ConversationMod {
             Event::Message(account, message) => {
                 if let message::Message::Xmpp(message) = message {
                     let account = account.as_ref().unwrap();
-                    if message.type_ == message::XmppMessageType::Chat && message.direction == message::Direction::Incoming {
-                        let index = ConversationIndex {
-                            account: account.clone(),
-                            jid: message.from.clone(),
-                        };
+                    let index = ConversationIndex {
+                        account: account.clone(),
+                        jid: message.from.clone(),
+                    };
 
+                    // Create a conversation for incomming chat messages
+                    if message.type_ == message::XmppMessageType::Chat
+                        && message.direction == message::Direction::Incoming
+                    {
                         if self.conversations.get(&index).is_none() {
-                            let conversation = conversation::Conversation::Chat(conversation::Chat {
-                                account: account.clone(),
-                                contact: message.from.clone(),
+                            let conversation =
+                                conversation::Conversation::Chat(conversation::Chat {
+                                    account: account.clone(),
+                                    contact: message.from.clone(),
+                                });
+                            self.conversations.insert(index.clone(), conversation);
+                        }
+                    }
+
+                    // Schedule a notification
+                    if !message.archive {
+                        let conversation = self.conversations.get(&index);
+                        if let Some(conversation) = conversation {
+                            let important = match &conversation {
+                                conversation::Conversation::Chat(_) => true,
+                                conversation::Conversation::Channel(channel) => {
+                                    // Look for mentions
+                                    let mut mention = false;
+                                    let body = message.get_last_body();
+                                    for word in body.split_word_bounds() {
+                                        if channel.nick == word {
+                                            mention = true;
+                                        }
+                                    }
+                                    mention
+                                }
+                            };
+                            aparte.schedule(Event::Notification {
+                                conversation: conversation.clone(),
+                                important,
                             });
-                            self.conversations.insert(index, conversation);
                         }
                     }
                 }

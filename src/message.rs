@@ -61,6 +61,7 @@ pub struct VersionedXmppMessage {
     pub history: Vec<XmppMessageVersion>,
     pub type_: XmppMessageType,
     pub direction: Direction,
+    pub archive: bool,
 }
 
 impl VersionedXmppMessage {
@@ -140,6 +141,7 @@ impl Message {
         account: &Account,
         message: &XmppParsersMessage,
         delay: &Option<Delay>,
+        archive: bool,
     ) -> Result<Self, ()> {
         let id = message
             .id
@@ -177,6 +179,7 @@ impl Message {
                             &from,
                             &to,
                             &bodies,
+                            archive,
                         ))
                     } else {
                         Ok(Message::incoming_chat(
@@ -187,6 +190,7 @@ impl Message {
                             &from,
                             &to,
                             &bodies,
+                            archive,
                         ))
                     }
                 }
@@ -198,6 +202,7 @@ impl Message {
                     &from,
                     &to,
                     &bodies,
+                    archive,
                 )),
                 _ => Err(()),
             }
@@ -262,6 +267,7 @@ impl Message {
         from_full: &Jid,
         to_full: &Jid,
         bodies: &HashMap<String, String>,
+        archive: bool,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -290,6 +296,7 @@ impl Message {
             history: vec![version],
             type_: XmppMessageType::Chat,
             direction: Direction::Incoming,
+            archive,
         })
     }
 
@@ -299,6 +306,7 @@ impl Message {
         from_full: &Jid,
         to_full: &Jid,
         bodies: &HashMap<String, String>,
+        archive: bool,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -327,6 +335,7 @@ impl Message {
             history: vec![version],
             type_: XmppMessageType::Chat,
             direction: Direction::Outgoing,
+            archive,
         })
     }
 
@@ -336,6 +345,7 @@ impl Message {
         from_full: &Jid,
         to_full: &Jid,
         bodies: &HashMap<String, String>,
+        archive: bool,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -364,6 +374,7 @@ impl Message {
             history: vec![version],
             type_: XmppMessageType::Channel,
             direction: Direction::Incoming,
+            archive,
         })
     }
 
@@ -373,6 +384,7 @@ impl Message {
         from_full: &Jid,
         to_full: &Jid,
         bodies: &HashMap<String, String>,
+        archive: bool,
     ) -> Self {
         let from = match from_full {
             Jid::Bare(from_full) => from_full.clone(),
@@ -401,6 +413,7 @@ impl Message {
             history: vec![version],
             type_: XmppMessageType::Channel,
             direction: Direction::Outgoing,
+            archive,
         })
     }
 

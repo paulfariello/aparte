@@ -5,6 +5,7 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use core::fmt::Debug;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
+use linked_hash_map::LinkedHashMap;
 use rand::{self, Rng};
 use std::any::TypeId;
 use std::cell::{Ref, RefCell, RefMut};
@@ -16,7 +17,6 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
-use linked_hash_map::LinkedHashMap;
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -65,7 +65,12 @@ pub enum Event {
     Disconnected(Account, String),
     AuthError(Account, String),
     Stanza(Account, Element),
-    RawMessage(Account, XmppParsersMessage, Option<Delay>),
+    RawMessage {
+        account: Account,
+        message: XmppParsersMessage,
+        delay: Option<Delay>,
+        archive: bool,
+    },
     RawCommand(Option<Account>, String, String),
     Command(Command),
     SendMessage(Account, Message),
@@ -198,6 +203,7 @@ pub trait ModTrait: fmt::Display {
         _account: &Account,
         _message: &XmppParsersMessage,
         _delay: &Option<Delay>,
+        _archive: bool,
     ) {
     }
 }
@@ -266,18 +272,35 @@ impl ModTrait for Mod {
         account: &Account,
         message: &XmppParsersMessage,
         delay: &Option<Delay>,
+        archive: bool,
     ) {
         match self {
-            Mod::Completion(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Carbons(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Contact(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Conversation(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Disco(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Bookmarks(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::UI(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Mam(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Messages(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
-            Mod::Correction(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay),
+            Mod::Completion(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::Carbons(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::Contact(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::Conversation(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::Disco(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::Bookmarks(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::UI(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay, archive),
+            Mod::Mam(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay, archive),
+            Mod::Messages(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
+            Mod::Correction(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
         }
     }
 }
@@ -544,7 +567,7 @@ Example:
                 let id = Uuid::new_v4().to_string();
                 let from: Jid = account.clone().into();
                 let timestamp = LocalTz::now();
-                let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies);
+                let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies, false);
                 aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
                 aparte.send(&account, Element::try_from(message).unwrap());
@@ -714,6 +737,7 @@ mod me {
                             &from,
                             &to,
                             &bodies,
+                            false,
                         ))
                     }
                     Conversation::Channel(channel) => {
@@ -732,6 +756,7 @@ mod me {
                             &from,
                             &to,
                             &bodies,
+                            false,
                         ))
                     }
                 }
@@ -1234,8 +1259,13 @@ impl Aparte {
                 Event::Stanza(account, stanza) => {
                     self.handle_stanza(account, stanza);
                 }
-                Event::RawMessage(account, message, delay) => {
-                    self.handle_xmpp_message(account, message, delay);
+                Event::RawMessage {
+                    account,
+                    message,
+                    delay,
+                    archive,
+                } => {
+                    self.handle_xmpp_message(account, message, delay, archive);
                 }
                 Event::Join {
                     account,
@@ -1295,7 +1325,7 @@ impl Aparte {
 
     fn handle_stanza(&mut self, account: Account, stanza: Element) {
         if let Ok(message) = XmppParsersMessage::try_from(stanza.clone()) {
-            self.handle_xmpp_message(account, message, None);
+            self.handle_xmpp_message(account, message, None, false);
         } else if let Ok(iq) = Iq::try_from(stanza.clone()) {
             if let IqType::Error(stanza) = iq.payload.clone() {
                 if let Some(text) = stanza.texts.get("en") {
@@ -1314,6 +1344,7 @@ impl Aparte {
         account: Account,
         message: XmppParsersMessage,
         delay: Option<Delay>,
+        archive: bool,
     ) {
         let mut best_match = 0f64;
         let mut matched_mod = None;
@@ -1333,7 +1364,7 @@ impl Aparte {
             debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
                 .borrow_mut()
-                .handle_xmpp_message(self, &account, &message, &delay);
+                .handle_xmpp_message(self, &account, &message, &delay, archive);
         } else {
             info!("Don't know how to handle message: {:?}", message);
         }
