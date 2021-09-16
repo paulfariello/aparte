@@ -8,6 +8,7 @@ use xmpp_parsers::{muc, BareJid, Jid};
 
 use crate::account::Account;
 use crate::conversation;
+use crate::message;
 use crate::core::{Aparte, Event, ModTrait};
 
 #[derive(Eq, PartialEq, Hash)]
@@ -82,6 +83,25 @@ impl ModTrait for ConversationMod {
                     jid: contact.clone(),
                 };
                 self.conversations.insert(index, conversation);
+            }
+            Event::Message(account, message) => {
+                if let message::Message::Xmpp(message) = message {
+                    let account = account.as_ref().unwrap();
+                    if message.type_ == message::XmppMessageType::Chat && message.direction == message::Direction::Incoming {
+                        let index = ConversationIndex {
+                            account: account.clone(),
+                            jid: message.from.clone(),
+                        };
+
+                        if self.conversations.get(&index).is_none() {
+                            let conversation = conversation::Conversation::Chat(conversation::Chat {
+                                account: account.clone(),
+                                contact: message.from.clone(),
+                            });
+                            self.conversations.insert(index, conversation);
+                        }
+                    }
+                }
             }
             Event::Joined {
                 account, channel, ..
