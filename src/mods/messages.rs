@@ -109,21 +109,22 @@ impl ModTrait for MessagesMod {
         account: &Account,
         message: &XmppParsersMessage,
         delay: &Option<Delay>,
+        archive: bool,
     ) {
         match message.type_ {
             XmppParsersMessageType::Chat => {
-                if let Ok(message) = Message::from_xmpp(account, message, delay) {
+                if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
                     aparte.schedule(Event::Message(Some(account.clone()), message));
                 }
             }
             XmppParsersMessageType::Groupchat => {
                 if !message.bodies.is_empty() {
-                    if let Ok(message) = Message::from_xmpp(account, message, delay) {
+                    if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
                         aparte.schedule(Event::Message(Some(account.clone()), message));
                     }
                 }
 
-                if !message.subjects.is_empty() {
+                if !archive && !message.subjects.is_empty() {
                     if let Ok(destination) =
                         Message::get_local_destination_from_xmpp(account, &message)
                     {

@@ -124,7 +124,12 @@ impl MamMod {
                 query.count -= 1;
                 match (result.forwarded.delay, result.forwarded.stanza) {
                     (Some(delay), Some(message)) => {
-                        aparte.schedule(Event::RawMessage(account.clone(), message, Some(delay)));
+                        aparte.schedule(Event::RawMessage {
+                            account: account.clone(),
+                            message,
+                            delay: Some(delay),
+                            archive: true,
+                        });
                     }
                     _ => {}
                 }
@@ -176,6 +181,7 @@ impl ModTrait for MamMod {
         account: &Account,
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
+        _archive: bool,
     ) {
         for payload in message.payloads.iter().cloned() {
             if let Ok(result) = mam::Result_::try_from(payload.clone()) {

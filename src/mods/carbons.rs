@@ -29,9 +29,20 @@ impl CarbonsMod {
         iq.into()
     }
 
-    fn handle_carbon(&mut self, aparte: &mut Aparte, account: &Account, forwarded: Forwarded) {
+    fn handle_carbon(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        forwarded: Forwarded,
+        archive: bool,
+    ) {
         if let Some(message) = forwarded.stanza {
-            aparte.schedule(Event::RawMessage(account.clone(), message, forwarded.delay));
+            aparte.schedule(Event::RawMessage {
+                account: account.clone(),
+                message,
+                delay: forwarded.delay,
+                archive,
+            });
         }
     }
 }
@@ -65,12 +76,13 @@ impl ModTrait for CarbonsMod {
         account: &Account,
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
+        archive: bool,
     ) {
         for payload in message.payloads.iter().cloned() {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
-                self.handle_carbon(aparte, account, received.forwarded);
+                self.handle_carbon(aparte, account, received.forwarded, archive);
             } else if let Ok(sent) = carbons::Sent::try_from(payload.clone()) {
-                self.handle_carbon(aparte, account, sent.forwarded);
+                self.handle_carbon(aparte, account, sent.forwarded, archive);
             }
         }
     }
