@@ -6,7 +6,6 @@ use chrono::offset::{Local, TimeZone};
 use chrono::Local as LocalTz;
 use futures::task::{AtomicWaker, Context, Poll};
 use futures::Stream;
-use linked_hash_set::LinkedHashSet;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -219,12 +218,14 @@ impl WinBar {
     }
 
     pub fn highlight_window(&mut self, window: &str, important: bool) {
-        let mut state = self.highlighted.entry(window.to_string()).or_insert((0, 0));
-        state.0 += 1;
-        if important {
-            state.1 += 1;
+        if self.current_window.as_deref() != Some(window) {
+            let mut state = self.highlighted.entry(window.to_string()).or_insert((0, 0));
+            state.0 += 1;
+            if important {
+                state.1 += 1;
+            }
+            self.dirty = true;
         }
-        self.dirty = true;
     }
 }
 
@@ -261,7 +262,10 @@ where
         let mut first = true;
         let mut remaining = self.highlighted.len();
 
-        for (window, state) in self.highlighted.iter() {
+        let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
+        sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
+
+        for (window, state) in sorted {
             // Keep space for at least ", +X]"
             let remaining_len = if remaining > 1 {
                 format!("{}", remaining).len() + 4
@@ -288,15 +292,25 @@ where
             if state.1 > 0 {
                 vprint!(
                     screen,
-                    "{}{}{}",
+                    "{}{}{} ({}{}{}, {})",
                     termion::style::Bold,
                     window,
-                    termion::style::NoBold
+                    termion::style::NoBold,
+                    termion::style::Bold,
+                    state.1,
+                    termion::style::NoBold,
+                    state.0,
                 );
+                written += window.len();
+                written += 5; // " (" + ", " + ")"
+                written += state.0.to_string().len();
+                written += state.1.to_string().len();
             } else {
-                vprint!(screen, "{}", window);
+                vprint!(screen, "{} ({})", window, state.0);
+                written += window.len();
+                written += 3; // " (" + ")"
+                written += state.0.to_string().len();
             }
-            written += window.len();
             remaining -= 1;
         }
 
@@ -646,7 +660,7 @@ pub struct UIMod {
     screen: Screen<Stdout>,
     windows: Vec<String>,
     current_window: Option<String>,
-    unread_windows: LinkedHashSet<String>,
+    unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
     root: LinearLayout<UIEvent, Stdout>,
     dimension: Option<Dimension>,
@@ -754,7 +768,7 @@ impl UIMod {
             root: layout,
             dimension: None,
             windows: Vec::new(),
-            unread_windows: LinkedHashSet::new(),
+            unread_windows: HashMap::new(),
             current_window: None,
             conversations: HashMap::new(),
             password_command: None,
@@ -1095,8 +1109,12 @@ impl ModTrait for UIMod {
                                 }
                             }
 
-                            if let Some(window) = window {
-                                self.unread_windows.insert(window.clone());
+                            if window != self.current_window {
+                                if let Some(window) = window {
+                                    let important =
+                                        self.unread_windows.entry(window.clone()).or_insert(0);
+                                    *important += 1;
+                                }
                             }
 
                             let conversation = {
@@ -1310,8 +1328,15 @@ impl ModTrait for UIMod {
                         }
                     }
                     Key::Alt('a') => {
-                        if let Some(window) = self.unread_windows.pop_front() {
-                            self.change_window(&window);
+                        if !self.unread_windows.is_empty() {
+                            let next = {
+                                let mut sorted = self.unread_windows.iter().collect::<Vec<_>>();
+                                sorted.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
+                                sorted[0].0.clone()
+                            };
+
+                            self.unread_windows.remove(&next.to_string());
+                            self.change_window(&next);
                         }
                     }
                     _ => {
