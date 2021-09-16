@@ -28,9 +28,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::color::{ColorTuple, id_to_rgb};
-use crate::config::Config;
+use crate::color::{id_to_rgb, ColorTuple};
 use crate::command::Command;
+use crate::config::Config;
 use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
@@ -185,7 +185,7 @@ struct WinBar {
     connection: Option<String>,
     windows: Vec<String>,
     current_window: Option<String>,
-    highlighted: Vec<String>,
+    highlighted: HashMap<String, (u64, u64)>,
     dirty: bool,
     pub color: ColorTuple,
 }
@@ -196,7 +196,7 @@ impl WinBar {
             connection: None,
             windows: Vec::new(),
             current_window: None,
-            highlighted: Vec::new(),
+            highlighted: HashMap::new(),
             dirty: true,
             color: color.clone(),
         }
@@ -209,29 +209,22 @@ impl WinBar {
 
     pub fn del_window(&mut self, window: &str) {
         self.windows.retain(|win| win != window);
-        self.highlighted.retain(|win| win != window);
+        self.highlighted.remove(window);
         self.dirty = true;
     }
 
     pub fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
-        // could use self.highlighted.drain_filter(|w| w == &window);
-        let mut i = 0;
-        while i != self.highlighted.len() {
-            if self.highlighted[i] == window {
-                self.highlighted.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        self.dirty = true;
+        self.dirty = self.highlighted.remove(window).is_some();
     }
 
-    pub fn highlight_window(&mut self, window: &str) {
-        if self.highlighted.iter().find(|w| w == &window).is_none() {
-            self.highlighted.push(window.to_string());
-            self.dirty = true;
+    pub fn highlight_window(&mut self, window: &str, important: bool) {
+        let mut state = self.highlighted.entry(window.to_string()).or_insert((0, 0));
+        state.0 += 1;
+        if important {
+            state.1 += 1;
         }
+        self.dirty = true;
     }
 }
 
@@ -249,12 +242,7 @@ where
             "{}",
             termion::cursor::Goto(dimension.x, dimension.y)
         );
-        vprint!(
-            screen,
-            "{}{}",
-            self.color.bg,
-            self.color.fg,
-        );
+        vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
 
         for _ in 0..dimension.w.unwrap() {
             vprint!(screen, " ");
@@ -273,7 +261,7 @@ where
         let mut first = true;
         let mut remaining = self.highlighted.len();
 
-        for window in &self.highlighted {
+        for (window, state) in self.highlighted.iter() {
             // Keep space for at least ", +X]"
             let remaining_len = if remaining > 1 {
                 format!("{}", remaining).len() + 4
@@ -296,13 +284,18 @@ where
                 vprint!(screen, ", ");
                 written += 2;
             }
-            vprint!(
-                screen,
-                "{}{}{}",
-                termion::style::Bold,
-                window,
-                termion::style::NoBold
-            );
+
+            if state.1 > 0 {
+                vprint!(
+                    screen,
+                    "{}{}{}",
+                    termion::style::Bold,
+                    window,
+                    termion::style::NoBold
+                );
+            } else {
+                vprint!(screen, "{}", window);
+            }
             written += window.len();
             remaining -= 1;
         }
@@ -342,18 +335,11 @@ where
                 self.connection = Some(terminus::clean(&account.to_string()));
                 self.dirty = true;
             }
-            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
-                let mut highlighted = None;
-                let messaged_window = terminus::clean(&message.from.to_string());
-                for window in &self.windows {
-                    if &messaged_window == window && Some(window) != self.current_window.as_ref() {
-                        highlighted = Some(window.clone());
-                    }
-                }
-                if highlighted.is_some() {
-                    self.highlight_window(&highlighted.unwrap());
-                    self.dirty = true;
-                }
+            UIEvent::Core(Event::Notification {
+                conversation,
+                important,
+            }) => {
+                self.highlight_window(&conversation.get_jid().to_string(), *important);
             }
             _ => {}
         }
@@ -1100,46 +1086,46 @@ impl ModTrait for UIMod {
                         }
 
                         if message.direction == Direction::Incoming {
-                            let mut unread = None;
-                            for window in &self.windows {
-                                if &message.from.to_string() == window
-                                    && Some(window) != self.current_window.as_ref()
+                            let mut window = None;
+                            for existing in &self.windows {
+                                if &message.from.to_string() == existing
+                                    && Some(existing) != self.current_window.as_ref()
                                 {
-                                    unread = Some(window.clone());
+                                    window = Some(existing.clone());
                                 }
                             }
-                            if unread.is_some() {
-                                self.unread_windows.insert(unread.unwrap());
-                            }
-                            match message.type_ {
-                                XmppMessageType::Chat => {
-                                    aparte.schedule(Event::Notification(String::from("")))
-                                }
-                                XmppMessageType::Channel => {
-                                    // Look for mentions
-                                    let nick = {
-                                        let conversations =
-                                            aparte.get_mod::<mods::conversation::ConversationMod>();
-                                        if let Some(Conversation::Channel(conversation)) =
-                                            conversations
-                                                .get(account.as_ref().unwrap(), &message.from)
-                                        {
-                                            Some(conversation.nick.clone())
-                                        } else {
-                                            None
-                                        }
-                                    };
 
-                                    if let Some(nick) = nick {
+                            if let Some(window) = window {
+                                self.unread_windows.insert(window.clone());
+                            }
+
+                            let conversation = {
+                                let conversations =
+                                    aparte.get_mod::<mods::conversation::ConversationMod>();
+                                conversations
+                                    .get(account.as_ref().unwrap(), &message.from)
+                                    .cloned()
+                            };
+
+                            if let Some(conversation) = conversation {
+                                let important = match &conversation {
+                                    conversation::Conversation::Chat(_) => true,
+                                    conversation::Conversation::Channel(channel) => {
+                                        // Look for mentions
+                                        let mut mention = false;
                                         let body = message.get_last_body();
                                         for word in body.split_word_bounds() {
-                                            if nick == word {
-                                                aparte
-                                                    .schedule(Event::Notification(String::from("")))
+                                            if channel.nick == word {
+                                                mention = true;
                                             }
                                         }
+                                        mention
                                     }
-                                }
+                                };
+                                aparte.schedule(Event::Notification {
+                                    conversation: conversation.clone(),
+                                    important,
+                                })
                             }
                         }
                     }
@@ -1340,11 +1326,18 @@ impl ModTrait for UIMod {
                     cursor.clone(),
                 )));
             }
-            Event::Notification(_) => {
-                if aparte.config.bell.unwrap_or(true) {
+            Event::Notification {
+                conversation,
+                important,
+            } => {
+                if *important && aparte.config.bell.unwrap_or(true) {
                     vprint!(self.screen, "\x07");
                     flush!(self.screen);
                 }
+                self.root.event(&mut UIEvent::Core(Event::Notification {
+                    conversation: conversation.clone(),
+                    important: important.clone(),
+                }));
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),

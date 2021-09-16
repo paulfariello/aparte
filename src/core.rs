@@ -122,7 +122,10 @@ pub enum Event {
     ResetCompletion,
     Completed(String, Cursor),
     ChangeWindow(String),
-    Notification(String),
+    Notification {
+        conversation: conversation::Conversation,
+        important: bool,
+    },
     Subject(Account, Jid, HashMap<String, String>),
 }
 
