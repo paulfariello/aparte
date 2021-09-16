@@ -13,10 +13,10 @@ pub struct ColorTuple {
 
 impl ColorTuple {
     pub fn new<B: color::Color, F: color::Color>(bg: B, fg: F) -> Self {
-       Self {
-           bg: color::Bg(bg).to_string(),
-           fg: color::Fg(fg).to_string(),
-       }
+        Self {
+            bg: color::Bg(bg).to_string(),
+            fg: color::Fg(fg).to_string(),
+        }
     }
 }
 
