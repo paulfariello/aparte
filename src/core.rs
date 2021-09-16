@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
+use linked_hash_map::LinkedHashMap;
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -336,7 +337,7 @@ pub struct Connection {
 
 pub struct Aparte {
     pub command_parsers: Rc<HashMap<String, CommandParser>>,
-    mods: Rc<HashMap<TypeId, RefCell<Mod>>>,
+    mods: Rc<LinkedHashMap<TypeId, RefCell<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
     event_queue: Vec<Event>,
@@ -792,7 +793,7 @@ impl Aparte {
 
         let mut aparte = Self {
             command_parsers: Rc::new(HashMap::new()),
-            mods: Rc::new(HashMap::new()),
+            mods: Rc::new(LinkedHashMap::new()),
             connections: HashMap::new(),
             current_connection: None,
             event_queue: Vec::new(),
