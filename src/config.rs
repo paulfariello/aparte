@@ -8,10 +8,14 @@ use termion::color;
 use crate::account::ConnectionInfo;
 use crate::color::ColorTuple;
 
+fn true_() -> bool { true }
+
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
 pub struct Config {
     pub accounts: HashMap<String, ConnectionInfo>,
-    pub bell: Option<bool>,
+    #[serde(default="true_")]
+    pub bell: bool,
     pub theme: Theme,
 }
 

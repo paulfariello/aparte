@@ -1326,7 +1326,7 @@ impl ModTrait for UIMod {
                 conversation,
                 important,
             } => {
-                if *important && aparte.config.bell.unwrap_or(true) {
+                if *important && aparte.config.bell {
                     vprint!(self.screen, "\x07");
                     flush!(self.screen);
                 }
