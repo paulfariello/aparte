@@ -108,7 +108,7 @@ impl ModTrait for ConversationMod {
                     }
 
                     // Schedule a notification
-                    if !message.archive {
+                    if !message.archive && message.direction == message::Direction::Incoming {
                         let conversation = self.conversations.get(&index);
                         if let Some(conversation) = conversation {
                             let important = match &conversation {
