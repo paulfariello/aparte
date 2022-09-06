@@ -5,7 +5,6 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use core::fmt::Debug;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use linked_hash_map::LinkedHashMap;
 use rand::{self, Rng};
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -316,7 +315,7 @@ impl ModTrait for Mod {
                 r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
             }
             Mod::Omemo(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive),
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
             }
         }
     }
@@ -849,7 +848,7 @@ impl Aparte {
             event_rx: Some(event_rx),
             send_tx,
             send_rx: Some(send_rx),
-            config,
+            config: config.clone(),
             pending_iq: Arc::new(Mutex::new(HashMap::new())),
         };
 
@@ -859,7 +858,7 @@ impl Aparte {
         aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
         aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
         aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
-        aparte.add_mod(Mod::UI(mods::ui::UIMod::new()));
+        aparte.add_mod(Mod::UI(mods::ui::UIMod::new(&config)));
         aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
         aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
         aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
@@ -1257,7 +1256,7 @@ impl Aparte {
             Event::Stanza(account, stanza) => {
                 self.handle_stanza(account, stanza);
             }
-            Event::RawMessage(account, message, delay) => {
+            Event::RawMessage{account, message, delay, archive} => {
                 self.handle_xmpp_message(account, message, delay, archive);
             }
             Event::Join {
