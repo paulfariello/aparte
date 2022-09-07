@@ -11,6 +11,7 @@ use uuid::Uuid;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::{Jid, BareJid};
 use xmpp_parsers::pubsub;
+use xmpp_parsers::ns;
 //use xmpp_parsers::omemo;
 
 use crate::account::Account;
@@ -34,7 +35,6 @@ impl OmemoMod {
 
         Aparte::spawn(async move {
             let response = aparte.iq(&account, Self::get_devices(&account.clone().into())).await;
-            info!("{:?}", response);
         });
     }
 
@@ -56,7 +56,7 @@ impl OmemoMod {
         let id = id.to_hyphenated().to_string();
         let items = pubsub::pubsub::Items {
             max_items: None,
-            node: pubsub::NodeName::from_str("test"/*ns::OMEMO_DEVICES*/).unwrap(),
+            node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
             subid: None,
             items: vec![],
         };
