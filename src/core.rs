@@ -1348,9 +1348,11 @@ impl Aparte {
     fn handle_iq(&mut self, account: Account, iq: Iq) {
         // Try to match to pending Iq
         if let Ok(uuid) = Uuid::from_str(&iq.id) {
-            if let Some(state) = self.pending_iq.lock().unwrap().remove(&uuid) {
+            let state = self.pending_iq.lock().unwrap().remove(&uuid);
+            if let Some(state) =  state {
                 match state {
                     PendingIqState::Waiting(waker) => {
+                        // XXX dead lock
                         self.pending_iq.lock().unwrap().insert(uuid, PendingIqState::Finished(iq));
                         if let Some(waker) = waker {
                             waker.wake();
