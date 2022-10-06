@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use termion::color;
 
@@ -12,7 +12,7 @@ fn true_() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub accounts: HashMap<String, ConnectionInfo>,
@@ -21,7 +21,7 @@ pub struct Config {
     pub theme: Theme,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
     pub title_bar: ColorTuple,
     pub win_bar: ColorTuple,

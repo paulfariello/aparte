@@ -4,14 +4,21 @@
 
 //use std::collections::HashMap;
 //use std::convert::TryFrom;
+use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
+
+use anyhow::Result;
+use rand::random;
 use uuid::Uuid;
+
 //use xmpp_parsers::ns;
-use xmpp_parsers::iq::Iq;
-use xmpp_parsers::{Jid, BareJid};
-use xmpp_parsers::pubsub;
+use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::legacy_omemo as Omemo;
 use xmpp_parsers::ns;
+use xmpp_parsers::pubsub;
+use xmpp_parsers::pubsub::{ItemId, PubSub};
+use xmpp_parsers::{BareJid, Jid};
 //use xmpp_parsers::omemo;
 
 use crate::account::Account;
@@ -29,13 +36,49 @@ impl OmemoMod {
         }
     }
 
-    fn configure(&self, aparte: &mut Aparte, account: &Account) {
+    fn configure(&self, aparte: &mut Aparte, account: &Account) -> Result<()> {
+        let device = match aparte.storage.get_omemo_device(account)? {
+            Some(device) => device,
+            None => {
+                // TODO create device_id
+                let device_id: i32 = random();
+                aparte.storage.set_omemo_device(account, device_id)?
+            }
+        };
+
+        debug!("{}", device.device_id);
+
         let mut aparte = aparte.proxy();
         let account = account.clone();
 
         Aparte::spawn(async move {
-            let response = aparte.iq(&account, Self::get_devices(&account.clone().into())).await;
+            let response = aparte
+                .iq(&account, Self::get_devices(&account.clone().into()))
+                .await;
+            // TODO check namespace
+            match response.payload {
+                IqType::Result(Some(pubsub)) => {
+                    if let Ok(PubSub::Items(items)) = PubSub::try_from(pubsub) {
+                        let current = Some(ItemId("current".to_string()));
+                        if let Some(current) = items.items.iter().find(|item| item.id == current) {
+                            if let Some(payload) = &current.payload {
+                                if let Ok(_list) = Omemo::DeviceList::try_from(payload.clone()) {
+                                    //match list.devices.iter().find(|_device| todo!()) {
+                                    //    Some(_device) => todo!(),
+                                    //    None => todo!(),
+                                    //};
+                                }
+                            }
+                        }
+                    }
+                }
+                IqType::Result(None) => todo!(),
+                IqType::Error(_) => todo!(),
+                _ => todo!(),
+            };
         });
+
+        Ok(())
     }
 
     //fn subscribe(&self, contact: &BareJid, subscriber: &BareJid) -> Iq {
@@ -71,7 +114,6 @@ impl OmemoMod {
     //}
 }
 
-
 impl ModTrait for OmemoMod {
     fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         //let mut disco = aparte.get_mod_mut::<DiscoMod>();
@@ -84,7 +126,9 @@ impl ModTrait for OmemoMod {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(account, _jid) => {
-                self.configure(aparte, account);
+                if let Err(err) = self.configure(aparte, account) {
+                    aparte.log(format!("Cannot configure OMEMO: {}", err));
+                }
             }
             //Event::PubSub { account: _, from: Some(from), event } => match event {
             //    pubsub::PubSubEvent::PublishedItems { node, items } => {

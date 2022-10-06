@@ -1,34 +1,36 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::any::TypeId;
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::fmt;
+use std::fs::OpenOptions;
+use std::future::Future;
+use std::io::Read;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use core::fmt::Debug;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::{self, Rng};
-use std::any::TypeId;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt;
-use std::future::Future;
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
-use tokio::sync::{mpsc, RwLock, RwLockReadGuard, RwLockWriteGuard, RwLockMappedWriteGuard};
+use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 use tokio::task;
 use tokio_xmpp::{
     AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket,
 };
 use uuid::Uuid;
 
-use xmpp_parsers::hashes as xmpp_hashes;
 use xmpp_parsers::caps::{self, Caps};
 use xmpp_parsers::delay::Delay;
+use xmpp_parsers::hashes as xmpp_hashes;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::muc::Muc;
@@ -46,6 +48,7 @@ use crate::conversation::{Channel, Conversation};
 use crate::cursor::Cursor;
 use crate::message::Message;
 use crate::mods;
+use crate::storage::Storage;
 use crate::{
     command_def, generate_arg_autocompletion, generate_command_autocompletions, generate_help,
     parse_command_args,
@@ -94,13 +97,23 @@ pub enum Event {
     },
     Leave(Channel),
     Iq(Account, iq::Iq),
-    IqResult { account: Account, uuid: Uuid, from: Option<Jid>, payload: Option<Element> },
-    IqError { account: Account, uuid: Uuid, from: Option<Jid>, payload: StanzaError },
+    IqResult {
+        account: Account,
+        uuid: Uuid,
+        from: Option<Jid>,
+        payload: Option<Element>,
+    },
+    IqError {
+        account: Account,
+        uuid: Uuid,
+        from: Option<Jid>,
+        payload: StanzaError,
+    },
     Disco(Account),
     PubSub {
         account: Account,
         from: Option<Jid>,
-        event: PubSubEvent
+        event: PubSubEvent,
     },
     Presence(Account, presence::Presence),
     ReadPassword(Command),
@@ -806,24 +819,22 @@ pub struct Aparte {
     pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     /// Aparté main configuration
     pub config: Config,
+    pub storage: Storage,
 }
 
 impl Aparte {
-    pub fn new(config_path: PathBuf) -> Self {
-        let mut config_file = match OpenOptions::new()
+    pub fn new(config_path: PathBuf, storage_path: PathBuf) -> Result<Self> {
+        let mut config_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(config_path)
-        {
-            Err(err) => panic!("Cannot read config file {}", err),
-            Ok(config_file) => config_file,
-        };
+            .open(&config_path)
+            .with_context(|| format!("Cannot read config file {:?}", config_path))?;
 
         let mut config_str = String::new();
-        if let Err(e) = config_file.read_to_string(&mut config_str) {
-            panic!("Cannot read config file {}", e);
-        }
+        config_file
+            .read_to_string(&mut config_str)
+            .with_context(|| format!("Cannot read config file {}", config_str))?;
 
         let config: Config = match config_str.len() {
             0 => Default::default(),
@@ -843,6 +854,7 @@ impl Aparte {
             command_parsers: Arc::new(HashMap::new()),
             mods: Arc::new(HashMap::new()),
             connections: HashMap::new(),
+            storage: Storage::new(storage_path)?,
             current_connection: None,
             event_tx,
             event_rx: Some(event_rx),
@@ -856,7 +868,9 @@ impl Aparte {
         aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
         aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
         aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
-        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new("client", "console", "Aparté", "en")));
+        aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new(
+            "client", "console", "Aparté", "en",
+        )));
         aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
         aparte.add_mod(Mod::UI(mods::ui::UIMod::new(&config)));
         aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
@@ -864,7 +878,7 @@ impl Aparte {
         aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
         aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
 
-        aparte
+        Ok(aparte)
     }
 
     pub fn handle_raw_command(
@@ -939,10 +953,7 @@ impl Aparte {
                 );
             }
             Mod::UI(r#mod) => {
-                mods.insert(
-                    TypeId::of::<mods::ui::UIMod>(),
-                    RwLock::new(Mod::UI(r#mod)),
-                );
+                mods.insert(TypeId::of::<mods::ui::UIMod>(), RwLock::new(Mod::UI(r#mod)));
             }
             Mod::Mam(r#mod) => {
                 mods.insert(
@@ -1154,16 +1165,16 @@ impl Aparte {
                 log::debug!("XMPP Event: {:?}", event);
                 match event {
                     XmppEvent::Disconnected(XmppError::Auth(e)) => {
-                        if let Err(err) = event_tx
-                            .send(Event::AuthError(account.clone(), format!("{e}")))
+                        if let Err(err) =
+                            event_tx.send(Event::AuthError(account.clone(), format!("{e}")))
                         {
                             log::error!("Cannot send event to internal channel: {}", err);
                         };
                         break;
                     }
                     XmppEvent::Disconnected(e) => {
-                        if let Err(err) = event_tx
-                            .send(Event::Disconnected(account.clone(), format!("{e}")))
+                        if let Err(err) =
+                            event_tx.send(Event::Disconnected(account.clone(), format!("{e}")))
                         {
                             log::error!("Cannot send event to internal channel: {}", err);
                         };
@@ -1181,18 +1192,14 @@ impl Aparte {
                         bound_jid: jid,
                         resumed: false,
                     } => {
-                        if let Err(err) = event_tx
-                            .send(Event::Connected(account.clone(), jid))
-                        {
+                        if let Err(err) = event_tx.send(Event::Connected(account.clone(), jid)) {
                             log::error!("Cannot send event to internal channel: {}", err);
                             break;
                         }
                     }
                     XmppEvent::Stanza(stanza) => {
                         log::debug!("RECV: {}", String::from(&stanza));
-                        if let Err(err) = event_tx
-                            .send(Event::Stanza(account.clone(), stanza))
-                        {
+                        if let Err(err) = event_tx.send(Event::Stanza(account.clone(), stanza)) {
                             log::error!("Cannot send stanza to internal channel: {}", err);
                             break;
                         }
@@ -1241,7 +1248,8 @@ impl Aparte {
 
                 let disco = self.get_mod::<mods::disco::DiscoMod>().get_disco();
                 let disco = caps::compute_disco(&disco);
-                let verification_string = caps::hash_caps(&disco, xmpp_hashes::Algo::Blake2b_512).unwrap();
+                let verification_string =
+                    caps::hash_caps(&disco, xmpp_hashes::Algo::Blake2b_512).unwrap();
                 let caps = Caps::new("aparté", verification_string);
                 presence.add_payload(caps);
 
@@ -1256,7 +1264,12 @@ impl Aparte {
             Event::Stanza(account, stanza) => {
                 self.handle_stanza(account, stanza);
             }
-            Event::RawMessage{account, message, delay, archive} => {
+            Event::RawMessage {
+                account,
+                message,
+                delay,
+                archive,
+            } => {
                 self.handle_xmpp_message(account, message, delay, archive);
             }
             Event::Join {
@@ -1327,7 +1340,8 @@ impl Aparte {
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
             let message_match = r#mod
-                .try_write().unwrap()
+                .try_write()
+                .unwrap()
                 .can_handle_xmpp_message(self, &account, &message, &delay);
             if message_match > best_match {
                 matched_mod = Some(r#mod);
@@ -1338,7 +1352,8 @@ impl Aparte {
         if let Some(r#mod) = matched_mod {
             log::debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
-                .try_write().unwrap()
+                .try_write()
+                .unwrap()
                 .handle_xmpp_message(self, &account, &message, &delay, archive);
         } else {
             log::info!("Don't know how to handle message: {:?}", message);
@@ -1349,19 +1364,25 @@ impl Aparte {
         // Try to match to pending Iq
         if let Ok(uuid) = Uuid::from_str(&iq.id) {
             let state = self.pending_iq.lock().unwrap().remove(&uuid);
-            if let Some(state) =  state {
+            if let Some(state) = state {
                 match state {
                     PendingIqState::Waiting(waker) => {
                         // XXX dead lock
-                        self.pending_iq.lock().unwrap().insert(uuid, PendingIqState::Finished(iq));
+                        self.pending_iq
+                            .lock()
+                            .unwrap()
+                            .insert(uuid, PendingIqState::Finished(iq));
                         if let Some(waker) = waker {
                             waker.wake();
                         }
-                    },
+                    }
                     PendingIqState::Finished(iq) => {
                         info!("Received multiple response for Iq: {}", uuid);
                         // Reinsert original result
-                        self.pending_iq.lock().unwrap().insert(uuid, PendingIqState::Finished(iq));
+                        self.pending_iq
+                            .lock()
+                            .unwrap()
+                            .insert(uuid, PendingIqState::Finished(iq));
                     }
                 }
                 return;

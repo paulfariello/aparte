@@ -9,7 +9,6 @@ use uuid::Uuid;
 use xmpp_parsers::disco;
 use xmpp_parsers::disco::Feature;
 use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::Element;
 use xmpp_parsers::{ns, Element, Jid};
 
 use crate::account::Account;
