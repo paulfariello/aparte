@@ -703,7 +703,11 @@ impl ModTrait for BookmarksMod {
                 }
                 _ => {}
             },
-            Event::PubSub{ account, from: _, event } => match event {
+            Event::PubSub {
+                account,
+                from: _,
+                event,
+            } => match event {
                 PubSubEvent::PublishedItems { node, items } => match &node.0 as &str {
                     ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(
                         aparte,

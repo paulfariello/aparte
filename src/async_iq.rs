@@ -1,10 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Poll, Context, Waker};
 use std::str::FromStr;
+use std::task::{Context, Poll, Waker};
 
-use xmpp_parsers::iq::Iq;
 use uuid::Uuid;
+use xmpp_parsers::iq::Iq;
 
 use crate::account::Account;
 use crate::core::AparteAsync;
@@ -25,12 +25,13 @@ impl IqFuture {
         // TODO generate uuid in here
         let uuid = Uuid::from_str(&iq.id).unwrap();
         aparte.send(account, iq.into());
-        aparte.pending_iq.lock().unwrap().insert(uuid, PendingIqState::Waiting(None));
+        aparte
+            .pending_iq
+            .lock()
+            .unwrap()
+            .insert(uuid, PendingIqState::Waiting(None));
 
-        Self {
-            aparte,
-            uuid,
-        }
+        Self { aparte, uuid }
     }
 }
 
@@ -42,9 +43,12 @@ impl Future for IqFuture {
         match pending_iq.remove(&self.uuid) {
             None => panic!("Iq response has already been consumed"),
             Some(PendingIqState::Waiting(_)) => {
-                pending_iq.insert(self.uuid.clone(), PendingIqState::Waiting(Some(cx.waker().clone())));
+                pending_iq.insert(
+                    self.uuid.clone(),
+                    PendingIqState::Waiting(Some(cx.waker().clone())),
+                );
                 Poll::Pending
-            },
+            }
             Some(PendingIqState::Finished(iq)) => Poll::Ready(iq),
         }
     }

@@ -57,7 +57,7 @@ impl MessagesMod {
                 aparte.schedule(Event::PubSub {
                     account: account.clone(),
                     from: message.from.clone(),
-                    event: pubsub_event
+                    event: pubsub_event,
                 });
             }
         }

@@ -6,6 +6,8 @@
 
 use clap::Parser;
 
+use anyhow::Result;
+
 #[macro_use]
 mod terminus;
 mod account;
@@ -21,6 +23,7 @@ mod color;
 mod cursor;
 mod i18n;
 mod mods;
+mod storage;
 mod word;
 
 use crate::core::Aparte;
@@ -53,7 +56,7 @@ fn main() {
     };
 
     let file_writer = flexi_logger::writers::FileLogWriter::builder()
-        .directory(aparte_data)
+        .directory(&aparte_data)
         .suppress_timestamp()
         .try_build()
         .unwrap();
@@ -76,11 +79,16 @@ fn main() {
         aparte_conf.join("config.toml")
     };
 
+    // TODO
+    let storage = aparte_data.join("storage.sqlite");
+
     log::info!("Starting aparté");
 
-    let mut aparte = Aparte::new(config);
+    let mut aparte = Aparte::new(config, storage)?;
 
     aparte.init().unwrap();
 
     aparte.run();
+
+    Ok(())
 }
