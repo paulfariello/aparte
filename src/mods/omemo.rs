@@ -3,12 +3,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 //use std::collections::HashMap;
-//use std::convert::TryFrom;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Result, Context};
 use rand::random;
 use uuid::Uuid;
 
@@ -22,7 +21,7 @@ use xmpp_parsers::{BareJid, Jid};
 //use xmpp_parsers::omemo;
 
 use crate::account::Account;
-use crate::core::{Aparte, Event, ModTrait};
+use crate::core::{Aparte, AparteAsync, Event, ModTrait};
 //use crate::mods::disco::DiscoMod;
 
 pub struct OmemoMod {
@@ -40,42 +39,22 @@ impl OmemoMod {
         let device = match aparte.storage.get_omemo_device(account)? {
             Some(device) => device,
             None => {
-                // TODO create device_id
-                let device_id: i32 = random();
+                info!("Generating device id");
+                let device_id: i32 = random::<i32>().abs();
                 aparte.storage.set_omemo_device(account, device_id)?
             }
         };
 
-        debug!("{}", device.device_id);
+        let device_id: u32 = device.device_id.try_into().unwrap();
+        info!("device id: {}", device_id);
 
         let mut aparte = aparte.proxy();
         let account = account.clone();
 
         Aparte::spawn(async move {
-            let response = aparte
-                .iq(&account, Self::get_devices(&account.clone().into()))
-                .await;
-            // TODO check namespace
-            match response.payload {
-                IqType::Result(Some(pubsub)) => {
-                    if let Ok(PubSub::Items(items)) = PubSub::try_from(pubsub) {
-                        let current = Some(ItemId("current".to_string()));
-                        if let Some(current) = items.items.iter().find(|item| item.id == current) {
-                            if let Some(payload) = &current.payload {
-                                if let Ok(_list) = Omemo::DeviceList::try_from(payload.clone()) {
-                                    //match list.devices.iter().find(|_device| todo!()) {
-                                    //    Some(_device) => todo!(),
-                                    //    None => todo!(),
-                                    //};
-                                }
-                            }
-                        }
-                    }
-                }
-                IqType::Result(None) => todo!(),
-                IqType::Error(_) => todo!(),
-                _ => todo!(),
-            };
+            if let Err(err) = Self::ensure_device_is_registered(&mut aparte, account, device_id).await {
+                aparte.error("Cannot configure OMEMO", err);
+            }
         });
 
         Ok(())
@@ -107,11 +86,80 @@ impl OmemoMod {
         Iq::from_get(id, pubsub).with_to(Jid::Bare(contact.clone()))
     }
 
+    fn set_devices(jid: &BareJid, devices: Omemo::DeviceList) -> Iq {
+        let id = Uuid::new_v4();
+
+        let id = id.to_hyphenated().to_string();
+        let item = pubsub::pubsub::Item(pubsub::Item {
+            id: Some(pubsub::ItemId("current".to_string())),
+            publisher: Some(jid.clone().into()),
+            payload: Some(devices.into()),
+        });
+        let items = pubsub::pubsub::Items {
+            max_items: None,
+            node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
+            subid: None,
+            items: vec![item],
+        };
+        let pubsub = pubsub::PubSub::Items(items);
+        Iq::from_set(id, pubsub).with_to(Jid::Bare(jid.clone()))
+    }
+
     //fn handle_devices(&mut self, contact: &BareJid, devices: &omemo::Devices) {
     //    info!("Updating OMEMO devices cache for {}", contact);
     //    let cache = self.devices_cache.entry(contact.clone()).or_insert(Vec::new());
     //    cache.extend(devices.devices.iter().cloned());
     //}
+
+    async fn ensure_device_is_registered(aparte: &mut AparteAsync, account: Account, device_id: u32) -> anyhow::Result<()> {
+        let response = aparte
+            .iq(&account, Self::get_devices(&account.clone().into()))
+            .await?;
+        // TODO check namespace
+        match response.payload {
+            IqType::Result(None) => todo!(),
+            IqType::Error(_) => todo!(),
+            IqType::Result(Some(pubsub)) => {
+                if let Ok(PubSub::Items(items)) = PubSub::try_from(pubsub) {
+                    let current = Some(ItemId("current".to_string()));
+                    if let Some(current) = items.items.iter().find(|item| item.id == current) {
+                        if let Some(payload) = &current.payload {
+                            if let Ok(list) = Omemo::DeviceList::try_from(payload.clone()) {
+                                // TODO handle race
+                                let found = list.devices.iter().find(|device| device.id == device_id);
+                                if found.is_none() {
+                                    info!("Registering device");
+                                    Self::register_device(aparte, account, device_id, list).await?;
+                                } else {
+                                    info!("Device registered");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => todo!(),
+        };
+
+        Ok(())
+    }
+
+    async fn register_device(aparte: &mut AparteAsync, account: Account, device_id: u32, mut list: Omemo::DeviceList) -> anyhow::Result<()>{
+        list.devices.push(Omemo::Device {
+            id: device_id
+        });
+        debug!("{:?}", list);
+
+        let response = aparte.iq(&account, Self::set_devices(&account.clone().into(), list)).await.context("Cannot register OMEMO device")?;
+        debug!("{:?}", response);
+        // match response.payload {
+        //     IqType::Result(None) => todo!(),
+        //     IqType::Error(_) => todo!(),
+        //     _ => todo!(),
+        // }
+
+        Ok(())
+    }
 }
 
 impl ModTrait for OmemoMod {
