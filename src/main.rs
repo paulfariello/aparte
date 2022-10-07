@@ -4,9 +4,8 @@
 #![cfg_attr(feature = "strict", deny(warnings))]
 #![allow(incomplete_features)]
 
-use clap::Parser;
-
 use anyhow::Result;
+use clap::Parser;
 
 #[macro_use]
 mod terminus;
@@ -39,7 +38,7 @@ struct Args {
     shared: Option<std::path::PathBuf>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let aparte_data = if let Some(shared) = args.shared {
