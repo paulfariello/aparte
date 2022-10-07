@@ -95,13 +95,13 @@ impl OmemoMod {
             publisher: Some(jid.clone().into()),
             payload: Some(devices.into()),
         });
-        let items = pubsub::pubsub::Items {
-            max_items: None,
-            node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
-            subid: None,
-            items: vec![item],
+        let pubsub = pubsub::PubSub::Publish {
+            publish: pubsub::pubsub::Publish {
+                node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
+                items: vec![item],
+            },
+            publish_options: None,
         };
-        let pubsub = pubsub::PubSub::Items(items);
         Iq::from_set(id, pubsub).with_to(Jid::Bare(jid.clone()))
     }
 
