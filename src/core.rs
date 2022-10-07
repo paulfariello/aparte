@@ -4,7 +4,7 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::fmt;
+use std::fmt::{self, Display};
 use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Read;
@@ -204,7 +204,7 @@ from_mod!(Mam, mods::mam::MamMod);
 from_mod!(Messages, mods::messages::MessagesMod);
 from_mod!(Correction, mods::correction::CorrectionMod);
 
-pub trait ModTrait: fmt::Display {
+pub trait ModTrait: Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event);
     /// Return weither this message can be handled
@@ -352,7 +352,7 @@ impl fmt::Debug for Mod {
     }
 }
 
-impl fmt::Display for Mod {
+impl Display for Mod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Mod::Completion(r#mod) => r#mod.fmt(f),
@@ -1318,12 +1318,25 @@ impl Aparte {
     }
 
     fn handle_stanza(&mut self, account: Account, stanza: Element) {
-        if let Ok(message) = XmppParsersMessage::try_from(stanza.clone()) {
-            self.handle_xmpp_message(account, message, None, false)
-        } else if let Ok(iq) = Iq::try_from(stanza.clone()) {
-            self.handle_iq(account, iq);
-        } else if let Ok(presence) = Presence::try_from(stanza.clone()) {
-            self.schedule(Event::Presence(account, presence));
+        match stanza.name() {
+            "iq" => match Iq::try_from(stanza.clone()) {
+                Ok(iq) => self.handle_iq(account, iq),
+                Err(err) => {
+                    error!("{}", err);
+                    if let Some(id) = stanza.attr("id") {
+                        self.errored_iq(id, err.into());
+                    }
+                },
+            }
+            "presence" => match Presence::try_from(stanza) {
+                Ok(presence) => self.schedule(Event::Presence(account, presence)),
+                Err(err) => error!("{}", err),
+            }
+            "message" => match XmppParsersMessage::try_from(stanza) {
+                Ok(message) => self.handle_xmpp_message(account, message, None, false),
+                Err(err) => error!("{}", err),
+            }
+            _ => error!("unknown stanza: {}", stanza.name()),
         }
     }
 
@@ -1376,6 +1389,14 @@ impl Aparte {
                             waker.wake();
                         }
                     }
+                    PendingIqState::Errored(_err) => {
+                        info!("Received multiple response for Iq: {}", uuid);
+                        // Insert valid iq instead
+                        self.pending_iq
+                            .lock()
+                            .unwrap()
+                            .insert(uuid, PendingIqState::Finished(iq));
+                    }
                     PendingIqState::Finished(iq) => {
                         info!("Received multiple response for Iq: {}", uuid);
                         // Reinsert original result
@@ -1389,7 +1410,7 @@ impl Aparte {
             }
         }
 
-        // Unkwon iq
+        // Unknown iq
         match iq.payload {
             IqType::Error(payload) => {
                 if let Some(text) = payload.texts.get("en") {
@@ -1402,6 +1423,42 @@ impl Aparte {
             }
             _ => {
                 self.schedule(Event::Iq(account, iq));
+            }
+        }
+    }
+
+    fn errored_iq(&mut self, id: &str, err: anyhow::Error) {
+        if let Ok(uuid) = Uuid::from_str(id) {
+            let state = self.pending_iq.lock().unwrap().remove(&uuid);
+            if let Some(state) = state {
+                match state {
+                    PendingIqState::Waiting(waker) => {
+                        // XXX dead lock
+                        self.pending_iq
+                            .lock()
+                            .unwrap()
+                            .insert(uuid, PendingIqState::Errored(err));
+                        if let Some(waker) = waker {
+                            waker.wake();
+                        }
+                    }
+                    PendingIqState::Errored(err) => {
+                        warn!("Received multiple response for Iq: {}", uuid);
+                        // Reinsert original result
+                        self.pending_iq
+                            .lock()
+                            .unwrap()
+                            .insert(uuid, PendingIqState::Errored(err));
+                    }
+                    PendingIqState::Finished(iq) => {
+                        warn!("Received multiple response for Iq: {}", uuid);
+                        // Reinsert original result
+                        self.pending_iq
+                            .lock()
+                            .unwrap()
+                            .insert(uuid, PendingIqState::Finished(iq));
+                    }
+                }
             }
         }
     }
@@ -1496,6 +1553,11 @@ impl AparteAsync {
 
     pub fn log(&mut self, message: String) {
         let message = Message::log(message);
+        self.schedule(Event::Message(None, message));
+    }
+
+    pub fn error<T: Display>(&mut self, message: T, err: anyhow::Error) {
+        let message = Message::log(format!("{}: {:#}", message, err));
         self.schedule(Event::Message(None, message));
     }
 

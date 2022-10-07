@@ -9,10 +9,11 @@ use xmpp_parsers::iq::Iq;
 use crate::account::Account;
 use crate::core::AparteAsync;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum PendingIqState {
     Waiting(Option<Waker>),
     Finished(Iq),
+    Errored(anyhow::Error),
 }
 
 pub struct IqFuture {
@@ -36,7 +37,7 @@ impl IqFuture {
 }
 
 impl Future for IqFuture {
-    type Output = Iq;
+    type Output = Result<Iq, anyhow::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let mut pending_iq = self.aparte.pending_iq.lock().unwrap();
@@ -49,7 +50,8 @@ impl Future for IqFuture {
                 );
                 Poll::Pending
             }
-            Some(PendingIqState::Finished(iq)) => Poll::Ready(iq),
+            Some(PendingIqState::Finished(iq)) => Poll::Ready(Ok(iq)),
+            Some(PendingIqState::Errored(err)) => Poll::Ready(Err(err)),
         }
     }
 }
