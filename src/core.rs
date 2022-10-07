@@ -155,6 +155,7 @@ pub enum Event {
         important: bool,
     },
     Subject(Account, Jid, HashMap<String, String>),
+    Omemo(mods::omemo::OmemoEvent),
 }
 
 pub enum Mod {
@@ -1064,14 +1065,14 @@ impl Aparte {
                             break;
                         },
                         None => {
-                            debug!("Broken event channel");
+                            log::debug!("Broken event channel");
                             break;
                         }
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
                         Some((account, stanza)) => self.send_stanza(account, stanza),
                         None => {
-                            debug!("Broken send channel");
+                            log::debug!("Broken send channel");
                             break;
                         }
                     }
@@ -1322,21 +1323,21 @@ impl Aparte {
             "iq" => match Iq::try_from(stanza.clone()) {
                 Ok(iq) => self.handle_iq(account, iq),
                 Err(err) => {
-                    error!("{}", err);
+                    log::error!("{}", err);
                     if let Some(id) = stanza.attr("id") {
                         self.errored_iq(id, err.into());
                     }
-                },
-            }
+                }
+            },
             "presence" => match Presence::try_from(stanza) {
                 Ok(presence) => self.schedule(Event::Presence(account, presence)),
-                Err(err) => error!("{}", err),
-            }
+                Err(err) => log::error!("{}", err),
+            },
             "message" => match XmppParsersMessage::try_from(stanza) {
                 Ok(message) => self.handle_xmpp_message(account, message, None, false),
-                Err(err) => error!("{}", err),
-            }
-            _ => error!("unknown stanza: {}", stanza.name()),
+                Err(err) => log::error!("{}", err),
+            },
+            _ => log::error!("unknown stanza: {}", stanza.name()),
         }
     }
 
@@ -1390,7 +1391,7 @@ impl Aparte {
                         }
                     }
                     PendingIqState::Errored(_err) => {
-                        info!("Received multiple response for Iq: {}", uuid);
+                        log::info!("Received multiple response for Iq: {}", uuid);
                         // Insert valid iq instead
                         self.pending_iq
                             .lock()
@@ -1398,7 +1399,7 @@ impl Aparte {
                             .insert(uuid, PendingIqState::Finished(iq));
                     }
                     PendingIqState::Finished(iq) => {
-                        info!("Received multiple response for Iq: {}", uuid);
+                        log::info!("Received multiple response for Iq: {}", uuid);
                         // Reinsert original result
                         self.pending_iq
                             .lock()
@@ -1419,7 +1420,7 @@ impl Aparte {
                 }
             }
             IqType::Result(payload) => {
-                info!("Received unexpected Iq result {:?}", payload);
+                log::info!("Received unexpected Iq result {:?}", payload);
             }
             _ => {
                 self.schedule(Event::Iq(account, iq));
@@ -1443,7 +1444,7 @@ impl Aparte {
                         }
                     }
                     PendingIqState::Errored(err) => {
-                        warn!("Received multiple response for Iq: {}", uuid);
+                        log::warn!("Received multiple response for Iq: {}", uuid);
                         // Reinsert original result
                         self.pending_iq
                             .lock()
@@ -1451,7 +1452,7 @@ impl Aparte {
                             .insert(uuid, PendingIqState::Errored(err));
                     }
                     PendingIqState::Finished(iq) => {
-                        warn!("Received multiple response for Iq: {}", uuid);
+                        log::warn!("Received multiple response for Iq: {}", uuid);
                         // Reinsert original result
                         self.pending_iq
                             .lock()
