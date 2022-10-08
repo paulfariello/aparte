@@ -40,7 +40,7 @@ rust-crypto = "^0.2"
 hsluv = "^0.1"
 fuzzy-matcher = "^0.3"
 clap = { version = "4.0.32", features = ["derive"] }
-diesel = { version = "^2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel = { version = "^2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "r2d2"] }
 diesel_migrations = "^2.0"
 anyhow = "^1.0"
 

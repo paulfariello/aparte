@@ -1472,6 +1472,7 @@ impl Aparte {
             send_tx: self.send_tx.clone(),
             pending_iq: self.pending_iq.clone(),
             config: self.config.clone(),
+            storage: self.storage.clone(),
         }
     }
 
@@ -1537,6 +1538,7 @@ pub struct AparteAsync {
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
     pub(crate) pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     pub config: Config,
+    pub storage: Storage,
 }
 
 impl AparteAsync {

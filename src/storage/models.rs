@@ -4,8 +4,17 @@
 use diesel::prelude::*;
 
 #[derive(Queryable)]
-pub struct OmemoDevice {
+pub struct OmemoOwnDevice {
     pub id: i32,
     pub account: String,
+    pub device_id: i32,
+    pub current: bool,
+}
+
+#[derive(Queryable)]
+pub struct OmemoContactDevice {
+    pub id: i32,
+    pub account: String,
+    pub contact: String,
     pub device_id: i32,
 }
