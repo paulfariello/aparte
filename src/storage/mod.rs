@@ -9,17 +9,19 @@ use std::path::PathBuf;
 use anyhow::{Error, Result};
 use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
-use diesel::Connection;
+use diesel::r2d2::{Pool, ConnectionManager};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use xmpp_parsers::BareJid;
 
 use crate::account::Account;
 
-pub use models::OmemoDevice;
+pub use models::{OmemoOwnDevice, OmemoContactDevice};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
+#[derive(Clone)]
 pub struct Storage {
-    conn: SqliteConnection,
+    pool: Pool<ConnectionManager<SqliteConnection>>,
 }
 
 impl Storage {
@@ -28,30 +30,50 @@ impl Storage {
             .into_os_string()
             .into_string()
             .map_err(|e| Error::msg(format!("Invalid path {:?}", e)))?;
-        let mut conn = SqliteConnection::establish(&path)?;
+        let manager = ConnectionManager::<SqliteConnection>::new(&path);
+        let pool = Pool::builder().build(manager)?;
 
+        let mut conn = pool.get()?;
         conn.run_pending_migrations(MIGRATIONS).unwrap();
 
-        Ok(Self { conn })
+        Ok(Self { pool })
     }
 
-    pub fn get_omemo_device(&mut self, account: &Account) -> Result<Option<OmemoDevice>> {
-        use schema::omemo_device;
-        let res = omemo_device::table
-            .filter(omemo_device::account.eq(account.to_string()))
-            .first(&mut self.conn)
+    pub fn get_omemo_own_device(&mut self, account: &Account) -> Result<Option<OmemoOwnDevice>> {
+        use schema::omemo_own_device;
+        let mut conn = self.pool.get()?;
+        let res = omemo_own_device::table
+            .filter(omemo_own_device::account.eq(account.to_string()))
+            .first(&mut conn)
             .optional()?;
         Ok(res)
     }
 
-    pub fn set_omemo_device(&mut self, account: &Account, device_id: i32) -> Result<OmemoDevice> {
-        use schema::omemo_device;
-        let device = diesel::insert_into(omemo_device::table)
+    pub fn set_omemo_current_device(&mut self, account: &Account, device_id: i32) -> Result<OmemoOwnDevice> {
+        use schema::omemo_own_device;
+        let mut conn = self.pool.get()?;
+        let device = diesel::insert_into(omemo_own_device::table)
             .values((
-                omemo_device::device_id.eq(device_id),
-                omemo_device::account.eq(account.to_string()),
+                omemo_own_device::account.eq(account.to_string()),
+                omemo_own_device::device_id.eq(device_id),
+                omemo_own_device::current.eq(true),
             ))
-            .get_result(&mut self.conn)?;
+            .get_result(&mut conn)?;
+        Ok(device)
+    }
+
+    pub fn upsert_omemo_contact_device(&mut self, account: &Account, contact: &BareJid, device_id: i32) -> Result<OmemoContactDevice> {
+        use schema::omemo_contact_device;
+        let mut conn = self.pool.get()?;
+        let device = diesel::insert_into(omemo_contact_device::table)
+            .values((
+                omemo_contact_device::account.eq(account.to_string()),
+                omemo_contact_device::contact.eq(contact.to_string()),
+                omemo_contact_device::device_id.eq(device_id),
+            ))
+            .on_conflict((omemo_contact_device::account, omemo_contact_device::contact, omemo_contact_device::device_id))
+            .do_nothing()
+            .get_result(&mut conn)?;
         Ok(device)
     }
 }

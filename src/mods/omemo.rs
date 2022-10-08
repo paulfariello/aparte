@@ -84,12 +84,14 @@ impl OmemoMod {
     }
 
     fn configure(&self, aparte: &mut Aparte, account: &Account) -> Result<()> {
-        let device = match aparte.storage.get_omemo_device(account)? {
+        let device = match aparte.storage.get_omemo_own_device(account)? {
             Some(device) => device,
             None => {
                 log::info!("Generating device id");
                 let device_id: i32 = random::<i32>().abs();
-                aparte.storage.set_omemo_device(account, device_id)?
+                aparte
+                    .storage
+                    .set_omemo_current_device(account, device_id)?
             }
         };
 
@@ -110,22 +112,26 @@ impl OmemoMod {
         Ok(())
     }
 
-    fn enable(&self, aparte: &mut Aparte, account: &Account, jid: &BareJid) {
-        let mut aparte = aparte.proxy();
-        let account = account.clone();
-        let jid = jid.clone();
+    async fn enable(aparte: &mut AparteAsync, account: Account, jid: BareJid) -> Result<()> {
+        Self::subscribe_to_device_list(aparte, &account, &jid)
+            .await
+            .context("Cannot subscribe to device list")?;
+        log::info!("Subscribed to {}'s OMEMO device list", jid);
 
-        Aparte::spawn(async move {
-            if let Err(err) = Self::subscribe_to_device_list(&mut aparte, &account, &jid).await {
-                aparte.error(
-                    format!("Cannot subscribe to {}'s OMEMO device list", jid),
-                    err,
-                )
-            }
-            log::info!("Subscribed to {}'s OMEMO device list", jid);
+        let device_list = Self::get_device_list(aparte, &account, &jid)
+            .await
+            .context("Cannot get device list")?;
+        log::info!("Got {}'s OMEMO device list", jid);
 
-            Ok::<(), anyhow::Error>(())
-        });
+        for device in device_list.devices {
+            // TODO key keyring material
+            aparte
+                .storage
+                .upsert_omemo_contact_device(&account, &jid, device.id.try_into()?)?;
+        }
+        log::info!("Update {}'s OMEMO device list cache", jid);
+
+        Ok(())
     }
 
     async fn subscribe_to_device_list(
@@ -153,7 +159,41 @@ impl OmemoMod {
                     None => Err(anyhow!("Empty subscription result")),
                 },
                 Err(err) => Err(err.into()),
-                Ok(el) => Err(anyhow!("Invalid response to subscription: {:?}", el)),
+                Ok(el) => Err(anyhow!("Invalid pubsub response: {:?}", el)),
+            },
+            iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
+        }
+    }
+
+    async fn get_device_list(
+        aparte: &mut AparteAsync,
+        account: &Account,
+        jid: &BareJid,
+    ) -> Result<Omemo::DeviceList> {
+        let response = aparte.iq(&account, Self::get_devices_iq(&jid)).await?;
+        match response.payload {
+            IqType::Result(None) => Err(anyhow!("Empty iq response")),
+            IqType::Error(err) => Err(anyhow!(
+                "Iq error: {} ({:?})",
+                err.type_,
+                err.defined_condition
+            )),
+            IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
+                PubSub::Items(items) => {
+                    let current = Some(ItemId("current".to_string()));
+                    match items.items.iter().find(|item| item.id == current) {
+                        Some(current) => {
+                            let payload = current
+                                .payload
+                                .clone()
+                                .ok_or(anyhow!("Missing pubsub payload"))?;
+                            let list = Omemo::DeviceList::try_from(payload)?;
+                            Ok(list)
+                        }
+                        None => Err(anyhow!("No device list")),
+                    }
+                }
+                _ => Err(anyhow!("Invalid pubsub response")),
             },
             iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
         }
@@ -173,7 +213,6 @@ impl OmemoMod {
         let response = aparte
             .iq(&account, Self::get_devices_iq(&account.clone().into()))
             .await?;
-        // TODO check namespace
         match response.payload {
             IqType::Result(None) => Err(anyhow!("Empty iq response")),
             IqType::Error(err) => Err(anyhow!(
@@ -312,7 +351,17 @@ impl ModTrait for OmemoMod {
             }
             Event::Omemo(event) => match event {
                 // TODO context()?
-                OmemoEvent::Enable { account, jid } => self.enable(aparte, account, jid),
+                OmemoEvent::Enable { account, jid } => {
+                    let mut aparte = aparte.proxy();
+                    let account = account.clone();
+                    let jid = jid.clone();
+
+                    Aparte::spawn(async move {
+                        if let Err(err) = Self::enable(&mut aparte, account, jid.clone()).await {
+                            aparte.error(format!("Can't enable OMEMO with {}", jid), err);
+                        }
+                    })
+                }
             },
             //Event::PubSub { account: _, from: Some(from), event } => match event {
             //    pubsub::PubSubEvent::PublishedItems { node, items } => {
