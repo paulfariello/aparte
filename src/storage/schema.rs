@@ -18,7 +18,4 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(
-    omemo_contact_device,
-    omemo_own_device,
-);
+diesel::allow_tables_to_appear_in_same_query!(omemo_contact_device, omemo_own_device,);

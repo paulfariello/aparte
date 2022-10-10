@@ -8,14 +8,14 @@ use std::path::PathBuf;
 
 use anyhow::{Error, Result};
 use diesel::prelude::*;
+use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
-use diesel::r2d2::{Pool, ConnectionManager};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use xmpp_parsers::BareJid;
 
 use crate::account::Account;
 
-pub use models::{OmemoOwnDevice, OmemoContactDevice};
+pub use models::{OmemoContactDevice, OmemoOwnDevice};
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
@@ -49,7 +49,11 @@ impl Storage {
         Ok(res)
     }
 
-    pub fn set_omemo_current_device(&mut self, account: &Account, device_id: i32) -> Result<OmemoOwnDevice> {
+    pub fn set_omemo_current_device(
+        &mut self,
+        account: &Account,
+        device_id: i32,
+    ) -> Result<OmemoOwnDevice> {
         use schema::omemo_own_device;
         let mut conn = self.pool.get()?;
         let device = diesel::insert_into(omemo_own_device::table)
@@ -62,7 +66,12 @@ impl Storage {
         Ok(device)
     }
 
-    pub fn upsert_omemo_contact_device(&mut self, account: &Account, contact: &BareJid, device_id: i32) -> Result<OmemoContactDevice> {
+    pub fn upsert_omemo_contact_device(
+        &mut self,
+        account: &Account,
+        contact: &BareJid,
+        device_id: i32,
+    ) -> Result<OmemoContactDevice> {
         use schema::omemo_contact_device;
         let mut conn = self.pool.get()?;
         let device = diesel::insert_into(omemo_contact_device::table)
@@ -71,7 +80,11 @@ impl Storage {
                 omemo_contact_device::contact.eq(contact.to_string()),
                 omemo_contact_device::device_id.eq(device_id),
             ))
-            .on_conflict((omemo_contact_device::account, omemo_contact_device::contact, omemo_contact_device::device_id))
+            .on_conflict((
+                omemo_contact_device::account,
+                omemo_contact_device::contact,
+                omemo_contact_device::device_id,
+            ))
             .do_nothing()
             .get_result(&mut conn)?;
         Ok(device)

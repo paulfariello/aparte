@@ -23,6 +23,7 @@ use xmpp_parsers::{BareJid, Jid};
 use crate::account::Account;
 use crate::command::{Command, CommandParser};
 use crate::core::{Aparte, AparteAsync, Event, ModTrait};
+use crate::i18n;
 //use crate::mods::disco::DiscoMod;
 use crate::mods::ui::UIMod;
 
@@ -125,9 +126,20 @@ impl OmemoMod {
 
         for device in device_list.devices {
             // TODO key keyring material
-            aparte
-                .storage
-                .upsert_omemo_contact_device(&account, &jid, device.id.try_into()?)?;
+            match Self::get_bundle(aparte, &account, &jid, device.id).await {
+                Ok(bundle) => {
+                    log::debug!("{:?}", bundle);
+                    aparte.storage.upsert_omemo_contact_device(
+                        &account,
+                        &jid,
+                        device.id.try_into()?,
+                    )?;
+                }
+                Err(err) => aparte.error(
+                    format!("Cannot load {}'s device {} bundle", jid, device.id),
+                    err,
+                ),
+            }
         }
         log::info!("Update {}'s OMEMO device list cache", jid);
 
@@ -147,11 +159,13 @@ impl OmemoMod {
             .await?;
         match response.payload {
             IqType::Result(None) => Err(anyhow!("Empty iq response")),
-            IqType::Error(err) => Err(anyhow!(
-                "Iq error: {} ({:?})",
-                err.type_,
-                err.defined_condition
-            )),
+            IqType::Error(err) => {
+                let text = match i18n::get_best(&err.texts, vec![]) {
+                    Some((_, text)) => text.to_string(),
+                    None => format!("{:?}", err.defined_condition),
+                };
+                Err(anyhow!("Iq error {}: {}", err.type_, text))
+            }
             IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub) {
                 Ok(PubSub::Subscription(subscription)) => match subscription.subscription {
                     Some(pubsub::Subscription::Subscribed) => Ok(()),
@@ -173,11 +187,13 @@ impl OmemoMod {
         let response = aparte.iq(&account, Self::get_devices_iq(&jid)).await?;
         match response.payload {
             IqType::Result(None) => Err(anyhow!("Empty iq response")),
-            IqType::Error(err) => Err(anyhow!(
-                "Iq error: {} ({:?})",
-                err.type_,
-                err.defined_condition
-            )),
+            IqType::Error(err) => {
+                let text = match i18n::get_best(&err.texts, vec![]) {
+                    Some((_, text)) => text.to_string(),
+                    None => format!("{:?}", err.defined_condition),
+                };
+                Err(anyhow!("Iq error {}: {}", err.type_, text))
+            }
             IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
@@ -215,11 +231,13 @@ impl OmemoMod {
             .await?;
         match response.payload {
             IqType::Result(None) => Err(anyhow!("Empty iq response")),
-            IqType::Error(err) => Err(anyhow!(
-                "Iq error: {} ({:?})",
-                err.type_,
-                err.defined_condition
-            )),
+            IqType::Error(err) => {
+                let text = match i18n::get_best(&err.texts, vec![]) {
+                    Some((_, text)) => text.to_string(),
+                    None => format!("{:?}", err.defined_condition),
+                };
+                Err(anyhow!("Iq error {}: {}", err.type_, text))
+            }
             IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
@@ -255,7 +273,7 @@ impl OmemoMod {
         account: Account,
         device_id: u32,
         list: Option<Omemo::DeviceList>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         // TODO handle race
 
         let mut list = match list {
@@ -281,6 +299,45 @@ impl OmemoMod {
         // }
 
         Ok(())
+    }
+
+    async fn get_bundle(
+        aparte: &mut AparteAsync,
+        account: &Account,
+        contact: &BareJid,
+        device_id: u32,
+    ) -> Result<Omemo::Bundle> {
+        let response = aparte
+            .iq(&account, Self::get_bundle_iq(contact, device_id))
+            .await?;
+        match response.payload {
+            IqType::Result(None) => Err(anyhow!("Empty iq response")),
+            IqType::Error(err) => {
+                let text = match i18n::get_best(&err.texts, vec![]) {
+                    Some((_, text)) => text.to_string(),
+                    None => format!("{:?}", err.defined_condition),
+                };
+                Err(anyhow!("Iq error {}: {}", err.type_, text))
+            }
+            IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
+                PubSub::Items(items) => {
+                    let current = Some(ItemId("current".to_string()));
+                    match items.items.iter().find(|item| item.id == current) {
+                        Some(current) => {
+                            let payload = current
+                                .payload
+                                .clone()
+                                .ok_or(anyhow!("Missing pubsub payload"))?;
+                            let bundle = Omemo::Bundle::try_from(payload)?;
+                            Ok(bundle)
+                        }
+                        None => Err(anyhow!("No device list")),
+                    }
+                }
+                _ => Err(anyhow!("Invalid pubsub response")),
+            },
+            iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
+        }
     }
 
     //
@@ -329,6 +386,20 @@ impl OmemoMod {
             options: None,
         };
         Iq::from_set(id, pubsub).with_to(Jid::Bare(contact.clone()))
+    }
+
+    fn get_bundle_iq(contact: &BareJid, device_id: u32) -> Iq {
+        let id = Uuid::new_v4();
+
+        let id = id.to_hyphenated().to_string();
+        let items = pubsub::pubsub::Items {
+            max_items: None,
+            node: pubsub::NodeName(format!("{}:{}", ns::LEGACY_OMEMO_BUNDLES, device_id)),
+            subid: None,
+            items: vec![],
+        };
+        let pubsub = pubsub::PubSub::Items(items);
+        Iq::from_get(id, pubsub).with_to(Jid::Bare(contact.clone()))
     }
 }
 
