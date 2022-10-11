@@ -89,14 +89,14 @@ impl OmemoMod {
             Some(device) => device,
             None => {
                 log::info!("Generating device id");
-                let device_id: i32 = random::<i32>().abs();
+                let device_id: u32 = random::<u32>();
                 aparte
                     .storage
                     .set_omemo_current_device(account, device_id)?
             }
         };
 
-        let device_id: u32 = device.device_id.try_into().unwrap();
+        let device_id: u32 = device.id.try_into().unwrap();
         log::info!("device id: {}", device_id);
 
         let mut aparte = aparte.proxy();
@@ -125,15 +125,18 @@ impl OmemoMod {
         log::info!("Got {}'s OMEMO device list", jid);
 
         for device in device_list.devices {
-            // TODO key keyring material
-            match Self::get_bundle(aparte, &account, &jid, device.id).await {
+            let device = aparte.storage.upsert_omemo_contact_device(
+                &account,
+                &jid,
+                device.id.try_into()?,
+            )?;
+            match Self::get_bundle(aparte, &account, &jid, device.id.try_into().unwrap()).await {
                 Ok(bundle) => {
-                    log::debug!("{:?}", bundle);
-                    aparte.storage.upsert_omemo_contact_device(
-                        &account,
-                        &jid,
-                        device.id.try_into()?,
-                    )?;
+                    if let Some(prekeys) = bundle.prekeys {
+                        aparte
+                            .storage
+                            .upsert_omemo_contact_prekeys(&device, &prekeys.keys)?;
+                    }
                 }
                 Err(err) => aparte.error(
                     format!("Cannot load {}'s device {} bundle", jid, device.id),
