@@ -43,6 +43,7 @@ clap = { version = "4.0.32", features = ["derive"] }
 diesel = { version = "^2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "r2d2"] }
 diesel_migrations = "^2.0"
 anyhow = "^1.0"
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.20.0" }
 
 [dev-dependencies]
 mockall = "^0.9"
