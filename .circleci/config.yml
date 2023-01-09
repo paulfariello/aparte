@@ -1,7 +1,7 @@
 version: 2.1
 
 jobs:
-  build:
+  unit_test:
     docker:
       - image: cimg/rust:1.65.0
     steps:
@@ -9,4 +9,4 @@ jobs:
       - run: cargo --version
       - run:
           name: Build
-          command: cargo build
+          command: cargo test
