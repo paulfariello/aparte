@@ -96,15 +96,13 @@ impl ModTrait for ConversationMod {
                     // Create a conversation for incomming chat messages
                     if message.type_ == message::XmppMessageType::Chat
                         && message.direction == message::Direction::Incoming
+                        && self.conversations.get(&index).is_none()
                     {
-                        if self.conversations.get(&index).is_none() {
-                            let conversation =
-                                conversation::Conversation::Chat(conversation::Chat {
-                                    account: account.clone(),
-                                    contact: message.from.clone(),
-                                });
-                            self.conversations.insert(index.clone(), conversation);
-                        }
+                        let conversation = conversation::Conversation::Chat(conversation::Chat {
+                            account: account.clone(),
+                            contact: message.from.clone(),
+                        });
+                        self.conversations.insert(index.clone(), conversation);
                     }
 
                     // Schedule a notification
@@ -161,12 +159,9 @@ impl ModTrait for ConversationMod {
                         self.conversations.get_mut(&index)
                     {
                         for payload in presence.clone().payloads {
-                            if let Some(muc_user) = muc::user::MucUser::try_from(payload).ok() {
+                            if let Ok(muc_user) = muc::user::MucUser::try_from(payload) {
                                 for item in muc_user.items {
-                                    let occupant_jid = match item.jid {
-                                        Some(full) => Some(full.into()),
-                                        None => None,
-                                    };
+                                    let occupant_jid = item.jid.map(|full| full.into());
                                     let occupant = conversation::Occupant {
                                         nick: from.resource.clone(),
                                         jid: occupant_jid,
@@ -193,27 +188,27 @@ impl ModTrait for ConversationMod {
     }
 }
 
-impl Into<ConversationIndex> for conversation::Channel {
-    fn into(self) -> ConversationIndex {
+impl From<conversation::Channel> for ConversationIndex {
+    fn from(val: conversation::Channel) -> Self {
         ConversationIndex {
-            account: self.account,
-            jid: self.jid,
+            account: val.account,
+            jid: val.jid,
         }
     }
 }
 
-impl Into<ConversationIndex> for conversation::Chat {
-    fn into(self) -> ConversationIndex {
+impl From<conversation::Chat> for ConversationIndex {
+    fn from(val: conversation::Chat) -> Self {
         ConversationIndex {
-            account: self.account,
-            jid: self.contact,
+            account: val.account,
+            jid: val.contact,
         }
     }
 }
 
-impl Into<ConversationIndex> for conversation::Conversation {
-    fn into(self) -> ConversationIndex {
-        match self {
+impl From<conversation::Conversation> for ConversationIndex {
+    fn from(val: conversation::Conversation) -> Self {
+        match val {
             conversation::Conversation::Channel(channel) => channel.into(),
             conversation::Conversation::Chat(chat) => chat.into(),
         }

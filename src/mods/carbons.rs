@@ -60,14 +60,14 @@ impl ModTrait for CarbonsMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter().cloned() {
-            if carbons::Received::try_from(payload.clone()).is_ok() {
-                return 1f64;
-            } else if carbons::Sent::try_from(payload.clone()).is_ok() {
+        for payload in message.payloads.iter() {
+            if carbons::Received::try_from(payload.clone()).is_ok()
+                || carbons::Sent::try_from(payload.clone()).is_ok()
+            {
                 return 1f64;
             }
         }
-        return 0f64;
+        0f64
     }
 
     fn handle_xmpp_message(
@@ -78,7 +78,7 @@ impl ModTrait for CarbonsMod {
         _delay: &Option<Delay>,
         archive: bool,
     ) {
-        for payload in message.payloads.iter().cloned() {
+        for payload in message.payloads.iter() {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
                 self.handle_carbon(aparte, account, received.forwarded, archive);
             } else if let Ok(sent) = carbons::Sent::try_from(payload.clone()) {

@@ -28,9 +28,9 @@ impl From<roster::Item> for contact::Contact {
         Self {
             jid: item.jid.clone(),
             name: item.name.clone(),
-            subscription: item.subscription.clone(),
+            subscription: item.subscription,
             presence: contact::Presence::Unavailable,
-            groups: groups,
+            groups,
         }
     }
 }
@@ -76,7 +76,7 @@ impl ModTrait for ContactMod {
             Event::Iq(account, iq) => {
                 if let IqType::Result(Some(payload)) = iq.payload.clone() {
                     if payload.is("query", ns::ROSTER) {
-                        if let Ok(roster) = roster::Roster::try_from(payload.clone()) {
+                        if let Ok(roster) = roster::Roster::try_from(payload) {
                             for item in roster.items {
                                 let contact: contact::Contact = item.clone().into();
                                 let index = ContactIndex {

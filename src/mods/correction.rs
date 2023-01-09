@@ -47,15 +47,12 @@ impl CorrectionMod {
                 Event::Message(Some(account.clone()), original.clone())
             } else {
                 let mut message = message.clone();
-                message.payloads = message
+                message
                     .payloads
-                    .iter()
-                    .filter(|payload| !payload.is("replace", ns::MESSAGE_CORRECT))
-                    .cloned()
-                    .collect();
+                    .retain(|payload| !payload.is("replace", ns::MESSAGE_CORRECT));
                 Event::RawMessage {
                     account: account.clone(),
-                    message: message,
+                    message,
                     delay: None,
                     archive,
                 }
@@ -78,13 +75,13 @@ impl ModTrait for CorrectionMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter().cloned() {
+        for payload in message.payloads.iter() {
             if Replace::try_from(payload.clone()).is_ok() {
                 return 1f64;
             }
         }
 
-        return 0f64;
+        0f64
     }
 
     fn handle_xmpp_message(
@@ -95,7 +92,7 @@ impl ModTrait for CorrectionMod {
         _delay: &Option<Delay>,
         archive: bool,
     ) {
-        for payload in message.payloads.iter().cloned() {
+        for payload in message.payloads.iter() {
             if let Ok(replace) = Replace::try_from(payload.clone()) {
                 self.handle_replace(aparte, account, message, replace, archive);
             }
@@ -110,7 +107,7 @@ impl ModTrait for CorrectionMod {
                 delay: _,
                 archive,
             } => {
-                for payload in message.payloads.iter().cloned() {
+                for payload in message.payloads.iter() {
                     if let Ok(replace) = Replace::try_from(payload.clone()) {
                         self.handle_replace(aparte, account, message, replace, *archive);
                     }

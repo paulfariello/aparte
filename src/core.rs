@@ -26,7 +26,7 @@ use tokio_xmpp::{
     AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket,
 };
 use uuid::Uuid;
-use xmpp_parsers;
+
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::message::Message as XmppParsersMessage;
@@ -55,7 +55,7 @@ const WELCOME: &str = r#"
 ▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
 ▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
 "#;
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -387,7 +387,7 @@ Examples:
 {
     account_name: String = {
         completion: (|aparte, _command| {
-            aparte.config.accounts.iter().map(|(name, _)| name.clone()).collect()
+            aparte.config.accounts.keys().cloned().collect()
         })
     },
     password: Password<String>
@@ -396,8 +396,8 @@ Examples:
     let account = {
         if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
             account.clone()
-        } else if !account_name.contains("@") {
-            return Err(format!("Unknown account or invalid jid {}", account_name));
+        } else if !account_name.contains('@') {
+            return Err(format!("Unknown account or invalid jid {account_name}"));
         } else if let Ok(jid) = Jid::from_str(&account_name) {
             ConnectionInfo {
                 jid: jid.to_string(),
@@ -406,7 +406,7 @@ Examples:
                 autoconnect: false,
             }
         } else {
-            return Err(format!("Unknown account or invalid jid {}", account_name));
+            return Err(format!("Unknown account or invalid jid {account_name}"));
         }
     };
 
@@ -435,7 +435,7 @@ Examples:
     }
 },
 |aparte, _command| {
-    aparte.schedule(Event::Win(window.clone()));
+    aparte.schedule(Event::Win(window));
     Ok(())
 });
 
@@ -463,10 +463,10 @@ Examples:
         let ui = aparte.get_mod::<mods::ui::UIMod>();
         ui.current_window().cloned()
     };
-    let window = window.or(current).clone();
+    let window = window.or(current);
     if let Some(window) = window {
         // Close window
-        aparte.schedule(Event::Close(window.clone()));
+        aparte.schedule(Event::Close(window));
     }
     Ok(())
 });
@@ -488,7 +488,7 @@ Examples:
             let ui = aparte.get_mod::<mods::ui::UIMod>();
             ui.get_windows().iter().map(|window| {
                 if let Some(account) = aparte.current_account() {
-                    if let Ok(jid) = BareJid::from_str(&window) {
+                    if let Ok(jid) = BareJid::from_str(window) {
                         let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
                         conversation_mod.get(&account, &jid).cloned()
                     } else {
@@ -512,7 +512,7 @@ Examples:
         let ui = aparte.get_mod::<mods::ui::UIMod>();
         ui.current_window().cloned()
     };
-    let window = window.or(current).clone();
+    let window = window.or(current);
     if let Some(window) = window {
         if let Some(account) = aparte.current_account() {
             if let Ok(jid) = BareJid::from_str(&window) {
@@ -547,14 +547,14 @@ Example:
     contact: String = {
         completion: (|aparte, _command| {
             let contact = aparte.get_mod::<mods::contact::ContactMod>();
-            contact.contacts.iter().map(|(_, contact)| contact.jid.to_string()).collect()
+            contact.contacts.values().map(|contact| contact.jid.to_string()).collect()
         })
     },
     message: Option<String>
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or(format!("No connection found"))?;
-    match Jid::from_str(&contact.clone()) {
+    let account = aparte.current_account().ok_or("No connection found".to_string())?;
+    match Jid::from_str(&contact) {
         Ok(jid) => {
             let to = match jid.clone() {
                 Jid::Bare(jid) => jid,
@@ -575,7 +575,7 @@ Example:
             Ok(())
         },
         Err(err) => {
-            Err(format!("Invalid JID {}: {}", contact, err))
+            Err(format!("Invalid JID {contact}: {err}"))
         }
     }
 });
@@ -593,12 +593,12 @@ Example:
     muc: String = {
         completion: (|aparte, _command| {
             let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
-            bookmarks.bookmarks_by_name.iter().map(|(a, _)| a.clone()).chain(bookmarks.bookmarks_by_jid.iter().map(|(a, _)| a.to_string())).collect()
+            bookmarks.bookmarks_by_name.keys().cloned().chain(bookmarks.bookmarks_by_jid.keys().map(|a| a.to_string())).collect()
         })
     },
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or(format!("No connection found"))?;
+    let account = aparte.current_account().ok_or("No connection found".to_string())?;
     match Jid::from_str(&muc) {
         Ok(jid) => {
             aparte.schedule(Event::Join {
@@ -678,7 +678,7 @@ Examples:
     if let Some(cmd) = cmd {
         let help = match aparte.command_parsers.get(&cmd) {
             Some(command) => Ok(command.help.to_string()),
-            None => Err(format!("Unknown command {}", cmd)),
+            None => Err(format!("Unknown command {cmd}")),
         }?;
 
         aparte.log(help);
@@ -852,12 +852,12 @@ impl Aparte {
         context: &String,
         buf: &String,
     ) -> Result<(), String> {
-        let command_name = Command::parse_name(&buf)?;
+        let command_name = Command::parse_name(buf)?;
 
         let parser = {
             match self.command_parsers.get(command_name) {
-                Some(parser) => parser.clone(),
-                None => return Err(format!("Unknown command {}", command_name)),
+                Some(parser) => parser,
+                None => return Err(format!("Unknown command {command_name}")),
             }
         };
 
@@ -868,7 +868,7 @@ impl Aparte {
     pub fn handle_command(&mut self, command: Command) -> Result<(), String> {
         let parser = {
             match self.command_parsers.get(&command.args[0]) {
-                Some(parser) => parser.clone(),
+                Some(parser) => parser,
                 None => return Err(format!("Unknown command {}", command.args[0])),
             }
         };
@@ -973,7 +973,7 @@ impl Aparte {
         };
 
         self.connections.insert(account.clone(), connection);
-        self.current_connection = Some(account.clone());
+        self.current_connection = Some(account);
     }
 
     pub fn current_account(&self) -> Option<Account> {
@@ -993,9 +993,7 @@ impl Aparte {
 
         let mods = Rc::clone(&self.mods);
         for (_, r#mod) in mods.iter() {
-            if let Err(err) = r#mod.borrow_mut().init(self) {
-                return Err(err);
-            }
+            r#mod.borrow_mut().init(self)?
         }
 
         Ok(())
@@ -1064,7 +1062,7 @@ impl Aparte {
 
     pub fn start(&mut self) {
         self.log(color::rainbow(WELCOME));
-        self.log(format!("Version: {}", VERSION));
+        self.log(format!("Version: {VERSION}"));
 
         for (_, account) in self.config.accounts.clone() {
             if account.autoconnect {
@@ -1108,7 +1106,7 @@ impl Aparte {
                     .take(5)
                     .map(char::from)
                     .collect();
-                jid.with_resource(format!("aparte_{}", rand_string))
+                jid.with_resource(format!("aparte_{rand_string}"))
             }
             Err(err) => {
                 self.log(format!(
@@ -1119,11 +1117,11 @@ impl Aparte {
             }
         };
 
-        self.log(format!("Connecting as {}", account));
-        let mut client = match TokioXmppClient::new(&account.to_string(), &password.0) {
+        self.log(format!("Connecting as {account}"));
+        let mut client = match TokioXmppClient::new(&account.to_string(), password.0) {
             Ok(client) => client,
             Err(err) => {
-                self.log(format!("Cannot connect as {}: {}", account, err));
+                self.log(format!("Cannot connect as {account}: {err}"));
                 return;
             }
         };
@@ -1157,7 +1155,7 @@ impl Aparte {
                 match event {
                     XmppEvent::Disconnected(XmppError::Auth(e)) => {
                         if let Err(err) = event_channel
-                            .send(Event::AuthError(account.clone(), format!("{}", e)))
+                            .send(Event::AuthError(account.clone(), format!("{e}")))
                             .await
                         {
                             error!("Cannot send event to internal channel: {}", err);
@@ -1166,7 +1164,7 @@ impl Aparte {
                     }
                     XmppEvent::Disconnected(e) => {
                         if let Err(err) = event_channel
-                            .send(Event::Disconnected(account.clone(), format!("{}", e)))
+                            .send(Event::Disconnected(account.clone(), format!("{e}")))
                             .await
                         {
                             error!("Cannot send event to internal channel: {}", err);
@@ -1209,7 +1207,7 @@ impl Aparte {
     }
 
     pub async fn event_loop(&mut self) -> Result<(), ()> {
-        while self.event_queue.len() > 0 {
+        while !self.event_queue.is_empty() {
             let event = self.event_queue.remove(0);
             debug!("Event: {:?}", event);
             {
@@ -1244,17 +1242,17 @@ impl Aparte {
                     self.connect(&account, password).await;
                 }
                 Event::Connected(account, _) => {
-                    self.log(format!("Connected as {}", account));
+                    self.log(format!("Connected as {account}"));
                     let mut presence = Presence::new(PresenceType::None);
                     presence.show = Some(PresenceShow::Chat);
 
                     self.send(&account, presence.into());
                 }
                 Event::Disconnected(account, err) => {
-                    self.log(format!("Connection lost for {}: {}", account, err));
+                    self.log(format!("Connection lost for {account}: {err}"));
                 }
                 Event::AuthError(account, err) => {
-                    self.log(format!("Authentication error for {}: {}", account, err));
+                    self.log(format!("Authentication error for {account}: {err}"));
                 }
                 Event::Stanza(account, stanza) => {
                     self.handle_stanza(account, stanza);
@@ -1288,7 +1286,7 @@ impl Aparte {
                     self.send(&account, presence.into());
 
                     // Successful join
-                    self.log(format!("Joined {}", channel));
+                    self.log(format!("Joined {channel}"));
                     self.schedule(Event::Joined {
                         account: account.clone(),
                         channel: to,
@@ -1334,7 +1332,7 @@ impl Aparte {
                 }
             }
             self.schedule(Event::Iq(account, iq));
-        } else if let Ok(presence) = Presence::try_from(stanza.clone()) {
+        } else if let Ok(presence) = Presence::try_from(stanza) {
             self.schedule(Event::Presence(account, presence));
         }
     }

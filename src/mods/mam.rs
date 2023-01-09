@@ -69,7 +69,7 @@ impl Query {
             form_type: Some(String::from(ns::MAM)),
             title: None,
             instructions: None,
-            fields: fields,
+            fields,
         };
 
         let set = SetQuery {
@@ -167,12 +167,12 @@ impl ModTrait for MamMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter().cloned() {
+        for payload in message.payloads.iter() {
             if mam::Result_::try_from(payload.clone()).is_ok() {
                 return 1f64;
             }
         }
-        return 0f64;
+        0f64
     }
 
     fn handle_xmpp_message(
@@ -183,7 +183,7 @@ impl ModTrait for MamMod {
         _delay: &Option<Delay>,
         _archive: bool,
     ) {
-        for payload in message.payloads.iter().cloned() {
+        for payload in message.payloads.iter() {
             if let Ok(result) = mam::Result_::try_from(payload.clone()) {
                 self.handle_result(aparte, account, result);
             }
@@ -216,7 +216,7 @@ impl ModTrait for MamMod {
                 let query = Query {
                     jid: jid.clone(),
                     with: None,
-                    from: from.clone(),
+                    from: *from,
                     count: 100,
                 };
                 self.query(aparte, account, query);
@@ -229,7 +229,7 @@ impl ModTrait for MamMod {
                 let query = Query {
                     jid: account.clone().into(),
                     with: Some(contact.clone()),
-                    from: from.clone(),
+                    from: *from,
                     count: 100,
                 };
                 self.query(aparte, account, query);

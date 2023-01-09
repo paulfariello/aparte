@@ -266,7 +266,7 @@ where
         for (window, state) in sorted {
             // Keep space for at least ", +X]"
             let remaining_len = if remaining > 1 {
-                format!("{}", remaining).len() + 4
+                format!("{remaining}").len() + 4
             } else {
                 0
             };
@@ -341,7 +341,7 @@ where
                 self.add_window(terminus::clean(name));
             }
             UIEvent::Core(Event::Close(window)) => {
-                self.del_window(&window);
+                self.del_window(window);
             }
             UIEvent::Core(Event::Connected(account, _)) => {
                 self.connection = Some(terminus::clean(&account.to_string()));
@@ -371,9 +371,9 @@ impl fmt::Display for Message {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 for line in message.body.lines() {
-                    write!(
+                    writeln!(
                         f,
-                        "{}{}{} - {}\n",
+                        "{}{}{} - {}",
                         color::Bg(color::Reset),
                         color::Fg(color::Reset),
                         timestamp.format("%T"),
@@ -384,16 +384,13 @@ impl fmt::Display for Message {
                 Ok(())
             }
             Message::Xmpp(message) => {
-                let author = terminus::clean(
-                    &match &message.type_ {
-                        XmppMessageType::Channel => match &message.from_full {
-                            Jid::Full(from) => from.resource.clone(),
-                            Jid::Bare(from) => from.to_string(),
-                        },
-                        XmppMessageType::Chat => message.from.to_string(),
-                    }
-                    .to_string(),
-                );
+                let author = terminus::clean(&match &message.type_ {
+                    XmppMessageType::Channel => match &message.from_full {
+                        Jid::Full(from) => from.resource.clone(),
+                        Jid::Bare(from) => from.to_string(),
+                    },
+                    XmppMessageType::Chat => message.from.to_string(),
+                });
 
                 let timestamp =
                     Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
@@ -445,7 +442,7 @@ impl fmt::Display for Message {
                 if let Some(line) = iter.next() {
                     write!(f, "{}", terminus::clean(line))?;
                 }
-                while let Some(line) = iter.next() {
+                for line in iter {
                     write!(f, "\n{}{}", padding, terminus::clean(line))?;
                 }
 
@@ -536,7 +533,7 @@ impl fmt::Display for RosterItem {
             Self::Window(window) => {
                 let disp = terminus::clean(window);
 
-                write!(f, "{}", disp)
+                write!(f, "{disp}")
             }
         }
     }
@@ -612,7 +609,7 @@ impl PanicHandler {
         let panic_for_hook = panic.clone();
         let backtrace_for_hook = backtrace.clone();
         panic::set_hook(Box::new(move |info| {
-            let panic = format!("{}", info);
+            let panic = format!("{info}");
             panic_for_hook
                 .lock()
                 .expect("cannot lock panic")
@@ -632,7 +629,7 @@ impl PanicHandler {
 impl Drop for PanicHandler {
     fn drop(&mut self) {
         if let Some(panic) = self.panic.lock().expect("cannot lock panic").as_ref() {
-            println!("Oops Aparté {}", panic);
+            println!("Oops Aparté {panic}");
             error!("Oops Aparté {}", panic);
             println!("This isn’t normal behavior. Please report issue.");
             error!("This isn’t normal behavior. Please report issue.");
@@ -700,7 +697,7 @@ impl UIMod {
                     }
                 }
                 UIEvent::Core(Event::Close(window)) => {
-                    frame.remove(&window);
+                    frame.remove(window);
 
                     // propagate Close with name only to each subview
                     // required at least for console view
@@ -927,7 +924,7 @@ impl UIMod {
             if index < self.windows.len() - 1 {
                 self.change_window(&self.windows[index + 1].clone());
             }
-        } else if self.windows.len() > 0 {
+        } else if !self.windows.is_empty() {
             self.change_window(&self.windows[0].clone());
         }
     }
@@ -939,7 +936,7 @@ impl UIMod {
             if index > 0 {
                 self.change_window(&self.windows[index - 1].clone());
             }
-        } else if self.windows.len() > 0 {
+        } else if !self.windows.is_empty() {
             self.change_window(&self.windows[0].clone());
         }
     }
@@ -1000,7 +997,7 @@ impl ModTrait for UIMod {
                 }
                 UIEvent::Core(Event::Contact(_, contact))
                 | UIEvent::Core(Event::ContactUpdate(_, contact)) => {
-                    if contact.groups.len() > 0 {
+                    if !contact.groups.is_empty() {
                         for group in &contact.groups {
                             view.insert(RosterItem::Contact(contact.clone()), Some(group.clone()));
                         }
@@ -1023,7 +1020,7 @@ impl ModTrait for UIMod {
                         autojoin: false,
                         extensions: None,
                     };
-                    let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                    let _ = view.remove(RosterItem::Bookmark(bookmark), Some(group));
                 }
                 UIEvent::AddWindow(name, _) => {
                     let group = contact::Group(String::from("Windows"));
@@ -1109,8 +1106,7 @@ impl ModTrait for UIMod {
 
                             if window != self.current_window {
                                 if let Some(window) = window {
-                                    let important =
-                                        self.unread_windows.entry(window.clone()).or_insert(0);
+                                    let important = self.unread_windows.entry(window).or_insert(0);
                                     *important += 1;
                                 }
                             }
@@ -1163,9 +1159,9 @@ impl ModTrait for UIMod {
             }
             Event::Win(window) => {
                 if self.windows.contains(window) {
-                    self.change_window(&window);
+                    self.change_window(window);
                 } else {
-                    aparte.log(format!("Unknown window {}", window));
+                    aparte.log(format!("Unknown window {window}"));
                 }
             }
             Event::WindowChange => {
@@ -1181,7 +1177,7 @@ impl ModTrait for UIMod {
                     self.windows.retain(|win| win != window);
                     self.unread_windows.remove(window);
                     if Some(window) == self.current_window.as_ref() {
-                        let current = self.windows.iter().next().cloned();
+                        let current = self.windows.first().cloned();
                         if let Some(current) = current {
                             self.change_window(&current);
                         }
@@ -1231,9 +1227,9 @@ impl ModTrait for UIMod {
                         let raw_buf = raw_buf.clone();
                         if *password {
                             let mut command = self.password_command.take().unwrap();
-                            command.args.push(raw_buf.clone());
+                            command.args.push(raw_buf);
                             aparte.schedule(Event::Command(command));
-                        } else if raw_buf.starts_with("/") {
+                        } else if raw_buf.starts_with('/') {
                             let window = self.current_window.clone().unwrap();
                             let account = match self.conversations.get(&window) {
                                 Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
@@ -1242,8 +1238,8 @@ impl ModTrait for UIMod {
                                 }
                                 _ => None,
                             };
-                            aparte.schedule(Event::RawCommand(account, window, raw_buf.clone()));
-                        } else if raw_buf.len() > 0 {
+                            aparte.schedule(Event::RawCommand(account, window, raw_buf));
+                        } else if !raw_buf.is_empty() {
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
@@ -1256,7 +1252,7 @@ impl ModTrait for UIMod {
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let mut bodies = HashMap::new();
-                                            bodies.insert("".to_string(), raw_buf.clone());
+                                            bodies.insert("".to_string(), raw_buf);
                                             let message = Message::outgoing_chat(
                                                 id.to_string(),
                                                 timestamp,
@@ -1279,7 +1275,7 @@ impl ModTrait for UIMod {
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let mut bodies = HashMap::new();
-                                            bodies.insert("".to_string(), raw_buf.clone());
+                                            bodies.insert("".to_string(), raw_buf);
                                             let message = Message::outgoing_channel(
                                                 id.to_string(),
                                                 timestamp,
@@ -1306,13 +1302,13 @@ impl ModTrait for UIMod {
                                 sorted[0].0.clone()
                             };
 
-                            self.unread_windows.remove(&next.to_string());
+                            self.unread_windows.remove(&next);
                             self.change_window(&next);
                         }
                     }
                     _ => {
                         aparte.schedule(Event::ResetCompletion);
-                        self.root.event(&mut UIEvent::Core(Event::Key(key.clone())));
+                        self.root.event(&mut UIEvent::Core(Event::Key(*key)));
                     }
                 }
             }
@@ -1332,7 +1328,7 @@ impl ModTrait for UIMod {
                 }
                 self.root.event(&mut UIEvent::Core(Event::Notification {
                     conversation: conversation.clone(),
-                    important: important.clone(),
+                    important: *important,
                 }));
             }
             // Forward all unknown events
