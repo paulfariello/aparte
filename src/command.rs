@@ -1,8 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#[allow(unused_imports)]
-use textwrap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::account::Account;
@@ -145,10 +143,7 @@ impl Command {
 
             if string_cursor == 0 {
                 if token_cursor.is_none() {
-                    token_cursor = match c {
-                        Some(_) => Some(tokens.len()),
-                        None => None,
-                    }
+                    token_cursor = c.map(|_| tokens.len())
                 }
             } else {
                 string_cursor -= 1;
@@ -162,7 +157,7 @@ impl Command {
             };
         }
 
-        if tokens.len() > 0 {
+        if !tokens.is_empty() {
             Ok(Command {
                 account,
                 context,
@@ -183,37 +178,34 @@ impl Command {
         let mut quote = None;
         let mut escaped = String::with_capacity(arg.len());
         for c in arg.chars() {
-            escaped.extend(
-                match c {
-                    '\\' => "\\\\".to_string(),
-                    ' ' => {
-                        if quote.is_none() {
-                            quote = Some(' ');
-                        }
-                        " ".to_string()
+            escaped.push_str(&match c {
+                '\\' => "\\\\".to_string(),
+                ' ' => {
+                    if quote.is_none() {
+                        quote = Some(' ');
                     }
-                    '\'' => match quote {
-                        Some('\'') => "\\'".to_string(),
-                        Some('"') => "'".to_string(),
-                        Some(' ') | None => {
-                            quote = Some('"');
-                            "'".to_string()
-                        }
-                        Some(_) => unreachable!(),
-                    },
-                    '"' => match quote {
-                        Some('\'') => "\"".to_string(),
-                        Some('"') => "\\\"".to_string(),
-                        Some(' ') | None => {
-                            quote = Some('\'');
-                            "\"".to_string()
-                        }
-                        Some(_) => unreachable!(),
-                    },
-                    c => c.to_string(),
+                    " ".to_string()
                 }
-                .chars(),
-            )
+                '\'' => match quote {
+                    Some('\'') => "\\'".to_string(),
+                    Some('"') => "'".to_string(),
+                    Some(' ') | None => {
+                        quote = Some('"');
+                        "'".to_string()
+                    }
+                    Some(_) => unreachable!(),
+                },
+                '"' => match quote {
+                    Some('\'') => "\"".to_string(),
+                    Some('"') => "\\\"".to_string(),
+                    Some(' ') | None => {
+                        quote = Some('\'');
+                        "\"".to_string()
+                    }
+                    Some(_) => unreachable!(),
+                },
+                c => c.to_string(),
+            })
         }
 
         if quote == Some(' ') {
@@ -221,9 +213,9 @@ impl Command {
         }
 
         if quote.is_none() {
-            return escaped;
+            escaped
         } else {
-            return format!("{}{}{}", quote.unwrap(), escaped, quote.unwrap());
+            format!("{}{}{}", quote.unwrap(), escaped, quote.unwrap())
         }
     }
 
@@ -477,7 +469,7 @@ macro_rules! command_def (
                     help: help(),
                     parse,
                     exec,
-                    autocompletions: autocompletions,
+                    autocompletions,
                 }
             }
         }
@@ -519,7 +511,7 @@ macro_rules! command_def (
                     help: help(),
                     parse,
                     exec,
-                    autocompletions: autocompletions,
+                    autocompletions,
                 }
             }
         }

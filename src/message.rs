@@ -71,7 +71,7 @@ impl VersionedXmppMessage {
     }
     pub fn get_last_body<'a>(&'a self) -> &'a str {
         let last = self.history.iter().max().unwrap();
-        &last.get_best_body(vec![])
+        last.get_best_body(vec![])
     }
 
     pub fn get_original_timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
@@ -94,7 +94,7 @@ impl VersionedXmppMessage {
             .payloads
             .iter()
             .filter_map(|payload| Delay::try_from(payload.clone()).ok())
-            .nth(0);
+            .next();
         let timestamp = delay
             .map(|delay| delay.stamp.0)
             .unwrap_or(LocalTz::now().into());
@@ -159,7 +159,7 @@ impl Message {
                     .payloads
                     .iter()
                     .filter_map(|payload| Delay::try_from(payload.clone()).ok())
-                    .nth(0),
+                    .next(),
             };
             let to = match message.to.clone() {
                 Some(to) => to,
@@ -429,7 +429,7 @@ impl Message {
     pub fn body<'a>(&'a self) -> &'a str {
         match self {
             Message::Xmpp(message) => message.get_last_body(),
-            Message::Log(LogMessage { body, .. }) => &body,
+            Message::Log(LogMessage { body, .. }) => body,
         }
     }
 
@@ -437,7 +437,7 @@ impl Message {
     pub fn id<'a>(&'a self) -> &'a str {
         match self {
             Message::Xmpp(VersionedXmppMessage { id, .. })
-            | Message::Log(LogMessage { id, .. }) => &id,
+            | Message::Log(LogMessage { id, .. }) => id,
         }
     }
 
