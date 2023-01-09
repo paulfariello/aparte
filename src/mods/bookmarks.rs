@@ -380,7 +380,7 @@ impl Bookmarks2 {
                     name: bookmark.name,
                     nick: bookmark.nick,
                     password: None,
-                    extensions: Some(vec![]),
+                    extensions: Vec::new(),
                 }
                 .into(),
             ),
