@@ -45,6 +45,7 @@ use crate::color;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
 use crate::conversation::{Channel, Conversation};
+use crate::crypto::CryptoEngine;
 use crate::cursor::Cursor;
 use crate::message::Message;
 use crate::mods;
@@ -818,6 +819,7 @@ pub struct Aparte {
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
     send_rx: Option<mpsc::UnboundedReceiver<(Account, Element)>>,
     pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
+    crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
     /// Aparté main configuration
     pub config: Config,
     pub storage: Storage,
@@ -863,6 +865,7 @@ impl Aparte {
             send_rx: Some(send_rx),
             config: config.clone(),
             pending_iq: Arc::new(Mutex::new(HashMap::new())),
+            crypto_engines: Arc::new(Mutex::new(HashMap::new())),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
@@ -1235,8 +1238,33 @@ impl Aparte {
             }
             Event::SendMessage(account, message) => {
                 self.schedule(Event::Message(Some(account.clone()), message.clone()));
-                if let Ok(xmpp_message) = Element::try_from(message) {
-                    self.send(&account, xmpp_message);
+                let message = match message.encryption_recipient() {
+                    Some(recipient) => {
+                        let mut crypto_engines = self.crypto_engines.lock().unwrap();
+                        match crypto_engines.get_mut(&(account.clone(), recipient)) {
+                            Some(crypto_engine) => {
+                                let mut message = message.clone();
+                                match crypto_engine.encrypt(&mut message) {
+                                    Ok(_) => Some(message),
+                                    Err(err) => {
+                                        log::error!(
+                                            "Cannot encrypt message (TODO print error in UI): {}",
+                                            err
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                            None => Some(message),
+                        }
+                    }
+                    None => Some(message),
+                };
+
+                if let Some(message) = message {
+                    if let Ok(xmpp_message) = Element::try_from(message) {
+                        self.send(&account, xmpp_message);
+                    }
                 }
             }
             Event::Connect(account, password) => {
@@ -1473,6 +1501,7 @@ impl Aparte {
             pending_iq: self.pending_iq.clone(),
             config: self.config.clone(),
             storage: self.storage.clone(),
+            crypto_engines: self.crypto_engines.clone(),
         }
     }
 
@@ -1484,10 +1513,20 @@ impl Aparte {
         tokio::spawn(future);
     }
 
-    // Common function for AparteAsync and Aparte, maybe share it in Trait
     pub fn add_command(&mut self, command_parser: CommandParser) {
         let command_parsers = Arc::get_mut(&mut self.command_parsers).unwrap();
         command_parsers.insert(command_parser.name.to_string(), command_parser);
+    }
+
+    // Common function for AparteAsync and Aparte, maybe share it in Trait
+    pub fn add_crypto_engine(
+        &mut self,
+        account: &Account,
+        recipient: &BareJid,
+        crypto_engine: CryptoEngine,
+    ) {
+        let mut crypto_engines = self.crypto_engines.lock().unwrap();
+        crypto_engines.insert((account.clone(), recipient.clone()), crypto_engine);
     }
 
     pub fn send(&mut self, account: &Account, stanza: Element) {
@@ -1500,6 +1539,11 @@ impl Aparte {
 
     pub fn log(&mut self, message: String) {
         let message = Message::log(message);
+        self.schedule(Event::Message(None, message));
+    }
+
+    pub fn error<T: Display>(&mut self, message: T, err: anyhow::Error) {
+        let message = Message::log(format!("{}: {:#}", message, err));
         self.schedule(Event::Message(None, message));
     }
 
@@ -1536,6 +1580,7 @@ pub struct AparteAsync {
     current_connection: Option<Account>,
     event_tx: mpsc::UnboundedSender<Event>,
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
+    crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
     pub(crate) pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     pub config: Config,
     pub storage: Storage,
@@ -1566,5 +1611,15 @@ impl AparteAsync {
 
     pub fn current_account(&self) -> Option<Account> {
         self.current_connection.clone()
+    }
+
+    pub fn add_crypto_engine(
+        &mut self,
+        account: &Account,
+        recipient: &BareJid,
+        crypto_engine: CryptoEngine,
+    ) {
+        let mut crypto_engines = self.crypto_engines.lock().unwrap();
+        crypto_engines.insert((account.clone(), recipient.clone()), crypto_engine);
     }
 }

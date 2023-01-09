@@ -19,6 +19,7 @@ mod message;
 #[macro_use]
 mod command;
 mod color;
+mod crypto;
 mod cursor;
 mod i18n;
 mod mods;

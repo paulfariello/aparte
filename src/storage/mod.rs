@@ -11,7 +11,6 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::sqlite::SqliteConnection;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use xmpp_parsers::legacy_omemo::PreKeyPublic;
 use xmpp_parsers::BareJid;
 
 use crate::account::Account;
@@ -30,8 +29,8 @@ impl Storage {
         let path = path
             .into_os_string()
             .into_string()
-            .map_err(|e| Error::msg(format!("Invalid path {:?}", e)))?;
-        let manager = ConnectionManager::<SqliteConnection>::new(&path);
+            .map_err(|e| Error::msg(format!("Invalid path {e:?}")))?;
+        let manager = ConnectionManager::<SqliteConnection>::new(path);
         let pool = Pool::builder().build(manager)?;
 
         let mut conn = pool.get()?;
@@ -54,6 +53,7 @@ impl Storage {
         &mut self,
         account: &Account,
         device_id: u32,
+        identity_key_pair: Vec<u8>,
     ) -> Result<OmemoOwnDevice> {
         use schema::omemo_own_device;
         let mut conn = self.pool.get()?;
@@ -61,7 +61,7 @@ impl Storage {
             .values((
                 omemo_own_device::account.eq(account.to_string()),
                 omemo_own_device::id.eq::<i64>(device_id.into()),
-                omemo_own_device::current.eq(true),
+                omemo_own_device::identity.eq(Some(identity_key_pair)),
             ))
             .get_result(&mut conn)?;
         Ok(device)
@@ -89,38 +89,5 @@ impl Storage {
             .do_nothing()
             .get_result(&mut conn)?;
         Ok(device)
-    }
-
-    pub fn upsert_omemo_contact_prekeys(
-        &mut self,
-        device: &OmemoContactDevice,
-        prekeys: &Vec<PreKeyPublic>,
-    ) -> Result<()> {
-        use schema::omemo_contact_prekey;
-        let mut conn = self.pool.get()?;
-        let values: Vec<_> = prekeys
-            .iter()
-            .map(|prekey| {
-                (
-                    omemo_contact_prekey::contact_device_fk.eq(device.contact_device_pk),
-                    omemo_contact_prekey::id.eq::<i64>(prekey.pre_key_id.into()),
-                    omemo_contact_prekey::data.eq(&prekey.data),
-                )
-            })
-            .collect();
-
-        for value in values.iter() {
-            diesel::insert_into(omemo_contact_prekey::table)
-                .values(value)
-                .on_conflict((
-                    omemo_contact_prekey::contact_device_fk,
-                    omemo_contact_prekey::id,
-                ))
-                .do_update()
-                .set(value.2)
-                .execute(&mut conn)?;
-        }
-
-        Ok(())
     }
 }

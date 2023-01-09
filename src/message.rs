@@ -425,6 +425,18 @@ impl Message {
         })
     }
 
+    pub fn encryption_recipient(&self) -> Option<BareJid> {
+        match self {
+            Message::Log(_) => None,
+            Message::Xmpp(message) => match message.direction {
+                Direction::Outgoing => match message.type_ {
+                    XmppMessageType::Channel | XmppMessageType::Chat => Some(message.to.clone()),
+                },
+                Direction::Incoming => None,
+            },
+        }
+    }
+
     #[allow(dead_code)]
     pub fn body<'a>(&'a self) -> &'a str {
         match self {

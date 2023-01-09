@@ -8,7 +8,7 @@ pub struct OmemoOwnDevice {
     pub own_device_pk: i32,
     pub account: String,
     pub id: i64,
-    pub current: bool,
+    pub identity: Option<Vec<u8>>,
 }
 
 #[derive(Queryable)]
@@ -17,12 +17,4 @@ pub struct OmemoContactDevice {
     pub account: String,
     pub contact: String,
     pub id: i64,
-}
-
-#[derive(Queryable)]
-pub struct OmemoContactPrekey {
-    pub contact_prekey_pk: i32,
-    pub contact_device_fk: i32,
-    pub id: i64,
-    pub data: Vec<u8>,
 }
