@@ -23,7 +23,7 @@ diesel::table! {
         own_device_pk -> Integer,
         account -> Text,
         id -> BigInt,
-        current -> Bool,
+        identity -> Nullable<Binary>,
     }
 }
 
