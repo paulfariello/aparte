@@ -126,7 +126,7 @@ impl ModTrait for MessagesMod {
 
                 if !archive && !message.subjects.is_empty() {
                     if let Ok(destination) =
-                        Message::get_local_destination_from_xmpp(account, &message)
+                        Message::get_local_destination_from_xmpp(account, message)
                     {
                         aparte.schedule(Event::Subject(
                             account.clone(),

@@ -44,11 +44,11 @@ impl CompletionMod {
         }
 
         if let Some(completions) = &self.completions {
-            if completions.len() > 0 {
+            if !completions.is_empty() {
                 let mut completed_buf = String::new();
                 let mut new_index = 0;
                 let completion = completions[self.current_completion].clone();
-                if raw_buf.starts_with("/") {
+                if raw_buf.starts_with('/') {
                     if let Ok(mut command) = Command::parse_with_cursor(
                         account.clone(),
                         context.to_string(),
@@ -65,8 +65,8 @@ impl CompletionMod {
                         new_index = completed_buf.len();
                     }
                 } else {
-                    let words = Words::new(&raw_buf);
-                    let old_index = cursor.index(&raw_buf);
+                    let words = Words::new(raw_buf);
+                    let old_index = cursor.index(raw_buf);
                     let mut iter_index = 0;
                     completed_buf = words
                         .map(|word| {
@@ -102,7 +102,7 @@ impl CompletionMod {
         raw_buf: &str,
         cursor: &Cursor,
     ) {
-        if raw_buf.starts_with("/") {
+        if raw_buf.starts_with('/') {
             let mut completions = Vec::new();
             if let Ok(command) = Command::parse_with_cursor(
                 account.clone(),
@@ -155,7 +155,7 @@ impl CompletionMod {
                         conversation_mod.get(account, conversation)
                     {
                         let words =
-                            Words::new(&raw_buf[..cursor.index(&raw_buf)]).collect::<Vec<_>>();
+                            Words::new(&raw_buf[..cursor.index(raw_buf)]).collect::<Vec<_>>();
                         let current_word = *words.last().unwrap_or(&"");
 
                         let append = if words.len() <= 1 { ": " } else { " " };
