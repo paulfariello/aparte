@@ -26,7 +26,7 @@ pub fn term_string_visible_len(string: &str) -> usize {
             "\x1b" => {
                 if let Some(grapheme) = iter.next() {
                     if grapheme == "[" {
-                        while let Some(grapheme) = iter.next() {
+                        for grapheme in iter.by_ref() {
                             let chars = grapheme.chars().collect::<Vec<_>>();
                             if chars.len() == 1 {
                                 match chars[0] {
@@ -63,7 +63,7 @@ pub fn clean(string: &str) -> String {
                 if let Some(c) = iter.next() {
                     match c {
                         '[' => {
-                            while let Some(c) = iter.next() {
+                            for c in iter.by_ref() {
                                 match c {
                                     '\x30'..='\x3f' => {}     // parameter bytes
                                     '\x20'..='\x2f' => {}     // intermediate bytes
@@ -99,7 +99,7 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
                 if let Some(grapheme) = iter.next() {
                     output.push_str(grapheme);
                     if grapheme == "[" {
-                        while let Some(grapheme) = iter.next() {
+                        for grapheme in iter.by_ref() {
                             output.push_str(grapheme);
                             let chars = grapheme.chars().collect::<Vec<_>>();
                             if chars.len() == 1 {
@@ -1007,11 +1007,11 @@ impl<E> Input<E> {
 
         use WordParserState::*;
 
-        let mut iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
+        let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
         let mut state = Init;
         let mut word_start = self.cursor.clone();
 
-        while let Some(c) = iter.next() {
+        for c in iter {
             state = match state {
                 Init => match c {
                     ' ' => Space,
@@ -1317,7 +1317,7 @@ where
         let mut buffers: Vec<String> = Vec::new();
 
         for buf in &self.history {
-            let formatted = format!("{}", buf);
+            let formatted = format!("{buf}");
             for line in formatted.lines() {
                 let mut words = line.split_word_bounds();
 
@@ -1345,7 +1345,7 @@ where
                                     let mut escape = String::from("\x1b[");
                                     let mut end = false;
 
-                                    while let Some(word) = words.next() {
+                                    for word in words.by_ref() {
                                         for c in word.chars() {
                                             // Push all char belonging to escape sequence
                                             // but keep remaining for wrap computation
@@ -1387,7 +1387,7 @@ where
                         visible_word = word;
                     }
 
-                    if visible_word.len() == 0 {
+                    if visible_word.is_empty() {
                         continue;
                     }
 
@@ -1413,7 +1413,7 @@ where
 
     #[allow(dead_code)]
     pub fn first<'a>(&'a self) -> Option<&'a I> {
-        self.history.iter().nth(0)
+        self.history.iter().next()
     }
 }
 
@@ -1686,7 +1686,7 @@ where
                 for (group, items) in &self.items {
                     if let Some(group) = group {
                         width =
-                            cmp::max(width, term_string_visible_len(&format!("{}", group)) as u16);
+                            cmp::max(width, term_string_visible_len(&format!("{group}")) as u16);
                     }
 
                     let indent = match group {
@@ -1697,7 +1697,7 @@ where
                     for item in items {
                         width = cmp::max(
                             width,
-                            term_string_visible_len(&format!("{}{}", indent, item)) as u16,
+                            term_string_visible_len(&format!("{indent}{item}")) as u16,
                         );
                     }
                 }
@@ -1781,8 +1781,8 @@ where
                 goto!(screen, dimension.x, y);
 
                 let mut disp = match group {
-                    Some(_) => format!("  {}", item),
-                    None => format!("{}", item),
+                    Some(_) => format!("  {item}"),
+                    None => format!("{item}"),
                 };
                 if term_string_visible_len(&disp) > width {
                     disp = term_string_visible_truncate(&disp, width, Some("…"));

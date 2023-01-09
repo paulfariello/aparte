@@ -47,17 +47,14 @@ Examples:
     autojoin: Named<bool>
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or(format!("No connection found"))?;
-    let autojoin = match autojoin {
-        None => false, // Autojoin default to false
-        Some(autojoin) => autojoin,
-    };
+    let account = aparte.current_account().ok_or("No connection found".to_string())?;
+    let autojoin = autojoin.unwrap_or(false);
     let bookmark = contact::Bookmark {
-        jid: conference.into(),
+        jid: conference,
         name: Some(name),
-        nick: nick,
+        nick,
         password: None,
-        autojoin: autojoin,
+        autojoin,
         extensions: None,
     };
     let add = {
@@ -85,10 +82,10 @@ Examples:
     |aparte, _command| {
         let account = aparte
             .current_account()
-            .ok_or(format!("No connection found"))?;
+            .ok_or("No connection found".to_string())?;
         if let Some((bookmark, delete)) = {
             let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
-            bookmarks.delete(conference.clone())
+            bookmarks.delete(conference)
         } {
             aparte.schedule(Event::DeletedBookmark(bookmark.jid));
             aparte.send(&account, delete);
@@ -120,7 +117,7 @@ Examples:
     conference: Option<BareJid>,
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or(format!("No connection found"))?;
+    let account = aparte.current_account().ok_or("No connection found".to_string())?;
     if let Some(edit) = {
         let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
         bookmarks.edit(name.clone(), conference, nick, autojoin)
@@ -128,7 +125,7 @@ Examples:
         aparte.send(&account, edit);
         Ok(())
     } else {
-        Err(format!("Unknown bookmark {}", name))
+        Err(format!("Unknown bookmark {name}"))
     }
 });
 
@@ -224,7 +221,7 @@ impl Bookmarks {
             }),
         };
         let pubsub = PubSub::Publish {
-            publish: publish,
+            publish,
             publish_options: Some(options),
         };
         let iq = Iq::from_set(id, pubsub);
@@ -349,7 +346,7 @@ impl Bookmarks2 {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
         };
         let pubsub = PubSub::Create {
-            create: create,
+            create,
             configure: None,
         };
         let iq = Iq::from_set(id, pubsub);
@@ -421,7 +418,7 @@ impl Bookmarks2 {
             }),
         };
         let pubsub = PubSub::Publish {
-            publish: publish,
+            publish,
             publish_options: Some(options),
         };
         let iq = Iq::from_set(id, pubsub);
@@ -554,7 +551,7 @@ impl BookmarksMod {
                 None => {}
             }
             match nick {
-                Some(nick) if nick == "" => bookmark.nick = None,
+                Some(nick) if nick.is_empty() => bookmark.nick = None,
                 Some(nick) => bookmark.nick = Some(nick),
                 None => {}
             }
@@ -575,7 +572,7 @@ impl BookmarksMod {
     fn delete(&mut self, conference: BareJid) -> Option<(contact::Bookmark, Element)> {
         if let Some(index) = self.bookmarks.iter().position(|b| {
             (conference.node.is_none() && b.name == Some(conference.to_string()))
-                || (!conference.node.is_none() && b.jid == conference)
+                || (conference.node.is_some() && b.jid == conference)
         }) {
             let bookmark = self.bookmarks.remove(index);
 
@@ -615,8 +612,8 @@ impl BookmarksMod {
         items: Vec<Item>,
     ) {
         let bookmarks = match (&node.0 as &str, &self.backend) {
-            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items.clone()),
-            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items.clone()),
+            (ns::BOOKMARKS, Backend::Bookmarks(backend)) => backend.handle(items),
+            (ns::BOOKMARKS2, Backend::Bookmarks2(backend)) => backend.handle(items),
             _ => return,
         };
 
@@ -708,7 +705,7 @@ impl ModTrait for BookmarksMod {
                     ns::BOOKMARKS | ns::BOOKMARKS2 => self.handle_bookmarks(
                         aparte,
                         account,
-                        &node,
+                        node,
                         items.iter().cloned().map(|item| item.0).collect(),
                     ),
                     _ => {}
