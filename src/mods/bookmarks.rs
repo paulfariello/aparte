@@ -247,7 +247,7 @@ impl Bookmarks {
                     }
                 }
             } else {
-                warn!("Missing storage element");
+                log::warn!("Missing storage element");
             }
         }
 
@@ -461,13 +461,13 @@ impl Bookmarks2 {
                             bookmarks.push(bookmark);
                         }
                     } else {
-                        warn!("Empty bookmark element {}", id.0);
+                        log::warn!("Empty bookmark element {}", id.0);
                     }
                 } else {
-                    warn!("Invalid bookmark jid {}", id.0);
+                    log::warn!("Invalid bookmark jid {}", id.0);
                 }
             } else {
-                warn!("Missing bookmark id");
+                log::warn!("Missing bookmark id");
             }
         }
 
@@ -639,7 +639,7 @@ impl BookmarksMod {
                     Some(nick) => Jid::Full(bookmark.jid.clone().with_resource(nick)),
                     None => Jid::Bare(bookmark.jid.clone()),
                 };
-                info!("Autojoin {}", jid.to_string());
+                log::info!("Autojoin {}", jid.to_string());
                 aparte.schedule(Event::Join {
                     account: account.clone(),
                     channel: jid,
