@@ -39,7 +39,7 @@ impl CorrectionMod {
                             original.archive = archive;
                         }
                     }
-                    Message::Log(_) => error!(
+                    Message::Log(_) => log::error!(
                         "Can't replace a log message (conflicting id? {})",
                         replace.id
                     ),

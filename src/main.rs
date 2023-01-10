@@ -3,16 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #![cfg_attr(feature = "strict", deny(warnings))]
 #![allow(incomplete_features)]
-#[macro_use]
-extern crate log;
-extern crate derive_error;
-extern crate dirs;
-extern crate flexi_logger;
-extern crate futures;
-extern crate rpassword;
-extern crate tokio;
-extern crate tokio_xmpp;
-extern crate xmpp_parsers;
+
+use clap::Parser;
 
 #[macro_use]
 mod terminus;
@@ -32,13 +24,32 @@ mod word;
 
 use crate::core::Aparte;
 
-fn main() {
-    let data_dir = dirs::data_dir().unwrap();
-    let aparte_data = data_dir.join("aparte");
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the config file
+    #[arg(short, long)]
+    config: Option<std::path::PathBuf>,
+    /// Path to the shared dir
+    #[arg(short, long)]
+    shared: Option<std::path::PathBuf>,
+}
 
-    if let Err(e) = std::fs::create_dir_all(&aparte_data) {
-        panic!("Cannot create aparte data dir: {}", e);
-    }
+fn main() {
+    let args = Args::parse();
+
+    let aparte_data = if let Some(shared) = args.shared {
+        shared
+    } else {
+        let data_dir = dirs::data_dir().unwrap();
+        let aparte_data = data_dir.join("aparte");
+
+        if let Err(e) = std::fs::create_dir_all(&aparte_data) {
+            panic!("Cannot create aparte data dir: {}", e);
+        }
+
+        aparte_data
+    };
 
     let file_writer = flexi_logger::writers::FileLogWriter::builder()
         .directory(aparte_data)
@@ -51,16 +62,20 @@ fn main() {
         panic!("Cannot start logger: {}", e);
     }
 
-    let conf_dir = dirs::config_dir().unwrap();
-    let aparte_conf = conf_dir.join("aparte");
+    let config = if let Some(config) = args.config {
+        config
+    } else {
+        let conf_dir = dirs::config_dir().unwrap();
+        let aparte_conf = conf_dir.join("aparte");
 
-    if let Err(e) = std::fs::create_dir_all(&aparte_conf) {
-        panic!("Cannot create aparte data dir: {}", e);
-    }
+        if let Err(e) = std::fs::create_dir_all(&aparte_conf) {
+            panic!("Cannot create aparte data dir: {}", e);
+        }
 
-    let config = aparte_conf.join("config.toml");
+        aparte_conf.join("config.toml")
+    };
 
-    info!("Starting aparté");
+    log::info!("Starting aparté");
 
     let mut aparte = Aparte::new(config);
 
