@@ -140,7 +140,7 @@ impl MamMod {
     fn handle_fin(&mut self, aparte: &mut Aparte, account: &Account, query: Query, fin: mam::Fin) {
         if fin.complete == mam::Complete::False {
             if let Some(start) = fin.set.first {
-                info!(
+                log::info!(
                     "Continuing MAM retrieval for {} with {:?} from {:?}",
                     query.jid,
                     query.with.clone().map(|jid| jid.to_string()),
@@ -241,7 +241,7 @@ impl ModTrait for MamMod {
                             if let Ok(fin) = mam::Fin::try_from(payload.clone()) {
                                 self.handle_fin(aparte, account, query, fin);
                             } else {
-                                warn!("Incorrect IQ response for MAM query");
+                                log::warn!("Incorrect IQ response for MAM query");
                             }
                         }
                     }

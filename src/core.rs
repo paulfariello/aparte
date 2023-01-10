@@ -809,7 +809,7 @@ impl Aparte {
             0 => Default::default(),
             _ => match toml::from_str(&config_str) {
                 Err(err) => {
-                    error!("Malformed config file: {}", err);
+                    log::error!("Malformed config file: {}", err);
                     Default::default()
                 }
                 Ok(config) => config,
@@ -877,7 +877,7 @@ impl Aparte {
     }
 
     pub fn add_mod(&mut self, r#mod: Mod) {
-        info!("Add mod `{}`", r#mod);
+        log::info!("Add mod `{}`", r#mod);
         let mods = Rc::get_mut(&mut self.mods).unwrap();
         // TODO ensure mod is not inserted twice
         match r#mod {
@@ -1017,7 +1017,7 @@ impl Aparte {
             loop {
                 sigwinch.recv().await;
                 if let Err(err) = tx_for_signal.send(Event::WindowChange).await {
-                    error!("Cannot send signal to internal channel: {}", err);
+                    log::error!("Cannot send signal to internal channel: {}", err);
                     break;
                 }
             }
@@ -1028,13 +1028,13 @@ impl Aparte {
                 match input_event_stream.next().await {
                     Some(event) => {
                         if let Err(err) = tx_for_event.send(event).await {
-                            error!("Cannot send event to internal channel: {}", err);
+                            log::error!("Cannot send event to internal channel: {}", err);
                             break;
                         }
                     }
                     None => {
                         if let Err(err) = tx_for_event.send(Event::Quit).await {
-                            error!("Cannot send Quit event to internal channel: {}", err);
+                            log::error!("Cannot send Quit event to internal channel: {}", err);
                         }
                         break;
                     }
@@ -1083,15 +1083,15 @@ impl Aparte {
         for (account, stanza) in self.send_queue.drain(..) {
             let mut raw = Vec::<u8>::new();
             stanza.write_to(&mut raw).unwrap();
-            debug!("SEND: {}", String::from_utf8(raw).unwrap());
+            log::debug!("SEND: {}", String::from_utf8(raw).unwrap());
             match self.connections.get_mut(&account) {
                 Some(connection) => {
                     if let Err(e) = connection.sink.send(stanza).await {
-                        warn!("Cannot send stanza: {}", e);
+                        log::warn!("Cannot send stanza: {}", e);
                     }
                 }
                 None => {
-                    warn!("No connection found for {}", account);
+                    log::warn!("No connection found for {}", account);
                 }
             }
         }
@@ -1137,7 +1137,7 @@ impl Aparte {
         task::spawn_local(async move {
             while let Some(element) = rx.recv().await {
                 if let Err(err) = writer.send(XmppPacket::Stanza(element)).await {
-                    error!("cannot send Stanza to internal channel: {}", err);
+                    log::error!("cannot send Stanza to internal channel: {}", err);
                     break;
                 }
             }
@@ -1151,14 +1151,14 @@ impl Aparte {
         let reconnect = true;
         task::spawn_local(async move {
             while let Some(event) = reader.next().await {
-                debug!("XMPP Event: {:?}", event);
+                log::debug!("XMPP Event: {:?}", event);
                 match event {
                     XmppEvent::Disconnected(XmppError::Auth(e)) => {
                         if let Err(err) = event_channel
                             .send(Event::AuthError(account.clone(), format!("{e}")))
                             .await
                         {
-                            error!("Cannot send event to internal channel: {}", err);
+                            log::error!("Cannot send event to internal channel: {}", err);
                         };
                         break;
                     }
@@ -1167,7 +1167,7 @@ impl Aparte {
                             .send(Event::Disconnected(account.clone(), format!("{e}")))
                             .await
                         {
-                            error!("Cannot send event to internal channel: {}", err);
+                            log::error!("Cannot send event to internal channel: {}", err);
                         };
                         if !reconnect {
                             break;
@@ -1177,7 +1177,7 @@ impl Aparte {
                         bound_jid: jid,
                         resumed: true,
                     } => {
-                        debug!("Reconnected to {}", jid);
+                        log::debug!("Reconnected to {}", jid);
                     }
                     XmppEvent::Online {
                         bound_jid: jid,
@@ -1187,17 +1187,17 @@ impl Aparte {
                             .send(Event::Connected(account.clone(), jid))
                             .await
                         {
-                            error!("Cannot send event to internal channel: {}", err);
+                            log::error!("Cannot send event to internal channel: {}", err);
                             break;
                         }
                     }
                     XmppEvent::Stanza(stanza) => {
-                        debug!("RECV: {}", String::from(&stanza));
+                        log::debug!("RECV: {}", String::from(&stanza));
                         if let Err(err) = event_channel
                             .send(Event::Stanza(account.clone(), stanza))
                             .await
                         {
-                            error!("Cannot send stanza to internal channel: {}", err);
+                            log::error!("Cannot send stanza to internal channel: {}", err);
                             break;
                         }
                     }
@@ -1209,7 +1209,7 @@ impl Aparte {
     pub async fn event_loop(&mut self) -> Result<(), ()> {
         while !self.event_queue.is_empty() {
             let event = self.event_queue.remove(0);
-            debug!("Event: {:?}", event);
+            log::debug!("Event: {:?}", event);
             {
                 let mods = Rc::clone(&self.mods);
                 for (_, r#mod) in mods.iter() {
@@ -1359,12 +1359,12 @@ impl Aparte {
         }
 
         if let Some(r#mod) = matched_mod {
-            debug!("Handling xmpp message by {:?}", r#mod);
+            log::debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
                 .borrow_mut()
                 .handle_xmpp_message(self, &account, &message, &delay, archive);
         } else {
-            info!("Don't know how to handle message: {:?}", message);
+            log::info!("Don't know how to handle message: {:?}", message);
         }
     }
 }

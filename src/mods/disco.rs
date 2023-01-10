@@ -27,7 +27,7 @@ impl DiscoMod {
     }
 
     pub fn add_feature(&mut self, feature: &str) -> Result<(), ()> {
-        debug!("Adding `{}` feature", feature);
+        log::debug!("Adding `{}` feature", feature);
         self.client_features.push(feature.to_string());
 
         Ok(())
