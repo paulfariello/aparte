@@ -630,9 +630,9 @@ impl Drop for PanicHandler {
     fn drop(&mut self) {
         if let Some(panic) = self.panic.lock().expect("cannot lock panic").as_ref() {
             println!("Oops Aparté {panic}");
-            error!("Oops Aparté {}", panic);
+            log::error!("Oops Aparté {}", panic);
             println!("This isn’t normal behavior. Please report issue.");
-            error!("This isn’t normal behavior. Please report issue.");
+            log::error!("This isn’t normal behavior. Please report issue.");
             if let Some(backtrace) = self
                 .backtrace
                 .lock()
@@ -641,7 +641,7 @@ impl Drop for PanicHandler {
             {
                 println!("Aparté is gathering more info in logfile…");
                 backtrace.resolve();
-                error!("{:?}", backtrace);
+                log::error!("{:?}", backtrace);
                 println!("All done.");
                 let data_dir = dirs::data_dir().unwrap();
                 let aparte_data = data_dir.join("aparte").join("aparte.log");
@@ -1389,7 +1389,7 @@ impl TermionEventStream {
                     Err(err) => match err.kind() {
                         IoErrorKind::Interrupted => continue,
                         _ => {
-                            error!("Cannot read input pipe: {}", err);
+                            log::error!("Cannot read input pipe: {}", err);
                             break;
                         }
                     },
