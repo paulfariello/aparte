@@ -422,6 +422,7 @@ Examples:
                 server: None,
                 port: None,
                 autoconnect: false,
+                password: None,
             }
         } else {
             return Err(format!("Unknown account or invalid jid {account_name}"));
@@ -1086,14 +1087,29 @@ impl Aparte {
         self.log(color::rainbow(WELCOME));
         self.log(format!("Version: {VERSION}"));
 
-        for (name, account) in self.config.accounts.clone() {
-            if account.autoconnect {
-                self.schedule(Event::RawCommand(
-                    None,
-                    "console".to_string(),
-                    format!("/connect {}", name),
-                ));
-            }
+        let autoconnect_accounts: Vec<_> = self
+            .config
+            .accounts
+            .iter()
+            .filter(|(_, conn)| conn.autoconnect)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        if !autoconnect_accounts.is_empty() {
+            self.log(format!(
+                "Autoconnect to: {}.",
+                autoconnect_accounts.join(", ")
+            ));
+        }
+
+        for account_name in autoconnect_accounts {
+            self.schedule(Event::RawCommand(
+                None,
+                "console".to_string(),
+                // TODO: passing empty string as second arg because otherwise password is queried
+                // even when defined in config
+                format!("/connect {} ''", account_name),
+            ));
         }
     }
 
@@ -1136,7 +1152,11 @@ impl Aparte {
         self.log(format!("Connecting as {account}"));
         let config = tokio_xmpp::AsyncConfig {
             jid: account.clone().into(),
-            password: password.0,
+            password: connection_info
+                .password
+                .as_ref()
+                .unwrap_or(&password.0)
+                .to_string(),
             server: match (&connection_info.server, &connection_info.port) {
                 (Some(server), Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
                     host: server.clone(),

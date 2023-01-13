@@ -19,4 +19,5 @@ pub struct ConnectionInfo {
     pub port: Option<u16>,
     #[serde(default = "false_")]
     pub autoconnect: bool,
+    pub password: Option<String>,
 }
