@@ -945,7 +945,7 @@ impl UIMod {
         self.windows.clone()
     }
 
-    pub fn current_window<'a>(&'a self) -> Option<&'a String> {
+    pub fn current_window(&self) -> Option<&String> {
         self.current_window.as_ref()
     }
 }

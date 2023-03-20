@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
 use std::fmt;
+
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::message_correct::Replace;
@@ -65,7 +66,9 @@ impl CorrectionMod {
 impl ModTrait for CorrectionMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
-        disco.add_feature(ns::MESSAGE_CORRECT)
+        disco.add_feature(ns::MESSAGE_CORRECT);
+
+        Ok(())
     }
 
     fn can_handle_xmpp_message(
