@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::convert::TryFrom;
 use std::fmt;
+
 use uuid::Uuid;
 use xmpp_parsers::carbons;
 use xmpp_parsers::delay::Delay;
@@ -50,7 +51,9 @@ impl CarbonsMod {
 impl ModTrait for CarbonsMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
-        disco.add_feature(ns::CARBONS)
+        disco.add_feature(ns::CARBONS);
+
+        Ok(())
     }
 
     fn can_handle_xmpp_message(

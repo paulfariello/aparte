@@ -4,11 +4,13 @@
 #![cfg_attr(feature = "strict", deny(warnings))]
 #![allow(incomplete_features)]
 
+use anyhow::Result;
 use clap::Parser;
 
 #[macro_use]
 mod terminus;
 mod account;
+mod async_iq;
 mod config;
 mod contact;
 mod conversation;
@@ -17,9 +19,11 @@ mod message;
 #[macro_use]
 mod command;
 mod color;
+mod crypto;
 mod cursor;
 mod i18n;
 mod mods;
+mod storage;
 mod word;
 
 use crate::core::Aparte;
@@ -35,7 +39,7 @@ struct Args {
     shared: Option<std::path::PathBuf>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let aparte_data = if let Some(shared) = args.shared {
@@ -52,7 +56,7 @@ fn main() {
     };
 
     let file_writer = flexi_logger::writers::FileLogWriter::builder()
-        .directory(aparte_data)
+        .directory(&aparte_data)
         .suppress_timestamp()
         .try_build()
         .unwrap();
@@ -75,11 +79,16 @@ fn main() {
         aparte_conf.join("config.toml")
     };
 
+    // TODO
+    let storage = aparte_data.join("storage.sqlite");
+
     log::info!("Starting aparté");
 
-    let mut aparte = Aparte::new(config);
+    let mut aparte = Aparte::new(config, storage)?;
 
     aparte.init().unwrap();
 
     aparte.run();
+
+    Ok(())
 }
