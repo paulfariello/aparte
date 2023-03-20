@@ -23,9 +23,6 @@ use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 use tokio::task;
-use tokio_xmpp::{
-    AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket,
-};
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -416,6 +413,7 @@ Examples:
 |aparte, _command| {
     let account = {
         if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
+            log::debug!("Use stored config for {account_name}");
             account.clone()
         } else if !account_name.contains('@') {
             return Err(format!("Unknown account or invalid jid {account_name}"));
@@ -1088,12 +1086,12 @@ impl Aparte {
         self.log(color::rainbow(WELCOME));
         self.log(format!("Version: {VERSION}"));
 
-        for (_, account) in self.config.accounts.clone() {
+        for (name, account) in self.config.accounts.clone() {
             if account.autoconnect {
                 self.schedule(Event::RawCommand(
                     None,
                     "console".to_string(),
-                    format!("/connect {}", account.jid),
+                    format!("/connect {}", name),
                 ));
             }
         }
@@ -1136,13 +1134,27 @@ impl Aparte {
         };
 
         self.log(format!("Connecting as {account}"));
-        let mut client = match TokioXmppClient::new(&account.to_string(), password.0) {
-            Ok(client) => client,
-            Err(err) => {
-                self.log(format!("Cannot connect as {account}: {err}"));
-                return;
-            }
+        let config = tokio_xmpp::AsyncConfig {
+            jid: account.clone().into(),
+            password: password.0,
+            server: match (&connection_info.server, &connection_info.port) {
+                (Some(server), Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
+                    host: server.clone(),
+                    port: *port,
+                },
+                (Some(server), None) => tokio_xmpp::AsyncServerConfig::Manual {
+                    host: server.clone(),
+                    port: 5222,
+                },
+                (None, Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
+                    host: account.domain.clone(),
+                    port: *port,
+                },
+                (None, None) => tokio_xmpp::AsyncServerConfig::UseSrv,
+            },
         };
+        log::debug!("Connect with config: {config:?}");
+        let mut client = tokio_xmpp::AsyncClient::new_with_config(config);
 
         client.set_reconnect(true);
 
@@ -1154,7 +1166,7 @@ impl Aparte {
         // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
             while let Some(element) = rx.recv().await {
-                if let Err(err) = writer.send(XmppPacket::Stanza(element)).await {
+                if let Err(err) = writer.send(tokio_xmpp::Packet::Stanza(element)).await {
                     log::error!("cannot send Stanza to internal channel: {}", err);
                     break;
                 }
@@ -1168,7 +1180,7 @@ impl Aparte {
             while let Some(event) = reader.next().await {
                 log::debug!("XMPP Event: {:?}", event);
                 match event {
-                    XmppEvent::Disconnected(XmppError::Auth(e)) => {
+                    tokio_xmpp::Event::Disconnected(tokio_xmpp::Error::Auth(e)) => {
                         if let Err(err) =
                             event_tx.send(Event::AuthError(account.clone(), format!("{e}")))
                         {
@@ -1176,7 +1188,7 @@ impl Aparte {
                         };
                         break;
                     }
-                    XmppEvent::Disconnected(e) => {
+                    tokio_xmpp::Event::Disconnected(e) => {
                         if let Err(err) =
                             event_tx.send(Event::Disconnected(account.clone(), format!("{e}")))
                         {
@@ -1186,13 +1198,13 @@ impl Aparte {
                             break;
                         }
                     }
-                    XmppEvent::Online {
+                    tokio_xmpp::Event::Online {
                         bound_jid: jid,
                         resumed: true,
                     } => {
                         log::debug!("Reconnected to {}", jid);
                     }
-                    XmppEvent::Online {
+                    tokio_xmpp::Event::Online {
                         bound_jid: jid,
                         resumed: false,
                     } => {
@@ -1201,7 +1213,7 @@ impl Aparte {
                             break;
                         }
                     }
-                    XmppEvent::Stanza(stanza) => {
+                    tokio_xmpp::Event::Stanza(stanza) => {
                         log::debug!("RECV: {}", String::from(&stanza));
                         if let Err(err) = event_tx.send(Event::Stanza(account.clone(), stanza)) {
                             log::error!("Cannot send stanza to internal channel: {}", err);
