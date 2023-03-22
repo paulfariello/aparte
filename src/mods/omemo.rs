@@ -13,8 +13,7 @@ use futures::future::FutureExt;
 use libsignal_protocol::{
     process_prekey_bundle, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
 };
-use rand::random;
-use rand::thread_rng;
+use rand::{random, seq::SliceRandom, thread_rng};
 use uuid::Uuid;
 
 //use xmpp_parsers::ns;
@@ -135,10 +134,21 @@ impl OmemoEngine {
                 .data,
         )?;
 
-        let bundle = PreKeyBundle::new(
+        let prekey = bundle
+            .prekeys
+            .as_ref()
+            .ok_or(anyhow!("No prekey in bundle"))?
+            .keys
+            .choose(&mut rand::thread_rng())
+            .ok_or(anyhow!("No prekey in bundle"))?;
+
+        let prekey_bundle = PreKeyBundle::new(
             0, // registration_id: u32,
             device_id.into(),
-            todo!("choose a random prekey from the bundle"), // pre_key: Option<(PreKeyId, PublicKey)>,
+            Some((
+                prekey.pre_key_id.into(),
+                PublicKey::deserialize(&prekey.data)?,
+            )),
             signed_pre_key_id,
             signed_pre_key,
             signed_pre_key_signature.to_vec(),
@@ -150,7 +160,7 @@ impl OmemoEngine {
             &address,
             &mut signal_store.session_store,
             &mut signal_store.identity_store,
-            &bundle,
+            &prekey_bundle,
             &mut thread_rng(),
             None,
         )
@@ -249,6 +259,7 @@ impl OmemoMod {
         account: &Account,
         jid: &BareJid,
     ) -> Result<()> {
+        log::info!("Start OMEMO session on {account} with {jid}");
         let mut omemo_engine = OmemoEngine::new(signal_store.clone(), jid);
 
         Self::subscribe_to_device_list(aparte, account, jid)
