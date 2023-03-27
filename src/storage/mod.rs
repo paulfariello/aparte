@@ -75,7 +75,7 @@ impl Storage {
     ) -> Result<OmemoContactDevice> {
         use schema::omemo_contact_device;
         let mut conn = self.pool.get()?;
-        let device = diesel::insert_into(omemo_contact_device::table)
+        let result = diesel::insert_into(omemo_contact_device::table)
             .values((
                 omemo_contact_device::account.eq(account.to_string()),
                 omemo_contact_device::contact.eq(contact.to_string()),
@@ -87,7 +87,18 @@ impl Storage {
                 omemo_contact_device::id,
             ))
             .do_nothing()
-            .get_result(&mut conn)?;
+            .get_result(&mut conn)
+            .optional()?;
+
+        let device = match result {
+            Some(device) => device,
+            None => omemo_contact_device::table
+                .filter(omemo_contact_device::account.eq(account.to_string()))
+                .filter(omemo_contact_device::contact.eq(contact.to_string()))
+                .filter(omemo_contact_device::id.eq::<i64>(device_id.into()))
+                .first(&mut conn)?,
+        };
+
         Ok(device)
     }
 }

@@ -273,6 +273,7 @@ impl OmemoMod {
         log::info!("Got {jid}'s OMEMO device list");
 
         for device in device_list.devices {
+            log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
             let device =
                 aparte
                     .storage
