@@ -1256,7 +1256,7 @@ impl Aparte {
                         match crypto_engines.get_mut(&(account.clone(), recipient)) {
                             Some(crypto_engine) => {
                                 let mut message = message.clone();
-                                match crypto_engine.encrypt(&mut message) {
+                                match crypto_engine.encrypt(self, &account, &mut message) {
                                     Ok(_) => Some(message),
                                     Err(err) => {
                                         log::error!(

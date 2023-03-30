@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Context, Result};
 use futures::future::FutureExt;
 use libsignal_protocol::{
-    process_prekey_bundle, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
+    process_prekey_bundle, CiphertextMessage, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
 };
 use rand::{random, seq::SliceRandom, thread_rng};
 use uuid::Uuid;
@@ -171,33 +171,52 @@ impl OmemoEngine {
 }
 
 impl CryptoEngineTrait for OmemoEngine {
-    #[allow(unreachable_code)]
-    fn encrypt(&mut self, message: &mut Message) -> Result<()> {
+    fn encrypt(&mut self, aparte: &Aparte, account: &Account, message: &mut Message) -> Result<()> {
         match message {
             Message::Xmpp(message) => {
-                let _store = self.signal_store.lock().unwrap();
-                let _version = message
-                    .history
-                    .get(0)
-                    .ok_or(anyhow!("No message to encrypt"))?;
-                let _address = ProtocolAddress::new(self.contact.to_string(), todo!());
-                let _encrypted = message_encrypt(
-                    &[],
-                    &_address,
-                    &mut _store.session_store,
-                    &mut _store.identity_store,
-                    None,
-                )
-                .now_or_never()
-                .ok_or(anyhow!("Cannot encrypt"))?;
-                todo!();
+                let signal_store = &mut *self.signal_store.lock().unwrap();
+                for device in aparte
+                    .storage
+                    .get_omemo_contact_devices(account, &message.to)?
+                {
+                    let address =
+                        ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
+                    let encrypted = message_encrypt(
+                        &[],
+                        &address,
+                        &mut signal_store.session_store,
+                        &mut signal_store.identity_store,
+                        None,
+                    )
+                    .now_or_never()
+                    .ok_or(anyhow!("Cannot encrypt"))??;
+
+                    match encrypted {
+                        CiphertextMessage::SignalMessage(msg) => log::debug!("SignalMessage"),
+                        CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage) => {
+                            log::debug!("PreKeySignalMessage")
+                        }
+                        CiphertextMessage::SenderKeyMessage(SenderKeyMessage) => {
+                            log::debug!("SenderKeyMessage")
+                        }
+                        CiphertextMessage::PlaintextContent(PlaintextContent) => {
+                            log::debug!("PlaintextContent")
+                        }
+                    }
+                }
+
                 Ok(())
             }
             _ => Err(anyhow!("Invalid message type")),
         }
     }
 
-    fn decrypt(&mut self, _message: &mut Message) -> Result<()> {
+    fn decrypt(
+        &mut self,
+        _aparte: &Aparte,
+        _account: &Account,
+        _message: &mut Message,
+    ) -> Result<()> {
         todo!()
     }
 }
