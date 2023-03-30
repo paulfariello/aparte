@@ -101,4 +101,18 @@ impl Storage {
 
         Ok(device)
     }
+
+    pub fn get_omemo_contact_devices(
+        &self,
+        account: &Account,
+        contact: &BareJid,
+    ) -> Result<Vec<OmemoContactDevice>> {
+        use schema::omemo_contact_device;
+        let mut conn = self.pool.get()?;
+
+        Ok(omemo_contact_device::table
+            .filter(omemo_contact_device::account.eq(account.to_string()))
+            .filter(omemo_contact_device::contact.eq(contact.to_string()))
+            .get_results(&mut conn)?)
+    }
 }
