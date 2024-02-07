@@ -158,8 +158,7 @@ impl Message {
                 None => message
                     .payloads
                     .iter()
-                    .filter_map(|payload| Delay::try_from(payload.clone()).ok())
-                    .next(),
+                    .find_map(|payload| Delay::try_from(payload.clone()).ok()),
             };
             let to = match message.to.clone() {
                 Some(to) => to,
