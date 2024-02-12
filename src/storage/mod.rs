@@ -39,7 +39,7 @@ impl Storage {
         Ok(Self { pool })
     }
 
-    pub fn get_omemo_own_device(&mut self, account: &Account) -> Result<Option<OmemoOwnDevice>> {
+    pub fn get_omemo_own_device(&self, account: &Account) -> Result<Option<OmemoOwnDevice>> {
         use schema::omemo_own_device;
         let mut conn = self.pool.get()?;
         let res = omemo_own_device::table

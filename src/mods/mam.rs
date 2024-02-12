@@ -115,7 +115,7 @@ impl MamMod {
         let (queryid, iq) = query.start();
         self.queries.insert(queryid.clone(), query);
         self.iq2id.insert(iq.id.clone(), queryid);
-        aparte.send(account, iq.into());
+        aparte.send(account, iq);
     }
 
     fn handle_result(&mut self, aparte: &mut Aparte, account: &Account, result: mam::Result_) {
@@ -149,7 +149,7 @@ impl MamMod {
                 let (queryid, iq) = query.cont(start);
                 self.queries.insert(queryid.clone(), query);
                 self.iq2id.insert(iq.id.clone(), queryid);
-                aparte.send(account, iq.into());
+                aparte.send(account, iq);
             }
         }
     }

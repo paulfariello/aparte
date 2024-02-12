@@ -3,8 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt::{self, Display};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::{self, Debug, Display};
 use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Read;
@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
-use core::fmt::Debug;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::{self, Rng};
@@ -589,7 +588,7 @@ Example:
                 let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies, false);
                 aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
-                aparte.send(&account, Element::try_from(message).unwrap());
+                aparte.send(&account, message);
             }
             Ok(())
         },
@@ -825,6 +824,7 @@ pub struct Aparte {
 
 impl Aparte {
     pub fn new(config_path: PathBuf, storage_path: PathBuf) -> Result<Self> {
+        log::debug!("Loading aparté with {:?}", config_path);
         let mut config_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -1250,33 +1250,22 @@ impl Aparte {
             }
             Event::SendMessage(account, message) => {
                 self.schedule(Event::Message(Some(account.clone()), message.clone()));
-                let message = match message.encryption_recipient() {
-                    Some(recipient) => {
+                let encryption = message
+                    .encryption_recipient()
+                    .map(|recipient| {
                         let mut crypto_engines = self.crypto_engines.lock().unwrap();
-                        match crypto_engines.get_mut(&(account.clone(), recipient)) {
-                            Some(crypto_engine) => {
-                                let mut message = message.clone();
-                                match crypto_engine.encrypt(self, &account, &mut message) {
-                                    Ok(_) => Some(message),
-                                    Err(err) => {
-                                        log::error!(
-                                            "Cannot encrypt message (TODO print error in UI): {}",
-                                            err
-                                        );
-                                        None
-                                    }
-                                }
-                            }
-                            None => Some(message),
-                        }
-                    }
-                    None => Some(message),
-                };
+                        crypto_engines
+                            .get_mut(&(account.clone(), recipient))
+                            .map(|crypto_engine| crypto_engine.encrypt(self, &account, &message))
+                    })
+                    .flatten();
 
-                if let Some(message) = message {
-                    if let Ok(xmpp_message) = Element::try_from(message) {
-                        self.send(&account, xmpp_message);
+                match encryption {
+                    Some(Ok(encrypted_message)) => self.send(&account, encrypted_message),
+                    Some(Err(e)) => {
+                        log::error!("Cannot encrypt message (TODO print error in UI): {e}")
                     }
+                    None => self.send(&account, message),
                 }
             }
             Event::Connect(account, password) => {
@@ -1294,7 +1283,7 @@ impl Aparte {
                 let caps = Caps::new("aparté", verification_string);
                 presence.add_payload(caps);
 
-                self.send(&account, presence.into());
+                self.send(&account, presence);
             }
             Event::Disconnected(account, err) => {
                 self.log(format!("Connection lost for {}: {}", account, err));
@@ -1331,7 +1320,7 @@ impl Aparte {
                 presence = presence.with_to(Jid::Full(to.clone()));
                 presence = presence.with_from(from);
                 presence.add_payload(Muc::new());
-                self.send(&account, presence.into());
+                self.send(&account, presence);
 
                 // Successful join
                 self.log(format!("Joined {}", channel));
@@ -1347,7 +1336,7 @@ impl Aparte {
                 presence = presence.with_to(channel.jid.clone());
                 presence = presence.with_from(channel.account.clone());
                 presence.add_payload(Muc::new());
-                self.send(&channel.account, presence.into());
+                self.send(&channel.account, presence);
             }
             Event::Quit => {
                 return Err(());
@@ -1541,8 +1530,16 @@ impl Aparte {
         crypto_engines.insert((account.clone(), recipient.clone()), crypto_engine);
     }
 
-    pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.send((account.clone(), stanza)).unwrap();
+    pub fn send<T>(&mut self, account: &Account, element: T)
+    where
+        T: TryInto<Element> + Debug,
+    {
+        match element.try_into() {
+            Ok(stanza) => self.send_tx.send((account.clone(), stanza)).unwrap(),
+            Err(_e) => {
+                log::error!("Cannot convert to element");
+            }
+        };
     }
 
     pub fn schedule(&mut self, event: Event) {
