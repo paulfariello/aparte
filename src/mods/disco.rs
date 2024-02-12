@@ -93,7 +93,7 @@ impl ModTrait for DiscoMod {
                         let id = iq.id.clone();
                         let disco = self.get_disco();
                         let iq = Iq::from_result(id, Some(disco));
-                        aparte.send(account, iq.into());
+                        aparte.send(account, iq);
                     }
                 }
                 _ => {}

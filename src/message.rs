@@ -93,8 +93,7 @@ impl VersionedXmppMessage {
         let delay = message
             .payloads
             .iter()
-            .filter_map(|payload| Delay::try_from(payload.clone()).ok())
-            .next();
+            .find_map(|payload| Delay::try_from(payload.clone()).ok());
         let timestamp = delay
             .map(|delay| delay.stamp.0)
             .unwrap_or(LocalTz::now().into());
@@ -429,7 +428,8 @@ impl Message {
             Message::Log(_) => None,
             Message::Xmpp(message) => match message.direction {
                 Direction::Outgoing => match message.type_ {
-                    XmppMessageType::Channel | XmppMessageType::Chat => Some(message.to.clone()),
+                    XmppMessageType::Chat => Some(message.to.clone()),
+                    XmppMessageType::Channel => None, // TODO fetch all participants?
                 },
                 Direction::Incoming => None,
             },

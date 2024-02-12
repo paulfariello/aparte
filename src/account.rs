@@ -7,10 +7,16 @@ use xmpp_parsers::FullJid;
 /// Uniquely identify an account inside Aparté
 pub type Account = FullJid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn false_() -> bool {
+    false
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ConnectionInfo {
     pub jid: String,
     pub server: Option<String>,
     pub port: Option<u16>,
+    #[serde(default = "false_")]
     pub autoconnect: bool,
 }
