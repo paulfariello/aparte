@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use aes_gcm::{
     self,
     aead::{Aead, AeadCore, KeyInit, OsRng},
-    Aes128Gcm, KeySizeUser,
+    Aes128Gcm,
 };
 use anyhow::{anyhow, Context, Result};
 use futures::future::FutureExt;
@@ -24,6 +24,7 @@ use uuid::Uuid;
 //use xmpp_parsers::ns;
 use xmpp_parsers::iq::{Iq, IqType};
 use xmpp_parsers::legacy_omemo;
+use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub;
 use xmpp_parsers::pubsub::{ItemId, PubSub};
@@ -40,12 +41,16 @@ use crate::message::Message;
 use crate::mods::ui::UIMod;
 
 use libsignal_protocol::{
+    message_decrypt,
     message_encrypt,
     IdentityKeyPair,
     InMemSignalProtocolStore, //SessionStore,
 };
 
 type SignalStore = Arc<Mutex<InMemSignalProtocolStore>>;
+
+const KEY_SIZE: usize = 16;
+const MAC_SIZE: usize = 16;
 
 command_def!(omemo_enable,
 r#"/omemo enable [<jid>]
@@ -144,7 +149,7 @@ impl OmemoEngine {
             .as_ref()
             .ok_or(anyhow!("No prekey in bundle"))?
             .keys
-            .choose(&mut rand::thread_rng())
+            .choose(&mut thread_rng())
             .ok_or(anyhow!("No prekey in bundle"))?;
 
         let prekey_bundle = PreKeyBundle::new(
@@ -176,6 +181,10 @@ impl OmemoEngine {
 }
 
 impl CryptoEngineTrait for OmemoEngine {
+    fn ns(&self) -> &'static str {
+        ns::LEGACY_OMEMO
+    }
+
     fn encrypt(
         &mut self,
         aparte: &Aparte,
@@ -200,14 +209,11 @@ impl CryptoEngineTrait for OmemoEngine {
             .encrypt(&nonce, body.as_bytes())
             .map_err(|e| anyhow!("{e}"))?;
 
-        const KEY_SIZE: usize = 16;
-        const KEY_TAG: usize = 16;
+        assert!(encrypted.len() - body.len() == MAC_SIZE);
 
-        assert!(encrypted.len() - body.len() == KEY_TAG);
-
-        let mut dek_and_tag = [0u8; KEY_SIZE + KEY_TAG];
-        dek_and_tag[..KEY_SIZE].copy_from_slice(&dek);
-        dek_and_tag[KEY_SIZE..KEY_SIZE + KEY_TAG].copy_from_slice(&encrypted[body.len()..]);
+        let mut dek_and_mac = [0u8; KEY_SIZE + MAC_SIZE];
+        dek_and_mac[..KEY_SIZE].copy_from_slice(&dek);
+        dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE].copy_from_slice(&encrypted[body.len()..]);
 
         // Encrypt DEK with each recipient key
         let signal_store = &mut *self.signal_store.lock().unwrap();
@@ -217,25 +223,16 @@ impl CryptoEngineTrait for OmemoEngine {
             .iter()
             .chain(Some((&own_device).into()).iter())
             .filter_map(|device| {
-                let address =
+                let remote_address =
                     ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
                 message_encrypt(
-                    &dek_and_tag,
-                    &address,
+                    &dek_and_mac,
+                    &remote_address,
                     &mut signal_store.session_store,
                     &mut signal_store.identity_store,
                     None,
                 )
                 .now_or_never()
-                .inspect(|msg| match msg {
-                    Ok(CiphertextMessage::PreKeySignalMessage(msg)) => {
-                        log::info!("{}", msg.message_version())
-                    }
-                    Ok(CiphertextMessage::SignalMessage(msg)) => {
-                        log::info!("{}", msg.message_version())
-                    }
-                    _ => {}
-                })
                 .map_or(None, |encrypted| match encrypted {
                     Ok(CiphertextMessage::SignalMessage(msg)) => Some(legacy_omemo::Key {
                         rid: device.id.try_into().unwrap(),
@@ -251,7 +248,7 @@ impl CryptoEngineTrait for OmemoEngine {
                         unreachable!();
                     }
                     Err(e) => {
-                        log::error!("Cannot encrypt for {address}: {e}");
+                        log::error!("Cannot encrypt for {remote_address}: {e}");
                         None
                     }
                 })
@@ -293,11 +290,95 @@ impl CryptoEngineTrait for OmemoEngine {
 
     fn decrypt(
         &mut self,
-        _aparte: &Aparte,
-        _account: &Account,
-        _message: &mut Message,
-    ) -> Result<Message> {
-        todo!()
+        aparte: &Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+    ) -> Result<XmppParsersMessage> {
+        let own_device = aparte
+            .storage
+            .get_omemo_own_device(account)?
+            .ok_or(anyhow!("Omemo isn't configured"))?;
+
+        let encrypted = message
+            .payloads
+            .iter()
+            .find_map(|p| legacy_omemo::Encrypted::try_from((*p).clone()).ok())
+            .ok_or(anyhow!("Missing encrypted element in EME OMEMO message"))?;
+
+        let key = encrypted
+            .header
+            .keys
+            .iter()
+            .find(|k| i64::from(k.rid) == own_device.id)
+            .ok_or(anyhow!("Missing OMEMO key for current device"))?;
+
+        let ciphertext_message = match key.prekey {
+            legacy_omemo::IsPreKey::True => {
+                libsignal_protocol::CiphertextMessage::PreKeySignalMessage(
+                    libsignal_protocol::PreKeySignalMessage::try_from(key.data.as_slice())
+                        .context("Invalid prekey signal message")?,
+                )
+            }
+            legacy_omemo::IsPreKey::False => libsignal_protocol::CiphertextMessage::SignalMessage(
+                libsignal_protocol::SignalMessage::try_from(key.data.as_slice())
+                    .context("Invalid signal message")?,
+            ),
+        };
+
+        let dek_and_mac = aparte
+            .storage
+            .get_omemo_contact_devices(account, &BareJid::from(message.from.clone().unwrap()))?
+            .iter()
+            .find_map(|device| {
+                let remote_address =
+                    ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
+
+                let signal_store = &mut *self.signal_store.lock().unwrap();
+                message_decrypt(
+                    &ciphertext_message,
+                    &remote_address,
+                    &mut signal_store.session_store,
+                    &mut signal_store.identity_store,
+                    &mut signal_store.pre_key_store,
+                    &mut signal_store.signed_pre_key_store,
+                    &mut thread_rng(),
+                    None,
+                )
+                .now_or_never()
+                .map(|e| e.ok())
+                .flatten()
+            })
+            .ok_or(anyhow!("No decryptable DEK found"))?;
+
+        if dek_and_mac.len() != MAC_SIZE + KEY_SIZE {
+            anyhow::bail!("Invalid DEK and MAC size");
+        }
+
+        let mut decrypted_message = message.clone();
+
+        if let Some(payload) = encrypted.payload {
+            let dek = aes_gcm::Key::<Aes128Gcm>::from_slice(&dek_and_mac[..KEY_SIZE]);
+            let mac = &dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE];
+            let mut payload_and_mac = Vec::with_capacity(payload.data.len() + mac.len());
+            payload_and_mac.extend(payload.data);
+            payload_and_mac.extend(mac);
+
+            let cipher = Aes128Gcm::new(&dek);
+            let nonce = aes_gcm::Nonce::<<Aes128Gcm as AeadCore>::NonceSize>::from_slice(
+                encrypted.header.iv.data.as_slice(),
+            );
+            let cleartext = cipher
+                .decrypt(nonce, payload_and_mac.as_slice())
+                .map_err(|_| anyhow!("Message decryption failed"))?;
+            let message = String::from_utf8(cleartext)
+                .context("Message decryption resulted in invalid utf-8")?;
+            log::debug!("Decrypted message: {message}");
+            decrypted_message
+                .bodies
+                .insert(String::new(), xmpp_parsers::message::Body(message));
+        }
+
+        Ok(decrypted_message)
     }
 }
 

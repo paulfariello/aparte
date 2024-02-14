@@ -1250,6 +1250,8 @@ impl Aparte {
             }
             Event::SendMessage(account, message) => {
                 self.schedule(Event::Message(Some(account.clone()), message.clone()));
+
+                // Encrypt if required
                 let encryption = message
                     .encryption_recipient()
                     .map(|recipient| {
@@ -1379,6 +1381,41 @@ impl Aparte {
     ) {
         let mut best_match = 0f64;
         let mut matched_mod = None;
+        let mut message = message;
+
+        // Decrypt if required
+        if let (Some(eme), Some(from)) = (
+            message.payloads.iter().find_map(|p| {
+                xmpp_parsers::eme::ExplicitMessageEncryption::try_from((*p).clone()).ok()
+            }),
+            message.from.clone(),
+        ) {
+            let mut crypto_engines = self.crypto_engines.lock().unwrap();
+            if let Some(crypto_engine) = crypto_engines.get_mut(&(account.clone(), from.into())) {
+                if eme.namespace == crypto_engine.ns() {
+                    message = match crypto_engine.decrypt(self, &account, &message) {
+                        Ok(message) => message,
+                        Err(err) => {
+                            log::error!("{}", err);
+                            message
+                        }
+                    };
+                } else {
+                    log::warn!(
+                        "Incompatible crypto engine found for {:?} (found {} expecting {})",
+                        message.from,
+                        crypto_engine.ns(),
+                        eme.namespace
+                    );
+                }
+            } else {
+                log::warn!(
+                    "No crypto engine found for {:?} (encrypted with {})",
+                    message.from,
+                    eme.namespace
+                );
+            }
+        }
 
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
