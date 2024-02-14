@@ -4,22 +4,27 @@
 
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use aes_gcm::{
+    self,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Aes128Gcm,
+};
 use anyhow::{anyhow, Context, Result};
 use futures::future::FutureExt;
 use libsignal_protocol::{
-    process_prekey_bundle, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
+    process_prekey_bundle, CiphertextMessage, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
 };
-use rand::random;
-use rand::thread_rng;
+use rand::{random, seq::SliceRandom, thread_rng};
 use uuid::Uuid;
 
 //use xmpp_parsers::ns;
 use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::legacy_omemo as Omemo;
+use xmpp_parsers::legacy_omemo;
+use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub;
 use xmpp_parsers::pubsub::{ItemId, PubSub};
@@ -36,12 +41,16 @@ use crate::message::Message;
 use crate::mods::ui::UIMod;
 
 use libsignal_protocol::{
+    message_decrypt,
     message_encrypt,
     IdentityKeyPair,
     InMemSignalProtocolStore, //SessionStore,
 };
 
 type SignalStore = Arc<Mutex<InMemSignalProtocolStore>>;
+
+const KEY_SIZE: usize = 16;
+const MAC_SIZE: usize = 16;
 
 command_def!(omemo_enable,
 r#"/omemo enable [<jid>]
@@ -102,7 +111,7 @@ impl OmemoEngine {
         }
     }
 
-    async fn update_bundle(&mut self, device_id: u32, bundle: &Omemo::Bundle) -> Result<()> {
+    async fn update_bundle(&mut self, device_id: u32, bundle: &legacy_omemo::Bundle) -> Result<()> {
         let address = ProtocolAddress::new(self.contact.to_string(), device_id.into());
 
         let signed_pre_key = PublicKey::deserialize(
@@ -135,10 +144,21 @@ impl OmemoEngine {
                 .data,
         )?;
 
-        let bundle = PreKeyBundle::new(
+        let prekey = bundle
+            .prekeys
+            .as_ref()
+            .ok_or(anyhow!("No prekey in bundle"))?
+            .keys
+            .choose(&mut thread_rng())
+            .ok_or(anyhow!("No prekey in bundle"))?;
+
+        let prekey_bundle = PreKeyBundle::new(
             0, // registration_id: u32,
             device_id.into(),
-            todo!("choose a random prekey from the bundle"), // pre_key: Option<(PreKeyId, PublicKey)>,
+            Some((
+                prekey.pre_key_id.into(),
+                PublicKey::deserialize(&prekey.data)?,
+            )),
             signed_pre_key_id,
             signed_pre_key,
             signed_pre_key_signature.to_vec(),
@@ -150,7 +170,7 @@ impl OmemoEngine {
             &address,
             &mut signal_store.session_store,
             &mut signal_store.identity_store,
-            &bundle,
+            &prekey_bundle,
             &mut thread_rng(),
             None,
         )
@@ -161,34 +181,204 @@ impl OmemoEngine {
 }
 
 impl CryptoEngineTrait for OmemoEngine {
-    #[allow(unreachable_code)]
-    fn encrypt(&mut self, message: &mut Message) -> Result<()> {
-        match message {
-            Message::Xmpp(message) => {
-                let _store = self.signal_store.lock().unwrap();
-                let _version = message
-                    .history
-                    .get(0)
-                    .ok_or(anyhow!("No message to encrypt"))?;
-                let _address = ProtocolAddress::new(self.contact.to_string(), todo!());
-                let _encrypted = message_encrypt(
-                    &[],
-                    &_address,
-                    &mut _store.session_store,
-                    &mut _store.identity_store,
+    fn ns(&self) -> &'static str {
+        ns::LEGACY_OMEMO
+    }
+
+    fn encrypt(
+        &mut self,
+        aparte: &Aparte,
+        account: &Account,
+        message: &Message,
+    ) -> Result<xmpp_parsers::Element> {
+        let Message::Xmpp(message) = message else {
+            unreachable!()
+        };
+
+        let own_device = aparte
+            .storage
+            .get_omemo_own_device(account)?
+            .ok_or(anyhow!("Omemo isn't configured"))?;
+
+        let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
+        let dek = Aes128Gcm::generate_key(OsRng);
+
+        let cipher = Aes128Gcm::new(&dek);
+        let body = message.get_last_body();
+        let encrypted = cipher
+            .encrypt(&nonce, body.as_bytes())
+            .map_err(|e| anyhow!("{e}"))?;
+
+        assert!(encrypted.len() - body.len() == MAC_SIZE);
+
+        let mut dek_and_mac = [0u8; KEY_SIZE + MAC_SIZE];
+        dek_and_mac[..KEY_SIZE].copy_from_slice(&dek);
+        dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE].copy_from_slice(&encrypted[body.len()..]);
+
+        // Encrypt DEK with each recipient key
+        let signal_store = &mut *self.signal_store.lock().unwrap();
+        let keys = aparte
+            .storage
+            .get_omemo_contact_devices(account, &message.to)?
+            .iter()
+            .chain(Some((&own_device).into()).iter())
+            .filter_map(|device| {
+                let remote_address =
+                    ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
+                message_encrypt(
+                    &dek_and_mac,
+                    &remote_address,
+                    &mut signal_store.session_store,
+                    &mut signal_store.identity_store,
                     None,
                 )
                 .now_or_never()
-                .ok_or(anyhow!("Cannot encrypt"))?;
-                todo!();
-                Ok(())
+                .map_or(None, |encrypted| match encrypted {
+                    Ok(CiphertextMessage::SignalMessage(msg)) => Some(legacy_omemo::Key {
+                        rid: device.id.try_into().unwrap(),
+                        prekey: legacy_omemo::IsPreKey::False,
+                        data: msg.serialized().to_vec(),
+                    }),
+                    Ok(CiphertextMessage::PreKeySignalMessage(msg)) => Some(legacy_omemo::Key {
+                        rid: device.id.try_into().unwrap(),
+                        prekey: legacy_omemo::IsPreKey::True,
+                        data: msg.serialized().to_vec(),
+                    }),
+                    Ok(_) => {
+                        unreachable!();
+                    }
+                    Err(e) => {
+                        log::error!("Cannot encrypt for {remote_address}: {e}");
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        let mut xmpp_message =
+            xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to.clone())));
+        xmpp_message.id = Some(message.id.clone());
+        xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
+        xmpp_message.bodies.insert(
+            String::new(),
+            xmpp_parsers::message::Body(String::from("coucou")),
+        );
+        xmpp_message.payloads.push(
+            legacy_omemo::Encrypted {
+                header: legacy_omemo::Header {
+                    sid: own_device.id.try_into().unwrap(),
+                    iv: legacy_omemo::IV {
+                        data: nonce.to_vec(),
+                    },
+                    keys,
+                },
+                payload: Some(legacy_omemo::Payload {
+                    data: encrypted.to_vec(),
+                }),
             }
-            _ => Err(anyhow!("Invalid message type")),
-        }
+            .into(),
+        );
+        xmpp_message.payloads.push(
+            xmpp_parsers::eme::ExplicitMessageEncryption {
+                namespace: String::from("eu.siacs.conversations.axolotl"),
+                name: Some(String::from("OMEMO")),
+            }
+            .into(),
+        );
+        Ok(xmpp_message.into())
     }
 
-    fn decrypt(&mut self, _message: &mut Message) -> Result<()> {
-        todo!()
+    fn decrypt(
+        &mut self,
+        aparte: &Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+    ) -> Result<XmppParsersMessage> {
+        let own_device = aparte
+            .storage
+            .get_omemo_own_device(account)?
+            .ok_or(anyhow!("Omemo isn't configured"))?;
+
+        let encrypted = message
+            .payloads
+            .iter()
+            .find_map(|p| legacy_omemo::Encrypted::try_from((*p).clone()).ok())
+            .ok_or(anyhow!("Missing encrypted element in EME OMEMO message"))?;
+
+        let key = encrypted
+            .header
+            .keys
+            .iter()
+            .find(|k| i64::from(k.rid) == own_device.id)
+            .ok_or(anyhow!("Missing OMEMO key for current device"))?;
+
+        let ciphertext_message = match key.prekey {
+            legacy_omemo::IsPreKey::True => {
+                libsignal_protocol::CiphertextMessage::PreKeySignalMessage(
+                    libsignal_protocol::PreKeySignalMessage::try_from(key.data.as_slice())
+                        .context("Invalid prekey signal message")?,
+                )
+            }
+            legacy_omemo::IsPreKey::False => libsignal_protocol::CiphertextMessage::SignalMessage(
+                libsignal_protocol::SignalMessage::try_from(key.data.as_slice())
+                    .context("Invalid signal message")?,
+            ),
+        };
+
+        let dek_and_mac = aparte
+            .storage
+            .get_omemo_contact_devices(account, &BareJid::from(message.from.clone().unwrap()))?
+            .iter()
+            .find_map(|device| {
+                let remote_address =
+                    ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
+
+                let signal_store = &mut *self.signal_store.lock().unwrap();
+                message_decrypt(
+                    &ciphertext_message,
+                    &remote_address,
+                    &mut signal_store.session_store,
+                    &mut signal_store.identity_store,
+                    &mut signal_store.pre_key_store,
+                    &mut signal_store.signed_pre_key_store,
+                    &mut thread_rng(),
+                    None,
+                )
+                .now_or_never()
+                .map(|e| e.ok())
+                .flatten()
+            })
+            .ok_or(anyhow!("No decryptable DEK found"))?;
+
+        if dek_and_mac.len() != MAC_SIZE + KEY_SIZE {
+            anyhow::bail!("Invalid DEK and MAC size");
+        }
+
+        let mut decrypted_message = message.clone();
+
+        if let Some(payload) = encrypted.payload {
+            let dek = aes_gcm::Key::<Aes128Gcm>::from_slice(&dek_and_mac[..KEY_SIZE]);
+            let mac = &dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE];
+            let mut payload_and_mac = Vec::with_capacity(payload.data.len() + mac.len());
+            payload_and_mac.extend(payload.data);
+            payload_and_mac.extend(mac);
+
+            let cipher = Aes128Gcm::new(&dek);
+            let nonce = aes_gcm::Nonce::<<Aes128Gcm as AeadCore>::NonceSize>::from_slice(
+                encrypted.header.iv.data.as_slice(),
+            );
+            let cleartext = cipher
+                .decrypt(nonce, payload_and_mac.as_slice())
+                .map_err(|_| anyhow!("Message decryption failed"))?;
+            let message = String::from_utf8(cleartext)
+                .context("Message decryption resulted in invalid utf-8")?;
+            log::debug!("Decrypted message: {message}");
+            decrypted_message
+                .bodies
+                .insert(String::new(), xmpp_parsers::message::Body(message));
+        }
+
+        Ok(decrypted_message)
     }
 }
 
@@ -225,6 +415,7 @@ impl OmemoMod {
 
         // TODO generate crypto
 
+        // TODO Should use proper ProtocolStore respecting  libsignal_protocol::storage::traits
         let signal_store = InMemSignalProtocolStore::new(identity_key_pair, device_id)?;
         self.signal_stores
             .insert(account.clone(), Arc::new(Mutex::new(signal_store)));
@@ -249,6 +440,7 @@ impl OmemoMod {
         account: &Account,
         jid: &BareJid,
     ) -> Result<()> {
+        log::info!("Start OMEMO session on {account} with {jid}");
         let mut omemo_engine = OmemoEngine::new(signal_store.clone(), jid);
 
         Self::subscribe_to_device_list(aparte, account, jid)
@@ -262,6 +454,7 @@ impl OmemoMod {
         log::info!("Got {jid}'s OMEMO device list");
 
         for device in device_list.devices {
+            log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
             let device =
                 aparte
                     .storage
@@ -330,7 +523,7 @@ impl OmemoMod {
         aparte: &mut AparteAsync,
         account: &Account,
         jid: &BareJid,
-    ) -> Result<Omemo::DeviceList> {
+    ) -> Result<legacy_omemo::DeviceList> {
         let response = aparte.iq(account, Self::get_devices_iq(jid)).await?;
         match response.payload {
             IqType::Result(None) => Err(anyhow!("Empty iq response")),
@@ -350,7 +543,7 @@ impl OmemoMod {
                                 .payload
                                 .clone()
                                 .ok_or(anyhow!("Missing pubsub payload"))?;
-                            let list = Omemo::DeviceList::try_from(payload)?;
+                            let list = legacy_omemo::DeviceList::try_from(payload)?;
                             Ok(list)
                         }
                         None => Err(anyhow!("No device list")),
@@ -362,7 +555,7 @@ impl OmemoMod {
         }
     }
 
-    //fn handle_devices(&mut self, contact: &BareJid, devices: &omemo::Devices) {
+    //fn handle_devices(&mut self, contact: &BareJid, devices: &legacy_omemo::Devices) {
     //    log::info!("Updating OMEMO devices cache for {contact}");
     //    let cache = self.devices_cache.entry(contact.clone()).or_insert(Vec::new());
     //    cache.extend(devices.devices.iter().cloned());
@@ -394,7 +587,7 @@ impl OmemoMod {
                                 .payload
                                 .clone()
                                 .ok_or(anyhow!("Missing pubsub payload"))?;
-                            let list = Omemo::DeviceList::try_from(payload)?;
+                            let list = legacy_omemo::DeviceList::try_from(payload)?;
                             match list.devices.iter().find(|device| device.id == device_id) {
                                 None => {
                                     Self::register_device(aparte, account, device_id, Some(list))
@@ -419,16 +612,16 @@ impl OmemoMod {
         aparte: &mut AparteAsync,
         account: Account,
         device_id: u32,
-        list: Option<Omemo::DeviceList>,
+        list: Option<legacy_omemo::DeviceList>,
     ) -> Result<()> {
         // TODO handle race
 
         let mut list = match list {
             Some(list) => list,
-            None => Omemo::DeviceList { devices: vec![] },
+            None => legacy_omemo::DeviceList { devices: vec![] },
         };
 
-        list.devices.push(Omemo::Device { id: device_id });
+        list.devices.push(legacy_omemo::Device { id: device_id });
         log::debug!("{:?}", list);
 
         let response = aparte
@@ -454,7 +647,7 @@ impl OmemoMod {
         account: &Account,
         contact: &BareJid,
         device_id: u32,
-    ) -> Result<Omemo::Bundle> {
+    ) -> Result<legacy_omemo::Bundle> {
         let response = aparte
             .iq(account, Self::get_bundle_iq(contact, device_id))
             .await?;
@@ -476,7 +669,7 @@ impl OmemoMod {
                                 .payload
                                 .clone()
                                 .ok_or(anyhow!("Missing pubsub payload"))?;
-                            let bundle = Omemo::Bundle::try_from(payload)?;
+                            let bundle = legacy_omemo::Bundle::try_from(payload)?;
                             Ok(bundle)
                         }
                         None => Err(anyhow!("No device list")),
@@ -505,7 +698,7 @@ impl OmemoMod {
         Iq::from_get(id, pubsub).with_to(Jid::Bare(contact.clone()))
     }
 
-    fn set_devices_iq(jid: &BareJid, devices: Omemo::DeviceList) -> Iq {
+    fn set_devices_iq(jid: &BareJid, devices: legacy_omemo::DeviceList) -> Iq {
         let id = Uuid::new_v4();
 
         let id = id.to_hyphenated().to_string();
@@ -599,7 +792,7 @@ impl ModTrait for OmemoMod {
             //            for item in items {
             //                if item.id == pubsub::ItemId::from_str("current").ok() {
             //                    if let Some(payload) = item.payload.clone() {
-            //                        if let Ok(devices) = omemo::Devices::try_from(payload) {
+            //                        if let Ok(devices) = legacy_omemo::Devices::try_from(payload) {
             //                            self.handle_devices(&from.clone().into(), &devices);
             //                        }
             //                    }
@@ -615,7 +808,7 @@ impl ModTrait for OmemoMod {
             //            log::warn!("Mismatching from for pending iq request: {:?} != {:?}", jid, from);
             //        } else {
             //            if let Some(payload) = payload {
-            //                if let Ok(devices) = omemo::Devices::try_from(payload.clone()) {
+            //                if let Ok(devices) = legacy_omemo::Devices::try_from(payload.clone()) {
             //                    self.handle_devices(&jid, &devices);
             //                } else {
             //                    log::warn!("Malformed devices element in OMEMO iq result {uuid}");

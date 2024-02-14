@@ -217,7 +217,7 @@ impl WinBar {
 
     pub fn highlight_window(&mut self, window: &str, important: bool) {
         if self.current_window.as_deref() != Some(window) {
-            let mut state = self.highlighted.entry(window.to_string()).or_insert((0, 0));
+            let state = self.highlighted.entry(window.to_string()).or_insert((0, 0));
             state.0 += 1;
             if important {
                 state.1 += 1;

@@ -39,7 +39,7 @@ impl Storage {
         Ok(Self { pool })
     }
 
-    pub fn get_omemo_own_device(&mut self, account: &Account) -> Result<Option<OmemoOwnDevice>> {
+    pub fn get_omemo_own_device(&self, account: &Account) -> Result<Option<OmemoOwnDevice>> {
         use schema::omemo_own_device;
         let mut conn = self.pool.get()?;
         let res = omemo_own_device::table
@@ -75,7 +75,7 @@ impl Storage {
     ) -> Result<OmemoContactDevice> {
         use schema::omemo_contact_device;
         let mut conn = self.pool.get()?;
-        let device = diesel::insert_into(omemo_contact_device::table)
+        let result = diesel::insert_into(omemo_contact_device::table)
             .values((
                 omemo_contact_device::account.eq(account.to_string()),
                 omemo_contact_device::contact.eq(contact.to_string()),
@@ -87,7 +87,32 @@ impl Storage {
                 omemo_contact_device::id,
             ))
             .do_nothing()
-            .get_result(&mut conn)?;
+            .get_result(&mut conn)
+            .optional()?;
+
+        let device = match result {
+            Some(device) => device,
+            None => omemo_contact_device::table
+                .filter(omemo_contact_device::account.eq(account.to_string()))
+                .filter(omemo_contact_device::contact.eq(contact.to_string()))
+                .filter(omemo_contact_device::id.eq::<i64>(device_id.into()))
+                .first(&mut conn)?,
+        };
+
         Ok(device)
+    }
+
+    pub fn get_omemo_contact_devices(
+        &self,
+        account: &Account,
+        contact: &BareJid,
+    ) -> Result<Vec<OmemoContactDevice>> {
+        use schema::omemo_contact_device;
+        let mut conn = self.pool.get()?;
+
+        Ok(omemo_contact_device::table
+            .filter(omemo_contact_device::account.eq(account.to_string()))
+            .filter(omemo_contact_device::contact.eq(contact.to_string()))
+            .get_results(&mut conn)?)
     }
 }

@@ -546,7 +546,7 @@ impl BookmarksMod {
         autojoin: Option<bool>,
     ) -> Option<Element> {
         if let Some(index) = self.bookmarks_by_name.get(&name) {
-            let mut bookmark = self.bookmarks.get_mut(*index).unwrap();
+            let bookmark = self.bookmarks.get_mut(*index).unwrap();
             match jid {
                 Some(jid) => bookmark.jid = jid,
                 None => {}
