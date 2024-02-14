@@ -36,7 +36,6 @@ rand = "0.7.3" # same as libsignal
 linked_hash_set = "^0.1"
 textwrap = "^0.12"
 linked-hash-map = "^0.5"
-rust-crypto = "^0.2"
 hsluv = "^0.1"
 fuzzy-matcher = "^0.3"
 clap = { version = "4.0.32", features = ["derive"] }
@@ -47,6 +46,7 @@ libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0
 async-trait = "0.1.41" # same as libsignal
 aes-gcm = "0.10.3"
 base64 = "0.21.7"
+sha1 = "0.10.6"
 
 [dev-dependencies]
 mockall = "^0.9"

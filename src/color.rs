@@ -1,10 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
 use hsluv::hsluv_to_rgb;
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::convert::TryInto;
 use termion::color;
 
@@ -26,9 +25,8 @@ impl ColorTuple {
 pub fn id_to_rgb(identifier: &str) -> (u8, u8, u8) {
     // Follow xep 0392 for color generation
     let mut hasher = Sha1::new();
-    hasher.input_str(identifier);
-    let mut hash = [0; 20];
-    hasher.result(&mut hash);
+    hasher.update(identifier);
+    let hash = hasher.finalize();
 
     let a = u16::from_le_bytes(hash[..2].try_into().unwrap());
     let hue_angle = f64::from(a) / 65536f64 * 360f64;
