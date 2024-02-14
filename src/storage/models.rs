@@ -18,3 +18,14 @@ pub struct OmemoContactDevice {
     pub contact: String,
     pub id: i64,
 }
+
+impl From<&OmemoOwnDevice> for OmemoContactDevice {
+    fn from(value: &OmemoOwnDevice) -> Self {
+        OmemoContactDevice {
+            contact_device_pk: -1,
+            account: value.account.clone(),
+            contact: value.account.clone(),
+            id: value.id,
+        }
+    }
+}

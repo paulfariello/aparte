@@ -3,8 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt::{self, Display};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::{self, Debug, Display};
 use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Read;
@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
-use core::fmt::Debug;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::{self, Rng};
@@ -23,9 +22,6 @@ use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 use tokio::task;
-use tokio_xmpp::{
-    AsyncClient as TokioXmppClient, Error as XmppError, Event as XmppEvent, Packet as XmppPacket,
-};
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -416,6 +412,7 @@ Examples:
 |aparte, _command| {
     let account = {
         if let Some((_, account)) = aparte.config.accounts.iter().find(|(name, _)| *name == &account_name) {
+            log::debug!("Use stored config for {account_name}");
             account.clone()
         } else if !account_name.contains('@') {
             return Err(format!("Unknown account or invalid jid {account_name}"));
@@ -591,7 +588,7 @@ Example:
                 let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies, false);
                 aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
-                aparte.send(&account, Element::try_from(message).unwrap());
+                aparte.send(&account, message);
             }
             Ok(())
         },
@@ -827,6 +824,7 @@ pub struct Aparte {
 
 impl Aparte {
     pub fn new(config_path: PathBuf, storage_path: PathBuf) -> Result<Self> {
+        log::debug!("Loading aparté with {:?}", config_path);
         let mut config_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -1088,12 +1086,12 @@ impl Aparte {
         self.log(color::rainbow(WELCOME));
         self.log(format!("Version: {VERSION}"));
 
-        for (_, account) in self.config.accounts.clone() {
+        for (name, account) in self.config.accounts.clone() {
             if account.autoconnect {
                 self.schedule(Event::RawCommand(
                     None,
                     "console".to_string(),
-                    format!("/connect {}", account.jid),
+                    format!("/connect {}", name),
                 ));
             }
         }
@@ -1136,13 +1134,27 @@ impl Aparte {
         };
 
         self.log(format!("Connecting as {account}"));
-        let mut client = match TokioXmppClient::new(&account.to_string(), password.0) {
-            Ok(client) => client,
-            Err(err) => {
-                self.log(format!("Cannot connect as {account}: {err}"));
-                return;
-            }
+        let config = tokio_xmpp::AsyncConfig {
+            jid: account.clone().into(),
+            password: password.0,
+            server: match (&connection_info.server, &connection_info.port) {
+                (Some(server), Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
+                    host: server.clone(),
+                    port: *port,
+                },
+                (Some(server), None) => tokio_xmpp::AsyncServerConfig::Manual {
+                    host: server.clone(),
+                    port: 5222,
+                },
+                (None, Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
+                    host: account.domain.clone(),
+                    port: *port,
+                },
+                (None, None) => tokio_xmpp::AsyncServerConfig::UseSrv,
+            },
         };
+        log::debug!("Connect with config: {config:?}");
+        let mut client = tokio_xmpp::AsyncClient::new_with_config(config);
 
         client.set_reconnect(true);
 
@@ -1154,7 +1166,7 @@ impl Aparte {
         // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
             while let Some(element) = rx.recv().await {
-                if let Err(err) = writer.send(XmppPacket::Stanza(element)).await {
+                if let Err(err) = writer.send(tokio_xmpp::Packet::Stanza(element)).await {
                     log::error!("cannot send Stanza to internal channel: {}", err);
                     break;
                 }
@@ -1168,7 +1180,7 @@ impl Aparte {
             while let Some(event) = reader.next().await {
                 log::debug!("XMPP Event: {:?}", event);
                 match event {
-                    XmppEvent::Disconnected(XmppError::Auth(e)) => {
+                    tokio_xmpp::Event::Disconnected(tokio_xmpp::Error::Auth(e)) => {
                         if let Err(err) =
                             event_tx.send(Event::AuthError(account.clone(), format!("{e}")))
                         {
@@ -1176,7 +1188,7 @@ impl Aparte {
                         };
                         break;
                     }
-                    XmppEvent::Disconnected(e) => {
+                    tokio_xmpp::Event::Disconnected(e) => {
                         if let Err(err) =
                             event_tx.send(Event::Disconnected(account.clone(), format!("{e}")))
                         {
@@ -1186,13 +1198,13 @@ impl Aparte {
                             break;
                         }
                     }
-                    XmppEvent::Online {
+                    tokio_xmpp::Event::Online {
                         bound_jid: jid,
                         resumed: true,
                     } => {
                         log::debug!("Reconnected to {}", jid);
                     }
-                    XmppEvent::Online {
+                    tokio_xmpp::Event::Online {
                         bound_jid: jid,
                         resumed: false,
                     } => {
@@ -1201,7 +1213,7 @@ impl Aparte {
                             break;
                         }
                     }
-                    XmppEvent::Stanza(stanza) => {
+                    tokio_xmpp::Event::Stanza(stanza) => {
                         log::debug!("RECV: {}", String::from(&stanza));
                         if let Err(err) = event_tx.send(Event::Stanza(account.clone(), stanza)) {
                             log::error!("Cannot send stanza to internal channel: {}", err);
@@ -1238,33 +1250,24 @@ impl Aparte {
             }
             Event::SendMessage(account, message) => {
                 self.schedule(Event::Message(Some(account.clone()), message.clone()));
-                let message = match message.encryption_recipient() {
-                    Some(recipient) => {
-                        let mut crypto_engines = self.crypto_engines.lock().unwrap();
-                        match crypto_engines.get_mut(&(account.clone(), recipient)) {
-                            Some(crypto_engine) => {
-                                let mut message = message.clone();
-                                match crypto_engine.encrypt(&mut message) {
-                                    Ok(_) => Some(message),
-                                    Err(err) => {
-                                        log::error!(
-                                            "Cannot encrypt message (TODO print error in UI): {}",
-                                            err
-                                        );
-                                        None
-                                    }
-                                }
-                            }
-                            None => Some(message),
-                        }
-                    }
-                    None => Some(message),
-                };
 
-                if let Some(message) = message {
-                    if let Ok(xmpp_message) = Element::try_from(message) {
-                        self.send(&account, xmpp_message);
+                // Encrypt if required
+                let encryption = message
+                    .encryption_recipient()
+                    .map(|recipient| {
+                        let mut crypto_engines = self.crypto_engines.lock().unwrap();
+                        crypto_engines
+                            .get_mut(&(account.clone(), recipient))
+                            .map(|crypto_engine| crypto_engine.encrypt(self, &account, &message))
+                    })
+                    .flatten();
+
+                match encryption {
+                    Some(Ok(encrypted_message)) => self.send(&account, encrypted_message),
+                    Some(Err(e)) => {
+                        log::error!("Cannot encrypt message (TODO print error in UI): {e}")
                     }
+                    None => self.send(&account, message),
                 }
             }
             Event::Connect(account, password) => {
@@ -1282,7 +1285,7 @@ impl Aparte {
                 let caps = Caps::new("aparté", verification_string);
                 presence.add_payload(caps);
 
-                self.send(&account, presence.into());
+                self.send(&account, presence);
             }
             Event::Disconnected(account, err) => {
                 self.log(format!("Connection lost for {}: {}", account, err));
@@ -1319,7 +1322,7 @@ impl Aparte {
                 presence = presence.with_to(Jid::Full(to.clone()));
                 presence = presence.with_from(from);
                 presence.add_payload(Muc::new());
-                self.send(&account, presence.into());
+                self.send(&account, presence);
 
                 // Successful join
                 self.log(format!("Joined {}", channel));
@@ -1335,7 +1338,7 @@ impl Aparte {
                 presence = presence.with_to(channel.jid.clone());
                 presence = presence.with_from(channel.account.clone());
                 presence.add_payload(Muc::new());
-                self.send(&channel.account, presence.into());
+                self.send(&channel.account, presence);
             }
             Event::Quit => {
                 return Err(());
@@ -1378,6 +1381,41 @@ impl Aparte {
     ) {
         let mut best_match = 0f64;
         let mut matched_mod = None;
+        let mut message = message;
+
+        // Decrypt if required
+        if let (Some(eme), Some(from)) = (
+            message.payloads.iter().find_map(|p| {
+                xmpp_parsers::eme::ExplicitMessageEncryption::try_from((*p).clone()).ok()
+            }),
+            message.from.clone(),
+        ) {
+            let mut crypto_engines = self.crypto_engines.lock().unwrap();
+            if let Some(crypto_engine) = crypto_engines.get_mut(&(account.clone(), from.into())) {
+                if eme.namespace == crypto_engine.ns() {
+                    message = match crypto_engine.decrypt(self, &account, &message) {
+                        Ok(message) => message,
+                        Err(err) => {
+                            log::error!("{}", err);
+                            message
+                        }
+                    };
+                } else {
+                    log::warn!(
+                        "Incompatible crypto engine found for {:?} (found {} expecting {})",
+                        message.from,
+                        crypto_engine.ns(),
+                        eme.namespace
+                    );
+                }
+            } else {
+                log::warn!(
+                    "No crypto engine found for {:?} (encrypted with {})",
+                    message.from,
+                    eme.namespace
+                );
+            }
+        }
 
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
@@ -1529,8 +1567,16 @@ impl Aparte {
         crypto_engines.insert((account.clone(), recipient.clone()), crypto_engine);
     }
 
-    pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.send((account.clone(), stanza)).unwrap();
+    pub fn send<T>(&mut self, account: &Account, element: T)
+    where
+        T: TryInto<Element> + Debug,
+    {
+        match element.try_into() {
+            Ok(stanza) => self.send_tx.send((account.clone(), stanza)).unwrap(),
+            Err(_e) => {
+                log::error!("Cannot convert to element");
+            }
+        };
     }
 
     pub fn schedule(&mut self, event: Event) {
