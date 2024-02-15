@@ -773,7 +773,7 @@ impl UIMod {
     }
 
     pub fn event_stream(&self) -> EventStream {
-        EventStream::new()
+        EventStream::default()
     }
 
     fn get_scheduler(&self) -> Scheduler {
@@ -1457,6 +1457,12 @@ impl EventStream {
         Self {
             inner: TermionEventStream::new(),
         }
+    }
+}
+
+impl Default for EventStream {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
