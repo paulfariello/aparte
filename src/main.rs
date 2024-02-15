@@ -55,13 +55,11 @@ fn main() -> Result<()> {
         aparte_data
     };
 
-    let file_writer = flexi_logger::writers::FileLogWriter::builder()
-        .directory(&aparte_data)
-        .suppress_timestamp()
-        .try_build()
-        .unwrap();
-    let log_target = flexi_logger::LogTarget::Writer(Box::new(file_writer));
-    let logger = flexi_logger::Logger::with_env_or_str("info").log_target(log_target);
+    let logger = flexi_logger::Logger::try_with_env_or_str("info")?.log_to_file(
+        flexi_logger::FileSpec::default()
+            .directory(&aparte_data)
+            .suppress_timestamp(),
+    );
     if let Err(e) = logger.start() {
         panic!("Cannot start logger: {}", e);
     }
