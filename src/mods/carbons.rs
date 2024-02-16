@@ -25,7 +25,7 @@ impl CarbonsMod {
     }
 
     fn enable(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let iq = Iq::from_set(id, carbons::Enable);
         iq.into()
     }

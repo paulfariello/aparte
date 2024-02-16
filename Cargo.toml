@@ -23,7 +23,7 @@ tokio = { version = "^1.10", features = ["full"] }
 tokio-xmpp = "=3.3.0"
 xmpp-parsers = "^0.19"
 rpassword = "^3.0"
-uuid = { version = "^0.7", features = ["v4"]  }
+uuid = { version = "^1.7", features = ["v4"]  }
 termion = "1.5"
 derive-error = "0.0.4"
 bytes = "^0.5"
