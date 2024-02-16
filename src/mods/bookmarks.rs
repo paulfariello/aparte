@@ -151,7 +151,7 @@ struct Bookmarks {}
 
 impl Bookmarks {
     fn retreive(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let items = Items {
             max_items: None,
             node: NodeName(String::from(ns::BOOKMARKS)),
@@ -164,7 +164,7 @@ impl Bookmarks {
     }
 
     fn update(&self, bookmarks: &Vec<contact::Bookmark>) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let confs = bookmarks
             .iter()
             .map(|bookmark| bookmarks::Conference {
@@ -256,7 +256,7 @@ impl Bookmarks {
     }
 
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let subscriber = aparte.current_account().unwrap();
         let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {
@@ -280,7 +280,7 @@ struct Bookmarks2 {}
 
 impl Bookmarks2 {
     pub fn retreive(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let items = Items {
             max_items: None,
             node: NodeName(String::from(ns::BOOKMARKS2)),
@@ -342,7 +342,7 @@ impl Bookmarks2 {
     }
 
     fn create_node(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let create = pubsub::Create {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
         };
@@ -355,7 +355,7 @@ impl Bookmarks2 {
     }
 
     fn config_node(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let config = pubsubowner::Configure {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
             form: Some(self.config_node_form()),
@@ -366,7 +366,7 @@ impl Bookmarks2 {
     }
 
     fn add(&self, bookmark: contact::Bookmark) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let item = Item {
             id: Some(ItemId(bookmark.jid.to_string())),
             payload: Some(
@@ -427,7 +427,7 @@ impl Bookmarks2 {
     }
 
     fn delete(&self, conference: BareJid) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let item = Item {
             id: Some(ItemId(conference.into())),
             payload: None,
@@ -476,7 +476,7 @@ impl Bookmarks2 {
     }
 
     fn subscribe(&self, aparte: &mut Aparte) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let subscriber = aparte.current_account().unwrap();
         let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {

@@ -79,7 +79,7 @@ impl Query {
             index: None,
         };
 
-        let queryid = Uuid::new_v4().to_hyphenated().to_string();
+        let queryid = Uuid::new_v4().hyphenated().to_string();
         let query = mam::Query {
             queryid: Some(mam::QueryId(queryid.clone())),
             node: None,
@@ -87,7 +87,7 @@ impl Query {
             set: Some(set),
         };
 
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         (
             queryid,
             Iq::from_set(id, query).with_to(Jid::Bare(self.jid.clone())),

@@ -1,4 +1,3 @@
--- Your SQL goes here
 CREATE TABLE omemo_own_device (
 	own_device_pk INTEGER PRIMARY KEY NOT NULL,
 	account VARCHAR NOT NULL UNIQUE,

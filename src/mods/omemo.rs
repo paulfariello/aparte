@@ -39,6 +39,7 @@ use crate::i18n;
 use crate::crypto::CryptoEngineTrait;
 use crate::message::Message;
 use crate::mods::ui::UIMod;
+use crate::storage::SignalStorage;
 
 use libsignal_protocol::{
     message_decrypt,
@@ -46,8 +47,6 @@ use libsignal_protocol::{
     IdentityKeyPair,
     InMemSignalProtocolStore, //SessionStore,
 };
-
-type SignalStore = Arc<Mutex<InMemSignalProtocolStore>>;
 
 const KEY_SIZE: usize = 16;
 const MAC_SIZE: usize = 16;
@@ -100,13 +99,13 @@ pub enum OmemoEvent {
 
 struct OmemoEngine {
     contact: BareJid,
-    signal_store: SignalStore,
+    signal_storage: SignalStorage,
 }
 
 impl OmemoEngine {
-    fn new(signal_store: SignalStore, contact: &BareJid) -> Self {
+    fn new(signal_storage: SignalStorage, contact: &BareJid) -> Self {
         Self {
-            signal_store,
+            signal_storage,
             contact: contact.clone(),
         }
     }
@@ -165,11 +164,10 @@ impl OmemoEngine {
             identity_key,
         )?;
 
-        let signal_store = &mut *self.signal_store.lock().unwrap();
         process_prekey_bundle(
             &address,
-            &mut signal_store.session_store,
-            &mut signal_store.identity_store,
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
             &prekey_bundle,
             &mut thread_rng(),
             None,
@@ -216,7 +214,6 @@ impl CryptoEngineTrait for OmemoEngine {
         dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE].copy_from_slice(&encrypted[body.len()..]);
 
         // Encrypt DEK with each recipient key
-        let signal_store = &mut *self.signal_store.lock().unwrap();
         let keys = aparte
             .storage
             .get_omemo_contact_devices(account, &message.to)?
@@ -228,8 +225,8 @@ impl CryptoEngineTrait for OmemoEngine {
                 message_encrypt(
                     &dek_and_mac,
                     &remote_address,
-                    &mut signal_store.session_store,
-                    &mut signal_store.identity_store,
+                    &mut self.signal_storage.clone(),
+                    &mut self.signal_storage.clone(),
                     None,
                 )
                 .now_or_never()
@@ -333,14 +330,13 @@ impl CryptoEngineTrait for OmemoEngine {
                 let remote_address =
                     ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
 
-                let signal_store = &mut *self.signal_store.lock().unwrap();
                 message_decrypt(
                     &ciphertext_message,
                     &remote_address,
-                    &mut signal_store.session_store,
-                    &mut signal_store.identity_store,
-                    &mut signal_store.pre_key_store,
-                    &mut signal_store.signed_pre_key_store,
+                    &mut self.signal_storage.clone(),
+                    &mut self.signal_storage.clone(),
+                    &mut self.signal_storage.clone(),
+                    &mut self.signal_storage.clone(),
                     &mut thread_rng(),
                     None,
                 )
@@ -383,7 +379,7 @@ impl CryptoEngineTrait for OmemoEngine {
 }
 
 pub struct OmemoMod {
-    signal_stores: HashMap<Account, SignalStore>,
+    signal_stores: HashMap<Account, SignalStorage>,
 }
 
 impl OmemoMod {
@@ -415,10 +411,8 @@ impl OmemoMod {
 
         // TODO generate crypto
 
-        // TODO Should use proper ProtocolStore respecting  libsignal_protocol::storage::traits
-        let signal_store = InMemSignalProtocolStore::new(identity_key_pair, device_id)?;
-        self.signal_stores
-            .insert(account.clone(), Arc::new(Mutex::new(signal_store)));
+        let signal_storage = SignalStorage::new(account.clone(), aparte.storage.clone());
+        self.signal_stores.insert(account.clone(), signal_storage);
 
         let mut aparte = aparte.proxy();
         let account = account.clone();
@@ -436,12 +430,12 @@ impl OmemoMod {
 
     async fn start_session(
         aparte: &mut AparteAsync,
-        signal_store: SignalStore,
+        signal_storage: SignalStorage,
         account: &Account,
         jid: &BareJid,
     ) -> Result<()> {
         log::info!("Start OMEMO session on {account} with {jid}");
-        let mut omemo_engine = OmemoEngine::new(signal_store.clone(), jid);
+        let mut omemo_engine = OmemoEngine::new(signal_storage.clone(), jid);
 
         Self::subscribe_to_device_list(aparte, account, jid)
             .await
@@ -687,7 +681,7 @@ impl OmemoMod {
     fn get_devices_iq(contact: &BareJid) -> Iq {
         let id = Uuid::new_v4();
 
-        let id = id.to_hyphenated().to_string();
+        let id = id.hyphenated().to_string();
         let items = pubsub::pubsub::Items {
             max_items: None,
             node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
@@ -701,7 +695,7 @@ impl OmemoMod {
     fn set_devices_iq(jid: &BareJid, devices: legacy_omemo::DeviceList) -> Iq {
         let id = Uuid::new_v4();
 
-        let id = id.to_hyphenated().to_string();
+        let id = id.hyphenated().to_string();
         let item = pubsub::pubsub::Item(pubsub::Item {
             id: Some(pubsub::ItemId("current".to_string())),
             publisher: Some(jid.clone().into()),
@@ -718,7 +712,7 @@ impl OmemoMod {
     }
 
     fn subscribe_to_device_list_iq(contact: &BareJid, subscriber: &BareJid) -> Iq {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         let pubsub = pubsub::PubSub::Subscribe {
             subscribe: Some(pubsub::pubsub::Subscribe {
                 node: Some(pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap()),
@@ -732,7 +726,7 @@ impl OmemoMod {
     fn get_bundle_iq(contact: &BareJid, device_id: u32) -> Iq {
         let id = Uuid::new_v4();
 
-        let id = id.to_hyphenated().to_string();
+        let id = id.hyphenated().to_string();
         let items = pubsub::pubsub::Items {
             max_items: None,
             node: pubsub::NodeName(format!("{}:{device_id}", ns::LEGACY_OMEMO_BUNDLES)),
@@ -769,11 +763,11 @@ impl ModTrait for OmemoMod {
                     let jid = jid.clone();
                     match self.signal_stores.get(&account) {
                         None => aparte.log(format!("OMEMO not configured for {account}")),
-                        Some(signal_store) => {
-                            let signal_store = signal_store.clone();
+                        Some(signal_storage) => {
+                            let signal_storage = signal_storage.clone();
                             Aparte::spawn(async move {
                                 if let Err(err) =
-                                    Self::start_session(&mut aparte, signal_store, &account, &jid)
+                                    Self::start_session(&mut aparte, signal_storage, &account, &jid)
                                         .await
                                 {
                                     aparte.error(
