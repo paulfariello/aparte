@@ -187,6 +187,7 @@ dependencies = [
  "futures",
  "fuzzy-matcher",
  "hsluv",
+ "itertools 0.12.1",
  "libsignal-protocol",
  "linked-hash-map",
  "linked_hash_set",
@@ -1114,6 +1115,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1194,7 +1204,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac 0.11.0",
- "itertools",
+ "itertools 0.10.5",
  "log",
  "num_enum",
  "prost",
@@ -1682,7 +1692,7 @@ checksum = "62941722fb675d463659e49c4f3fe1fe792ff24fe5bbaa9c08cd3b98a1c354f5"
 dependencies = [
  "bytes 1.5.0",
  "heck 0.3.3",
- "itertools",
+ "itertools 0.10.5",
  "lazy_static",
  "log",
  "multimap",
@@ -1701,7 +1711,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9cc1a3263e07e0bf68e96268f37665207b49560d98739662cdfaae215c720fe"
 dependencies = [
  "anyhow",
- "itertools",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote 1.0.35",
  "syn 1.0.109",

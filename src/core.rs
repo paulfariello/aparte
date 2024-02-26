@@ -1396,7 +1396,11 @@ impl Aparte {
                     message = match crypto_engine.decrypt(self, &account, &message) {
                         Ok(message) => message,
                         Err(err) => {
-                            log::error!("{}", err);
+                            log::error!(
+                                "Cannot decrypt message with {}: {}",
+                                crypto_engine.ns(),
+                                err
+                            );
                             message
                         }
                     };

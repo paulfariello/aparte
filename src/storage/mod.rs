@@ -171,8 +171,8 @@ impl std::error::Error for UnwindSafeResultError {}
 
 #[derive(Clone)]
 pub struct SignalStorage {
-    account: Account,
-    storage: Storage,
+    pub account: Account,
+    pub storage: Storage,
 }
 
 impl SignalStorage {
@@ -187,6 +187,7 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         &self,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<libsignal_protocol::IdentityKeyPair> {
+        log::debug!("Get own identity key pair");
         self.storage
             .get_omemo_own_device(&self.account)
             .map_err(signal_storage_display_error("Cannot get own device"))?
@@ -201,6 +202,7 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         &self,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<u32> {
+        log::debug!("Get local registration id");
         self.storage
             .get_omemo_own_device(&self.account)
             .map_err(signal_storage_display_error("Cannot get own device"))?
@@ -214,6 +216,7 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         identity: &libsignal_protocol::IdentityKey,
         ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<bool> {
+        log::debug!("Save {address}'s identity");
         // The return value represents whether an existing identity was replaced (`Ok(true)`). If it is
         // new or hasn't changed, the return value should be `Ok(false)`.
         let ret = if let Some(stored) = self.get_identity(address, ctx).await? {
@@ -259,6 +262,7 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         _direction: libsignal_protocol::Direction,
         ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<bool> {
+        log::debug!("Is {address}'s identity trusted");
         Ok(match self.get_identity(address, ctx).await? {
             Some(stored) => &stored == identity,
             _ => false,
@@ -270,6 +274,7 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         address: &libsignal_protocol::ProtocolAddress,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::IdentityKey>> {
+        log::debug!("Get {address}'s identity");
         use schema::omemo_identity;
         let mut conn = self
             .storage
@@ -298,6 +303,7 @@ impl libsignal_protocol::SessionStore for SignalStorage {
         address: &libsignal_protocol::ProtocolAddress,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SessionRecord>> {
+        log::debug!("Load session for {address}");
         use schema::omemo_session;
         let mut conn = self
             .storage
@@ -324,6 +330,7 @@ impl libsignal_protocol::SessionStore for SignalStorage {
         session: &libsignal_protocol::SessionRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
+        log::debug!("Store session for {address}");
         use schema::omemo_session;
         let mut conn = self
             .storage
@@ -358,6 +365,7 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
         pre_key_id: libsignal_protocol::PreKeyId,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<libsignal_protocol::PreKeyRecord> {
+        log::debug!("Get pre key {pre_key_id}");
         use schema::omemo_pre_key;
         let mut conn = self
             .storage
@@ -383,6 +391,7 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
         pre_key: &libsignal_protocol::PreKeyRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
+        log::debug!("Save pre key {pre_key_id}");
         use schema::omemo_pre_key;
         let mut conn = self
             .storage
@@ -413,6 +422,7 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
         pre_key_id: libsignal_protocol::PreKeyId,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
+        log::debug!("Remove pre key {pre_key_id}");
         use schema::omemo_pre_key;
         let mut conn = self
             .storage
@@ -439,6 +449,7 @@ impl libsignal_protocol::SignedPreKeyStore for SignalStorage {
         signed_pre_key_id: libsignal_protocol::SignedPreKeyId,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<libsignal_protocol::SignedPreKeyRecord> {
+        log::debug!("Get signed pre key {signed_pre_key_id}");
         use schema::omemo_signed_pre_key;
         let mut conn = self
             .storage
@@ -464,6 +475,7 @@ impl libsignal_protocol::SignedPreKeyStore for SignalStorage {
         signed_pre_key: &libsignal_protocol::SignedPreKeyRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
+        log::debug!("Save signed pre key {signed_pre_key_id}");
         use schema::omemo_signed_pre_key;
         let mut conn = self
             .storage
@@ -499,6 +511,7 @@ impl libsignal_protocol::SenderKeyStore for SignalStorage {
         sender_key: &libsignal_protocol::SenderKeyRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
+        log::debug!("Store sender key {sender}");
         use schema::omemo_sender_key;
         let mut conn = self
             .storage
@@ -534,6 +547,7 @@ impl libsignal_protocol::SenderKeyStore for SignalStorage {
         distribution_id: uuid::Uuid,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SenderKeyRecord>> {
+        log::debug!("Load sender key {sender}");
         use schema::omemo_sender_key;
         let mut conn = self
             .storage

@@ -47,6 +47,7 @@ async-trait = "0.1.41" # same as libsignal
 aes-gcm = "0.10.3"
 base64 = "0.21.7"
 sha1 = "0.10.6"
+itertools = "0.12.1"
 
 [dev-dependencies]
 mockall = "^0.9"
