@@ -157,7 +157,7 @@ where
                 self.set_name(name);
             }
             UIEvent::Core(Event::Subject(_, jid, subjects)) => {
-                let window: BareJid = jid.clone().into();
+                let window: BareJid = jid.to_bare();
                 self.add_subjects(
                     window.to_string(),
                     subjects
@@ -386,7 +386,7 @@ impl fmt::Display for Message {
             Message::Xmpp(message) => {
                 let author = terminus::clean(&match &message.type_ {
                     XmppMessageType::Channel => match &message.from_full {
-                        Jid::Full(from) => from.resource.clone(),
+                        Jid::Full(from) => from.resource().to_string(),
                         Jid::Bare(from) => from.to_string(),
                     },
                     XmppMessageType::Chat => message.from.to_string(),
@@ -1077,14 +1077,14 @@ impl ModTrait for UIMod {
                                     Direction::Incoming => Conversation::Channel(Channel {
                                         account: account.clone().unwrap(),
                                         jid: message.from.clone(),
-                                        nick: account.as_ref().unwrap().resource.clone(),
+                                        nick: account.as_ref().unwrap().resource().to_string(),
                                         name: None,
                                         occupants: HashMap::new(),
                                     }),
                                     Direction::Outgoing => Conversation::Channel(Channel {
                                         account: account.clone().unwrap(),
                                         jid: message.to.clone(),
-                                        nick: account.as_ref().unwrap().resource.clone(),
+                                        nick: account.as_ref().unwrap().resource().to_string(),
                                         name: None,
                                         occupants: HashMap::new(),
                                     }),
@@ -1139,15 +1139,15 @@ impl ModTrait for UIMod {
                 channel,
                 user_request,
             } => {
-                let bare: BareJid = channel.clone().into();
+                let bare: BareJid = channel.to_bare();
                 let win_name = bare.to_string();
                 if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
                         Conversation::Channel(Channel {
                             account: account.clone(),
-                            jid: channel.clone().into(),
-                            nick: channel.resource.clone(),
+                            jid: channel.to_bare(),
+                            nick: channel.resource().to_string(),
                             name: None, // TODO use name from bookmark
                             occupants: HashMap::new(),
                         }),
@@ -1268,8 +1268,10 @@ impl ModTrait for UIMod {
                                         }
                                         Conversation::Channel(channel) => {
                                             let account = &channel.account;
-                                            let mut us = account.clone();
-                                            us.resource = channel.nick.clone();
+                                            let us = account
+                                                .to_bare()
+                                                .with_resource_str(&channel.nick)
+                                                .unwrap(); // TODO avoid unwrap
                                             let from: Jid = us.into();
                                             let to: Jid = channel.jid.clone().into();
                                             let id = Uuid::new_v4();

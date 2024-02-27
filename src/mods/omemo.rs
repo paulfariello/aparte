@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 
 use aes_gcm::{
     self,
@@ -348,7 +347,7 @@ impl CryptoEngineTrait for OmemoEngine {
 
         let dek_and_mac = aparte
             .storage
-            .get_omemo_contact_devices(account, &BareJid::from(message.from.clone().unwrap()))?
+            .get_omemo_contact_devices(account, &message.from.clone().unwrap().to_bare())?
             .iter()
             .find_map(|device| {
                 let remote_address =
@@ -575,7 +574,7 @@ impl OmemoMod {
         let response = aparte
             .iq(
                 account,
-                Self::subscribe_to_device_list_iq(jid, &BareJid::from(account.clone())),
+                Self::subscribe_to_device_list_iq(jid, &account.to_bare()),
             )
             .await?;
         match response.payload {
@@ -649,7 +648,7 @@ impl OmemoMod {
     ) -> Result<()> {
         log::info!("Ensure device {device_id} is registered");
         let response = aparte
-            .iq(account, Self::get_devices_iq(&account.clone().into()))
+            .iq(account, Self::get_devices_iq(&account.to_bare()))
             .await?;
         match response.payload {
             IqType::Result(None) => Err(anyhow!("Empty iq response")),
@@ -700,7 +699,7 @@ impl OmemoMod {
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Result<()> {
         log::info!("Ensure device {device_id}'s bundle is published");
-        match Self::get_bundle(aparte, account, &account.clone().into(), device_id).await? {
+        match Self::get_bundle(aparte, account, &account.to_bare(), device_id).await? {
             None => {
                 Self::publish_bundle(
                     aparte,
@@ -737,11 +736,11 @@ impl OmemoMod {
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Result<()> {
         log::info!("Publish device {device_id}'s bundle");
-        let response = aparte
+        let _response = aparte
             .iq(
                 account,
                 Self::publish_bundle_iq(
-                    &account.clone().into(),
+                    &account.to_bare(),
                     device_id,
                     identity_key_pair,
                     signed_pre_key_pub,
@@ -771,7 +770,7 @@ impl OmemoMod {
         log::debug!("{:?}", list);
 
         let response = aparte
-            .iq(account, Self::set_devices_iq(&account.clone().into(), list))
+            .iq(account, Self::set_devices_iq(&account.to_bare(), list))
             .await
             .context("Cannot register OMEMO device")?;
         log::debug!("{:?}", response);
@@ -1030,7 +1029,7 @@ impl ModTrait for OmemoMod {
             //    }
             //}
             //Event::Chat { account, contact } => {
-            //    //aparte.iq::<OmemoMod>(account, self.subscribe(contact, &account.clone().into()));
+            //    //aparte.iq::<OmemoMod>(account, self.subscribe(contact, &account.to_bare()));
             //    //aparte.iq::<OmemoMod>(account, self.get_devices(contact));
             //}
             _ => {}

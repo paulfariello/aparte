@@ -517,7 +517,7 @@ Examples:
                 }
             }).filter_map(|conversation| {
                 if let Some(Conversation::Channel(channel)) = conversation {
-                    Some(channel.jid.into())
+                    Some(channel.jid.into_inner())
                 } else {
                     None
                 }
@@ -574,11 +574,7 @@ Example:
     let account = aparte.current_account().ok_or("No connection found".to_string())?;
     match Jid::from_str(&contact) {
         Ok(jid) => {
-            let to = match jid.clone() {
-                Jid::Bare(jid) => jid,
-                Jid::Full(jid) => jid.into(),
-            };
-            aparte.schedule(Event::Chat { account: account.clone(), contact: to });
+            aparte.schedule(Event::Chat { account: account.clone(), contact: jid.to_bare() });
             if let Some(body) = message {
                 let mut bodies = HashMap::new();
                 bodies.insert("".to_string(), body);
@@ -632,7 +628,7 @@ Example:
                 match bookmarks.get_by_name(&muc) {
                     Some(bookmark) => {
                         match bookmark.nick {
-                            Some(nick) => Ok(Jid::Full(bookmark.jid.with_resource(nick))),
+                            Some(nick) => Ok(Jid::Full(bookmark.jid.with_resource_str(&nick).map_err(|e| format!("Invalid nick: {e}"))?)),
                             None => Ok(Jid::Bare(bookmark.jid.clone())),
                         }
                     },
@@ -760,8 +756,10 @@ mod me {
                     }
                     Conversation::Channel(channel) => {
                         let account = &channel.account;
-                        let mut us = account.clone();
-                        us.resource = channel.nick.clone();
+                        let us = account
+                            .to_bare()
+                            .with_resource_str(&channel.nick)
+                            .map_err(|e| format!("Invalid nick: {e}"))?;
                         let from: Jid = us.into();
                         let to: Jid = channel.jid.clone().into();
                         let id = Uuid::new_v4();
@@ -1122,7 +1120,8 @@ impl Aparte {
                     .take(5)
                     .map(char::from)
                     .collect();
-                jid.with_resource(format!("aparte_{rand_string}"))
+                jid.with_resource_str(&format!("aparte_{rand_string}"))
+                    .unwrap()
             }
             Err(err) => {
                 self.log(format!(
@@ -1135,22 +1134,22 @@ impl Aparte {
 
         self.log(format!("Connecting as {account}"));
         let config = tokio_xmpp::AsyncConfig {
-            jid: account.clone().into(),
+            jid: Jid::from(account.clone()),
             password: password.0,
             server: match (&connection_info.server, &connection_info.port) {
-                (Some(server), Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
+                (Some(server), Some(port)) => tokio_xmpp::starttls::ServerConfig::Manual {
                     host: server.clone(),
                     port: *port,
                 },
-                (Some(server), None) => tokio_xmpp::AsyncServerConfig::Manual {
+                (Some(server), None) => tokio_xmpp::starttls::ServerConfig::Manual {
                     host: server.clone(),
                     port: 5222,
                 },
-                (None, Some(port)) => tokio_xmpp::AsyncServerConfig::Manual {
-                    host: account.domain.clone(),
+                (None, Some(port)) => tokio_xmpp::starttls::ServerConfig::Manual {
+                    host: account.domain().to_string(),
                     port: *port,
                 },
-                (None, None) => tokio_xmpp::AsyncServerConfig::UseSrv,
+                (None, None) => tokio_xmpp::starttls::ServerConfig::UseSrv,
             },
         };
         log::debug!("Connect with config: {config:?}");
@@ -1312,8 +1311,8 @@ impl Aparte {
                 let to = match channel.clone() {
                     Jid::Full(jid) => jid,
                     Jid::Bare(jid) => {
-                        let node = account.node.clone().unwrap();
-                        jid.with_resource(node)
+                        let node = account.node().clone().unwrap();
+                        jid.with_resource_str(&node.to_string()).unwrap()
                     }
                 };
                 let from: Jid = account.clone().into();
@@ -1391,7 +1390,8 @@ impl Aparte {
             message.from.clone(),
         ) {
             let mut crypto_engines = self.crypto_engines.lock().unwrap();
-            if let Some(crypto_engine) = crypto_engines.get_mut(&(account.clone(), from.into())) {
+            if let Some(crypto_engine) = crypto_engines.get_mut(&(account.clone(), from.to_bare()))
+            {
                 if eme.namespace == crypto_engine.ns() {
                     message = match crypto_engine.decrypt(self, &account, &message) {
                         Ok(message) => message,

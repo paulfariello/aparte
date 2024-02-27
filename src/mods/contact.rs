@@ -95,7 +95,7 @@ impl ModTrait for ContactMod {
                 if let Some(from) = &presence.from {
                     let jid = match from {
                         Jid::Bare(jid) => jid.clone(),
-                        Jid::Full(jid) => jid.clone().into(),
+                        Jid::Full(jid) => jid.to_bare(),
                     };
                     let index = ContactIndex {
                         account: account.clone(),

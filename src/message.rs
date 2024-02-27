@@ -166,8 +166,8 @@ impl Message {
 
             match message.type_ {
                 XmppParsersMessageType::Chat => {
-                    if from.clone().node() == account.node
-                        && from.clone().domain() == account.domain
+                    if from.clone().node() == account.node()
+                        && from.clone().domain() == account.domain()
                     {
                         Ok(Message::outgoing_chat(
                             id,
@@ -214,14 +214,13 @@ impl Message {
         message: &'a XmppParsersMessage,
     ) -> Result<&'a Jid, String> {
         match Message::get_direction_from_xmpp(account, message)? {
-            Direction::Incoming => message
-                .from
-                .as_ref()
-                .ok_or("Missing 'from' attribute for incoming message".to_string()),
+            Direction::Incoming => message.from.as_ref().ok_or(String::from(
+                "Missing 'from' attribute for incoming message",
+            )),
             Direction::Outgoing => message
                 .to
                 .as_ref()
-                .ok_or("Missing 'to' attribute for outgoing message".to_string()),
+                .ok_or(String::from("Missing 'to' attribute for outgoing message")),
         }
     }
 
@@ -229,9 +228,9 @@ impl Message {
         account: &Account,
         message: &XmppParsersMessage,
     ) -> Result<Direction, String> {
-        let from: Option<BareJid> = message.from.clone().map(|f| f.into());
-        let to: Option<BareJid> = message.to.clone().map(|f| f.into());
-        let bare_account: BareJid = account.clone().into();
+        let from: Option<BareJid> = message.from.as_ref().map(|f| f.to_bare());
+        let to: Option<BareJid> = message.to.as_ref().map(|f| f.to_bare());
+        let bare_account: BareJid = account.to_bare();
 
         match (from.as_ref(), to.as_ref()) {
             (Some(from), Some(_to)) => {
@@ -262,21 +261,11 @@ impl Message {
     pub fn incoming_chat<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
-        from_full: &Jid,
-        to_full: &Jid,
+        from: &Jid,
+        to: &Jid,
         bodies: &HashMap<String, String>,
         archive: bool,
     ) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
         let id = id.into();
 
         let version = XmppMessageVersion {
@@ -287,10 +276,10 @@ impl Message {
 
         Message::Xmpp(VersionedXmppMessage {
             id,
-            from,
-            from_full: from_full.clone(),
-            to,
-            to_full: to_full.clone(),
+            from: from.to_bare(),
+            from_full: from.clone(),
+            to: to.to_bare(),
+            to_full: to.clone(),
             history: vec![version],
             type_: XmppMessageType::Chat,
             direction: Direction::Incoming,
@@ -301,21 +290,11 @@ impl Message {
     pub fn outgoing_chat<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
-        from_full: &Jid,
-        to_full: &Jid,
+        from: &Jid,
+        to: &Jid,
         bodies: &HashMap<String, String>,
         archive: bool,
     ) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
         let id = id.into();
 
         let version = XmppMessageVersion {
@@ -326,10 +305,10 @@ impl Message {
 
         Message::Xmpp(VersionedXmppMessage {
             id,
-            from,
-            from_full: from_full.clone(),
-            to,
-            to_full: to_full.clone(),
+            from: from.to_bare(),
+            from_full: from.clone(),
+            to: to.to_bare(),
+            to_full: to.clone(),
             history: vec![version],
             type_: XmppMessageType::Chat,
             direction: Direction::Outgoing,
@@ -340,21 +319,11 @@ impl Message {
     pub fn incoming_channel<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
-        from_full: &Jid,
-        to_full: &Jid,
+        from: &Jid,
+        to: &Jid,
         bodies: &HashMap<String, String>,
         archive: bool,
     ) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
         let id = id.into();
 
         let version = XmppMessageVersion {
@@ -365,10 +334,10 @@ impl Message {
 
         Message::Xmpp(VersionedXmppMessage {
             id,
-            from,
-            from_full: from_full.clone(),
-            to,
-            to_full: to_full.clone(),
+            from: from.to_bare(),
+            from_full: from.clone(),
+            to: to.to_bare(),
+            to_full: to.clone(),
             history: vec![version],
             type_: XmppMessageType::Channel,
             direction: Direction::Incoming,
@@ -379,21 +348,11 @@ impl Message {
     pub fn outgoing_channel<I: Into<String>>(
         id: I,
         timestamp: DateTime<FixedOffset>,
-        from_full: &Jid,
-        to_full: &Jid,
+        from: &Jid,
+        to: &Jid,
         bodies: &HashMap<String, String>,
         archive: bool,
     ) -> Self {
-        let from = match from_full {
-            Jid::Bare(from_full) => from_full.clone(),
-            Jid::Full(from_full) => from_full.clone().into(),
-        };
-
-        let to = match to_full {
-            Jid::Bare(to_full) => to_full.clone(),
-            Jid::Full(to_full) => to_full.clone().into(),
-        };
-
         let id = id.into();
 
         let version = XmppMessageVersion {
@@ -404,10 +363,10 @@ impl Message {
 
         Message::Xmpp(VersionedXmppMessage {
             id,
-            from,
-            from_full: from_full.clone(),
-            to,
-            to_full: to_full.clone(),
+            from: from.to_bare(),
+            from_full: from.clone(),
+            to: to.to_bare(),
+            to_full: to.clone(),
             history: vec![version],
             type_: XmppMessageType::Channel,
             direction: Direction::Outgoing,

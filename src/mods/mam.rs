@@ -85,6 +85,7 @@ impl Query {
             node: None,
             form: Some(form),
             set: Some(set),
+            flip_page: false,
         };
 
         let id = Uuid::new_v4().hyphenated().to_string();
@@ -196,7 +197,7 @@ impl ModTrait for MamMod {
                 account, channel, ..
             } => {
                 let query = Query {
-                    jid: channel.clone().into(),
+                    jid: channel.to_bare(),
                     with: None,
                     from: None,
                     count: 100,
@@ -205,7 +206,7 @@ impl ModTrait for MamMod {
             }
             Event::Chat { account, contact } => {
                 let query = Query {
-                    jid: account.clone().into(),
+                    jid: account.to_bare(),
                     with: Some(contact.clone()),
                     from: None,
                     count: 100,
@@ -227,7 +228,7 @@ impl ModTrait for MamMod {
                 from,
             } => {
                 let query = Query {
-                    jid: account.clone().into(),
+                    jid: account.to_bare(),
                     with: Some(contact.clone()),
                     from: *from,
                     count: 100,

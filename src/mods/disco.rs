@@ -51,7 +51,7 @@ impl DiscoMod {
     pub fn disco(&mut self, jid: Jid, node: Option<String>) -> Element {
         let id = Uuid::new_v4().hyphenated().to_string();
         let query = disco::DiscoInfoQuery { node };
-        let iq = Iq::from_get(id, query).with_to(Jid::from_str(&jid.domain()).unwrap());
+        let iq = Iq::from_get(id, query).with_to(Jid::from_str(&jid.domain().to_string()).unwrap());
         iq.into()
     }
 

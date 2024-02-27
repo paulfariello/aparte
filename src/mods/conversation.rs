@@ -135,11 +135,11 @@ impl ModTrait for ConversationMod {
             Event::Joined {
                 account, channel, ..
             } => {
-                let channel_jid: BareJid = channel.clone().into();
+                let channel_jid: BareJid = channel.to_bare();
                 let conversation = conversation::Conversation::Channel(conversation::Channel {
                     account: account.clone(),
                     jid: channel_jid.clone(),
-                    nick: channel.resource.clone(),
+                    nick: channel.resource().to_string(),
                     name: None,
                     occupants: HashMap::new(),
                 });
@@ -154,7 +154,7 @@ impl ModTrait for ConversationMod {
                 if let Some(Jid::Full(from)) = &presence.from {
                     let index = ConversationIndex {
                         account: account.clone(),
-                        jid: from.clone().into(),
+                        jid: from.to_bare(),
                     };
                     if let Some(conversation::Conversation::Channel(channel)) =
                         self.conversations.get_mut(&index)
@@ -162,9 +162,9 @@ impl ModTrait for ConversationMod {
                         for payload in presence.clone().payloads {
                             if let Ok(muc_user) = muc::user::MucUser::try_from(payload) {
                                 for item in muc_user.items {
-                                    let occupant_jid = item.jid.map(|full| full.into());
+                                    let occupant_jid = item.jid.map(|full| full.to_bare());
                                     let occupant = conversation::Occupant {
-                                        nick: from.resource.clone(),
+                                        nick: from.resource().to_string(),
                                         jid: occupant_jid,
                                         affiliation: item.affiliation.into(),
                                         role: item.role.into(),
