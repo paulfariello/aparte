@@ -429,7 +429,7 @@ impl Bookmarks2 {
     fn delete(&self, conference: BareJid) -> Element {
         let id = Uuid::new_v4().hyphenated().to_string();
         let item = Item {
-            id: Some(ItemId(conference.into())),
+            id: Some(ItemId(conference.into_inner())),
             payload: None,
             publisher: None,
         };
@@ -572,8 +572,8 @@ impl BookmarksMod {
 
     fn delete(&mut self, conference: BareJid) -> Option<(contact::Bookmark, Element)> {
         if let Some(index) = self.bookmarks.iter().position(|b| {
-            (conference.node.is_none() && b.name == Some(conference.to_string()))
-                || (conference.node.is_some() && b.jid == conference)
+            (conference.node().is_none() && b.name == Some(conference.to_string()))
+                || (conference.node().is_some() && b.jid == conference)
         }) {
             let bookmark = self.bookmarks.remove(index);
 
@@ -637,7 +637,7 @@ impl BookmarksMod {
             aparte.schedule(Event::Bookmark(bookmark.clone()));
             if bookmark.autojoin {
                 let jid = match &bookmark.nick {
-                    Some(nick) => Jid::Full(bookmark.jid.clone().with_resource(nick)),
+                    Some(nick) => Jid::Full(bookmark.jid.clone().with_resource_str(&nick).unwrap()), // TODO avoid unwrap
                     None => Jid::Bare(bookmark.jid.clone()),
                 };
                 log::info!("Autojoin {}", jid.to_string());
