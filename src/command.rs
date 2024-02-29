@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use anyhow::{anyhow, Result};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::account::Account;
@@ -16,15 +17,15 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(account: Option<Account>, context: String, buf: String) -> Result<Self, String> {
+    pub fn new(account: Option<Account>, context: String, buf: String) -> Result<Self> {
         let cursor = Cursor::from_index(&buf, buf.graphemes(true).count() - 1)
-            .map_err(|_| "invalid cursor".to_string())?;
+            .map_err(|_| anyhow!("Invalid index"))?;
         Command::parse_with_cursor(account, context, buf, cursor)
     }
 
-    pub fn parse_name<'a>(buf: &'a str) -> Result<&'a str, String> {
+    pub fn parse_name<'a>(buf: &'a str) -> Result<&'a str> {
         if &buf[0..1] != "/" {
-            return Err("Missing starting /".to_string());
+            anyhow::bail!("Missing starting /");
         }
 
         let buf = &buf[1..];
@@ -39,7 +40,7 @@ impl Command {
         context: String,
         buf: String,
         cursor: Cursor,
-    ) -> Result<Self, String> {
+    ) -> Result<Self> {
         enum State {
             Initial,
             Delimiter,
@@ -55,7 +56,7 @@ impl Command {
 
         let mut string_cursor = cursor
             .try_index(&buf)
-            .map_err(|_| "invalid cursor".to_string())?;
+            .map_err(|_| anyhow!("Invalid index"))?;
         let mut tokens: Vec<String> = Vec::new();
         let mut token = String::new();
         let mut state = Initial;
@@ -67,7 +68,7 @@ impl Command {
             state = match state {
                 Initial => match c {
                     Some('/') => Delimiter,
-                    _ => return Err("Missing starting /".to_string()),
+                    _ => anyhow::bail!("Missing starting /"),
                 },
                 Delimiter => match c {
                     Some(' ') => Delimiter,
@@ -89,7 +90,7 @@ impl Command {
                         token.push(c);
                         SimplyQuoted
                     }
-                    None => return Err("Missing closing quote".to_string()),
+                    None => anyhow::bail!("Missing closing quote"),
                 },
                 DoublyQuoted => match c {
                     Some('\"') => Unquoted,
@@ -98,7 +99,7 @@ impl Command {
                         token.push(c);
                         DoublyQuoted
                     }
-                    None => return Err("Missing closing quote".to_string()),
+                    None => anyhow::bail!("Missing closing quote"),
                 },
                 Unquoted => match c {
                     Some('\'') => SimplyQuoted,
@@ -123,21 +124,21 @@ impl Command {
                         token.push(c);
                         Unquoted
                     }
-                    None => return Err("Missing escaped char".to_string()),
+                    None => anyhow::bail!("Missing escaped char"),
                 },
                 SimplyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         SimplyQuoted
                     }
-                    None => return Err("Missing escaped char".to_string()),
+                    None => anyhow::bail!("Missing escaped char"),
                 },
                 DoublyQuotedEscaped => match c {
                     Some(c) => {
                         token.push(c);
                         DoublyQuoted
                     }
-                    None => return Err("Missing escaped char".to_string()),
+                    None => anyhow::bail!("Missing escaped char"),
                 },
             };
 
@@ -247,8 +248,8 @@ impl Command {
 pub struct CommandParser {
     pub name: &'static str,
     pub help: String,
-    pub parse: fn(&Option<Account>, &str, &str) -> Result<Command, String>,
-    pub exec: fn(&mut Aparte, Command) -> Result<(), String>,
+    pub parse: fn(&Option<Account>, &str, &str) -> anyhow::Result<Command>,
+    pub exec: fn(&mut Aparte, Command) -> anyhow::Result<()>,
     pub autocompletions: Vec<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>,
 }
 
@@ -280,20 +281,14 @@ macro_rules! parse_command_args(
             return Ok(())
         }
 
-        let $arg: Password<$type> = match Password::from_str(&$command.args[$index]) {
-            Ok(arg) => arg,
-            Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
-        };
+        let $arg: Password<$type> = Password::from_str(&$command.args[$index])?;
 
         $index += 1;
     );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Option<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
         let $arg: Option<$type> = {
             if $command.args.len() > $index {
-                match <$type>::from_str(&$command.args[$index]) {
-                    Ok(arg) => Some(arg),
-                    Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
-                }
+                Some(<$type>::from_str(&$command.args[$index])?)
             } else {
                 None
             }
@@ -319,12 +314,9 @@ macro_rules! parse_command_args(
                 [] => None,
                 [named] => {
                     let arg = named.splitn(2, "=").collect::<Vec<&str>>()[1];
-                    match <$type>::from_str(&arg) {
-                        Ok(arg) => Some(arg),
-                        Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
-                    }
+                    Some(<$type>::from_str(&arg)?)
                 }
-                _ => return Err(format!("Multiple occurance of {} argument", stringify!($arg))),
+                _ => ::anyhow::bail!("Multiple occurance of {} argument", stringify!($arg)),
             }
         };
 
@@ -332,7 +324,7 @@ macro_rules! parse_command_args(
     );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
-            return Err(format!("Missing {} argument", stringify!($arg)))
+            ::anyhow::bail!("Missing {} argument", stringify!($arg))
         }
 
         let mut sub_commands: HashMap<String, CommandParser> = HashMap::new();
@@ -346,18 +338,15 @@ macro_rules! parse_command_args(
                 };
                 (sub_parser.exec)($aparte, sub_command)
             },
-            None => Err(format!("Invalid subcommand {}", $command.args[$index])),
+            None => ::anyhow::bail!("Invalid subcommand {}", $command.args[$index]),
         };
     );
     ($aparte:ident, $command:ident, $index:ident, { $arg:ident: $type:ty $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
-            return Err(format!("Missing {} argument", stringify!($arg)))
+            ::anyhow::bail!("Missing {} argument", stringify!($arg))
         }
 
-        let $arg: $type = match <$type>::from_str(&$command.args[$index]) {
-            Ok(arg) => arg,
-            Err(e) => return Err(format!("Invalid format for {} argument: {}", stringify!($arg), e)),
-        };
+        let $arg: $type = <$type>::from_str(&$command.args[$index])?;
 
         $index += 1;
 
@@ -450,11 +439,11 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
-            fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command, String> {
+            fn parse(account: &Option<Account>, context: &str, buf: &str) -> ::anyhow::Result<Command> {
                 Command::new(account.clone(), context.to_string(), buf.to_string())
             }
 
-            fn exec(aparte: &mut Aparte, command: Command) -> Result<(), String> {
+            fn exec(aparte: &mut Aparte, command: Command) -> ::anyhow::Result<()> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!(aparte, command, index, $args);
@@ -485,11 +474,11 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
-            fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command, String> {
+            fn parse(account: &Option<Account>, context: &str, buf: &str) -> ::anyhow::Result<Command> {
                 Command::new(account.clone(), context.to_string(), buf.to_string())
             }
 
-            fn exec($aparte: &mut Aparte, mut $command: Command) -> Result<(), String> {
+            fn exec($aparte: &mut Aparte, mut $command: Command) -> ::anyhow::Result<()> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
                 parse_command_args!($aparte, $command, index, $args);
@@ -807,6 +796,6 @@ mod tests_command_parser {
     #[test]
     fn test_command_parse_name_without_args() {
         let name = Command::parse_name("/close");
-        assert_eq!(Ok("close"), name);
+        assert_eq!(anyhow::Result::Ok("close"), name);
     }
 }

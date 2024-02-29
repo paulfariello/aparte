@@ -416,7 +416,7 @@ Examples:
             log::debug!("Use stored config for {account_name}");
             account.clone()
         } else if !account_name.contains('@') {
-            return Err(format!("Unknown account or invalid jid {account_name}"));
+            anyhow::bail!("Unknown account or invalid jid {account_name}");
         } else if let Ok(jid) = Jid::from_str(&account_name) {
             ConnectionInfo {
                 jid: jid.to_string(),
@@ -425,7 +425,7 @@ Examples:
                 autoconnect: false,
             }
         } else {
-            return Err(format!("Unknown account or invalid jid {account_name}"));
+            anyhow::bail!("Unknown account or invalid jid {account_name}");
         }
     };
 
@@ -572,27 +572,21 @@ Example:
     message: Option<String>
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or("No connection found".to_string())?;
-    match Jid::from_str(&contact) {
-        Ok(jid) => {
-            aparte.schedule(Event::Chat { account: account.clone(), contact: jid.to_bare() });
-            if let Some(body) = message {
-                let mut bodies = HashMap::new();
-                bodies.insert("".to_string(), body);
-                let id = Uuid::new_v4().to_string();
-                let from: Jid = account.clone().into();
-                let timestamp = LocalTz::now();
-                let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies, false);
-                aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
+    let account = aparte.current_account().context("No connection found")?;
+    let jid = Jid::from_str(&contact).context("Invalid JID")?;
+    aparte.schedule(Event::Chat { account: account.clone(), contact: jid.to_bare() });
+    if let Some(body) = message {
+        let mut bodies = HashMap::new();
+        bodies.insert("".to_string(), body);
+        let id = Uuid::new_v4().to_string();
+        let from: Jid = account.clone().into();
+        let timestamp = LocalTz::now();
+        let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies, false);
+        aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
-                aparte.send(&account, message);
-            }
-            Ok(())
-        },
-        Err(err) => {
-            Err(format!("Invalid JID {contact}: {err}"))
-        }
+        aparte.send(&account, message);
     }
+    Ok(())
 });
 
 command_def!(join,
@@ -613,7 +607,7 @@ Example:
     },
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or("No connection found".to_string())?;
+    let account = aparte.current_account().context("No connection found")?;
     match Jid::from_str(&muc) {
         Ok(jid) => {
             aparte.schedule(Event::Join {
@@ -629,28 +623,20 @@ Example:
                 match bookmarks.get_by_name(&muc) {
                     Some(bookmark) => {
                         match bookmark.nick {
-                            Some(nick) => Ok(Jid::Full(bookmark.jid.with_resource_str(&nick).map_err(|e| format!("Invalid nick: {e}"))?)),
-                            None => Ok(Jid::Bare(bookmark.jid.clone())),
+                            Some(nick) => Jid::Full(bookmark.jid.with_resource_str(&nick).context("Invalid nick")?),
+                            None => Jid::Bare(bookmark.jid.clone()),
                         }
                     },
-                    None => match Jid::from_str(&muc) {
-                        Ok(jid) => Ok(jid),
-                        Err(e) => Err(e.to_string()),
-                    }
+                    None => Jid::from_str(&muc)?
                 }
             };
 
-            match jid {
-                Ok(jid) => {
-                    aparte.schedule(Event::Join {
-                        account,
-                        channel: jid,
-                        user_request: true
-                    });
-                    Ok(())
-                },
-                Err(e) => Err(e),
-            }
+            aparte.schedule(Event::Join {
+                account,
+                channel: jid,
+                user_request: true
+            });
+            Ok(())
         }
     }
 });
@@ -691,10 +677,7 @@ Examples:
 },
 |aparte, _command| {
     if let Some(cmd) = cmd {
-        let help = match aparte.command_parsers.get(&cmd) {
-            Some(command) => Ok(command.help.to_string()),
-            None => Err(format!("Unknown command {cmd}")),
-        }?;
+        let help = aparte.command_parsers.get(&cmd).with_context(|| format!("Unknown command {cmd}"))?.help.to_string();
 
         aparte.log(help);
         Ok(())
@@ -705,6 +688,7 @@ Examples:
 });
 
 mod me {
+    use anyhow::{anyhow, Context, Result};
     use chrono::Local as LocalTz;
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -718,7 +702,7 @@ mod me {
     use crate::message::Message;
     use crate::mods;
 
-    fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command, String> {
+    fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command> {
         Ok(Command {
             account: account.clone(),
             context: context.to_string(),
@@ -727,12 +711,12 @@ mod me {
         })
     }
 
-    fn exec(aparte: &mut Aparte, command: Command) -> Result<(), String> {
+    fn exec(aparte: &mut Aparte, command: Command) -> Result<()> {
         let account = command
             .account
-            .ok_or("Can't use /me in non XMPP window".to_string())?;
-        let jid = BareJid::from_str(&command.context)
-            .map_err(|_| "Can't use /me in non XMPP window".to_string())?;
+            .context("Can't use /me in non XMPP window")?;
+        let jid =
+            BareJid::from_str(&command.context).context("Can't use /me in non XMPP window")?;
         let message = {
             let conversation = aparte.get_mod::<mods::conversation::ConversationMod>();
             if let Some(conversation) = conversation.get(&account, &jid) {
@@ -760,7 +744,7 @@ mod me {
                         let us = account
                             .to_bare()
                             .with_resource_str(&channel.nick)
-                            .map_err(|e| format!("Invalid nick: {e}"))?;
+                            .context("Invalid nick")?;
                         let from: Jid = us.into();
                         let to: Jid = channel.jid.clone().into();
                         let id = Uuid::new_v4();
@@ -778,7 +762,7 @@ mod me {
                     }
                 }
             } else {
-                Err(format!("Unknown context {}", command.context))
+                Err(anyhow!("Unknown context {}", command.context))
             }
         }?;
         aparte.schedule(Event::SendMessage(account, message));
@@ -887,27 +871,23 @@ impl Aparte {
         account: &Option<Account>,
         context: &String,
         buf: &String,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let command_name = Command::parse_name(buf)?;
 
-        let parser = {
-            match self.command_parsers.get(command_name) {
-                Some(parser) => parser,
-                None => return Err(format!("Unknown command {command_name}")),
-            }
-        };
+        let parser = self
+            .command_parsers
+            .get(command_name)
+            .with_context(|| format!("Unknown command {command_name}"))?;
 
         let command = (parser.parse)(account, context, buf)?;
         (parser.exec)(self, command)
     }
 
-    pub fn handle_command(&mut self, command: Command) -> Result<(), String> {
-        let parser = {
-            match self.command_parsers.get(&command.args[0]) {
-                Some(parser) => parser,
-                None => return Err(format!("Unknown command {}", command.args[0])),
-            }
-        };
+    pub fn handle_command(&mut self, command: Command) -> Result<()> {
+        let parser = self
+            .command_parsers
+            .get(&command.args[0])
+            .with_context(|| format!("Unknown command {}", command.args[0]))?;
 
         (parser.exec)(self, command)
     }
