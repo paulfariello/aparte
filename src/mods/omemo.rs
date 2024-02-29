@@ -250,7 +250,11 @@ impl CryptoEngineTrait for OmemoEngine {
         let own_device = aparte
             .storage
             .get_omemo_own_device(account)?
-            .ok_or(anyhow!("Omemo isn't configured"))?;
+            .ok_or(anyhow!("Missing own device"))?;
+
+        let own_devices = aparte
+            .storage
+            .get_omemo_contact_devices(account, &account.to_bare())?;
 
         let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
         let dek = Aes128Gcm::generate_key(OsRng);
@@ -272,7 +276,11 @@ impl CryptoEngineTrait for OmemoEngine {
             .storage
             .get_omemo_contact_devices(account, &message.to)?
             .iter()
-            .chain(Some((&own_device).into()).iter())
+            .chain(
+                own_devices
+                    .iter()
+                    .filter(|device| device.id != own_device.id),
+            )
             .filter_map(|device| {
                 let remote_address =
                     ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
