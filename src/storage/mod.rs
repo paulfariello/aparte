@@ -121,6 +121,28 @@ impl Storage {
             .get_results(&mut conn)?)
     }
 
+    pub fn get_omemo_contact_identities(
+        &self,
+        account: &Account,
+        contact: &BareJid,
+    ) -> Result<Vec<libsignal_protocol::IdentityKey>> {
+        use schema::omemo_identity;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_identity::table
+            .filter(omemo_identity::account.eq(account.to_string()))
+            .filter(omemo_identity::user_id.eq(contact.to_string()))
+            .get_results(&mut conn)?
+            .into_iter()
+            .filter_map(|identity: OmemoIdentity| {
+                libsignal_protocol::IdentityKey::decode(&identity.identity).ok()
+            })
+            .collect())
+    }
+
     pub fn get_omemo_identity_key_pair(
         &self,
         account: &Account,

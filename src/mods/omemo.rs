@@ -82,18 +82,34 @@ Examples:
 
 command_def!(
     omemo_fingerprint,
-    r#"/omemo fingerprint
+    r#"/omemo fingerprint [<jid>]
 
 Description:
-    Show OMEMO own fingerprint
+    Show OMEMO own or given jid fingerprint
 
 Examples:
     /omemo fingerprint
 "#,
-    {},
+{
+    jid: Option<String>,
+},
     |aparte, _command| {
+        let mut current = {
+            let ui = aparte.get_mod::<UIMod>();
+            ui.current_window().cloned()
+        };
+
+        if current == Some(String::from("console")) {
+            current = None;
+        }
+        let contact = jid.or(current).map(|jid| BareJid::from_str(&jid))
+            .transpose()?;
+
         if let Some(account) = aparte.current_account() {
-            aparte.schedule(Event::Omemo(OmemoEvent::Fingerprint { account }));
+            aparte.schedule(Event::Omemo(OmemoEvent::ShowFingerprints {
+                account,
+                jid: contact,
+            }));
         }
         Ok(())
     }
@@ -112,8 +128,14 @@ r#"/omemo enable"#,
 
 #[derive(Debug, Clone)]
 pub enum OmemoEvent {
-    Enable { account: Account, jid: BareJid },
-    Fingerprint { account: Account },
+    Enable {
+        account: Account,
+        jid: BareJid,
+    },
+    ShowFingerprints {
+        account: Account,
+        jid: Option<BareJid>,
+    },
 }
 
 struct OmemoEngine {
@@ -566,22 +588,46 @@ impl OmemoMod {
         Ok(own_device)
     }
 
-    fn get_own_fingerprint(&self, account: &Account) -> Result<String> {
+    fn show_fingerprints(
+        &self,
+        aparte: &mut Aparte,
+        account: &Account,
+        jid: &Option<BareJid>,
+    ) -> Result<()> {
         let signal_store = self
             .signal_stores
             .get(&account)
             .ok_or(anyhow!("OMEMO not configured for {account}"))?;
-        if let Ok(Some(OmemoOwnDevice {
-            identity: Some(identity),
-            ..
-        })) = signal_store.storage.get_omemo_own_device(&account)
-        {
-            let identity = IdentityKeyPair::try_from(identity.as_slice())
-                .map_err(|_| anyhow!("Corrupted own OMEMO identity"))?;
-            Ok(fingerprint(identity.public_key()))
-        } else {
-            anyhow::bail!("Can't get OMEMO own device for {account}");
+
+        let identities = match jid {
+            None => vec![IdentityKeyPair::try_from(
+                signal_store
+                    .storage
+                    .get_omemo_own_device(account)?
+                    .context("No current OMEMO device")?
+                    .identity
+                    .context("Missing identity for device")?
+                    .as_slice(),
+            )?
+            .public_key()
+            .clone()],
+            Some(jid) => signal_store
+                .storage
+                .get_omemo_contact_identities(&account, jid)?
+                .into_iter()
+                .map(|identity| identity.public_key().clone())
+                .collect(),
+        };
+
+        match jid {
+            Some(jid) => aparte.log(format!("OMEMO fingerprint for {jid}:")),
+            None => aparte.log(format!("OMEMO own fingerprint:")),
         }
+        for identity in identities {
+            aparte.log(fingerprint(&identity));
+        }
+
+        Ok(())
     }
 
     async fn start_session(
@@ -1061,18 +1107,12 @@ impl ModTrait for OmemoMod {
                         }
                     }
                 }
-                OmemoEvent::Fingerprint { account } => {
-                    let mut aparte = aparte.proxy();
+                OmemoEvent::ShowFingerprints { account, jid } => {
                     let account = account.clone();
 
-                    match self.get_own_fingerprint(&account) {
-                        Ok(fingerprint) => {
-                            aparte.log(format!("OMEMO fingerprint ({account}): {fingerprint}"));
-                        }
-                        Err(err) => {
-                            log::error!("Cannot get own OMEMO fingerprint: {err}");
-                            aparte.error("Cannot get own OMEMO fingerprint", err);
-                        }
+                    if let Err(e) = self.show_fingerprints(aparte, &account, &jid) {
+                        log::error!("Cannot get own OMEMO fingerprint: {e}");
+                        aparte.error("Cannot get own OMEMO fingerprint", e);
                     }
                 }
             },
