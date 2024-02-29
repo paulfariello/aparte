@@ -6,6 +6,7 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 
+use anyhow::Context;
 use uuid::Uuid;
 use xmpp_parsers::bookmarks;
 use xmpp_parsers::bookmarks2;
@@ -48,7 +49,7 @@ Examples:
     autojoin: Named<bool>
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or("No connection found".to_string())?;
+    let account = aparte.current_account().context("No connection found")?;
     let autojoin = autojoin.unwrap_or(false);
     let bookmark = contact::Bookmark {
         jid: conference,
@@ -67,9 +68,8 @@ Examples:
     Ok(())
 });
 
-command_def!(
-    bookmark_del,
-    r#"/bookmark del <bookmark>
+command_def!(bookmark_del,
+r#"/bookmark del <bookmark>
 
     bookmark    The bookmark friendly name
 
@@ -79,20 +79,18 @@ Description:
 Examples:
     /bookmark del aparte
 "#,
-    { conference: BareJid },
-    |aparte, _command| {
-        let account = aparte
-            .current_account()
-            .ok_or("No connection found".to_string())?;
-        if let Some((bookmark, delete)) = {
-            let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
-            bookmarks.delete(conference)
-        } {
-            aparte.schedule(Event::DeletedBookmark(bookmark.jid));
-            aparte.send(&account, delete);
-        }
-        Ok(())
+{ conference: BareJid },
+|aparte, _command| {
+    let account = aparte.current_account().context("No connection found")?;
+    if let Some((bookmark, delete)) = {
+        let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
+        bookmarks.delete(conference)
+    } {
+        aparte.schedule(Event::DeletedBookmark(bookmark.jid));
+        aparte.send(&account, delete);
     }
+    Ok(())
+}
 );
 
 command_def!(bookmark_edit,
@@ -118,16 +116,14 @@ Examples:
     conference: Option<BareJid>,
 },
 |aparte, _command| {
-    let account = aparte.current_account().ok_or("No connection found".to_string())?;
-    if let Some(edit) = {
+    let account = aparte.current_account().context("No connection found")?;
+    let edit = {
         let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
-        bookmarks.edit(name.clone(), conference, nick, autojoin)
-    } {
-        aparte.send(&account, edit);
-        Ok(())
-    } else {
-        Err(format!("Unknown bookmark {name}"))
-    }
+        bookmarks.edit(name.clone(), conference, nick, autojoin).with_context(|| format!("Unknown bookmark {name}"))?
+    };
+
+    aparte.send(&account, edit);
+    Ok(())
 });
 
 command_def!(bookmark,
