@@ -302,7 +302,7 @@ impl CryptoEngineTrait for OmemoEngine {
                     keys,
                 },
                 payload: Some(legacy_omemo::Payload {
-                    data: encrypted.to_vec(),
+                    data: encrypted[..body.len()].to_vec(),
                 }),
             }
             .into(),
@@ -398,7 +398,6 @@ impl CryptoEngineTrait for OmemoEngine {
                 .map_err(|_| anyhow!("Message decryption failed"))?;
             let message = String::from_utf8(cleartext)
                 .context("Message decryption resulted in invalid utf-8")?;
-            log::debug!("Decrypted message: {message}");
             decrypted_message
                 .bodies
                 .insert(String::new(), xmpp_parsers::message::Body(message));
