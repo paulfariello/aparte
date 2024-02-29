@@ -418,7 +418,7 @@ fn fingerprint(pub_key: &PublicKey) -> String {
             .serialize()
             .iter()
             .skip(1)
-            .map(|byte| format!("{byte:x}"))
+            .map(|byte| format!("{byte:02x}"))
             .chunks(4)
             .into_iter()
             .map(|word| word.collect::<String>()),
