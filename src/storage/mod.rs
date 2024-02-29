@@ -7,7 +7,7 @@ mod schema;
 use std::convert::TryFrom;
 use std::path::PathBuf;
 
-use anyhow::{Error, Result};
+use anyhow::{anyhow, Error, Result};
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -120,6 +120,375 @@ impl Storage {
             .filter(omemo_contact_device::contact.eq(contact.to_string()))
             .get_results(&mut conn)?)
     }
+
+    pub fn get_omemo_identity_key_pair(
+        &self,
+        account: &Account,
+    ) -> Result<libsignal_protocol::IdentityKeyPair> {
+        log::debug!("Get own identity key pair");
+        let identity = self
+            .get_omemo_own_device(account)?
+            .map(|device| device.identity)
+            .flatten()
+            .ok_or(anyhow!("Missing own device identity"))?;
+        Ok(libsignal_protocol::IdentityKeyPair::try_from(
+            identity.as_ref(),
+        )?)
+    }
+
+    pub fn get_omemo_local_registration_id(&self, account: &Account) -> Result<u32> {
+        log::debug!("Get local registration id");
+        self.get_omemo_own_device(account)?
+            .map(|device| device.id as u32)
+            .ok_or(anyhow!("Missing own device"))
+    }
+
+    pub fn save_omemo_identity(
+        &mut self,
+        account: &Account,
+        address: &libsignal_protocol::ProtocolAddress,
+        identity: &libsignal_protocol::IdentityKey,
+    ) -> Result<bool> {
+        log::debug!("Save {address}'s identity");
+        // The return value represents whether an existing identity was replaced (`Ok(true)`). If it is
+        // new or hasn't changed, the return value should be `Ok(false)`.
+        let ret = if let Some(stored) = self.get_omemo_identity(account, address)? {
+            if &stored != identity {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        use schema::omemo_identity;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+        diesel::insert_into(omemo_identity::table)
+            .values((
+                omemo_identity::account.eq(account.to_string()),
+                omemo_identity::user_id.eq(address.name()),
+                omemo_identity::device_id.eq(u32::from(address.device_id()) as i64),
+                omemo_identity::identity.eq(identity.serialize().to_vec()),
+            ))
+            .on_conflict((
+                omemo_identity::account,
+                omemo_identity::user_id,
+                omemo_identity::device_id,
+            ))
+            .do_update()
+            .set(omemo_identity::identity.eq(identity.serialize().to_vec()))
+            .execute(&mut conn)?;
+
+        Ok(ret)
+    }
+
+    pub fn is_omemo_trusted_identity(
+        &self,
+        account: &Account,
+        address: &libsignal_protocol::ProtocolAddress,
+        identity: &libsignal_protocol::IdentityKey,
+        _direction: libsignal_protocol::Direction,
+    ) -> Result<bool> {
+        log::debug!("Is {address}'s identity trusted?");
+        Ok(match self.get_omemo_identity(account, address)? {
+            Some(stored) => &stored == identity,
+            _ => false,
+        })
+    }
+
+    pub fn get_omemo_identity(
+        &self,
+        account: &Account,
+        address: &libsignal_protocol::ProtocolAddress,
+    ) -> Result<Option<libsignal_protocol::IdentityKey>> {
+        log::debug!("Get {address}'s identity");
+        use schema::omemo_identity;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_identity::table
+            .filter(omemo_identity::account.eq(account.to_string()))
+            .filter(omemo_identity::user_id.eq(address.name()))
+            .filter(omemo_identity::device_id.eq(u32::from(address.device_id()) as i64))
+            .first(&mut conn)
+            .optional()?
+            .map(|identity: OmemoIdentity| {
+                libsignal_protocol::IdentityKey::decode(&identity.identity)
+            })
+            .transpose()?)
+    }
+
+    pub fn load_omemo_session(
+        &self,
+        account: &Account,
+        address: &libsignal_protocol::ProtocolAddress,
+    ) -> Result<Option<libsignal_protocol::SessionRecord>> {
+        log::debug!("Load session for {address}");
+        use schema::omemo_session;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_session::table
+            .filter(omemo_session::account.eq(account.to_string()))
+            .filter(omemo_session::user_id.eq(address.name()))
+            .filter(omemo_session::device_id.eq(u32::from(address.device_id()) as i64))
+            .first(&mut conn)
+            .optional()?
+            .map(|session: OmemoSession| {
+                libsignal_protocol::SessionRecord::deserialize(&session.session)
+            })
+            .transpose()?)
+    }
+
+    pub fn store_omemo_session(
+        &mut self,
+        account: &Account,
+        address: &libsignal_protocol::ProtocolAddress,
+        session: &libsignal_protocol::SessionRecord,
+    ) -> Result<()> {
+        log::debug!("Store session for {address}");
+        use schema::omemo_session;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+        diesel::insert_into(omemo_session::table)
+            .values((
+                omemo_session::account.eq(account.to_string()),
+                omemo_session::user_id.eq(address.name()),
+                omemo_session::device_id.eq(u32::from(address.device_id()) as i64),
+                omemo_session::session.eq(session.serialize()?.to_vec()),
+            ))
+            .on_conflict((
+                omemo_session::account,
+                omemo_session::user_id,
+                omemo_session::device_id,
+            ))
+            .do_update()
+            .set(omemo_session::session.eq(session.serialize()?.to_vec()))
+            .execute(&mut conn)
+            .map_err(signal_storage_display_error())?;
+
+        Ok(())
+    }
+
+    pub fn get_omemo_pre_key(
+        &self,
+        account: &Account,
+        pre_key_id: libsignal_protocol::PreKeyId,
+    ) -> Result<libsignal_protocol::PreKeyRecord> {
+        log::debug!("Get pre key {pre_key_id}");
+        use schema::omemo_pre_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_pre_key::table
+            .filter(omemo_pre_key::account.eq(account.to_string()))
+            .filter(omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64))
+            .first(&mut conn)
+            .optional()?
+            .ok_or_else(signal_storage_empty_error("PreKey not found"))
+            .map(|pre_key: OmemoPreKey| {
+                libsignal_protocol::PreKeyRecord::deserialize(&pre_key.pre_key)
+            })??)
+    }
+
+    pub fn get_all_omemo_pre_key(
+        &self,
+        account: &Account,
+    ) -> Result<Vec<libsignal_protocol::PreKeyRecord>> {
+        log::debug!("Get all pre key");
+        use schema::omemo_pre_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_pre_key::table
+            .filter(omemo_pre_key::account.eq(account.to_string()))
+            .get_results(&mut conn)?
+            .into_iter()
+            .filter_map(|pre_key: OmemoPreKey| {
+                libsignal_protocol::PreKeyRecord::deserialize(&pre_key.pre_key).ok()
+            })
+            .collect())
+    }
+
+    pub fn save_omemo_pre_key(
+        &mut self,
+        account: &Account,
+        pre_key_id: libsignal_protocol::PreKeyId,
+        pre_key: &libsignal_protocol::PreKeyRecord,
+    ) -> Result<()> {
+        log::debug!("Save pre key {pre_key_id}");
+        use schema::omemo_pre_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+        diesel::insert_into(omemo_pre_key::table)
+            .values((
+                omemo_pre_key::account.eq(account.to_string()),
+                omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64),
+                omemo_pre_key::pre_key.eq(pre_key.serialize()?.to_vec()),
+            ))
+            .on_conflict((omemo_pre_key::account, omemo_pre_key::pre_key_id))
+            .do_update()
+            .set(omemo_pre_key::pre_key.eq(pre_key.serialize()?.to_vec()))
+            .execute(&mut conn)
+            .map_err(signal_storage_display_error())?;
+
+        Ok(())
+    }
+
+    pub fn remove_omemo_pre_key(
+        &mut self,
+        account: &Account,
+        pre_key_id: libsignal_protocol::PreKeyId,
+    ) -> Result<()> {
+        log::debug!("Remove pre key {pre_key_id}");
+        use schema::omemo_pre_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        diesel::delete(
+            omemo_pre_key::table
+                .filter(omemo_pre_key::account.eq(account.to_string()))
+                .filter(omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64)),
+        )
+        .execute(&mut conn)
+        .map_err(signal_storage_display_error())?;
+
+        Ok(())
+    }
+
+    pub fn get_omemo_signed_pre_key(
+        &self,
+        account: &Account,
+        signed_pre_key_id: libsignal_protocol::SignedPreKeyId,
+    ) -> Result<libsignal_protocol::SignedPreKeyRecord> {
+        log::debug!("Get signed pre key {signed_pre_key_id}");
+        use schema::omemo_signed_pre_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_signed_pre_key::table
+            .filter(omemo_signed_pre_key::account.eq(account.to_string()))
+            .filter(omemo_signed_pre_key::signed_pre_key_id.eq(u32::from(signed_pre_key_id) as i64))
+            .first(&mut conn)
+            .optional()
+            .map_err(signal_storage_display_error())?
+            .ok_or_else(signal_storage_empty_error("PreKey not found"))
+            .map(|signed_pre_key: OmemoSignedPreKey| {
+                libsignal_protocol::SignedPreKeyRecord::deserialize(&signed_pre_key.signed_pre_key)
+            })??)
+    }
+
+    pub fn save_omemo_signed_pre_key(
+        &mut self,
+        account: &Account,
+        signed_pre_key_id: libsignal_protocol::SignedPreKeyId,
+        signed_pre_key: &libsignal_protocol::SignedPreKeyRecord,
+    ) -> Result<()> {
+        log::debug!("Save signed pre key {signed_pre_key_id}");
+        use schema::omemo_signed_pre_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+        diesel::insert_into(omemo_signed_pre_key::table)
+            .values((
+                omemo_signed_pre_key::account.eq(account.to_string()),
+                omemo_signed_pre_key::signed_pre_key_id.eq(u32::from(signed_pre_key_id) as i64),
+                omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.to_vec()),
+            ))
+            .on_conflict((
+                omemo_signed_pre_key::account,
+                omemo_signed_pre_key::signed_pre_key_id,
+            ))
+            .do_update()
+            .set(omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.to_vec()))
+            .execute(&mut conn)
+            .map_err(signal_storage_display_error())?;
+
+        Ok(())
+    }
+
+    pub fn store_omemo_sender_key(
+        &mut self,
+        account: &Account,
+        sender: &libsignal_protocol::ProtocolAddress,
+        distribution_id: uuid::Uuid,
+        sender_key: &libsignal_protocol::SenderKeyRecord,
+    ) -> Result<()> {
+        log::debug!("Store sender key {sender}");
+        use schema::omemo_sender_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+        diesel::insert_into(omemo_sender_key::table)
+            .values((
+                omemo_sender_key::account.eq(account.to_string()),
+                omemo_sender_key::sender_id.eq(sender.name()),
+                omemo_sender_key::device_id.eq(u32::from(sender.device_id()) as i64),
+                omemo_sender_key::distribution_id.eq(distribution_id.as_bytes().to_vec()),
+                omemo_sender_key::sender_key.eq(sender_key.serialize()?.to_vec()),
+            ))
+            .on_conflict((
+                omemo_sender_key::account,
+                omemo_sender_key::sender_id,
+                omemo_sender_key::device_id,
+                omemo_sender_key::distribution_id,
+            ))
+            .do_update()
+            .set(omemo_sender_key::sender_key.eq(sender_key.serialize()?.to_vec()))
+            .execute(&mut conn)
+            .map_err(signal_storage_display_error())?;
+
+        Ok(())
+    }
+
+    pub fn load_omemo_sender_key(
+        &mut self,
+        account: &Account,
+        sender: &libsignal_protocol::ProtocolAddress,
+        distribution_id: uuid::Uuid,
+    ) -> Result<Option<libsignal_protocol::SenderKeyRecord>> {
+        log::debug!("Load sender key {sender}");
+        use schema::omemo_sender_key;
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(signal_storage_error("Cannot connect to storage"))?;
+
+        Ok(omemo_sender_key::table
+            .filter(omemo_sender_key::account.eq(account.to_string()))
+            .filter(omemo_sender_key::sender_id.eq(sender.name()))
+            .filter(omemo_sender_key::device_id.eq(u32::from(sender.device_id()) as i64))
+            .filter(omemo_sender_key::distribution_id.eq(distribution_id.as_bytes().to_vec()))
+            .first(&mut conn)
+            .optional()
+            .map_err(signal_storage_display_error())?
+            .map(|sender_key: OmemoSenderKey| {
+                libsignal_protocol::SenderKeyRecord::deserialize(&sender_key.sender_key)
+            })
+            .transpose()?)
+    }
 }
 
 fn signal_storage_error<T>(
@@ -133,15 +502,13 @@ where
     }
 }
 
-fn signal_storage_display_error<T>(
-    str: &'static str,
-) -> impl Fn(T) -> libsignal_protocol::error::SignalProtocolError
+fn signal_storage_display_error<T>() -> impl Fn(T) -> libsignal_protocol::error::SignalProtocolError
 where
     T: std::fmt::Display,
 {
     move |e: T| {
         libsignal_protocol::error::SignalProtocolError::ApplicationCallbackError(
-            str,
+            "Storage Error",
             Box::new(UnwindSafeResultError(format!("{}", e))),
         )
     }
@@ -187,15 +554,9 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         &self,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<libsignal_protocol::IdentityKeyPair> {
-        log::debug!("Get own identity key pair");
         self.storage
-            .get_omemo_own_device(&self.account)
-            .map_err(signal_storage_display_error("Cannot get own device"))?
-            .map(|device| device.identity)
-            .flatten()
-            .ok_or_else(signal_storage_empty_error("Missing own device identity"))
-            .map(|identity| libsignal_protocol::IdentityKeyPair::try_from(identity.as_ref()))?
-            .map_err(signal_storage_error("Corrupted stored own identity"))
+            .get_omemo_identity_key_pair(&self.account)
+            .map_err(signal_storage_display_error())
     }
 
     async fn get_local_registration_id(
@@ -204,55 +565,19 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
     ) -> libsignal_protocol::error::Result<u32> {
         log::debug!("Get local registration id");
         self.storage
-            .get_omemo_own_device(&self.account)
-            .map_err(signal_storage_display_error("Cannot get own device"))?
-            .map(|device| device.id as u32)
-            .ok_or_else(signal_storage_empty_error("Missing own device"))
+            .get_omemo_local_registration_id(&self.account)
+            .map_err(signal_storage_display_error())
     }
 
     async fn save_identity(
         &mut self,
         address: &libsignal_protocol::ProtocolAddress,
         identity: &libsignal_protocol::IdentityKey,
-        ctx: libsignal_protocol::Context,
+        _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<bool> {
-        log::debug!("Save {address}'s identity");
-        // The return value represents whether an existing identity was replaced (`Ok(true)`). If it is
-        // new or hasn't changed, the return value should be `Ok(false)`.
-        let ret = if let Some(stored) = self.get_identity(address, ctx).await? {
-            if &stored != identity {
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        use schema::omemo_identity;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-        diesel::insert_into(omemo_identity::table)
-            .values((
-                omemo_identity::account.eq(self.account.to_string()),
-                omemo_identity::user_id.eq(address.name()),
-                omemo_identity::device_id.eq(u32::from(address.device_id()) as i64),
-                omemo_identity::identity.eq(identity.serialize().to_vec()),
-            ))
-            .on_conflict((
-                omemo_identity::account,
-                omemo_identity::user_id,
-                omemo_identity::device_id,
-            ))
-            .do_update()
-            .set(omemo_identity::identity.eq(identity.serialize().to_vec()))
-            .execute(&mut conn)
-            .map_err(signal_storage_display_error("Cannot upsert identity"))?;
-
-        Ok(ret)
+        self.storage
+            .save_omemo_identity(&self.account, address, identity)
+            .map_err(signal_storage_display_error())
     }
 
     async fn is_trusted_identity(
@@ -260,13 +585,11 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         address: &libsignal_protocol::ProtocolAddress,
         identity: &libsignal_protocol::IdentityKey,
         _direction: libsignal_protocol::Direction,
-        ctx: libsignal_protocol::Context,
+        _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<bool> {
-        log::debug!("Is {address}'s identity trusted");
-        Ok(match self.get_identity(address, ctx).await? {
-            Some(stored) => &stored == identity,
-            _ => false,
-        })
+        self.storage
+            .is_omemo_trusted_identity(&self.account, address, identity, _direction)
+            .map_err(signal_storage_display_error())
     }
 
     async fn get_identity(
@@ -274,25 +597,9 @@ impl libsignal_protocol::IdentityKeyStore for SignalStorage {
         address: &libsignal_protocol::ProtocolAddress,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::IdentityKey>> {
-        log::debug!("Get {address}'s identity");
-        use schema::omemo_identity;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-
-        omemo_identity::table
-            .filter(omemo_identity::account.eq(self.account.to_string()))
-            .filter(omemo_identity::user_id.eq(address.name()))
-            .filter(omemo_identity::device_id.eq(u32::from(address.device_id()) as i64))
-            .first(&mut conn)
-            .optional()
-            .map_err(signal_storage_display_error("Cannot fetch identity"))?
-            .map(|identity: OmemoIdentity| {
-                libsignal_protocol::IdentityKey::decode(&identity.identity)
-            })
-            .transpose()
+        self.storage
+            .get_omemo_identity(&self.account, address)
+            .map_err(signal_storage_display_error())
     }
 }
 
@@ -303,25 +610,9 @@ impl libsignal_protocol::SessionStore for SignalStorage {
         address: &libsignal_protocol::ProtocolAddress,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SessionRecord>> {
-        log::debug!("Load session for {address}");
-        use schema::omemo_session;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-
-        omemo_session::table
-            .filter(omemo_session::account.eq(self.account.to_string()))
-            .filter(omemo_session::user_id.eq(address.name()))
-            .filter(omemo_session::device_id.eq(u32::from(address.device_id()) as i64))
-            .first(&mut conn)
-            .optional()
-            .map_err(signal_storage_display_error("Cannot fetch session"))?
-            .map(|session: OmemoSession| {
-                libsignal_protocol::SessionRecord::deserialize(&session.session)
-            })
-            .transpose()
+        self.storage
+            .load_omemo_session(&self.account, address)
+            .map_err(signal_storage_display_error())
     }
 
     async fn store_session(
@@ -330,31 +621,9 @@ impl libsignal_protocol::SessionStore for SignalStorage {
         session: &libsignal_protocol::SessionRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
-        log::debug!("Store session for {address}");
-        use schema::omemo_session;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-        diesel::insert_into(omemo_session::table)
-            .values((
-                omemo_session::account.eq(self.account.to_string()),
-                omemo_session::user_id.eq(address.name()),
-                omemo_session::device_id.eq(u32::from(address.device_id()) as i64),
-                omemo_session::session.eq(session.serialize()?.to_vec()),
-            ))
-            .on_conflict((
-                omemo_session::account,
-                omemo_session::user_id,
-                omemo_session::device_id,
-            ))
-            .do_update()
-            .set(omemo_session::session.eq(session.serialize()?.to_vec()))
-            .execute(&mut conn)
-            .map_err(signal_storage_display_error("Cannot upsert session"))?;
-
-        Ok(())
+        self.storage
+            .store_omemo_session(&self.account, address, session)
+            .map_err(signal_storage_display_error())
     }
 }
 
@@ -365,24 +634,9 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
         pre_key_id: libsignal_protocol::PreKeyId,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<libsignal_protocol::PreKeyRecord> {
-        log::debug!("Get pre key {pre_key_id}");
-        use schema::omemo_pre_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-
-        omemo_pre_key::table
-            .filter(omemo_pre_key::account.eq(self.account.to_string()))
-            .filter(omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64))
-            .first(&mut conn)
-            .optional()
-            .map_err(signal_storage_display_error("Cannot fetch pre_key"))?
-            .ok_or_else(signal_storage_empty_error("PreKey not found"))
-            .map(|pre_key: OmemoPreKey| {
-                libsignal_protocol::PreKeyRecord::deserialize(&pre_key.pre_key)
-            })?
+        self.storage
+            .get_omemo_pre_key(&self.account, pre_key_id)
+            .map_err(signal_storage_display_error())
     }
 
     async fn save_pre_key(
@@ -391,30 +645,9 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
         pre_key: &libsignal_protocol::PreKeyRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
-        log::debug!("Save pre key {pre_key_id}");
-        use schema::omemo_pre_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-        diesel::insert_into(omemo_pre_key::table)
-            .values((
-                omemo_pre_key::account.eq(self.account.to_string()),
-                omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64),
-                omemo_pre_key::pre_key.eq(pre_key.serialize()?.to_vec()),
-            ))
-            .on_conflict((
-                omemo_pre_key::account,
-                omemo_pre_key::pre_key_id,
-                omemo_pre_key::pre_key,
-            ))
-            .do_update()
-            .set(omemo_pre_key::pre_key.eq(pre_key.serialize()?.to_vec()))
-            .execute(&mut conn)
-            .map_err(signal_storage_display_error("Cannot upsert pre_key"))?;
-
-        Ok(())
+        self.storage
+            .save_omemo_pre_key(&self.account, pre_key_id, pre_key)
+            .map_err(signal_storage_display_error())
     }
 
     async fn remove_pre_key(
@@ -422,23 +655,9 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
         pre_key_id: libsignal_protocol::PreKeyId,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
-        log::debug!("Remove pre key {pre_key_id}");
-        use schema::omemo_pre_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-
-        diesel::delete(
-            omemo_pre_key::table
-                .filter(omemo_pre_key::account.eq(self.account.to_string()))
-                .filter(omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64)),
-        )
-        .execute(&mut conn)
-        .map_err(signal_storage_display_error("Cannot delete pre_key"))?;
-
-        Ok(())
+        self.storage
+            .remove_omemo_pre_key(&self.account, pre_key_id)
+            .map_err(signal_storage_display_error())
     }
 }
 
@@ -449,24 +668,9 @@ impl libsignal_protocol::SignedPreKeyStore for SignalStorage {
         signed_pre_key_id: libsignal_protocol::SignedPreKeyId,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<libsignal_protocol::SignedPreKeyRecord> {
-        log::debug!("Get signed pre key {signed_pre_key_id}");
-        use schema::omemo_signed_pre_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-
-        omemo_signed_pre_key::table
-            .filter(omemo_signed_pre_key::account.eq(self.account.to_string()))
-            .filter(omemo_signed_pre_key::signed_pre_key_id.eq(u32::from(signed_pre_key_id) as i64))
-            .first(&mut conn)
-            .optional()
-            .map_err(signal_storage_display_error("Cannot fetch signed_pre_key"))?
-            .ok_or_else(signal_storage_empty_error("PreKey not found"))
-            .map(|signed_pre_key: OmemoSignedPreKey| {
-                libsignal_protocol::SignedPreKeyRecord::deserialize(&signed_pre_key.signed_pre_key)
-            })?
+        self.storage
+            .get_omemo_signed_pre_key(&self.account, signed_pre_key_id)
+            .map_err(signal_storage_display_error())
     }
 
     async fn save_signed_pre_key(
@@ -475,30 +679,9 @@ impl libsignal_protocol::SignedPreKeyStore for SignalStorage {
         signed_pre_key: &libsignal_protocol::SignedPreKeyRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
-        log::debug!("Save signed pre key {signed_pre_key_id}");
-        use schema::omemo_signed_pre_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-        diesel::insert_into(omemo_signed_pre_key::table)
-            .values((
-                omemo_signed_pre_key::account.eq(self.account.to_string()),
-                omemo_signed_pre_key::signed_pre_key_id.eq(u32::from(signed_pre_key_id) as i64),
-                omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.to_vec()),
-            ))
-            .on_conflict((
-                omemo_signed_pre_key::account,
-                omemo_signed_pre_key::signed_pre_key_id,
-                omemo_signed_pre_key::signed_pre_key,
-            ))
-            .do_update()
-            .set(omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.to_vec()))
-            .execute(&mut conn)
-            .map_err(signal_storage_display_error("Cannot upsert signed_pre_key"))?;
-
-        Ok(())
+        self.storage
+            .save_omemo_signed_pre_key(&self.account, signed_pre_key_id, signed_pre_key)
+            .map_err(signal_storage_display_error())
     }
 }
 
@@ -511,34 +694,9 @@ impl libsignal_protocol::SenderKeyStore for SignalStorage {
         sender_key: &libsignal_protocol::SenderKeyRecord,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<()> {
-        log::debug!("Store sender key {sender}");
-        use schema::omemo_sender_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-        diesel::insert_into(omemo_sender_key::table)
-            .values((
-                omemo_sender_key::account.eq(self.account.to_string()),
-                omemo_sender_key::sender_id.eq(sender.name()),
-                omemo_sender_key::device_id.eq(u32::from(sender.device_id()) as i64),
-                omemo_sender_key::distribution_id.eq(distribution_id.as_bytes().to_vec()),
-                omemo_sender_key::sender_key.eq(sender_key.serialize()?.to_vec()),
-            ))
-            .on_conflict((
-                omemo_sender_key::account,
-                omemo_sender_key::sender_id,
-                omemo_sender_key::device_id,
-                omemo_sender_key::distribution_id,
-                omemo_sender_key::sender_key,
-            ))
-            .do_update()
-            .set(omemo_sender_key::sender_key.eq(sender_key.serialize()?.to_vec()))
-            .execute(&mut conn)
-            .map_err(signal_storage_display_error("Cannot upsert sender_key"))?;
-
-        Ok(())
+        self.storage
+            .store_omemo_sender_key(&self.account, sender, distribution_id, sender_key)
+            .map_err(signal_storage_display_error())
     }
 
     async fn load_sender_key(
@@ -547,25 +705,8 @@ impl libsignal_protocol::SenderKeyStore for SignalStorage {
         distribution_id: uuid::Uuid,
         _ctx: libsignal_protocol::Context,
     ) -> libsignal_protocol::error::Result<Option<libsignal_protocol::SenderKeyRecord>> {
-        log::debug!("Load sender key {sender}");
-        use schema::omemo_sender_key;
-        let mut conn = self
-            .storage
-            .pool
-            .get()
-            .map_err(signal_storage_error("Cannot connect to storage"))?;
-
-        omemo_sender_key::table
-            .filter(omemo_sender_key::account.eq(self.account.to_string()))
-            .filter(omemo_sender_key::sender_id.eq(sender.name()))
-            .filter(omemo_sender_key::device_id.eq(u32::from(sender.device_id()) as i64))
-            .filter(omemo_sender_key::distribution_id.eq(distribution_id.as_bytes().to_vec()))
-            .first(&mut conn)
-            .optional()
-            .map_err(signal_storage_display_error("Cannot fetch sender_key"))?
-            .map(|sender_key: OmemoSenderKey| {
-                libsignal_protocol::SenderKeyRecord::deserialize(&sender_key.sender_key)
-            })
-            .transpose()
+        self.storage
+            .load_omemo_sender_key(&self.account, sender, distribution_id)
+            .map_err(signal_storage_display_error())
     }
 }

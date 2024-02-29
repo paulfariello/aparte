@@ -28,6 +28,7 @@ use xmpp_parsers::caps::{self, Caps};
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::hashes as xmpp_hashes;
 use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::legacy_omemo;
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
@@ -1382,17 +1383,27 @@ impl Aparte {
         let mut matched_mod = None;
         let mut message = message;
 
+        let encryption_ns = message
+            .payloads
+            .iter()
+            .find_map(|p| {
+                xmpp_parsers::eme::ExplicitMessageEncryption::try_from((*p).clone())
+                    .ok()
+                    .map(|eme| eme.namespace)
+            })
+            .or(message.payloads.iter().find_map(|p| {
+                legacy_omemo::Encrypted::try_from((*p).clone())
+                    .ok()
+                    .map(|_| xmpp_parsers::ns::LEGACY_OMEMO.to_string())
+            }));
+
         // Decrypt if required
-        if let (Some(eme), Some(from)) = (
-            message.payloads.iter().find_map(|p| {
-                xmpp_parsers::eme::ExplicitMessageEncryption::try_from((*p).clone()).ok()
-            }),
-            message.from.clone(),
-        ) {
+        // TODO EME can't be required
+        if let (Some(encryption_ns), Some(from)) = (encryption_ns, message.from.clone()) {
             let mut crypto_engines = self.crypto_engines.lock().unwrap();
             if let Some(crypto_engine) = crypto_engines.get_mut(&(account.clone(), from.to_bare()))
             {
-                if eme.namespace == crypto_engine.ns() {
+                if encryption_ns == crypto_engine.ns() {
                     message = match crypto_engine.decrypt(self, &account, &message) {
                         Ok(message) => message,
                         Err(err) => {
@@ -1409,14 +1420,14 @@ impl Aparte {
                         "Incompatible crypto engine found for {:?} (found {} expecting {})",
                         message.from,
                         crypto_engine.ns(),
-                        eme.namespace
+                        encryption_ns
                     );
                 }
             } else {
                 log::warn!(
                     "No crypto engine found for {:?} (encrypted with {})",
                     message.from,
-                    eme.namespace
+                    encryption_ns
                 );
             }
         }
@@ -1587,8 +1598,8 @@ impl Aparte {
         self.event_tx.send(event).unwrap();
     }
 
-    pub fn log(&mut self, message: String) {
-        let message = Message::log(message);
+    pub fn log<T: ToString>(&mut self, message: T) {
+        let message = Message::log(message.to_string());
         self.schedule(Event::Message(None, message));
     }
 
@@ -1649,8 +1660,8 @@ impl AparteAsync {
         self.event_tx.send(event).unwrap();
     }
 
-    pub fn log(&mut self, message: String) {
-        let message = Message::log(message);
+    pub fn log<T: ToString>(&mut self, message: T) {
+        let message = Message::log(message.to_string());
         self.schedule(Event::Message(None, message));
     }
 

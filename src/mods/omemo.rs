@@ -41,7 +41,10 @@ use crate::message::Message;
 use crate::mods::ui::UIMod;
 use crate::storage::{OmemoOwnDevice, SignalStorage};
 
-use libsignal_protocol::{message_decrypt, message_encrypt, IdentityKeyPair, KeyPair};
+use libsignal_protocol::{
+    message_decrypt, message_encrypt, IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyStore,
+    SignedPreKeyStore,
+};
 
 const KEY_SIZE: usize = 16;
 const MAC_SIZE: usize = 16;
@@ -181,9 +184,16 @@ impl OmemoEngine {
         )?;
 
         log::info!(
-            "Process device {device_id}'s bundle: {}",
+            "Automatic trust of {address}: {}",
             fingerprint(identity_key.public_key())
         );
+
+        self.signal_storage
+            .save_identity(&address, &identity_key, None)
+            .now_or_never()
+            .ok_or(anyhow!("Cannot trust {address}"))??;
+
+        log::debug!("Process {address}'s bundle");
 
         process_prekey_bundle(
             &address,
@@ -332,8 +342,11 @@ impl CryptoEngineTrait for OmemoEngine {
             .find(|k| i64::from(k.rid) == own_device.id)
             .ok_or(anyhow!("Missing OMEMO key for current device"))?;
 
+        log::debug!("Found encrypted DEK for current device ({})", own_device.id);
+
         let ciphertext_message = match key.prekey {
             legacy_omemo::IsPreKey::True => {
+                log::debug!("Prekey message");
                 libsignal_protocol::CiphertextMessage::PreKeySignalMessage(
                     libsignal_protocol::PreKeySignalMessage::try_from(key.data.as_slice())
                         .context("Invalid prekey signal message")?,
@@ -345,29 +358,23 @@ impl CryptoEngineTrait for OmemoEngine {
             ),
         };
 
-        let dek_and_mac = aparte
-            .storage
-            .get_omemo_contact_devices(account, &message.from.clone().unwrap().to_bare())?
-            .iter()
-            .find_map(|device| {
-                let remote_address =
-                    ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
+        let remote_address = ProtocolAddress::new(
+            self.contact.to_string(),
+            libsignal_protocol::DeviceId::from(encrypted.header.sid),
+        );
 
-                message_decrypt(
-                    &ciphertext_message,
-                    &remote_address,
-                    &mut self.signal_storage.clone(),
-                    &mut self.signal_storage.clone(),
-                    &mut self.signal_storage.clone(),
-                    &mut self.signal_storage.clone(),
-                    &mut thread_rng(),
-                    None,
-                )
-                .now_or_never()
-                .map(|e| e.ok())
-                .flatten()
-            })
-            .ok_or(anyhow!("No decryptable DEK found"))?;
+        let dek_and_mac = message_decrypt(
+            &ciphertext_message,
+            &remote_address,
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
+            &mut thread_rng(),
+            None,
+        )
+        .now_or_never()
+        .ok_or(anyhow!("Cannot decrypt DEK"))??;
 
         if dek_and_mac.len() != MAC_SIZE + KEY_SIZE {
             anyhow::bail!("Invalid DEK and MAC size");
@@ -406,16 +413,19 @@ pub struct OmemoMod {
 }
 
 fn fingerprint(pub_key: &PublicKey) -> String {
-    pub_key
-        .serialize()
-        .iter()
-        .skip(1)
-        .map(|byte| format!("{byte:x}"))
-        .chunks(4)
-        .into_iter()
-        .map(|word| word.collect::<String>())
-        .intersperse(String::from(" "))
-        .collect()
+    // TODO fallback to standard library when intersperse will be added
+    itertools::Itertools::intersperse(
+        pub_key
+            .serialize()
+            .iter()
+            .skip(1)
+            .map(|byte| format!("{byte:x}"))
+            .chunks(4)
+            .into_iter()
+            .map(|word| word.collect::<String>()),
+        String::from(" "),
+    )
+    .collect()
 }
 
 impl OmemoMod {
@@ -426,21 +436,15 @@ impl OmemoMod {
     }
 
     fn configure(&mut self, aparte: &mut Aparte, account: &Account) -> Result<()> {
+        let signal_store = SignalStorage::new(account.clone(), aparte.storage.clone());
+        self.signal_stores.insert(account.clone(), signal_store);
+
         let device = match aparte.storage.get_omemo_own_device(account)? {
             Some(device) => {
                 log::info!("Reusing existing device");
                 device
             }
-            None => {
-                log::info!("Generating device id");
-                let device_id: u32 = random::<u32>();
-                let identity_key_pair = IdentityKeyPair::generate(&mut thread_rng());
-                aparte.storage.set_omemo_current_device(
-                    account,
-                    device_id,
-                    identity_key_pair.serialize().to_vec(),
-                )?
-            }
+            None => self.initialize_crypto(aparte, account)?,
         };
 
         let device_id: u32 = device.id.try_into().unwrap();
@@ -450,21 +454,26 @@ impl OmemoMod {
         let fingerprint = fingerprint(identity_key_pair.public_key());
         log::info!("Device fingerprint: {fingerprint}");
 
-        let signal_storage = SignalStorage::new(account.clone(), aparte.storage.clone());
-        self.signal_stores.insert(account.clone(), signal_storage);
-
         let mut aparte = aparte.proxy();
         let account = account.clone();
 
-        // TODO load prekey from storage otherwise generate some
-        let pre_keys = (1..101)
-            .map(|i| (i, KeyPair::generate(&mut thread_rng())))
-            .collect::<Vec<(u32, KeyPair)>>();
-
-        let signed_pre_key = KeyPair::generate(&mut thread_rng());
-        let signed_pre_key_signature = identity_key_pair
-            .private_key()
-            .calculate_signature(&signed_pre_key.public_key.serialize(), &mut thread_rng())?;
+        let signed_pre_key_id = 0;
+        let signed_pre_key = aparte.storage.get_omemo_signed_pre_key(
+            &account,
+            libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
+        )?;
+        let signed_pre_key_public = signed_pre_key.public_key()?;
+        let signed_pre_key_signature = signed_pre_key.signature()?;
+        let pre_keys = aparte
+            .storage
+            .get_all_omemo_pre_key(&account)?
+            .into_iter()
+            .map(|pre_key| match (pre_key.id(), pre_key.public_key()) {
+                (Ok(id), Ok(public_key)) => Ok((u32::from(id), public_key)),
+                (Err(e), _) => Err(e),
+                (_, Err(e)) => Err(e),
+            })
+            .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
 
         Aparte::spawn(async move {
             if let Err(err) =
@@ -479,12 +488,10 @@ impl OmemoMod {
                 &account,
                 device_id,
                 identity_key_pair,
-                signed_pre_key.public_key,
+                signed_pre_key_id,
+                signed_pre_key_public,
                 signed_pre_key_signature,
-                pre_keys
-                    .into_iter()
-                    .map(|(i, key_pair)| (i, key_pair.public_key))
-                    .collect(),
+                pre_keys,
             )
             .await
             {
@@ -494,6 +501,70 @@ impl OmemoMod {
         });
 
         Ok(())
+    }
+
+    fn initialize_crypto(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+    ) -> Result<OmemoOwnDevice> {
+        log::info!("Initializing OMEMO device");
+        aparte.log("Initializing OMEMO device");
+
+        let signal_storage = self.signal_stores.get_mut(&account).unwrap();
+
+        let device_id: u32 = random::<u32>();
+        let identity_key_pair = IdentityKeyPair::generate(&mut thread_rng());
+        let own_device = aparte.storage.set_omemo_current_device(
+            account,
+            device_id,
+            identity_key_pair.serialize().to_vec(),
+        )?;
+
+        let pre_keys = (1..101)
+            .map(|i| (i, KeyPair::generate(&mut thread_rng())))
+            .collect::<Vec<(u32, KeyPair)>>();
+
+        let signed_pre_key_id = 0;
+        let signed_pre_key = KeyPair::generate(&mut thread_rng());
+        let signed_pre_key_signature = identity_key_pair
+            .private_key()
+            .calculate_signature(&signed_pre_key.public_key.serialize(), &mut thread_rng())?;
+
+        for (i, pre_key) in pre_keys.iter() {
+            signal_storage
+                .save_pre_key(
+                    libsignal_protocol::PreKeyId::from(*i),
+                    &libsignal_protocol::PreKeyRecord::new(
+                        libsignal_protocol::PreKeyId::from(*i),
+                        &pre_key,
+                    ),
+                    None,
+                )
+                .now_or_never()
+                .ok_or(anyhow!("Cannot save pre_keys"))??;
+        }
+
+        signal_storage
+            .save_signed_pre_key(
+                libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
+                &libsignal_protocol::SignedPreKeyRecord::new(
+                    libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
+                    chrono::Local::now().timestamp().try_into().unwrap(),
+                    &signed_pre_key,
+                    &signed_pre_key_signature,
+                ),
+                None,
+            )
+            .now_or_never()
+            .ok_or(anyhow!("Cannot save pre_keys"))??;
+
+        aparte.log(format!(
+            "OMEMO device initialized: id: {device_id} fingerprint: {}",
+            fingerprint(identity_key_pair.public_key()),
+        ));
+
+        Ok(own_device)
     }
 
     fn get_own_fingerprint(&self, account: &Account) -> Result<String> {
@@ -534,12 +605,12 @@ impl OmemoMod {
         log::info!("Got {jid}'s OMEMO device list");
 
         for device in device_list.devices {
-            log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
             let device =
                 aparte
                     .storage
                     .upsert_omemo_contact_device(account, jid, device.id.try_into()?)?;
 
+            log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
             match Self::get_bundle(aparte, account, jid, device.id.try_into().unwrap()).await {
                 Ok(Some(bundle)) => {
                     if let Err(err) = omemo_engine
@@ -694,8 +765,9 @@ impl OmemoMod {
         account: &Account,
         device_id: u32,
         identity_key_pair: IdentityKeyPair,
+        signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
-        signed_pre_key_signature: Box<[u8]>,
+        signed_pre_key_signature: Vec<u8>,
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Result<()> {
         log::info!("Ensure device {device_id}'s bundle is published");
@@ -706,6 +778,7 @@ impl OmemoMod {
                     account,
                     device_id,
                     identity_key_pair,
+                    signed_pre_key_id,
                     signed_pre_key_pub,
                     signed_pre_key_signature,
                     pre_keys,
@@ -731,8 +804,9 @@ impl OmemoMod {
         account: &Account,
         device_id: u32,
         identity_key_pair: IdentityKeyPair,
+        signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
-        signed_pre_key_signature: Box<[u8]>,
+        signed_pre_key_signature: Vec<u8>,
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Result<()> {
         log::info!("Publish device {device_id}'s bundle");
@@ -743,6 +817,7 @@ impl OmemoMod {
                     &account.to_bare(),
                     device_id,
                     identity_key_pair,
+                    signed_pre_key_id,
                     signed_pre_key_pub,
                     signed_pre_key_signature,
                     pre_keys,
@@ -795,6 +870,12 @@ impl OmemoMod {
             .await?;
         match response.payload {
             IqType::Result(None) => Ok(None),
+            IqType::Error(err)
+                if err.defined_condition
+                    == xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
+            {
+                Ok(None)
+            }
             IqType::Error(err) => {
                 let text = match i18n::get_best(&err.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
@@ -889,8 +970,9 @@ impl OmemoMod {
         jid: &BareJid,
         device_id: u32,
         identity_key_pair: IdentityKeyPair,
+        signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
-        signed_pre_key_signature: Box<[u8]>,
+        signed_pre_key_signature: Vec<u8>,
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Iq {
         let id = Uuid::new_v4();
@@ -898,7 +980,7 @@ impl OmemoMod {
         let id = id.hyphenated().to_string();
         let bundle = legacy_omemo::Bundle {
             signed_pre_key_public: Some(legacy_omemo::SignedPreKeyPublic {
-                signed_pre_key_id: Some(0), // TODO rand ?
+                signed_pre_key_id: Some(signed_pre_key_id),
                 data: signed_pre_key_pub.serialize().to_vec(),
             }),
             signed_pre_key_signature: Some(legacy_omemo::SignedPreKeySignature {
