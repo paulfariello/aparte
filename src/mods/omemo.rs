@@ -631,7 +631,7 @@ impl OmemoMod {
             None => crate::info!(aparte, "OMEMO own fingerprint:"),
         }
         for identity in identities {
-            crate::info!(aparte, "🛡️ {}", fingerprint(&identity));
+            crate::info!(aparte, "🛡 {}", fingerprint(&identity));
         }
 
         Ok(())
