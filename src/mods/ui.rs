@@ -1161,7 +1161,7 @@ impl ModTrait for UIMod {
                 if self.windows.contains(window) {
                     self.change_window(window);
                 } else {
-                    aparte.log(format!("Unknown window {window}"));
+                    crate::info!(aparte, "Unknown window {window}");
                 }
             }
             Event::WindowChange => {

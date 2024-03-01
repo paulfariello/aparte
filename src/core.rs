@@ -679,10 +679,10 @@ Examples:
     if let Some(cmd) = cmd {
         let help = aparte.command_parsers.get(&cmd).with_context(|| format!("Unknown command {cmd}"))?.help.to_string();
 
-        aparte.log(help);
+        crate::info!(aparte, "{}", help);
         Ok(())
     } else {
-        aparte.log(format!("Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.to_string()).collect::<Vec<String>>().join(", ")));
+        crate::info!(aparte, "Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.to_string()).collect::<Vec<String>>().join(", "));
         Ok(())
     }
 });
@@ -788,6 +788,32 @@ Examples:
         }
     }
 }
+
+#[macro_export]
+macro_rules! info(
+    ($aparte:ident, $msg:literal, $($args: tt)*) => ({
+        ::log::info!($msg, $($args)*);
+        $aparte.log(format!($msg, $($args)*))
+    });
+    ($aparte:ident, $msg:literal) => ({
+        ::log::info!($msg);
+        $aparte.log(format!($msg))
+    });
+);
+
+#[macro_export]
+macro_rules! error(
+    ($aparte:ident, $err:ident, $msg:literal, $($args: tt)*) => ({
+        let context = format!($msg, $($args)*);
+        ::log::error!("{:?}", $err.context(context.clone()));
+        $aparte.log(context)
+    });
+    ($aparte:ident, $err:ident, $msg:literal) => ({
+        let context = format!($msg);
+        ::log::error!("{:?}", $err.context(context.clone()));
+        $aparte.log(context)
+    });
+);
 
 pub struct Aparte {
     pub command_parsers: Arc<HashMap<String, CommandParser>>,
