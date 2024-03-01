@@ -283,7 +283,7 @@ impl CryptoEngineTrait for OmemoEngine {
             )
             .filter_map(|device| {
                 let remote_address =
-                    ProtocolAddress::new(self.contact.to_string(), (device.id as u32).into());
+                    ProtocolAddress::new(device.contact.clone(), (device.id as u32).into());
                 message_encrypt(
                     &dek_and_mac,
                     &remote_address,
@@ -504,27 +504,38 @@ impl OmemoMod {
             })
             .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
 
-        Aparte::spawn(async move {
-            // TODO blind trust omemo own devices
-            if let Err(err) =
-                Self::ensure_device_is_registered(&mut aparte, &account, device_id).await
-            {
-                crate::error!(aparte, err, "Cannot configure OMEMO");
-            }
+        let signal_store = self.signal_stores.get(&account).unwrap();
+        Aparte::spawn({
+            let signal_store = SignalStorage::clone(signal_store);
+            async move {
+                if let Err(err) =
+                    Self::ensure_device_is_registered(&mut aparte, &account, device_id).await
+                {
+                    crate::error!(aparte, err, "Cannot configure OMEMO");
+                    return;
+                }
 
-            if let Err(err) = Self::ensure_device_bundle_is_published(
-                &mut aparte,
-                &account,
-                device_id,
-                identity_key_pair,
-                signed_pre_key_id,
-                signed_pre_key_public,
-                signed_pre_key_signature,
-                pre_keys,
-            )
-            .await
-            {
-                crate::error!(aparte, err, "Cannot configure OMEMO");
+                if let Err(err) = Self::ensure_device_bundle_is_published(
+                    &mut aparte,
+                    &account,
+                    device_id,
+                    identity_key_pair,
+                    signed_pre_key_id,
+                    signed_pre_key_public,
+                    signed_pre_key_signature,
+                    pre_keys,
+                )
+                .await
+                {
+                    crate::error!(aparte, err, "Cannot configure OMEMO");
+                }
+
+                if let Err(err) =
+                    Self::start_session(&mut aparte, &signal_store, &account, &account.to_bare())
+                        .await
+                {
+                    crate::error!(aparte, err, "Can't start OMEMO session own devices",);
+                }
             }
         });
 
@@ -639,12 +650,16 @@ impl OmemoMod {
 
     async fn start_session(
         aparte: &mut AparteAsync,
-        signal_storage: SignalStorage,
+        signal_store: &SignalStorage,
         account: &Account,
         jid: &BareJid,
     ) -> Result<()> {
         log::info!("Start OMEMO session on {account} with {jid}");
-        let mut omemo_engine = OmemoEngine::new(signal_storage.clone(), jid);
+        let mut omemo_engine = OmemoEngine::new(signal_store.clone(), jid);
+
+        let own_device = signal_store
+            .storage
+            .get_omemo_local_registration_id(&signal_store.account)?;
 
         Self::subscribe_to_device_list(aparte, account, jid)
             .await
@@ -656,7 +671,11 @@ impl OmemoMod {
             .context("Cannot get device list")?;
         log::info!("Got {jid}'s OMEMO device list");
 
-        for device in device_list.devices {
+        for device in device_list
+            .devices
+            .iter()
+            .filter(|device| device.id != own_device)
+        {
             let device =
                 aparte
                     .storage
@@ -798,8 +817,13 @@ impl OmemoMod {
                             let list = legacy_omemo::DeviceList::try_from(payload)?;
                             match list.devices.iter().find(|device| device.id == device_id) {
                                 None => {
-                                    Self::register_device(aparte, account, device_id, Some(list))
-                                        .await
+                                    Self::register_device(
+                                        aparte,
+                                        account,
+                                        device_id,
+                                        Some(list.clone()),
+                                    )
+                                    .await
                                 }
                                 Some(_) => {
                                     log::info!("Device already registered");
@@ -1101,11 +1125,11 @@ impl ModTrait for OmemoMod {
                     let jid = jid.clone();
                     match self.signal_stores.get(&account) {
                         None => crate::info!(aparte, "OMEMO not configured for {account}"),
-                        Some(signal_storage) => {
-                            let signal_storage = signal_storage.clone();
-                            Aparte::spawn(async move {
+                        Some(signal_store) => Aparte::spawn({
+                            let signal_store = SignalStorage::clone(signal_store);
+                            async move {
                                 if let Err(err) =
-                                    Self::start_session(&mut aparte, signal_storage, &account, &jid)
+                                    Self::start_session(&mut aparte, &signal_store, &account, &jid)
                                         .await
                                 {
                                     crate::error!(
@@ -1114,8 +1138,8 @@ impl ModTrait for OmemoMod {
                                         "Can't start OMEMO session with {jid}",
                                     );
                                 }
-                            })
-                        }
+                            }
+                        }),
                     }
                 }
                 OmemoEvent::ShowFingerprints { account, jid } => {
