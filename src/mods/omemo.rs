@@ -151,7 +151,7 @@ impl OmemoEngine {
         }
     }
 
-    async fn update_bundle(&mut self, device_id: u32, bundle: &legacy_omemo::Bundle) -> Result<()> {
+    fn update_bundle(&mut self, device_id: u32, bundle: &legacy_omemo::Bundle) -> Result<()> {
         let address = ProtocolAddress::new(self.contact.to_string(), device_id.into());
 
         let signed_pre_key = PublicKey::deserialize(
@@ -685,9 +685,8 @@ impl OmemoMod {
             log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
             match Self::get_bundle(aparte, account, jid, device.id.try_into().unwrap()).await {
                 Ok(Some(bundle)) => {
-                    if let Err(err) = omemo_engine
-                        .update_bundle(device.id.try_into().unwrap(), &bundle)
-                        .await
+                    if let Err(err) =
+                        omemo_engine.update_bundle(device.id.try_into().unwrap(), &bundle)
                     {
                         crate::error!(
                             aparte,
