@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use diesel::prelude::*;
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoOwnDevice {
     pub own_device_pk: i32,
     pub account: String,
@@ -11,7 +11,7 @@ pub struct OmemoOwnDevice {
     pub identity: Option<Vec<u8>>,
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoContactDevice {
     pub contact_device_pk: i32,
     pub account: String,
@@ -30,7 +30,7 @@ impl From<&OmemoOwnDevice> for OmemoContactDevice {
     }
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoIdentity {
     pub identity_pk: i32,
     pub account: String,
@@ -39,7 +39,7 @@ pub struct OmemoIdentity {
     pub identity: Vec<u8>,
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoSession {
     pub identity_pk: i32,
     pub account: String,
@@ -48,7 +48,7 @@ pub struct OmemoSession {
     pub session: Vec<u8>,
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoPreKey {
     pub pre_key_pk: i32,
     pub account: String,
@@ -56,7 +56,7 @@ pub struct OmemoPreKey {
     pub pre_key: Vec<u8>,
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoSignedPreKey {
     pub signed_pre_key_pk: i32,
     pub account: String,
@@ -64,7 +64,7 @@ pub struct OmemoSignedPreKey {
     pub signed_pre_key: Vec<u8>,
 }
 
-#[derive(Queryable)]
+#[derive(Queryable, Debug)]
 pub struct OmemoSenderKey {
     pub sender_key_pk: i32,
     pub account: String,
