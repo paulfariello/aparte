@@ -551,7 +551,8 @@ impl OmemoMod {
 
         let signal_storage = self.signal_stores.get_mut(&account).unwrap();
 
-        let device_id: u32 = random::<u32>();
+        // XEP 0384 4.1 The Device ID is a randomly generated integer between 1 and 2^31 - 1.
+        let device_id: u32 = random::<u32>() % (2u32.pow(31) - 1) + 1;
         let identity_key_pair = IdentityKeyPair::generate(&mut thread_rng());
         let own_device = aparte.storage.set_omemo_current_device(
             account,
