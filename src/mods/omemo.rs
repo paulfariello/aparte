@@ -509,8 +509,7 @@ impl OmemoMod {
             if let Err(err) =
                 Self::ensure_device_is_registered(&mut aparte, &account, device_id).await
             {
-                log::error!("Cannot configure OMEMO: {err}");
-                aparte.error("Cannot configure OMEMO", err);
+                crate::error!(aparte, err, "Cannot configure OMEMO");
             }
 
             if let Err(err) = Self::ensure_device_bundle_is_published(
@@ -525,8 +524,7 @@ impl OmemoMod {
             )
             .await
             {
-                log::error!("Cannot configure OMEMO: {err}");
-                aparte.error("Cannot configure OMEMO", err);
+                crate::error!(aparte, err, "Cannot configure OMEMO");
             }
         });
 
@@ -538,8 +536,7 @@ impl OmemoMod {
         aparte: &mut Aparte,
         account: &Account,
     ) -> Result<OmemoOwnDevice> {
-        log::info!("Initializing OMEMO device");
-        aparte.log("Initializing OMEMO device");
+        crate::info!(aparte, "Initializing OMEMO device");
 
         let signal_storage = self.signal_stores.get_mut(&account).unwrap();
 
@@ -589,10 +586,11 @@ impl OmemoMod {
             .now_or_never()
             .ok_or(anyhow!("Cannot save pre_keys"))??;
 
-        aparte.log(format!(
+        crate::info!(
+            aparte,
             "OMEMO device initialized: id: {device_id} fingerprint: {}",
-            fingerprint(identity_key_pair.public_key()),
-        ));
+            fingerprint(identity_key_pair.public_key())
+        );
 
         Ok(own_device)
     }
@@ -629,11 +627,11 @@ impl OmemoMod {
         };
 
         match jid {
-            Some(jid) => aparte.log(format!("OMEMO fingerprint for {jid}:")),
-            None => aparte.log(format!("OMEMO own fingerprint:")),
+            Some(jid) => crate::info!(aparte, "OMEMO fingerprint for {jid}:"),
+            None => crate::info!(aparte, "OMEMO own fingerprint:"),
         }
         for identity in identities {
-            aparte.log(format!("🛡️ {}", fingerprint(&identity)));
+            crate::info!(aparte, "🛡️ {}", fingerprint(&identity));
         }
 
         Ok(())
@@ -671,16 +669,16 @@ impl OmemoMod {
                         .update_bundle(device.id.try_into().unwrap(), &bundle)
                         .await
                     {
-                        aparte.error(
-                            format!("Cannot load {jid}'s device {} bundle", device.id),
+                        crate::error!(aparte,
                             err,
+                            "Cannot load {jid}'s device {} bundle", device.id,
                         );
                     }
                 }
-                Ok(None) => aparte.log(format!("No bundle found for {jid}.{}", device.id)),
-                Err(err) => aparte.error(
-                    format!("Cannot load {jid}'s device {} bundle", device.id),
+                Ok(None) => crate::info!(aparte, "No bundle found for {jid}.{}", device.id),
+                Err(err) => crate::error!(aparte,
                     err,
+                    "Cannot load {jid}'s device {} bundle", device.id,
                 ),
             };
         }
@@ -1088,7 +1086,7 @@ impl ModTrait for OmemoMod {
         match event {
             Event::Connected(account, _jid) => {
                 if let Err(err) = self.configure(aparte, account) {
-                    aparte.log(format!("Cannot configure OMEMO: {err}"));
+                    crate::info!(aparte, "Cannot configure OMEMO: {err}");
                 }
             }
             Event::Omemo(event) => match event {
@@ -1098,7 +1096,7 @@ impl ModTrait for OmemoMod {
                     let account = account.clone();
                     let jid = jid.clone();
                     match self.signal_stores.get(&account) {
-                        None => aparte.log(format!("OMEMO not configured for {account}")),
+                        None => crate::info!(aparte, "OMEMO not configured for {account}"),
                         Some(signal_storage) => {
                             let signal_storage = signal_storage.clone();
                             Aparte::spawn(async move {
@@ -1106,10 +1104,9 @@ impl ModTrait for OmemoMod {
                                     Self::start_session(&mut aparte, signal_storage, &account, &jid)
                                         .await
                                 {
-                                    log::error!("Can't start OMEMO session with {jid}: {err}");
-                                    aparte.error(
-                                        format!("Can't start OMEMO session with {jid}"),
+                                    crate::error!(aparte,
                                         err,
+                                        "Can't start OMEMO session with {jid}",
                                     );
                                 }
                             })
@@ -1120,8 +1117,7 @@ impl ModTrait for OmemoMod {
                     let account = account.clone();
 
                     if let Err(e) = self.show_fingerprints(aparte, &account, &jid) {
-                        log::error!("Cannot get own OMEMO fingerprint: {e}");
-                        aparte.error("Cannot get own OMEMO fingerprint", e);
+                        crate::error!(aparte, e, "Cannot get own OMEMO fingerprint");
                     }
                 }
             },
