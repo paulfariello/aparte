@@ -320,7 +320,7 @@ impl CryptoEngineTrait for OmemoEngine {
         xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
         xmpp_message.bodies.insert(
             String::new(),
-            xmpp_parsers::message::Body(String::from("coucou")),
+            xmpp_parsers::message::Body(String::from("I sent you an OMEMO encrypted message but your client doesn’t seem to support that.")),
         );
         xmpp_message.payloads.push(
             legacy_omemo::Encrypted {
@@ -669,16 +669,20 @@ impl OmemoMod {
                         .update_bundle(device.id.try_into().unwrap(), &bundle)
                         .await
                     {
-                        crate::error!(aparte,
+                        crate::error!(
+                            aparte,
                             err,
-                            "Cannot load {jid}'s device {} bundle", device.id,
+                            "Cannot load {jid}'s device {} bundle",
+                            device.id,
                         );
                     }
                 }
                 Ok(None) => crate::info!(aparte, "No bundle found for {jid}.{}", device.id),
-                Err(err) => crate::error!(aparte,
+                Err(err) => crate::error!(
+                    aparte,
                     err,
-                    "Cannot load {jid}'s device {} bundle", device.id,
+                    "Cannot load {jid}'s device {} bundle",
+                    device.id,
                 ),
             };
         }
@@ -1104,7 +1108,8 @@ impl ModTrait for OmemoMod {
                                     Self::start_session(&mut aparte, signal_storage, &account, &jid)
                                         .await
                                 {
-                                    crate::error!(aparte,
+                                    crate::error!(
+                                        aparte,
                                         err,
                                         "Can't start OMEMO session with {jid}",
                                     );
