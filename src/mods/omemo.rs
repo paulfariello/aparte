@@ -206,7 +206,7 @@ impl OmemoEngine {
         )?;
 
         log::info!(
-            "Automatic trust of {address}: {}",
+            "Blind trust of {address}: {}",
             fingerprint(identity_key.public_key())
         );
 
@@ -505,6 +505,7 @@ impl OmemoMod {
             .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
 
         Aparte::spawn(async move {
+            // TODO blind trust omemo own devices
             if let Err(err) =
                 Self::ensure_device_is_registered(&mut aparte, &account, device_id).await
             {
@@ -632,7 +633,7 @@ impl OmemoMod {
             None => aparte.log(format!("OMEMO own fingerprint:")),
         }
         for identity in identities {
-            aparte.log(fingerprint(&identity));
+            aparte.log(format!("🛡️ {}", fingerprint(&identity)));
         }
 
         Ok(())
