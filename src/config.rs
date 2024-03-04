@@ -32,10 +32,10 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Theme {
-            title_bar: ColorTuple::new(color::Blue, color::White),
-            win_bar: ColorTuple::new(color::Blue, color::White),
-            roster: ColorTuple::new(color::Blue, color::White),
-            occupants: ColorTuple::new(color::Blue, color::White),
+            title_bar: ColorTuple::new(color::Blue, color::Black),
+            win_bar: ColorTuple::new(color::Blue, color::Black),
+            roster: ColorTuple::new(color::Blue, color::Black),
+            occupants: ColorTuple::new(color::Blue, color::Black),
         }
     }
 }
