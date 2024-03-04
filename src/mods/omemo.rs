@@ -139,13 +139,15 @@ pub enum OmemoEvent {
 }
 
 struct OmemoEngine {
+    account: Account,
     contact: BareJid,
     signal_storage: SignalStorage,
 }
 
 impl OmemoEngine {
-    fn new(signal_storage: SignalStorage, contact: &BareJid) -> Self {
+    fn new(account: &Account, signal_storage: SignalStorage, contact: &BareJid) -> Self {
         Self {
+            account: account.clone(),
             signal_storage,
             contact: contact.clone(),
         }
@@ -227,6 +229,60 @@ impl OmemoEngine {
         )
         .now_or_never()
         .ok_or(anyhow!("Cannot start session with {device_id}"))??;
+
+        Ok(())
+    }
+
+    fn sync_bundle(&self, aparte: &Aparte) -> Result<()> {
+        log::info!("Syncing {}'s own bundle", self.account);
+        let device = aparte
+            .storage
+            .get_omemo_own_device(&self.account)?
+            .context("OMEMO isn't configured")?;
+
+        let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
+        let identity = device.identity.context("Missing own identity")?;
+        let identity_key_pair =
+            IdentityKeyPair::try_from(identity.as_ref()).context("Corrupted own identity")?;
+
+        let signed_pre_key_id = 0;
+        let signed_pre_key = aparte.storage.get_omemo_signed_pre_key(
+            &self.account,
+            libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
+        )?;
+        let signed_pre_key_public = signed_pre_key.public_key()?;
+        let signed_pre_key_signature = signed_pre_key.signature()?;
+        let pre_keys = aparte
+            .storage
+            .get_all_omemo_pre_key(&self.account)?
+            .into_iter()
+            .map(|pre_key| match (pre_key.id(), pre_key.public_key()) {
+                (Ok(id), Ok(public_key)) => Ok((u32::from(id), public_key)),
+                (Err(e), _) => Err(e),
+                (_, Err(e)) => Err(e),
+            })
+            .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
+
+        Aparte::spawn({
+            let mut aparte = aparte.proxy();
+            let account = self.account.clone();
+            async move {
+                if let Err(err) = OmemoMod::publish_bundle(
+                    &mut aparte,
+                    &account,
+                    device_id,
+                    identity_key_pair,
+                    signed_pre_key_id,
+                    signed_pre_key_public,
+                    signed_pre_key_signature,
+                    pre_keys,
+                )
+                .await
+                {
+                    crate::error!(aparte, err, "Cannot sync OMEMO bundle");
+                }
+            }
+        });
 
         Ok(())
     }
@@ -405,6 +461,11 @@ impl CryptoEngineTrait for OmemoEngine {
         )
         .now_or_never()
         .ok_or(anyhow!("Cannot decrypt DEK"))??;
+
+        if self.signal_storage.deleted_pre_keys {
+            self.sync_bundle(aparte)?;
+            self.signal_storage.deleted_pre_keys = false;
+        }
 
         if dek_and_mac.len() != MAC_SIZE + KEY_SIZE {
             anyhow::bail!("Invalid DEK and MAC size");
@@ -656,7 +717,7 @@ impl OmemoMod {
         jid: &BareJid,
     ) -> Result<()> {
         log::info!("Start OMEMO session on {account} with {jid}");
-        let mut omemo_engine = OmemoEngine::new(signal_store.clone(), jid);
+        let mut omemo_engine = OmemoEngine::new(account, signal_store.clone(), jid);
 
         let own_device = signal_store
             .storage
