@@ -562,11 +562,16 @@ impl std::error::Error for UnwindSafeResultError {}
 pub struct SignalStorage {
     pub account: Account,
     pub storage: Storage,
+    pub deleted_pre_keys: bool,
 }
 
 impl SignalStorage {
     pub fn new(account: Account, storage: Storage) -> Self {
-        Self { account, storage }
+        Self {
+            account,
+            storage,
+            deleted_pre_keys: false,
+        }
     }
 }
 
@@ -679,7 +684,11 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
     ) -> libsignal_protocol::error::Result<()> {
         self.storage
             .remove_omemo_pre_key(&self.account, pre_key_id)
-            .map_err(signal_storage_display_error())
+            .map_err(signal_storage_display_error())?;
+
+        self.deleted_pre_keys = true;
+
+        Ok(())
     }
 }
 
