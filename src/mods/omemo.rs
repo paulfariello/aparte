@@ -723,6 +723,23 @@ impl OmemoMod {
         Ok(())
     }
 
+    fn restore_sessions(&mut self, aparte: &mut Aparte, account: &Account) -> Result<()> {
+        let signal_store = self
+            .signal_stores
+            .get(account)
+            .context("Missing signal store")?;
+
+        for contact in aparte.storage.get_all_omemo_contacts(account)?.iter() {
+            aparte.add_crypto_engine(
+                account,
+                contact,
+                Box::new(OmemoEngine::new(account, signal_store.clone(), contact)),
+            );
+        }
+
+        Ok(())
+    }
+
     async fn start_session(
         aparte: &mut AparteAsync,
         signal_store: &SignalStorage,
@@ -1187,7 +1204,10 @@ impl ModTrait for OmemoMod {
         match event {
             Event::Connected(account, _jid) => {
                 if let Err(err) = self.configure(aparte, account) {
-                    crate::info!(aparte, "Cannot configure OMEMO: {err}");
+                    crate::error!(aparte, err, "Cannot configure OMEMO");
+                }
+                if let Err(err) = self.restore_sessions(aparte, account) {
+                    crate::error!(aparte, err, "Cannot restore OMEMO sessions");
                 }
             }
             Event::Omemo(event) => match event {

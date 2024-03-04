@@ -6,6 +6,7 @@ mod schema;
 
 use std::convert::TryFrom;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -107,6 +108,20 @@ impl Storage {
         };
 
         Ok(device)
+    }
+
+    pub fn get_all_omemo_contacts(&self, account: &Account) -> Result<Vec<BareJid>> {
+        use schema::omemo_contact_device;
+        let mut conn = self.pool.get()?;
+
+        Ok(omemo_contact_device::table
+            .group_by(omemo_contact_device::contact)
+            .select(omemo_contact_device::contact)
+            .filter(omemo_contact_device::account.eq(account.to_string()))
+            .get_results::<String>(&mut conn)?
+            .iter()
+            .filter_map(|contact| BareJid::from_str(contact).ok())
+            .collect())
     }
 
     pub fn get_omemo_contact_devices(
