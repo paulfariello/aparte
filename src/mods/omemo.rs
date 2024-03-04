@@ -468,9 +468,12 @@ impl CryptoEngineTrait for OmemoEngine {
         .now_or_never()
         .ok_or(anyhow!("Cannot decrypt DEK"))??;
 
-        if self.signal_storage.deleted_pre_keys {
+        if self
+            .signal_storage
+            .deleted_pre_keys
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
             self.sync_bundle(aparte)?;
-            self.signal_storage.deleted_pre_keys = false;
         }
 
         if dek_and_mac.len() != MAC_SIZE + KEY_SIZE {

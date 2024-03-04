@@ -6,6 +6,8 @@ mod schema;
 
 use std::convert::TryFrom;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Error, Result};
 use async_trait::async_trait;
@@ -562,7 +564,7 @@ impl std::error::Error for UnwindSafeResultError {}
 pub struct SignalStorage {
     pub account: Account,
     pub storage: Storage,
-    pub deleted_pre_keys: bool,
+    pub deleted_pre_keys: Arc<AtomicBool>,
 }
 
 impl SignalStorage {
@@ -570,7 +572,7 @@ impl SignalStorage {
         Self {
             account,
             storage,
-            deleted_pre_keys: false,
+            deleted_pre_keys: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -686,7 +688,8 @@ impl libsignal_protocol::PreKeyStore for SignalStorage {
             .remove_omemo_pre_key(&self.account, pre_key_id)
             .map_err(signal_storage_display_error())?;
 
-        self.deleted_pre_keys = true;
+        self.deleted_pre_keys
+            .store(true, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
