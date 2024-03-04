@@ -381,7 +381,10 @@ impl CryptoEngineTrait for OmemoEngine {
         xmpp_message.payloads.push(
             legacy_omemo::Encrypted {
                 header: legacy_omemo::Header {
-                    sid: own_device.id.try_into().unwrap(),
+                    sid: own_device
+                        .id
+                        .try_into()
+                        .context("Corrupted own device id")?,
                     iv: legacy_omemo::IV {
                         data: nonce.to_vec(),
                     },
@@ -409,7 +412,10 @@ impl CryptoEngineTrait for OmemoEngine {
         account: &Account,
         message: &XmppParsersMessage,
     ) -> Result<XmppParsersMessage> {
-        log::info!("Decrypting message from {}", message.from.clone().unwrap());
+        log::info!(
+            "Decrypting message from {}",
+            message.from.clone().context("Missing from attribute")?
+        );
         let own_device = aparte
             .storage
             .get_omemo_own_device(account)?
@@ -537,10 +543,11 @@ impl OmemoMod {
             None => self.initialize_crypto(aparte, account)?,
         };
 
-        let device_id: u32 = device.id.try_into().unwrap();
+        let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
         log::info!("Device id: {device_id}");
-        let identity = device.identity.unwrap();
-        let identity_key_pair = IdentityKeyPair::try_from(identity.as_ref()).unwrap();
+        let identity = device.identity.context("Missing own identity")?;
+        let identity_key_pair =
+            IdentityKeyPair::try_from(identity.as_ref()).context("Corrupted own identity")?;
         let fingerprint = fingerprint(identity_key_pair.public_key());
         log::info!("Device fingerprint: {fingerprint}");
 
@@ -610,7 +617,10 @@ impl OmemoMod {
     ) -> Result<OmemoOwnDevice> {
         crate::info!(aparte, "Initializing OMEMO device");
 
-        let signal_storage = self.signal_stores.get_mut(&account).unwrap();
+        let signal_storage = self
+            .signal_stores
+            .get_mut(&account)
+            .context("Missing signal store")?;
 
         // XEP 0384 4.1 The Device ID is a randomly generated integer between 1 and 2^31 - 1.
         let device_id: u32 = random::<u32>() % (2u32.pow(31) - 1) + 1;
@@ -744,11 +754,10 @@ impl OmemoMod {
                     .upsert_omemo_contact_device(account, jid, device.id.try_into()?)?;
 
             log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
-            match Self::get_bundle(aparte, account, jid, device.id.try_into().unwrap()).await {
+            let device_id = device.id.try_into().context("Corrupted device id")?;
+            match Self::get_bundle(aparte, account, jid, device_id).await {
                 Ok(Some(bundle)) => {
-                    if let Err(err) =
-                        omemo_engine.update_bundle(device.id.try_into().unwrap(), &bundle)
-                    {
+                    if let Err(err) = omemo_engine.update_bundle(device_id, &bundle) {
                         crate::error!(
                             aparte,
                             err,
