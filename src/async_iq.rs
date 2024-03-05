@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll, Waker};
 
+use anyhow::Result;
 use uuid::Uuid;
 use xmpp_parsers::iq::Iq;
 

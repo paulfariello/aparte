@@ -33,6 +33,64 @@ where
         .map(|((_, item), rank)| (prefered_langs[rank], item))
 }
 
+pub fn xmpp_err_to_string<'a>(
+    err: &'a xmpp_parsers::stanza_error::StanzaError,
+    prefered_langs: Vec<&'a str>,
+) -> (&'a str, String) {
+    get_best(&err.texts, prefered_langs)
+        .map(|(a, b)| (a, b.clone()))
+        .or_else(|| {
+            Some((
+                "",
+                format!(
+                    "{}: {}",
+                    err.type_,
+                    match err.defined_condition {
+                        xmpp_parsers::stanza_error::DefinedCondition::BadRequest => "bad-request",
+                        xmpp_parsers::stanza_error::DefinedCondition::Conflict => "conflict",
+                        xmpp_parsers::stanza_error::DefinedCondition::FeatureNotImplemented =>
+                            "feature-not-implemented",
+                        xmpp_parsers::stanza_error::DefinedCondition::Forbidden => "forbidden",
+                        xmpp_parsers::stanza_error::DefinedCondition::Gone => "gone",
+                        xmpp_parsers::stanza_error::DefinedCondition::InternalServerError =>
+                            "internal-server-error",
+                        xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
+                            "item-not-found",
+                        xmpp_parsers::stanza_error::DefinedCondition::JidMalformed =>
+                            "jid-malformed",
+                        xmpp_parsers::stanza_error::DefinedCondition::NotAcceptable =>
+                            "not-acceptable",
+                        xmpp_parsers::stanza_error::DefinedCondition::NotAllowed => "not-allowed",
+                        xmpp_parsers::stanza_error::DefinedCondition::NotAuthorized =>
+                            "not-authorized",
+                        xmpp_parsers::stanza_error::DefinedCondition::PolicyViolation =>
+                            "policy-violation",
+                        xmpp_parsers::stanza_error::DefinedCondition::RecipientUnavailable =>
+                            "recipient-unavailable",
+                        xmpp_parsers::stanza_error::DefinedCondition::Redirect => "redirect",
+                        xmpp_parsers::stanza_error::DefinedCondition::RegistrationRequired =>
+                            "registration-required",
+                        xmpp_parsers::stanza_error::DefinedCondition::RemoteServerNotFound =>
+                            "remote-server-not-found",
+                        xmpp_parsers::stanza_error::DefinedCondition::RemoteServerTimeout =>
+                            "remote-server-timeout",
+                        xmpp_parsers::stanza_error::DefinedCondition::ResourceConstraint =>
+                            "resource-constraint",
+                        xmpp_parsers::stanza_error::DefinedCondition::ServiceUnavailable =>
+                            "service-unavailable",
+                        xmpp_parsers::stanza_error::DefinedCondition::SubscriptionRequired =>
+                            "subscription-required",
+                        xmpp_parsers::stanza_error::DefinedCondition::UndefinedCondition =>
+                            "undefined-condition",
+                        xmpp_parsers::stanza_error::DefinedCondition::UnexpectedRequest =>
+                            "unexpected-request",
+                    }
+                ),
+            ))
+        })
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests_command_parser {
     use super::*;
