@@ -107,7 +107,7 @@ pub enum Event {
         from: Option<Jid>,
         payload: StanzaError,
     },
-    Disco(Account),
+    Disco(Account, Vec<String>),
     PubSub {
         account: Account,
         from: Option<Jid>,
@@ -119,7 +119,8 @@ pub enum Event {
     Close(String),
     Contact(Account, contact::Contact),
     ContactUpdate(Account, contact::Contact),
-    Bookmark(contact::Bookmark),
+    Bookmark(Account, contact::Bookmark),
+    BookmarksUpdate(Account, Vec<contact::Bookmark>),
     DeletedBookmark(BareJid),
     Occupant {
         account: Account,

@@ -1006,7 +1006,7 @@ impl ModTrait for UIMod {
                         view.insert(RosterItem::Contact(contact.clone()), Some(group));
                     }
                 }
-                UIEvent::Core(Event::Bookmark(bookmark)) => {
+                UIEvent::Core(Event::Bookmark(_, bookmark)) => {
                     let group = contact::Group(String::from("Bookmarks"));
                     view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
                 }

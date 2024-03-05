@@ -5,14 +5,18 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
+
+use anyhow::{anyhow, Result};
 use uuid::Uuid;
+
 use xmpp_parsers::disco;
 use xmpp_parsers::disco::Feature;
 use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::{ns, Element, Jid};
+use xmpp_parsers::{ns, Jid};
 
 use crate::account::Account;
-use crate::core::{Aparte, Event, ModTrait};
+use crate::core::{Aparte, AparteAsync, Event, ModTrait};
+use crate::i18n;
 
 pub struct DiscoMod {
     identity: disco::Identity,
@@ -48,11 +52,43 @@ impl DiscoMod {
             .any(|i| i == feature)
     }
 
-    pub fn disco(&mut self, jid: Jid, node: Option<String>) -> Element {
+    async fn get_server_disco(
+        aparte: &mut AparteAsync,
+        account: &Account,
+        jid: &Jid,
+    ) -> Result<()> {
+        let resp = aparte
+            .iq(
+                account,
+                Self::disco_info_query_iq(&Jid::from_str(&jid.domain().to_string()).unwrap(), None),
+            )
+            .await?;
+
+        match resp.payload {
+            IqType::Result(Some(el)) => {
+                if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
+                    aparte.schedule(Event::Disco(
+                        account.clone(),
+                        disco.features.iter().map(|i| i.var.clone()).collect(),
+                    ));
+
+                    Ok(())
+                } else {
+                    Err(anyhow!("Cannot get server disco info: invalid response"))
+                }
+            }
+            IqType::Error(err) => Err(anyhow!(
+                "Cannot get server disco info: {}",
+                i18n::xmpp_err_to_string(&err, vec![]).1
+            )),
+            _ => Err(anyhow!("Cannot get server disco info: invalid response")),
+        }
+    }
+
+    fn disco_info_query_iq(jid: &Jid, node: Option<String>) -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
         let query = disco::DiscoInfoQuery { node };
-        let iq = Iq::from_get(id, query).with_to(Jid::from_str(&jid.domain().to_string()).unwrap());
-        iq.into()
+        Iq::from_get(id, query).with_to(jid.clone())
     }
 
     pub fn get_disco(&self) -> disco::DiscoInfoResult {
@@ -77,17 +113,25 @@ impl ModTrait for DiscoMod {
         match event {
             Event::Connected(account, jid) => {
                 self.server_features.insert(account.clone(), Vec::new());
-                aparte.send(account, self.disco(jid.clone(), None));
-            }
-            Event::Iq(account, iq) => match iq.payload.clone() {
-                IqType::Result(Some(el)) => {
-                    if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
-                        if let Some(features) = self.server_features.get_mut(account) {
-                            features.extend(disco.features.iter().map(|i| i.var.clone()));
-                            aparte.schedule(Event::Disco(account.clone()));
+
+                Aparte::spawn({
+                    let mut aparte = aparte.proxy();
+                    let account = account.clone();
+                    let jid = jid.clone();
+                    async move {
+                        if let Err(err) = Self::get_server_disco(&mut aparte, &account, &jid).await
+                        {
+                            crate::error!(aparte, err, "Cannot get server disco");
                         }
                     }
+                });
+            }
+            Event::Disco(account, features) => {
+                if let Some(server_features) = self.server_features.get_mut(account) {
+                    server_features.extend(features.clone());
                 }
+            }
+            Event::Iq(account, iq) => match iq.payload.clone() {
                 IqType::Get(el) => {
                     if let Ok(_disco) = disco::DiscoInfoQuery::try_from(el) {
                         let id = iq.id.clone();
