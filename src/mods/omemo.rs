@@ -535,17 +535,25 @@ impl OmemoMod {
     }
 
     fn configure(&mut self, aparte: &mut Aparte, account: &Account) -> Result<()> {
+        log::info!("Configure omemo for {account}");
         let signal_store = SignalStorage::new(account.clone(), aparte.storage.clone());
         self.signal_stores.insert(account.clone(), signal_store);
 
-        let device = match aparte.storage.get_omemo_own_device(account)? {
+        let device = match aparte
+            .storage
+            .get_omemo_own_device(account)
+            .context("Can't get or create own device")?
+        {
             Some(device) => {
                 log::info!("Reusing existing device");
                 device
             }
-            None => self.initialize_crypto(aparte, account)?,
+            None => self
+                .initialize_crypto(aparte, account)
+                .context("Cannot initialize crypto")?,
         };
 
+        log::debug!("Retrieve crypto assets");
         let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
         log::info!("Device id: {device_id}");
         let identity = device.identity.context("Missing own identity")?;
@@ -558,10 +566,13 @@ impl OmemoMod {
         let account = account.clone();
 
         let signed_pre_key_id = 0;
-        let signed_pre_key = aparte.storage.get_omemo_signed_pre_key(
-            &account,
-            libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
-        )?;
+        let signed_pre_key = aparte
+            .storage
+            .get_omemo_signed_pre_key(
+                &account,
+                libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
+            )
+            .context("Can't get stored signed pre key")?;
         let signed_pre_key_public = signed_pre_key.public_key()?;
         let signed_pre_key_signature = signed_pre_key.signature()?;
         let pre_keys = aparte
