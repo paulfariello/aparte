@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use rand::{self, Rng};
+use rand::Rng;
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
