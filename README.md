@@ -17,7 +17,7 @@ Features
   - [x] Bookmarks
   - [x] Consistent color generation
   - [x] MAM
-  - [ ] Omemo
+  - [x] Omemo (no MUC support currently)
 
 Install
 =======
