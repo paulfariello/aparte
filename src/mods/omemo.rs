@@ -8,7 +8,6 @@ use std::fmt::{self, Debug};
 use std::str::FromStr;
 
 use aes_gcm::{
-    self,
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes128Gcm,
 };
