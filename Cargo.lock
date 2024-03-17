@@ -195,6 +195,7 @@ dependencies = [
  "mockall",
  "rand 0.7.3",
  "rpassword",
+ "secrecy",
  "serde",
  "sha1",
  "termion",
