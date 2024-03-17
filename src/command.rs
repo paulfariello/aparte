@@ -275,13 +275,13 @@ macro_rules! build_subcommand_map(
 #[macro_export]
 macro_rules! parse_command_args(
     ($aparte:ident, $command:ident, $index:ident, {}) => ();
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password<$type:ty> }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password }) => (
         if $command.args.len() <= $index {
             $aparte.schedule(Event::ReadPassword($command.clone()));
             return Ok(())
         }
 
-        let $arg: Password<$type> = Password::from_str(&$command.args[$index])?;
+        let $arg: Password = Password::from_str(&$command.args[$index])?;
 
         $index += 1;
     );
@@ -669,7 +669,10 @@ mod tests_command_parser {
             "/test \"command with arg".to_string(),
         );
         assert!(command.is_err());
-        assert_eq!(format!("{}", command.err().unwrap()), "Missing closing quote");
+        assert_eq!(
+            format!("{}", command.err().unwrap()),
+            "Missing closing quote"
+        );
     }
 
     #[test]
