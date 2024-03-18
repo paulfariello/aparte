@@ -6,7 +6,7 @@ use linked_hash_map::{Entry, LinkedHashMap};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self};
 use std::hash::Hash;
 use std::io::Write;
 use std::rc::Rc;
@@ -14,7 +14,33 @@ use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
 
-pub type Screen<W> = AlternateScreen<RawTerminal<W>>;
+pub type Screen<W> = BufferedScreen<AlternateScreen<RawTerminal<W>>>;
+
+pub struct BufferedScreen<W: Write> {
+    inner: W,
+    buffer: Vec<u8>,
+}
+
+impl<W: Write> BufferedScreen<W> {
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            buffer: Vec::with_capacity(100 * 500 * 10),
+        }
+    }
+}
+
+impl<W: Write> Write for BufferedScreen<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buffer.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.write_all(self.buffer.as_slice())?;
+        self.buffer.clear();
+        self.inner.flush()
+    }
+}
 
 pub fn term_string_visible_len(string: &str) -> usize {
     // Count each grapheme on a given struct but ignore invisible chars sequences like '\x1b[…'
@@ -1506,7 +1532,6 @@ where
         }
 
         restore_cursor!(screen);
-        flush!(screen);
 
         self.dirty = false;
     }
@@ -1791,7 +1816,6 @@ where
         }
 
         restore_cursor!(screen);
-        flush!(screen);
 
         self.dirty = false;
     }

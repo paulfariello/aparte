@@ -36,8 +36,8 @@ use crate::cursor::Cursor;
 use crate::i18n;
 use crate::message::{Direction, Message, XmppMessageType};
 use crate::terminus::{
-    self, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
-    Orientation, Screen, View, Window as _,
+    self, BufferedScreen, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts,
+    LinearLayout, ListView, Orientation, Screen, View, Window as _,
 };
 use crate::{contact, conversation};
 
@@ -147,7 +147,6 @@ where
         );
 
         restore_cursor!(screen);
-        flush!(screen);
         self.dirty = false;
     }
 
@@ -328,7 +327,6 @@ where
         );
 
         restore_cursor!(screen);
-        flush!(screen);
         self.dirty = false;
     }
 
@@ -674,7 +672,7 @@ pub struct UIMod {
 impl UIMod {
     pub fn new(config: &Config) -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
-        let screen = AlternateScreen::from(stdout);
+        let screen = BufferedScreen::new(AlternateScreen::from(stdout));
 
         let panic_handler = PanicHandler::new();
 
@@ -1336,7 +1334,6 @@ impl ModTrait for UIMod {
             } => {
                 if *important && aparte.config.bell {
                     vprint!(self.screen, "\x07");
-                    flush!(self.screen);
                 }
                 self.root.event(&mut UIEvent::Core(Event::Notification {
                     conversation: conversation.clone(),
@@ -1364,6 +1361,7 @@ impl ModTrait for UIMod {
                 self.root.measure(&mut dimension, Some(width), Some(height));
                 self.root.layout(&mut dimension, 1, 1);
                 self.root.render(&dimension, &mut self.screen);
+                flush!(self.screen);
                 self.dimension = Some(dimension);
             } else if self.root.is_dirty() {
                 log::debug!("Render (saved {} rendering)", self.debounced);
@@ -1372,6 +1370,7 @@ impl ModTrait for UIMod {
 
                 let dimension: &Dimension = self.dimension.as_ref().unwrap();
                 self.root.render(dimension, &mut self.screen);
+                flush!(self.screen);
             }
         } else {
             log::debug!("Debounce rendering");
