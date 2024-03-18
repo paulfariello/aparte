@@ -259,7 +259,7 @@ macro_rules! parse_subcommand_attrs(
     ($map:ident, { children: $subcommands:tt $(, $($tail:tt)*)? }) => (
         build_subcommand_map!($map, $subcommands);
     );
-    ($map:ident, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => ();
+    ($map:ident, { completion: |$aparte:ident, $command:ident| $completion:block $(, $($tail:tt)*)? }) => ();
 );
 
 #[macro_export]
@@ -269,16 +269,16 @@ macro_rules! build_subcommand_map(
         $map.insert(String::from_str($subname).unwrap(), $subparser::new());
         build_subcommand_map!($map, { $($($tail)*)? });
     );
-    ($map:ident, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => ();
+    ($map:ident, { completion: |$aparte:ident, $command:ident| $completion:block $(, $($tail:tt)*)? }) => ();
 );
 
 #[macro_export]
 macro_rules! parse_lookup_arg(
     ($aparte:ident, $command:ident, $({})?) => (None);
-    ($aparte:ident, $command:ident, $({ lookup: (|$lookup_aparte:ident, $lookup_command:ident| $lookup:block) $(, $($tail:tt)*)? })?) => (
+    ($aparte:ident, $command:ident, $({ lookup: |$lookup_aparte:ident, $lookup_command:ident| $lookup:block $(, $($tail:tt)*)? })?) => (
         $((|$lookup_aparte: &mut Aparte, $lookup_command: &mut Command| $lookup)($aparte, &mut $command))?
     );
-    ($aparte:ident, $command:ident, $({ $attr:ident: $v:tt $(, $($tail:tt)*)? })?) => (
+    ($aparte:ident, $command:ident, $({ completion: |$completion_aparte:ident, $completion_command:ident| $lookup:block $(, $($tail:tt)*)? })?) => (
         parse_lookup_arg!($aparte, $command, { $($($tail)*)? })
     );
 );
@@ -401,14 +401,14 @@ macro_rules! generate_sub_autocompletion(
 #[macro_export]
 macro_rules! generate_arg_autocompletion(
     ($autocompletions:ident, $type:ty, {}) => ();
-    ($autocompletions:ident, $type:ty, { lookup: $subs:tt $(, $($tail:tt)*)? }) => ();
+    ($autocompletions:ident, $type:ty, { lookup: |$aparte:ident, $command:ident| $completion:block $(, $($tail:tt)*)? }) => ();
     ($autocompletions:ident, $type:ty, { children: $subs:tt $(, $($tail:tt)*)? }) => (
         let mut sub = vec![];
         generate_sub_autocompletion!(sub, $subs);
         $autocompletions.push(Some(Box::new(move |_: &mut Aparte, _: Command| -> Vec<String> { sub.clone() })));
         generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
-    ($autocompletions:ident, $type:ty, { completion: (|$aparte:ident, $command:ident| $completion:block) $(, $($tail:tt)*)? }) => (
+    ($autocompletions:ident, $type:ty, { completion: |$aparte:ident, $command:ident| $completion:block $(, $($tail:tt)*)? }) => (
         $autocompletions.push(Some(Box::new(|$aparte: &mut Aparte, $command: Command| -> Vec<String> { $completion })));
         generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
@@ -557,9 +557,9 @@ mod tests_command_macro {
 
     command_def!(one_arg_completion, "help", {
                   _first_arg: String = {
-                      completion: (|_aparte, _command| {
+                      completion: |_aparte, _command| {
                           Vec::new()
-                      })
+                      }
                   }
     }, |_aparte, _command| { Ok(()) });
 
@@ -585,9 +585,9 @@ mod tests_command_macro {
 
     command_def!(two_args_completion, "help", {
         _first_arg: String = {
-            completion: (|_aparte, _command| {
+            completion: |_aparte, _command| {
                 Vec::new()
-            })
+            }
         },
         _second_arg: String
     }, |_aparte, _command| { Ok(()) });
