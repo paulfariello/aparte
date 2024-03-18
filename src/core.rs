@@ -10,6 +10,8 @@ use std::future::Future;
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -816,6 +818,7 @@ pub struct Aparte {
     send_rx: Option<mpsc::UnboundedReceiver<(Account, Element)>>,
     pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
+    read_password: AtomicBool,
     /// Aparté main configuration
     pub config: Config,
     pub storage: Storage,
@@ -863,6 +866,7 @@ impl Aparte {
             config: config.clone(),
             pending_iq: Arc::new(Mutex::new(HashMap::new())),
             crypto_engines: Arc::new(Mutex::new(HashMap::new())),
+            read_password: AtomicBool::new(false),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
@@ -1222,7 +1226,11 @@ impl Aparte {
     }
 
     pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
-        log::debug!("Event: {:?}", event);
+        if self.read_password.load(Relaxed) && matches!(event, Event::Key(..)) {
+            log::debug!("Event: {:?}", Event::Key(Key::Char('*')));
+        } else {
+            log::debug!("Event: {:?}", event);
+        }
         {
             let mods = self.mods.clone();
             for (_, r#mod) in mods.iter() {
@@ -1234,10 +1242,13 @@ impl Aparte {
             Event::Start => {
                 self.start();
             }
-            Event::Command(command) => match self.handle_command(command) {
-                Err(err) => self.log(err),
-                Ok(()) => {}
-            },
+            Event::Command(command) => {
+                self.read_password.swap(false, Relaxed);
+                match self.handle_command(command) {
+                    Err(err) => self.log(err),
+                    Ok(()) => {}
+                }
+            }
             Event::RawCommand(account, context, buf) => {
                 match self.handle_raw_command(&account, &context, &buf) {
                     Err(err) => self.log(err),
@@ -1335,6 +1346,9 @@ impl Aparte {
                 presence = presence.with_from(channel.account.clone());
                 presence.add_payload(Muc::new());
                 self.send(&channel.account, presence);
+            }
+            Event::ReadPassword(_) => {
+                self.read_password.swap(true, Relaxed);
             }
             Event::Quit => {
                 return Err(());
