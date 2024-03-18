@@ -394,14 +394,14 @@ Examples:
 "#,
 {
     account_name: String = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             aparte.config.accounts.keys().cloned().collect()
-        })
+        }
     },
     password: Password = {
-        lookup: (|aparte, _command| {
+        lookup: |aparte, _command| {
             aparte.config.accounts.get(&account_name).map(|account| account.password.clone()).flatten()
-        })
+        }
     },
 },
 |aparte, _command| {
@@ -442,10 +442,10 @@ Examples:
     /win contact@server.tld"#,
 {
     window: String = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             let ui = aparte.get_mod::<mods::ui::UIMod>();
             ui.get_windows()
-        })
+        }
     }
 },
 |aparte, _command| {
@@ -466,10 +466,10 @@ Examples:
     /close contact@server.tld"#,
 {
     window: Option<String> = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             let ui = aparte.get_mod::<mods::ui::UIMod>();
             ui.get_windows()
-        })
+        }
     }
 },
 |aparte, _command| {
@@ -498,7 +498,7 @@ Examples:
     /leave channel@conversation.server.tld"#,
 {
     window: Option<String> = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             let ui = aparte.get_mod::<mods::ui::UIMod>();
             let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
             ui.get_windows().iter().map(|window| {
@@ -518,7 +518,7 @@ Examples:
                     None
                 }
             }).collect()
-        })
+        }
     }
 },
 |aparte, _command| {
@@ -559,10 +559,10 @@ Example:
 "#,
 {
     contact: String = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             let contact = aparte.get_mod::<mods::contact::ContactMod>();
             contact.contacts.values().map(|contact| contact.jid.to_string()).collect()
-        })
+        }
     },
     message: Option<String>
 },
@@ -595,10 +595,10 @@ Example:
     /join channel@conference.server.tld"#,
 {
     muc: String = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
             bookmarks.bookmarks_by_name.keys().cloned().chain(bookmarks.bookmarks_by_jid.keys().map(|a| a.to_string())).collect()
-        })
+        }
     },
 },
 |aparte, _command| {
@@ -665,9 +665,9 @@ Examples:
     /help win"#,
 {
     cmd: Option<String> = {
-        completion: (|aparte, _command| {
+        completion: |aparte, _command| {
             aparte.command_parsers.iter().map(|c| c.0.to_string()).collect()
-        })
+        }
     }
 },
 |aparte, _command| {
