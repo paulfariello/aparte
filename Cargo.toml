@@ -1,6 +1,6 @@
 [package]
 name = "aparte"
-version = "0.3.0-dev"
+version = "0.4.0-dev"
 description = "Simple XMPP console client written in Rust and inspired by Profanity."
 authors = ["Paul Fariello <paul@fariello.eu>"]
 edition = "2018"
@@ -20,8 +20,8 @@ flexi_logger = "^0.27"
 backtrace = "^0.3"
 futures = "^0.3"
 tokio = { version = "^1.10", features = ["full"] }
-tokio-xmpp = { path = "../xmpp-rs/tokio-xmpp/" } # "=3.3.0"
-xmpp-parsers = { path = "../xmpp-rs/parsers/" } # "^0.19"
+tokio-xmpp = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git" }
+xmpp-parsers = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git" }
 rpassword = "^3.0"
 uuid = { version = "^1.7", features = ["v4"]  }
 termion = "1.5"
@@ -48,6 +48,7 @@ aes-gcm = "0.10.3"
 base64 = "0.21.7"
 sha1 = "0.10.6"
 itertools = "0.12.1"
+secrecy = "0.8.0"
 
 [dev-dependencies]
 mockall = "^0.9"

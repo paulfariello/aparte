@@ -1257,7 +1257,6 @@ where
     T: fmt::Display + Hash + Eq + Ord,
 {
     fn insert(&mut self, item: T);
-    fn send_message(&self);
     /// PageUp the window, return true if top is reached
     fn page_up(&mut self) -> bool;
     /// PageDown the window, return true if bottom is reached
@@ -1467,8 +1466,6 @@ where
             true
         }
     }
-
-    fn send_message(&self) {}
 }
 
 impl<E, W, I> View<E, W> for BufferedWin<E, W, I>

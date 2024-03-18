@@ -275,13 +275,13 @@ macro_rules! build_subcommand_map(
 #[macro_export]
 macro_rules! parse_command_args(
     ($aparte:ident, $command:ident, $index:ident, {}) => ();
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password<$type:ty> }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password }) => (
         if $command.args.len() <= $index {
             $aparte.schedule(Event::ReadPassword($command.clone()));
             return Ok(())
         }
 
-        let $arg: Password<$type> = Password::from_str(&$command.args[$index])?;
+        let $arg: Password = Password::from_str(&$command.args[$index])?;
 
         $index += 1;
     );
@@ -669,7 +669,10 @@ mod tests_command_parser {
             "/test \"command with arg".to_string(),
         );
         assert!(command.is_err());
-        assert_eq!(command.err(), Some("Missing closing quote".to_string()));
+        assert_eq!(
+            format!("{}", command.err().unwrap()),
+            "Missing closing quote"
+        );
     }
 
     #[test]
@@ -790,12 +793,14 @@ mod tests_command_parser {
     #[test]
     fn test_command_parse_name() {
         let name = Command::parse_name("/me's best client is Aparté");
-        assert_eq!(Ok("me"), name);
+        assert!(name.is_ok());
+        assert_eq!("me", name.unwrap());
     }
 
     #[test]
     fn test_command_parse_name_without_args() {
         let name = Command::parse_name("/close");
-        assert_eq!(anyhow::Result::Ok("close"), name);
+        assert!(name.is_ok());
+        assert_eq!("close", name.unwrap());
     }
 }
