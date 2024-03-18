@@ -274,18 +274,21 @@ macro_rules! build_subcommand_map(
 
 #[macro_export]
 macro_rules! parse_lookup_arg(
-    ($aparte:ident, $command:ident, {}) => (None);
-    ($aparte:ident, $command:ident, { lookup: (|$lookup_aparte:ident, $lookup_command:ident| $lookup:block) $(, $($tail:tt)*)? }) => (
-        (|$lookup_aparte: &mut Aparte, $lookup_command: &mut Command| $lookup)($aparte, &mut $command)
+    ($aparte:ident, $command:ident, $({})?) => (None);
+    ($aparte:ident, $command:ident, $({ lookup: (|$lookup_aparte:ident, $lookup_command:ident| $lookup:block) $(, $($tail:tt)*)? })?) => (
+        $((|$lookup_aparte: &mut Aparte, $lookup_command: &mut Command| $lookup)($aparte, &mut $command))?
+    );
+    ($aparte:ident, $command:ident, $({ $attr:ident: $v:tt $(, $($tail:tt)*)? })?) => (
+        parse_lookup_arg!($aparte, $command, { $($($tail)*)? })
     );
 );
 
 #[macro_export]
 macro_rules! parse_command_args(
     ($aparte:ident, $command:ident, $index:ident, {}) => ();
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password = $attrs:tt $(,)? }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password $(= $attrs:tt)? $(,)? }) => (
         let $arg: Password = if $command.args.len() <= $index {
-            let $arg: Option<Password> = parse_lookup_arg!($aparte, $command, $attrs);
+            let $arg: Option<Password> = parse_lookup_arg!($aparte, $command, $($attrs)?);
             match $arg {
                None => {
                    $aparte.schedule(Event::ReadPassword($command.clone()));
@@ -299,12 +302,12 @@ macro_rules! parse_command_args(
 
         $index += 1;
     );
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Option<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Option<$type:ty> $(= $attrs:tt)? $(, $($tail:tt)*)? }) => (
         let $arg: Option<$type> = {
             if $command.args.len() > $index {
                 Some(<$type>::from_str(&$command.args[$index])?)
             } else {
-                None
+                parse_lookup_arg!($aparte, $command, $($attrs)?)
             }
         };
 
@@ -312,7 +315,7 @@ macro_rules! parse_command_args(
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Named<$type:ty> $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Named<$type:ty> $(= $attrs:tt)? $(, $($tail:tt)*)? }) => (
         let $arg: Option<$type> = {
             // Could use let matching = $command.args.drain_filter(|a| a.starts_with(stringify!($arg))).collect::<Vec<String>>();
             let mut matching = Vec::new();
@@ -336,13 +339,13 @@ macro_rules! parse_command_args(
 
         parse_command_args!($aparte, $command, $index, { $($($tail)*)? });
     );
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Command = $attr:tt $(, $($tail:tt)*)? }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Command = $attrs:tt $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
             ::anyhow::bail!("Missing {} argument", stringify!($arg))
         }
 
         let mut sub_commands: HashMap<String, CommandParser> = HashMap::new();
-        parse_subcommand_attrs!(sub_commands, $attr);
+        parse_subcommand_attrs!(sub_commands, $attrs);
 
         return match sub_commands.get(&$command.args[$index]) {
             Some(sub_parser) => {
@@ -355,7 +358,7 @@ macro_rules! parse_command_args(
             None => ::anyhow::bail!("Invalid subcommand {}", $command.args[$index]),
         };
     );
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: $type:ty $(= $attr:tt)? $(, $($tail:tt)*)? }) => (
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: $type:ty $(= $attrs:tt)? $(, $($tail:tt)*)? }) => (
         if $command.args.len() <= $index {
             ::anyhow::bail!("Missing {} argument", stringify!($arg))
         }
