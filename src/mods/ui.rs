@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use termion::color;
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
@@ -39,6 +40,9 @@ use crate::terminus::{
     Orientation, Screen, View, Window as _,
 };
 use crate::{contact, conversation};
+
+// Debounce rendering at 350ms pace (based on Doherty Threshold)
+const UI_DEBOUNCE_NS: u32 = 35_000_000u32;
 
 enum UIEvent {
     Core(Event),
@@ -658,6 +662,8 @@ pub struct UIMod {
     unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
     root: LinearLayout<UIEvent, Stdout>,
+    last_render: Instant,
+    debounced: u32,
     dimension: Option<Dimension>,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
@@ -769,6 +775,8 @@ impl UIMod {
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             panic_handler,
+            last_render: Instant::now(),
+            debounced: 0,
         }
     }
 
@@ -1041,6 +1049,8 @@ impl ModTrait for UIMod {
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
+        let mut force_render = false;
+
         match event {
             Event::ReadPassword(command) => {
                 self.password_command = Some(command.clone());
@@ -1333,21 +1343,49 @@ impl ModTrait for UIMod {
                     important: *important,
                 }));
             }
+            Event::UIRender => {
+                log::debug!("Force render");
+                force_render = true;
+            }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
 
-        // Update rendering
-        if self.root.is_layout_dirty() {
-            let (width, height) = termion::terminal_size().unwrap();
-            let mut dimension = Dimension::new();
-            self.root.measure(&mut dimension, Some(width), Some(height));
-            self.root.layout(&mut dimension, 1, 1);
-            self.root.render(&dimension, &mut self.screen);
-            self.dimension = Some(dimension);
-        } else if self.root.is_dirty() {
-            let dimension: &Dimension = self.dimension.as_ref().unwrap();
-            self.root.render(dimension, &mut self.screen);
+        // Debounce rendering
+        if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
+            // Update rendering
+            if self.root.is_layout_dirty() {
+                log::debug!("Render (saved {} rendering)", self.debounced);
+                self.last_render = Instant::now();
+                self.debounced = 0;
+
+                let (width, height) = termion::terminal_size().unwrap();
+                let mut dimension = Dimension::new();
+                self.root.measure(&mut dimension, Some(width), Some(height));
+                self.root.layout(&mut dimension, 1, 1);
+                self.root.render(&dimension, &mut self.screen);
+                self.dimension = Some(dimension);
+            } else if self.root.is_dirty() {
+                log::debug!("Render (saved {} rendering)", self.debounced);
+                self.last_render = Instant::now();
+                self.debounced = 0;
+
+                let dimension: &Dimension = self.dimension.as_ref().unwrap();
+                self.root.render(dimension, &mut self.screen);
+            }
+        } else {
+            log::debug!("Debounce rendering");
+            if self.debounced == 0 {
+                // Ensure we will render this debounced event right in time
+                Aparte::spawn({
+                    let mut aparte = aparte.proxy();
+                    async move {
+                        thread::sleep(Duration::new(0, UI_DEBOUNCE_NS));
+                        aparte.schedule(Event::UIRender)
+                    }
+                })
+            }
+            self.debounced += 1;
         }
 
         // Handle queued outgoing event
