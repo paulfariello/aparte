@@ -19,7 +19,7 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::Rng;
-use secrecy::{ExposeSecret, Secret};
+use secrecy::ExposeSecret;
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -39,7 +39,7 @@ use xmpp_parsers::pubsub::event::PubSubEvent;
 use xmpp_parsers::stanza_error::StanzaError;
 use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
 
-use crate::account::{Account, ConnectionInfo};
+use crate::account::{Account, ConnectionInfo, Password};
 use crate::async_iq::{IqFuture, PendingIqState};
 use crate::color;
 use crate::command::{Command, CommandParser};
@@ -52,7 +52,7 @@ use crate::mods;
 use crate::storage::Storage;
 use crate::{
     command_def, generate_arg_autocompletion, generate_command_autocompletions, generate_help,
-    parse_command_args,
+    parse_command_args, parse_lookup_arg,
 };
 use crate::{contact, conversation};
 
@@ -373,8 +373,6 @@ impl Display for Mod {
     }
 }
 
-pub type Password = Secret<String>;
-
 pub struct Connection {
     pub sink: mpsc::UnboundedSender<Element>,
     pub account: FullJid,
@@ -400,7 +398,11 @@ Examples:
             aparte.config.accounts.keys().cloned().collect()
         })
     },
-    password: Password
+    password: Password = {
+        lookup: (|aparte, _command| {
+            aparte.config.accounts.get(&account_name).map(|account| account.password.clone()).flatten()
+        })
+    },
 },
 |aparte, _command| {
     let account = {
@@ -415,6 +417,7 @@ Examples:
                 server: None,
                 port: None,
                 autoconnect: false,
+                password: None,
             }
         } else {
             anyhow::bail!("Unknown account or invalid jid {account_name}");
