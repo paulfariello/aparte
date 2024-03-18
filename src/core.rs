@@ -10,13 +10,16 @@ use std::future::Future;
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use rand::{self, Rng};
+use rand::Rng;
+use secrecy::{ExposeSecret, Secret};
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -64,7 +67,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
-    Connect(ConnectionInfo, Password<String>),
+    Connect(ConnectionInfo, Password),
     Connected(Account, Jid),
     Disconnected(Account, String),
     AuthError(Account, String),
@@ -370,19 +373,7 @@ impl Display for Mod {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Password<T: FromStr>(pub T);
-
-impl<T: FromStr> FromStr for Password<T> {
-    type Err = T::Err;
-
-    fn from_str(s: &str) -> Result<Self, T::Err> {
-        match T::from_str(s) {
-            Err(e) => Err(e),
-            Ok(inner) => Ok(Password(inner)),
-        }
-    }
-}
+pub type Password = Secret<String>;
 
 pub struct Connection {
     pub sink: mpsc::UnboundedSender<Element>,
@@ -409,7 +400,7 @@ Examples:
             aparte.config.accounts.keys().cloned().collect()
         })
     },
-    password: Password<String>
+    password: Password
 },
 |aparte, _command| {
     let account = {
@@ -827,6 +818,7 @@ pub struct Aparte {
     send_rx: Option<mpsc::UnboundedReceiver<(Account, Element)>>,
     pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
     crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
+    read_password: AtomicBool,
     /// Aparté main configuration
     pub config: Config,
     pub storage: Storage,
@@ -874,6 +866,7 @@ impl Aparte {
             config: config.clone(),
             pending_iq: Arc::new(Mutex::new(HashMap::new())),
             crypto_engines: Arc::new(Mutex::new(HashMap::new())),
+            read_password: AtomicBool::new(false),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
@@ -1119,7 +1112,7 @@ impl Aparte {
         }
     }
 
-    pub fn connect(&mut self, connection_info: &ConnectionInfo, password: Password<String>) {
+    pub fn connect(&mut self, connection_info: &ConnectionInfo, password: Password) {
         let account: Account = match Jid::from_str(&connection_info.jid) {
             Ok(Jid::Full(jid)) => jid,
             Ok(Jid::Bare(jid)) => {
@@ -1143,7 +1136,7 @@ impl Aparte {
         self.log(format!("Connecting as {account}"));
         let config = tokio_xmpp::AsyncConfig {
             jid: Jid::from(account.clone()),
-            password: password.0,
+            password: password.expose_secret().clone(),
             server: match (&connection_info.server, &connection_info.port) {
                 (Some(server), Some(port)) => tokio_xmpp::starttls::ServerConfig::Manual {
                     host: server.clone(),
@@ -1233,7 +1226,11 @@ impl Aparte {
     }
 
     pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
-        log::debug!("Event: {:?}", event);
+        if self.read_password.load(Relaxed) && matches!(event, Event::Key(..)) {
+            log::debug!("Event: {:?}", Event::Key(Key::Char('*')));
+        } else {
+            log::debug!("Event: {:?}", event);
+        }
         {
             let mods = self.mods.clone();
             for (_, r#mod) in mods.iter() {
@@ -1245,10 +1242,13 @@ impl Aparte {
             Event::Start => {
                 self.start();
             }
-            Event::Command(command) => match self.handle_command(command) {
-                Err(err) => self.log(err),
-                Ok(()) => {}
-            },
+            Event::Command(command) => {
+                self.read_password.swap(false, Relaxed);
+                match self.handle_command(command) {
+                    Err(err) => self.log(err),
+                    Ok(()) => {}
+                }
+            }
             Event::RawCommand(account, context, buf) => {
                 match self.handle_raw_command(&account, &context, &buf) {
                     Err(err) => self.log(err),
@@ -1346,6 +1346,9 @@ impl Aparte {
                 presence = presence.with_from(channel.account.clone());
                 presence.add_payload(Muc::new());
                 self.send(&channel.account, presence);
+            }
+            Event::ReadPassword(_) => {
+                self.read_password.swap(true, Relaxed);
             }
             Event::Quit => {
                 return Err(());
