@@ -273,15 +273,29 @@ macro_rules! build_subcommand_map(
 );
 
 #[macro_export]
+macro_rules! parse_lookup_arg(
+    ($aparte:ident, $command:ident, {}) => (None);
+    ($aparte:ident, $command:ident, { lookup: (|$lookup_aparte:ident, $lookup_command:ident| $lookup:block) $(, $($tail:tt)*)? }) => (
+        (|$lookup_aparte: &mut Aparte, $lookup_command: &mut Command| $lookup)($aparte, &mut $command)
+    );
+);
+
+#[macro_export]
 macro_rules! parse_command_args(
     ($aparte:ident, $command:ident, $index:ident, {}) => ();
-    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password }) => (
-        if $command.args.len() <= $index {
-            $aparte.schedule(Event::ReadPassword($command.clone()));
-            return Ok(())
-        }
-
-        let $arg: Password = Password::from_str(&$command.args[$index])?;
+    ($aparte:ident, $command:ident, $index:ident, { $arg:ident: Password = $attrs:tt $(,)? }) => (
+        let $arg: Password = if $command.args.len() <= $index {
+            let $arg: Option<Password> = parse_lookup_arg!($aparte, $command, $attrs);
+            match $arg {
+               None => {
+                   $aparte.schedule(Event::ReadPassword($command.clone()));
+                   return Ok(())
+               },
+               Some($arg) => $arg,
+            }
+        } else {
+            Password::from_str(&$command.args[$index])?
+        };
 
         $index += 1;
     );
@@ -384,6 +398,7 @@ macro_rules! generate_sub_autocompletion(
 #[macro_export]
 macro_rules! generate_arg_autocompletion(
     ($autocompletions:ident, $type:ty, {}) => ();
+    ($autocompletions:ident, $type:ty, { lookup: $subs:tt $(, $($tail:tt)*)? }) => ();
     ($autocompletions:ident, $type:ty, { children: $subs:tt $(, $($tail:tt)*)? }) => (
         let mut sub = vec![];
         generate_sub_autocompletion!(sub, $subs);
