@@ -12,6 +12,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::io::{Read, Stdout, Write};
+use std::os::fd::AsFd;
 use std::panic;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -23,7 +24,7 @@ use termion::color;
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
 use termion::raw::IntoRawMode;
-use termion::screen::AlternateScreen;
+use termion::screen::IntoAlternateScreen;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -86,7 +87,7 @@ impl TitleBar {
 
 impl<W> View<UIEvent, W> for TitleBar
 where
-    W: Write,
+    W: Write + AsFd,
 {
     fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
         save_cursor!(screen);
@@ -232,7 +233,7 @@ impl WinBar {
 
 impl<W> View<UIEvent, W> for WinBar
 where
-    W: Write,
+    W: Write + AsFd,
 {
     fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
         save_cursor!(screen);
@@ -671,8 +672,12 @@ pub struct UIMod {
 
 impl UIMod {
     pub fn new(config: &Config) -> Self {
-        let stdout = std::io::stdout().into_raw_mode().unwrap();
-        let screen = BufferedScreen::new(AlternateScreen::from(stdout));
+        let stdout = std::io::stdout()
+            .into_raw_mode()
+            .unwrap()
+            .into_alternate_screen()
+            .unwrap();
+        let screen = BufferedScreen::new(stdout);
 
         let panic_handler = PanicHandler::new();
 

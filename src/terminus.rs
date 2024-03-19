@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{self};
 use std::hash::Hash;
 use std::io::Write;
+use std::os::fd::AsFd;
 use std::rc::Rc;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
@@ -320,7 +321,7 @@ impl Dimension {
 
 pub trait View<E, W>
 where
-    W: Write,
+    W: Write + AsFd,
 {
     /// Compute the wanted dimension given passed width and height
     fn measure(
@@ -457,7 +458,7 @@ impl<E, W> dyn View<E, W> where W: Write {}
 pub struct FrameLayout<E, W, K>
 where
     K: Hash + Eq + Clone,
-    W: Write,
+    W: Write + AsFd,
 {
     children: HashMap<K, (Dimension, Box<dyn View<E, W>>)>,
     current: Option<K>,
@@ -469,7 +470,7 @@ where
 impl<E, W, K> FrameLayout<E, W, K>
 where
     K: Hash + Eq + Clone,
-    W: Write,
+    W: Write + AsFd,
 {
     pub fn new() -> Self {
         Self {
@@ -571,7 +572,7 @@ where
 impl<E, W, K> View<E, W> for FrameLayout<E, W, K>
 where
     K: Hash + Eq + Clone,
-    W: Write,
+    W: Write + AsFd,
 {
     fn measure(
         &mut self,
@@ -664,7 +665,7 @@ pub struct LinearLayout<E, W> {
 
 impl<E, W> LinearLayout<E, W>
 where
-    W: Write,
+    W: Write + AsFd,
 {
     pub fn new(orientation: Orientation) -> Self {
         Self {
@@ -715,7 +716,7 @@ where
 
 impl<E, W> View<E, W> for LinearLayout<E, W>
 where
-    W: Write,
+    W: Write + AsFd,
 {
     fn measure(
         &mut self,
@@ -1202,7 +1203,7 @@ impl<E> Input<E> {
 
 impl<E, W> View<E, W> for Input<E>
 where
-    W: Write,
+    W: Write + AsFd,
 {
     fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
         self.width = dimension.w.unwrap() as usize;
@@ -1279,7 +1280,7 @@ where
 
 pub trait Window<E, W, T>: View<E, W>
 where
-    W: Write,
+    W: Write + AsFd,
     T: fmt::Display + Hash + Eq + Ord,
 {
     fn insert(&mut self, item: T);
@@ -1444,7 +1445,7 @@ where
 
 impl<E, W, I> Window<E, W, I> for BufferedWin<E, W, I>
 where
-    W: Write,
+    W: Write + AsFd,
     I: fmt::Display + Hash + Eq + Ord,
 {
     fn insert(&mut self, item: I) {
@@ -1496,7 +1497,7 @@ where
 
 impl<E, W, I> View<E, W> for BufferedWin<E, W, I>
 where
-    W: Write,
+    W: Write + AsFd,
     I: fmt::Display + Hash + Eq + Ord,
 {
     fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
@@ -1690,7 +1691,7 @@ where
 
 impl<E, W, G, V> View<E, W> for ListView<E, W, G, V>
 where
-    W: Write,
+    W: Write + AsFd,
     G: fmt::Display + Hash + Eq,
     V: fmt::Display + Hash + Eq,
 {
