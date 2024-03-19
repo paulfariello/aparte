@@ -24,7 +24,7 @@ tokio-xmpp = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git" }
 xmpp-parsers = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git" }
 rpassword = "^3.0"
 uuid = { version = "^1.7", features = ["v4"]  }
-termion = "3.0"
+termion = { path = "../termion/" } # "3.0.0" + d57468cdc106699585dd0fea0361998293c26574
 derive-error = "0.0.4"
 bytes = "^0.5"
 dirs = "^2.0"

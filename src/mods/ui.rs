@@ -727,39 +727,46 @@ impl UIMod {
                 }
             });
         let win_bar = WinBar::new(&config.theme.win_bar);
-        let input = Input::new().with_event(|input, event| match event {
-            UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
-            UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
-            UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
-            UIEvent::Core(Event::Key(Key::Home)) => input.home(),
-            UIEvent::Core(Event::Key(Key::End)) => input.end(),
-            UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
-            UIEvent::Core(Event::Key(Key::Down)) => input.next(),
-            UIEvent::Core(Event::Key(Key::Left)) => input.left(),
-            UIEvent::Core(Event::Key(Key::Right)) => input.right(),
-            UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
-            UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
-            UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
-            UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
-            UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
-            UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
-            UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
-            UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
-            UIEvent::Validate(result) => {
-                let mut result = result.borrow_mut();
-                result.replace(input.validate());
+        let input = Input::new().with_event(|input, event| {
+            if let UIEvent::Core(Event::Key(event)) = event {
+                log::debug!("Input event: {:?}", event);
             }
-            UIEvent::GetInput(result) => {
-                let mut result = result.borrow_mut();
-                result.replace((input.buf.clone(), input.cursor.clone(), input.password));
+            match event {
+                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
+                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
+                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
+                UIEvent::Core(Event::Key(Key::End)) => input.end(),
+                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
+                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
+                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
+                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
+                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
+                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
+                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
+                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
+                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
+                UIEvent::Core(Event::Key(Key::CtrlLeft)) => input.word_left(),
+                UIEvent::Core(Event::Key(Key::CtrlRight)) => input.word_right(),
+                UIEvent::Validate(result) => {
+                    let mut result = result.borrow_mut();
+                    result.replace(input.validate());
+                }
+                UIEvent::GetInput(result) => {
+                    let mut result = result.borrow_mut();
+                    result.replace((input.buf.clone(), input.cursor.clone(), input.password));
+                }
+                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+                    input.buf = raw_buf.clone();
+                    input.cursor = cursor.clone();
+                    input.dirty = true;
+                }
+                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+                _ => {}
             }
-            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                input.buf = raw_buf.clone();
-                input.cursor = cursor.clone();
-                input.dirty = true;
-            }
-            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
-            _ => {}
         });
 
         layout.push(title_bar);
@@ -1515,42 +1522,27 @@ impl Stream for EventStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(TermionEvent::Key(key))) => {
-                match key {
-                    //Key::Alt('\x1b') => {
-                    //    match Pin::new(&mut self.inner).poll_next(cx) {
-                    //        Poll::Ready(Some(TermionEvent::Key(Key::Char('[')))) => {
-                    //            match Pin::new(&mut self.inner).poll_next(cx) {
-                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('C')))) => Poll::Pending,
-                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('D')))) => Poll::Pending,
-                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
-                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
-                    //                Poll::Ready(None) => Poll::Pending,
-                    //                Poll::Pending => Poll::Pending,
-                    //            }
-                    //        },
-                    //        _ => Poll::Pending,
-                    //    };
-                    //},
-                    Key::Char(c) => Poll::Ready(Some(Event::Key(Key::Char(c)))),
-                    Key::Backspace => Poll::Ready(Some(Event::Key(Key::Backspace))),
-                    Key::Delete => Poll::Ready(Some(Event::Key(Key::Delete))),
-                    Key::Home => Poll::Ready(Some(Event::Key(Key::Home))),
-                    Key::End => Poll::Ready(Some(Event::Key(Key::End))),
-                    Key::Up => Poll::Ready(Some(Event::Key(Key::Up))),
-                    Key::Down => Poll::Ready(Some(Event::Key(Key::Down))),
-                    Key::Left => Poll::Ready(Some(Event::Key(Key::Left))),
-                    Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
-                    Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
-                    Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
-                    Key::PageUp => Poll::Ready(Some(Event::Key(Key::PageUp))),
-                    Key::PageDown => Poll::Ready(Some(Event::Key(Key::PageDown))),
-                    _ => {
-                        self.inner.waker.register(cx.waker());
-                        Poll::Pending
-                    }
+            Poll::Ready(Some(TermionEvent::Key(key))) => match key {
+                Key::Char(c) => Poll::Ready(Some(Event::Key(Key::Char(c)))),
+                Key::Backspace => Poll::Ready(Some(Event::Key(Key::Backspace))),
+                Key::Delete => Poll::Ready(Some(Event::Key(Key::Delete))),
+                Key::Home => Poll::Ready(Some(Event::Key(Key::Home))),
+                Key::End => Poll::Ready(Some(Event::Key(Key::End))),
+                Key::Up => Poll::Ready(Some(Event::Key(Key::Up))),
+                Key::Down => Poll::Ready(Some(Event::Key(Key::Down))),
+                Key::Left => Poll::Ready(Some(Event::Key(Key::Left))),
+                Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
+                Key::CtrlLeft => Poll::Ready(Some(Event::Key(Key::CtrlLeft))),
+                Key::CtrlRight => Poll::Ready(Some(Event::Key(Key::CtrlRight))),
+                Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
+                Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
+                Key::PageUp => Poll::Ready(Some(Event::Key(Key::PageUp))),
+                Key::PageDown => Poll::Ready(Some(Event::Key(Key::PageDown))),
+                _ => {
+                    self.inner.waker.register(cx.waker());
+                    Poll::Pending
                 }
-            }
+            },
             Poll::Ready(Some(TermionEvent::Mouse(_))) => {
                 self.inner.waker.register(cx.waker());
                 Poll::Pending

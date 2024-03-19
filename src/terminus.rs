@@ -79,6 +79,52 @@ pub fn term_string_visible_len(string: &str) -> usize {
     len
 }
 
+fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
+    // XXX utf char boundary?
+    enum WordParserState {
+        Init,
+        Space,
+        Separator,
+        Word,
+    }
+
+    use WordParserState::*;
+
+    let mut state = Init;
+    let mut count = 0;
+
+    for c in iter {
+        state = match state {
+            Init => match c {
+                ' ' => Space,
+                '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '=' | '>'
+                | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
+                _ => Word,
+            },
+            Space => match c {
+                ' ' => Space,
+                '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '=' | '>'
+                | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
+                _ => Word,
+            },
+            Separator => match c {
+                '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '=' | '>'
+                | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
+                _ => break,
+            },
+            Word => match c {
+                ' ' | '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
+                | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => break,
+                _ => Word,
+            },
+        };
+
+        count += 1;
+    }
+
+    count
+}
+
 /// Remove all terminal specific chars sequences
 pub fn clean(string: &str) -> String {
     let mut output = String::new();
@@ -1024,49 +1070,9 @@ impl<E> Input<E> {
     }
 
     pub fn backward_delete_word(&mut self) {
-        // XXX utf char boundary?
-        enum WordParserState {
-            Init,
-            Space,
-            Separator,
-            Word,
-        }
-
-        use WordParserState::*;
-
         let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
-        let mut state = Init;
         let mut word_start = self.cursor.clone();
-
-        for c in iter {
-            state = match state {
-                Init => match c {
-                    ' ' => Space,
-                    '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
-                    | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
-                    _ => Word,
-                },
-                Space => match c {
-                    ' ' => Space,
-                    '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
-                    | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
-                    _ => Word,
-                },
-                Separator => match c {
-                    '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<' | '='
-                    | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => Separator,
-                    _ => break,
-                },
-                Word => match c {
-                    ' ' | '/' | '\\' | '\'' | '"' | '&' | '(' | ')' | '*' | ',' | ';' | '<'
-                    | '=' | '>' | '?' | '@' | '[' | ']' | '^' | '{' | '|' | '}' => break,
-                    _ => Word,
-                },
-            };
-
-            word_start -= 1;
-        }
-
+        word_start -= next_word(iter);
         self.buf.replace_range(
             word_start.index(&self.buf)..self.cursor.index(&self.buf),
             "",
@@ -1149,6 +1155,26 @@ impl<E> Input<E> {
         if self.cursor < term_string_visible_len(&self.buf) {
             self.cursor += 1;
         }
+        if !self.password {
+            self.dirty = true;
+        }
+    }
+
+    pub fn word_left(&mut self) {
+        log::debug!("Word left");
+        let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
+        self.cursor -= next_word(iter);
+
+        if !self.password {
+            self.dirty = true;
+        }
+    }
+
+    pub fn word_right(&mut self) {
+        log::debug!("Word right");
+        let iter = self.buf[self.cursor.index(&self.buf)..].chars();
+        self.cursor += next_word(iter);
+
         if !self.password {
             self.dirty = true;
         }
