@@ -8,12 +8,28 @@
 
 		<os>Linux</os>
 		<os>Mac</os>
+		<os>BSD</os>
 
 		<shortdesc xml:lang='en'>Free console XMPP client</shortdesc>
 		<shortdesc xml:lang='fr'>Client XMPP libre en console</shortdesc>
 
 		<description xml:lang='en'>Free and modern console XMPP client written in Rust</description>
 		<description xml:lang='fr'>Client console XMPP libre et moderne, écrit en Rust</description>
+
+		<category rdf:resource='https://linkmauve.fr/ns/xmpp-doap#category-client' />
+
+		<repository>
+			<GitRepository>
+				<browse rdf:resource='https://github.com/paulfariello/aparte' />
+				<location rdf:resource='https://github.com/paulfariello/aparte.git' />
+			</GitRepository>
+		</repository>
+
+
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc6120.html' />
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc6121.html' />
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc6122.html' />
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc7590.html' />
 
 		<implements>
 			<xmpp:SupportedXep>
