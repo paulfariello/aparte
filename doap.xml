@@ -75,7 +75,26 @@
 				<xmpp:note xml:lang='en'>Doesn't support OMEMO in MUC yet</xmpp:note>
 			</xmpp:SupportedXep>
 		</implements>
-
-
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0245.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.0</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0280.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.0.1</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0402.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.1.4</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
 	</Project>
 </rdf:RDF>
