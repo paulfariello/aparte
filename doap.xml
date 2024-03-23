@@ -7,8 +7,9 @@
 		<homepage rdf:resource='https://github.com/paulfariello/aparte/' />
 
 		<os>Linux</os>
-		<os>Mac</os>
-		<os>BSD</os>
+		<os>MacOS</os>
+		<os>FreeBSD</os>
+		<os>OpenBSD</os>
 
 		<shortdesc xml:lang='en'>Free console XMPP client</shortdesc>
 		<shortdesc xml:lang='fr'>Client XMPP libre en console</shortdesc>
