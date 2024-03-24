@@ -17,6 +17,10 @@
 		<description xml:lang='en'>Free and modern console XMPP client written in Rust</description>
 		<description xml:lang='fr'>Client console XMPP libre et moderne, écrit en Rust</description>
 
+		<schema:logo rdf:resource='https://raw.githubusercontent.com/paulfariello/aparte/develop/aparte.svg'/>
+		<schema:screenshot rdf:resource='https://camo.githubusercontent.com/cb7360923ab5582ac799ba7ce243ed92a7b7a22752d32363a686d17a2664e0fb/68747470733a2f2f61736369696e656d612e6f72672f612f3338393332392e706e67'/>
+
+
 		<category rdf:resource='https://linkmauve.fr/ns/xmpp-doap#category-client' />
 
 		<repository>
