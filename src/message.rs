@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
+use sixel_image::SixelImage;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -123,10 +124,16 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone)]
+pub enum Body {
+    Text(String),
+    Image(SixelImage),
+}
+
+#[derive(Debug, Clone)]
 pub struct LogMessage {
     pub id: String,
     pub timestamp: DateTime<FixedOffset>,
-    pub body: String,
+    pub body: Body,
 }
 
 #[derive(Debug, Clone)]
@@ -378,7 +385,7 @@ impl Message {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
             timestamp: LocalTz::now().into(),
-            body: msg,
+            body: Body::Text(msg),
         })
     }
 
@@ -395,11 +402,17 @@ impl Message {
         }
     }
 
-    #[allow(dead_code)]
     pub fn body<'a>(&'a self) -> &'a str {
         match self {
             Message::Xmpp(message) => message.get_last_body(),
-            Message::Log(LogMessage { body, .. }) => body,
+            Message::Log(LogMessage {
+                body: Body::Text(body),
+                ..
+            }) => body,
+            Message::Log(LogMessage {
+                body: Body::Image(image),
+                ..
+            }) => todo!(),
         }
     }
 

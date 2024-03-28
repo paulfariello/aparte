@@ -35,7 +35,7 @@ use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::i18n;
-use crate::message::{Direction, Message, XmppMessageType};
+use crate::message::{Body, Direction, Message, XmppMessageType};
 use crate::terminus::{
     self, BufferedScreen, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts,
     LinearLayout, ListView, Orientation, Screen, View, Window as _,
@@ -373,15 +373,22 @@ impl fmt::Display for Message {
         match self {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                for line in message.body.lines() {
-                    writeln!(
-                        f,
-                        "{}{}{} - {}",
-                        color::Bg(color::Reset),
-                        color::Fg(color::Reset),
-                        timestamp.format("%T"),
-                        line
-                    )?;
+                match &message.body {
+                    Body::Text(body) => {
+                        for line in body.lines() {
+                            writeln!(
+                                f,
+                                "{}{}{} - {}",
+                                color::Bg(color::Reset),
+                                color::Fg(color::Reset),
+                                timestamp.format("%T"),
+                                line
+                            )?;
+                        }
+                    }
+                    Body::Image(image) => {
+                        f.write_str(todo!())?;
+                    }
                 }
 
                 Ok(())

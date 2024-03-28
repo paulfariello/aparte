@@ -49,6 +49,7 @@ base64 = "0.21.7"
 sha1 = "0.10.6"
 itertools = "0.12.1"
 secrecy = { version = "0.8.0", features = ["serde"] }
+sixel-image = "0.1.0"
 
 [dev-dependencies]
 mockall = "^0.9"

@@ -198,6 +198,7 @@ dependencies = [
  "secrecy",
  "serde",
  "sha1",
+ "sixel-image",
  "termion",
  "textwrap",
  "tokio",
@@ -213,6 +214,12 @@ name = "arrayref"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b4930d2cb77ce62f89ee5d5289b4ac049559b1c45539271f5ed4fdc7db34545"
+
+[[package]]
+name = "arrayvec"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96d30a06541fbafbc7f82ed10c06164cfbd2c401138f6addd8404629c4b16711"
 
 [[package]]
 name = "async-trait"
@@ -2086,6 +2093,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8229b473baa5980ac72ef434c4415e70c4b5e71b423043adb4ba059f89c99a1"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "sixel-image"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84880b5da046b87741b9bad6ee916919d5548cca182f009b3a240e20a7f7c99f"
+dependencies = [
+ "sixel-tokenizer",
+]
+
+[[package]]
+name = "sixel-tokenizer"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b71b7f6629ac964d60179c1fb00dfb80da265fc3465a17245e26c1eaf678d476"
+dependencies = [
+ "arrayvec",
+ "thiserror",
 ]
 
 [[package]]
