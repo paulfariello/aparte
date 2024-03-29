@@ -65,7 +65,7 @@ const WELCOME: &str = r#"
 "#;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const LOGO: &str = include_str!("aparte.six");
+const LOGO: &[u8] = include_bytes!("aparte.six");
 
 #[derive(Debug, Clone)]
 pub enum Event {
