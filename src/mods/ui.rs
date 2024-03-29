@@ -2,11 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use backtrace::Backtrace;
-use chrono::offset::{Local, TimeZone};
 use chrono::Local as LocalTz;
 use futures::task::{AtomicWaker, Context, Poll};
 use futures::Stream;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -35,10 +34,10 @@ use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::i18n;
-use crate::message::{Body, Direction, Message, XmppMessageType};
+use crate::message::{Direction, Message, XmppMessageType};
 use crate::terminus::{
-    self, BufferedScreen, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts,
-    LinearLayout, ListView, Orientation, Screen, View, Window as _,
+    self, BufferedScreen, Dimension, DimensionSpec, FrameLayout, Input, Layout, Layouts,
+    LinearLayout, ListView, Orientation, Screen, ScrollWin, View,
 };
 use crate::{contact, conversation};
 
@@ -55,7 +54,7 @@ enum UIEvent {
 struct TitleBar {
     name: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
-    dirty: bool,
+    dirty: Cell<bool>,
     pub color: ColorTuple,
 }
 
@@ -64,7 +63,7 @@ impl TitleBar {
         Self {
             name: None,
             subjects: HashMap::new(),
-            dirty: true,
+            dirty: Cell::new(true),
             color: color.clone(),
         }
     }
@@ -74,12 +73,12 @@ impl TitleBar {
         self.subjects
             .entry(name.to_string())
             .or_insert(HashMap::new());
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     fn add_subjects(&mut self, jid: String, subjects: HashMap<String, String>) {
         if Some(&jid) == self.name.as_ref() {
-            self.dirty = true;
+            self.dirty.set(true);
         }
         self.subjects.insert(jid, subjects);
     }
@@ -89,7 +88,7 @@ impl<W> View<UIEvent, W> for TitleBar
 where
     W: Write + AsFd,
 {
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
         save_cursor!(screen);
 
         vprint!(
@@ -105,7 +104,7 @@ where
             termion::style::Bold,
         );
 
-        vprint!(screen, "{}", " ".repeat(dimension.w.unwrap().into()));
+        vprint!(screen, "{}", " ".repeat(dimension.width.into()));
 
         vprint!(
             screen,
@@ -114,14 +113,11 @@ where
         );
 
         if let Some(name) = &self.name {
-            let clean_name = terminus::term_string_visible_truncate(
-                name,
-                dimension.w.unwrap().into(),
-                Some("…"),
-            );
+            let clean_name =
+                terminus::term_string_visible_truncate(name, dimension.width.into(), Some("…"));
             vprint!(screen, "{}", clean_name);
 
-            let remaining = dimension.w.unwrap()
+            let remaining = dimension.width
                 - terminus::term_string_visible_len(&clean_name) as u16
                 - " – ".len() as u16;
             if remaining > 0 {
@@ -148,11 +144,11 @@ where
         );
 
         restore_cursor!(screen);
-        self.dirty = false;
+        self.dirty.set(false);
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.get()
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -187,7 +183,7 @@ struct WinBar {
     windows: Vec<String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
-    dirty: bool,
+    dirty: Cell<bool>,
     pub color: ColorTuple,
 }
 
@@ -198,25 +194,25 @@ impl WinBar {
             windows: Vec::new(),
             current_window: None,
             highlighted: HashMap::new(),
-            dirty: true,
+            dirty: Cell::new(true),
             color: color.clone(),
         }
     }
 
     pub fn add_window(&mut self, window: String) {
         self.windows.push(window);
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn del_window(&mut self, window: &str) {
         self.windows.retain(|win| win != window);
         self.highlighted.remove(window);
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
-        self.dirty = self.highlighted.remove(window).is_some();
+        self.dirty.set(self.highlighted.remove(window).is_some());
     }
 
     pub fn highlight_window(&mut self, window: &str, important: bool) {
@@ -226,7 +222,7 @@ impl WinBar {
             if important {
                 state.1 += 1;
             }
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 }
@@ -235,7 +231,7 @@ impl<W> View<UIEvent, W> for WinBar
 where
     W: Write + AsFd,
 {
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
         save_cursor!(screen);
 
         let mut written = 0;
@@ -247,7 +243,7 @@ where
         );
         vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
 
-        for _ in 0..dimension.w.unwrap() {
+        for _ in 0..dimension.width {
             vprint!(screen, " ");
         }
 
@@ -275,7 +271,7 @@ where
                 0
             };
 
-            if window.len() + written + remaining_len > dimension.w.unwrap() as usize {
+            if window.len() + written + remaining_len > dimension.width as usize {
                 if !first {
                     vprint!(screen, ", +{}", remaining);
                 }
@@ -328,11 +324,11 @@ where
         );
 
         restore_cursor!(screen);
-        self.dirty = false;
+        self.dirty.set(false);
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.get()
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -348,7 +344,7 @@ where
             }
             UIEvent::Core(Event::Connected(account, _)) => {
                 self.connection = Some(terminus::clean(&account.to_string()));
-                self.dirty = true;
+                self.dirty.set(true);
             }
             UIEvent::Core(Event::Notification {
                 conversation,
@@ -364,100 +360,6 @@ where
         Layouts {
             width: Layout::match_parent(),
             height: Layout::absolute(1),
-        }
-    }
-}
-
-impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Message::Log(message) => {
-                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                match &message.body {
-                    Body::Text(body) => {
-                        for line in body.lines() {
-                            writeln!(
-                                f,
-                                "{}{}{} - {}",
-                                color::Bg(color::Reset),
-                                color::Fg(color::Reset),
-                                timestamp.format("%T"),
-                                line
-                            )?;
-                        }
-                    }
-                    Body::Image(image) => {
-                        f.write_str(todo!())?;
-                    }
-                }
-
-                Ok(())
-            }
-            Message::Xmpp(message) => {
-                let author = terminus::clean(&match &message.type_ {
-                    XmppMessageType::Channel => match &message.from_full {
-                        Jid::Full(from) => from.resource().to_string(),
-                        Jid::Bare(from) => from.to_string(),
-                    },
-                    XmppMessageType::Chat => message.from.to_string(),
-                });
-
-                let timestamp =
-                    Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
-                let body = message.get_last_body();
-                let me = body.starts_with("/me");
-                let padding_len = match me {
-                    true => format!("{} - {}: ", timestamp.format("%T"), author).len(),
-                    false => format!("{} - * {}", timestamp.format("%T"), author).len(),
-                };
-                let padding = " ".repeat(padding_len);
-
-                let (r, g, b) = id_to_rgb(&author);
-
-                let mut attributes = "".to_string();
-                if message.has_multiple_version() {
-                    attributes.push_str("✎ ");
-                }
-
-                match me {
-                    true => write!(
-                        f,
-                        "{}{}{} - {}* {}{}{}",
-                        color::Bg(color::Reset),
-                        color::Fg(color::Reset),
-                        timestamp.format("%T"),
-                        attributes,
-                        color::Fg(color::Rgb(r, g, b)),
-                        author,
-                        color::Fg(color::Reset)
-                    ),
-                    false => write!(
-                        f,
-                        "{}{}{} - {}{}{}:{} ",
-                        color::Bg(color::Reset),
-                        color::Fg(color::Reset),
-                        timestamp.format("%T"),
-                        attributes,
-                        color::Fg(color::Rgb(r, g, b)),
-                        author,
-                        color::Fg(color::Reset)
-                    ),
-                }?;
-
-                let mut iter = match me {
-                    true => body.strip_prefix("/me").unwrap().lines(),
-                    false => body.lines(),
-                };
-
-                if let Some(line) = iter.next() {
-                    write!(f, "{}", terminus::clean(line))?;
-                }
-                for line in iter {
-                    write!(f, "\n{}{}", padding, terminus::clean(line))?;
-                }
-
-                Ok(())
-            }
         }
     }
 }
@@ -769,7 +671,7 @@ impl UIMod {
                 UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
                     input.buf = raw_buf.clone();
                     input.cursor = cursor.clone();
-                    input.dirty = true;
+                    input.dirty.set(true);
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 _ => {}
@@ -812,8 +714,8 @@ impl UIMod {
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
-                    move |view, event| {
+                let chatwin =
+                    ScrollWin::<UIEvent, Stdout, Message>::new().with_event(move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                                 match message.direction {
@@ -846,8 +748,7 @@ impl UIMod {
                             }
                             _ => {}
                         }
-                    },
-                );
+                    });
 
                 self.add_window(chat.contact.to_string(), Box::new(chatwin));
                 self.conversations
@@ -862,8 +763,8 @@ impl UIMod {
                     });
 
                 let channel_for_event = channel.clone();
-                let chanwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
-                    move |view, event| {
+                let chanwin =
+                    ScrollWin::<UIEvent, Stdout, Message>::new().with_event(move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                                 match message.direction {
@@ -896,8 +797,7 @@ impl UIMod {
                             }
                             _ => {}
                         }
-                    },
-                );
+                    });
                 layout.push(chanwin);
 
                 let roster_jid = channel.jid.clone();
@@ -980,9 +880,12 @@ impl ModTrait for UIMod {
         vprint!(&mut self.screen, "{}", termion::clear::All);
 
         let (width, height) = termion::terminal_size().unwrap();
-        let mut dimension = Dimension::new();
-        self.root.measure(&mut dimension, Some(width), Some(height));
-        self.root.layout(&mut dimension, 1, 1);
+        let mut dimension_spec = terminus::DimensionSpec {
+            width: Some(width),
+            height: Some(height),
+        };
+        self.root.measure(&mut dimension_spec);
+        let dimension = self.root.layout(&mut dimension_spec, 1, 1);
         self.root.render(&dimension, &mut self.screen);
         self.dimension = Some(dimension);
 
@@ -994,18 +897,23 @@ impl ModTrait for UIMod {
             },
         );
         console.push(
-            BufferedWin::<UIEvent, Stdout, Message>::new().with_event(|view, event| match event {
-                UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                    view.insert(Message::Log(message.clone()));
-                }
-                UIEvent::Core(Event::Key(Key::PageUp)) => {
-                    view.page_up();
-                }
-                UIEvent::Core(Event::Key(Key::PageDown)) => {
-                    view.page_down();
-                }
-                _ => {}
-            }),
+            ScrollWin::<UIEvent, Stdout, Message>::new()
+                .with_layouts(Layouts {
+                    width: Layout::wrap_content().with_relative_max(0.7),
+                    height: Layout::match_parent(),
+                })
+                .with_event(|view, event| match event {
+                    UIEvent::Core(Event::Message(_, Message::Log(message))) => {
+                        view.insert(Message::Log(message.clone()));
+                    }
+                    UIEvent::Core(Event::Key(Key::PageUp)) => {
+                        view.page_up();
+                    }
+                    UIEvent::Core(Event::Key(Key::PageDown)) => {
+                        view.page_down();
+                    }
+                    _ => {}
+                }),
         );
         let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
             .with_layouts(Layouts {
@@ -1193,9 +1101,12 @@ impl ModTrait for UIMod {
             }
             Event::WindowChange => {
                 let (width, height) = termion::terminal_size().unwrap();
-                let mut dimension = Dimension::new();
-                self.root.measure(&mut dimension, Some(width), Some(height));
-                self.root.layout(&mut dimension, 1, 1);
+                let mut dimension_spec = DimensionSpec {
+                    width: Some(width),
+                    height: Some(height),
+                };
+                self.root.measure(&mut dimension_spec);
+                let dimension = self.root.layout(&mut dimension_spec, 1, 1);
                 self.root.render(&dimension, &mut self.screen);
                 self.dimension = Some(dimension);
             }
@@ -1376,9 +1287,12 @@ impl ModTrait for UIMod {
                 self.debounced = 0;
 
                 let (width, height) = termion::terminal_size().unwrap();
-                let mut dimension = Dimension::new();
-                self.root.measure(&mut dimension, Some(width), Some(height));
-                self.root.layout(&mut dimension, 1, 1);
+                let mut dimension_spec = DimensionSpec {
+                    width: Some(width),
+                    height: Some(height),
+                };
+                self.root.measure(&mut dimension_spec);
+                let dimension = self.root.layout(&mut dimension_spec, 1, 1);
                 self.root.render(&dimension, &mut self.screen);
                 flush!(self.screen);
                 self.dimension = Some(dimension);

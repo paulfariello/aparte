@@ -3,9 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use crate::cursor::Cursor;
 use linked_hash_map::{Entry, LinkedHashMap};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self};
 use std::hash::Hash;
 use std::io::Write;
@@ -161,7 +161,8 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
     let mut iter = string.graphemes(true);
     let mut remaining = max;
     if let Some(append) = append {
-        remaining -= append.graphemes(true).count();
+        let count = append.graphemes(true).count();
+        remaining -= count;
     }
     let mut output = String::new();
 
@@ -216,8 +217,8 @@ pub enum LayoutConstraint {
 
 #[derive(Debug, Clone)]
 pub struct LayoutConstraints {
-    max: Option<LayoutConstraint>,
-    min: Option<LayoutConstraint>,
+    pub max: Option<LayoutConstraint>,
+    pub min: Option<LayoutConstraint>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,7 +230,7 @@ pub enum LayoutBehavior {
 
 #[derive(Debug, Clone)]
 pub struct Layout {
-    behavior: LayoutBehavior,
+    pub behavior: LayoutBehavior,
 }
 
 impl Layout {
@@ -346,50 +347,67 @@ pub enum Orientation {
     Horizontal,
 }
 
-#[derive(Debug, Clone)]
-pub struct Dimension {
-    pub x: u16,
-    pub y: u16,
-    pub w: Option<u16>,
-    pub h: Option<u16>,
+#[derive(Debug, Clone, Default)]
+pub struct DimensionSpec {
+    pub width: Option<u16>,
+    pub height: Option<u16>,
 }
 
-impl Dimension {
-    pub fn new() -> Self {
-        Self {
-            x: 1,
-            y: 1,
-            w: None,
-            h: None,
+impl DimensionSpec {
+    pub fn layout(&self, x: u16, y: u16) -> Dimension {
+        Dimension {
+            x,
+            y,
+            width: self.width.unwrap(),
+            height: self.height.unwrap(),
         }
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Dimension {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+/// Represent any component that can be displayed.
+///
+/// Rendering is done in 3 steps:
+///
+///  - measure
+///  - layout
+///  - render
+///
+/// Measure compute the wanted dimension.
+/// Layout apply the definitive dimension, setting the final x and y position.
+/// Render draw the component on the given screen.
 pub trait View<E, W>
 where
     W: Write + AsFd,
 {
     /// Compute the wanted dimension given passed width and height
-    fn measure(
-        &mut self,
-        dimension: &mut Dimension,
-        width_spec: Option<u16>,
-        height_spec: Option<u16>,
-    ) {
+    ///
+    /// dimension_spec is IN/OUT var:
+    ///  - IN: constraints
+    ///  - OUT: desired dimension
+    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
         let layout = self.get_layouts();
-        dimension.w = match layout.width.behavior {
-            LayoutBehavior::MatchParent => width_spec,
+
+        dimension_spec.width = match layout.width.behavior {
+            LayoutBehavior::MatchParent => dimension_spec.width,
             LayoutBehavior::WrapContent(_) => unreachable!(),
-            LayoutBehavior::Absolute(width) => match width_spec {
+            LayoutBehavior::Absolute(width) => match dimension_spec.width {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        dimension.h = match layout.height.behavior {
-            LayoutBehavior::MatchParent => height_spec,
+        dimension_spec.height = match layout.height.behavior {
+            LayoutBehavior::MatchParent => dimension_spec.height,
             LayoutBehavior::WrapContent(_) => unreachable!(),
-            LayoutBehavior::Absolute(height) => match height_spec {
+            LayoutBehavior::Absolute(height) => match dimension_spec.height {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
@@ -397,10 +415,17 @@ where
     }
 
     /// Apply the definitive dimension given the top and left position
-    fn layout(&mut self, dimension: &mut Dimension, top: u16, left: u16) {
-        dimension.x = left;
-        dimension.y = top;
+    ///
+    /// dimension are the definitive dimension.
+    /// If a dimension is None, then it can be modified, otherwise the dimension must be considered a hard constraint.
+    ///
+    /// Parent has responsability of storing resulting dimension for all its children.
+    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
+        dimension_spec.layout(x, y)
     }
+
+    /// Render the view with the given dimensions inside the given screen
+    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>);
 
     /// If the layout of the current view is dirty. Meaning its content requires that its dimension
     /// changes
@@ -428,9 +453,6 @@ where
 
     /// If this view requires to be rendered
     fn is_dirty(&self) -> bool;
-
-    /// Render the view with the given dimensions inside the given screen
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>);
 
     /// Handle an event
     fn event(&mut self, event: &mut E);
@@ -501,15 +523,16 @@ macro_rules! restore_cursor {
 
 impl<E, W> dyn View<E, W> where W: Write {}
 
+/// Component that can hold multiple children but display only one at a time
 pub struct FrameLayout<E, W, K>
 where
     K: Hash + Eq + Clone,
     W: Write + AsFd,
 {
-    children: HashMap<K, (Dimension, Box<dyn View<E, W>>)>,
+    children: HashMap<K, Box<dyn View<E, W>>>,
     current: Option<K>,
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
-    dirty: bool,
+    dirty: Cell<bool>,
     layouts: Layouts,
 }
 
@@ -523,7 +546,7 @@ where
             children: HashMap::new(),
             current: None,
             event_handler: None,
-            dirty: true,
+            dirty: Cell::new(true),
             layouts: Layouts {
                 width: Layout::match_parent(),
                 height: Layout::match_parent(),
@@ -547,13 +570,13 @@ where
 
     pub fn set_current(&mut self, key: K) {
         self.current = Some(key);
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn get_current_mut<'a>(&'a mut self) -> Option<&'a mut Box<dyn View<E, W>>> {
         if let Some(current) = &self.current {
-            if let Some((_, view)) = self.children.get_mut(current) {
-                Some(view)
+            if let Some(child) = self.children.get_mut(current) {
+                Some(child)
             } else {
                 unreachable!();
             }
@@ -565,8 +588,8 @@ where
     #[allow(unused)]
     pub fn get_current<'a>(&'a self) -> Option<&'a Box<dyn View<E, W>>> {
         if let Some(current) = &self.current {
-            if let Some((_, view)) = self.children.get(current) {
-                Some(view)
+            if let Some(child) = self.children.get(current) {
+                Some(child)
             } else {
                 unreachable!();
             }
@@ -585,13 +608,11 @@ where
     where
         T: View<E, W> + 'static,
     {
-        let child_dimension = Dimension::new();
-        self.children.insert(key, (child_dimension, Box::new(view)));
+        self.children.insert(key, Box::new(view));
     }
 
     pub fn insert_boxed(&mut self, key: K, view: Box<dyn View<E, W> + 'static>) {
-        let child_dimension = Dimension::new();
-        self.children.insert(key, (child_dimension, view));
+        self.children.insert(key, view);
     }
 
     pub fn remove(&mut self, key: &K) {
@@ -604,14 +625,12 @@ where
     pub fn iter_children_mut<'a>(
         &'a mut self,
     ) -> impl Iterator<Item = &'a mut Box<dyn View<E, W>>> {
-        self.children
-            .iter_mut()
-            .map(|(_, (_, child_view))| child_view)
+        self.children.iter_mut().map(|(_, child)| child)
     }
 
     #[allow(unused)]
     pub fn iter_children<'a>(&'a self) -> impl Iterator<Item = &'a Box<dyn View<E, W>>> {
-        self.children.iter().map(|(_, (_, child_view))| child_view)
+        self.children.iter().map(|(_, child)| child)
     }
 }
 
@@ -620,68 +639,38 @@ where
     K: Hash + Eq + Clone,
     W: Write + AsFd,
 {
-    fn measure(
-        &mut self,
-        dimension: &mut Dimension,
-        width_spec: Option<u16>,
-        height_spec: Option<u16>,
-    ) {
-        dimension.w = width_spec;
-        dimension.h = height_spec;
-
-        for (_, (child_dimension, child_view)) in self.children.iter_mut() {
-            child_view.measure(child_dimension, dimension.w, dimension.h);
+    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
+        if let Some(child) = self.get_current_mut() {
+            child.measure(dimension_spec);
         }
     }
 
-    fn layout(&mut self, dimension: &mut Dimension, top: u16, left: u16) {
-        dimension.x = left;
-        dimension.y = top;
-
-        for (_, (child_dimension, child_view)) in self.children.iter_mut() {
-            child_view.layout(child_dimension, top, left);
+    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
+        if let Some(child) = self.get_current_mut() {
+            child.layout(dimension_spec, x, y)
+        } else {
+            dimension_spec.layout(x, y)
         }
-
-        // Set dirty to ensure all children are rendered on next render
-        self.dirty = true;
     }
 
-    fn render(&mut self, _dimension: &Dimension, screen: &mut Screen<W>) {
-        if let Some(current) = &self.current {
-            let (child_dimension, child_view) = self.children.get_mut(current).unwrap();
-            if self.dirty || child_view.is_dirty() {
-                child_view.render(child_dimension, screen);
+    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
+        if let Some(child) = self.get_current() {
+            if self.dirty.get() || child.is_dirty() {
+                child.render(dimension, screen);
             }
         }
-        self.dirty = false;
+        self.dirty.set(false);
     }
 
     fn is_layout_dirty(&self) -> bool {
-        match self.dirty {
-            true => true,
-            _ => {
-                if let Some(current) = &self.current {
-                    let (_, child_view) = self.children.get(current).unwrap();
-                    child_view.is_layout_dirty()
-                } else {
-                    false
-                }
-            }
-        }
+        self.dirty.get()
+            || self
+                .get_current()
+                .map_or(false, |child| child.is_layout_dirty())
     }
 
     fn is_dirty(&self) -> bool {
-        match self.dirty {
-            true => true,
-            _ => {
-                if let Some(current) = &self.current {
-                    let (_, child_view) = self.children.get(current).unwrap();
-                    child_view.is_dirty()
-                } else {
-                    false
-                }
-            }
-        }
+        self.dirty.get() || self.get_current().map_or(false, |child| child.is_dirty())
     }
 
     fn event(&mut self, event: &mut E) {
@@ -701,11 +690,13 @@ where
     }
 }
 
+/// Component with multiple ordered children sharing the same space.
+/// Each child is placed according to the orientation of the component.
 pub struct LinearLayout<E, W> {
     pub orientation: Orientation,
-    pub children: Vec<(Dimension, Box<dyn View<E, W>>)>,
+    pub children: Vec<(Option<Dimension>, Box<dyn View<E, W>>)>,
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
-    pub dirty: bool,
+    pub dirty: Cell<bool>,
     layouts: Layouts,
 }
 
@@ -718,7 +709,7 @@ where
             orientation,
             children: Vec::new(),
             event_handler: None,
-            dirty: true,
+            dirty: Cell::new(true),
             layouts: Layouts {
                 width: Layout::match_parent(),
                 height: Layout::match_parent(),
@@ -730,8 +721,7 @@ where
     where
         T: View<E, W> + 'static,
     {
-        let dimension = Dimension::new();
-        self.children.push((dimension, Box::new(view)));
+        self.children.push((None, Box::new(view)));
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
@@ -764,80 +754,123 @@ impl<E, W> View<E, W> for LinearLayout<E, W>
 where
     W: Write + AsFd,
 {
-    fn measure(
-        &mut self,
-        dimension: &mut Dimension,
-        width_spec: Option<u16>,
-        height_spec: Option<u16>,
-    ) {
-        /* Measure dimension of this layout with the following stpes:
-         *
-         *  - Compute max dimension from parent
-         *  - Compute min dimension from children
-         *  - Split remaining space for each child that don't have strong size requirement
-         *    (answered 0 to first measure pass)
-         *  - Set dimension for each children
-         */
+    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
         let layouts = self.get_layouts();
-        let max_width = match layouts.width.behavior {
-            LayoutBehavior::MatchParent => width_spec,
-            LayoutBehavior::WrapContent(_) => width_spec,
-            LayoutBehavior::Absolute(width) => match width_spec {
+        dimension_spec.width = match layouts.width.behavior {
+            LayoutBehavior::MatchParent => dimension_spec.width,
+            LayoutBehavior::WrapContent(_) => {
+                todo!()
+            }
+            LayoutBehavior::Absolute(width) => match dimension_spec.width {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        let max_height = match layouts.height.behavior {
-            LayoutBehavior::MatchParent => height_spec,
-            LayoutBehavior::WrapContent(_) => height_spec,
-            LayoutBehavior::Absolute(height) => match height_spec {
+        dimension_spec.height = match layouts.height.behavior {
+            LayoutBehavior::MatchParent => dimension_spec.height,
+            LayoutBehavior::WrapContent(_) => {
+                todo!()
+            }
+            LayoutBehavior::Absolute(height) => match dimension_spec.height {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
         };
+    }
 
+    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
+        /* Layout with the following steps:
+         *
+         *  - Get dimension from spec
+         *  - Compute min dimension from children
+         *  - Split remaining space for each child that don't have strong size requirement
+         *    (answered 0 to first measure pass)
+         *  - Set dimension for each children
+         *
+         *  Algorithm should be:
+         *
+         *  - Satisfy hard behavior first (thus in the following order):
+         *    - Absolute -> give them what they want
+         *    - WrapContent -> give them at min(what they want, what's available)
+         *    - MatchParent -> give them what's available
+         */
+
+        let max_width = dimension_spec.width;
+        let max_height = dimension_spec.height;
+
+        let mut children_infos: Vec<(Layouts, DimensionSpec, &mut Option<Dimension>, &mut _)> =
+            self.children
+                .iter_mut()
+                .map(|(dimension, child)| {
+                    let mut child_dimension_spec = dimension_spec.clone();
+                    child.measure(&mut child_dimension_spec);
+                    (child.get_layouts(), child_dimension_spec, dimension, child)
+                })
+                .collect();
+
+        // Gather requested sizes
         let mut min_width = 0;
         let mut min_height = 0;
-        for (child_dimension, child_view) in self.children.iter_mut() {
-            child_view.measure(child_dimension, None, None);
-            let child_layouts = child_view.get_layouts();
-            let requested_width = match &child_layouts {
-                Layouts {
-                    width:
-                        Layout {
-                            behavior: LayoutBehavior::WrapContent(constraints),
-                            ..
-                        },
-                    ..
-                } => apply_constraints(child_dimension.w.unwrap_or(0), max_width, constraints),
-                _ => child_dimension.w.unwrap_or(0),
+        let mut free_width_count = 0;
+        let mut free_height_count = 0;
+
+        log::debug!("layout LinearLayout");
+        for (child_layouts, child_dimension_spec, _, _) in children_infos.iter_mut() {
+            child_dimension_spec.width = match &child_layouts.width.behavior {
+                LayoutBehavior::WrapContent(constraints) => Some(apply_constraints(
+                    child_dimension_spec.width.unwrap_or(0),
+                    max_width,
+                    constraints,
+                )),
+                LayoutBehavior::MatchParent => None,
+                LayoutBehavior::Absolute(n) => Some(*n),
+            };
+            log::debug!(
+                "computed requested_width: {:?} ({:?})",
+                child_dimension_spec.width,
+                child_layouts.width.behavior
+            );
+
+            if child_dimension_spec.width.is_none() {
+                free_width_count += 1;
+            }
+
+            child_dimension_spec.height = match &child_layouts.height.behavior {
+                LayoutBehavior::WrapContent(constraints) => Some(apply_constraints(
+                    child_dimension_spec.height.unwrap_or(0),
+                    max_height,
+                    constraints,
+                )),
+                LayoutBehavior::MatchParent => None,
+                LayoutBehavior::Absolute(n) => Some(*n),
             };
 
-            let requested_height = match &child_layouts {
-                Layouts {
-                    height:
-                        Layout {
-                            behavior: LayoutBehavior::WrapContent(constraints),
-                            ..
-                        },
-                    ..
-                } => apply_constraints(child_dimension.h.unwrap_or(0), max_height, constraints),
-                _ => child_dimension.h.unwrap_or(0),
-            };
+            if child_dimension_spec.height.is_none() {
+                free_height_count += 1;
+            }
 
             match self.orientation {
                 Orientation::Vertical => {
-                    min_width = cmp::max(min_width, requested_width);
-                    min_height += requested_height;
+                    if let Some(requested_width) = child_dimension_spec.width {
+                        min_width = cmp::max(min_width, requested_width);
+                    }
+                    if let Some(requested_height) = child_dimension_spec.height {
+                        min_height += requested_height;
+                    }
                 }
                 Orientation::Horizontal => {
-                    min_width += requested_width;
-                    min_height = cmp::max(min_height, requested_height);
+                    if let Some(requested_width) = child_dimension_spec.width {
+                        min_width += requested_width;
+                    }
+                    if let Some(requested_height) = child_dimension_spec.height {
+                        min_height = cmp::max(min_height, requested_height);
+                    }
                 }
             }
         }
 
+        // Compute remaining free sizes
         let remaining_width = match max_width {
             Some(max_width) => max_width - min_width,
             None => 0,
@@ -851,110 +884,70 @@ where
         // Split remaining space to children that don't know their size
         let splitted_width = match self.orientation {
             Orientation::Vertical => max_width,
-            Orientation::Horizontal => {
-                let unsized_children = self
-                    .children
-                    .iter()
-                    .filter(|(dimension, _)| dimension.w.is_none());
-                Some(match unsized_children.count() {
-                    0 => 0,
-                    count => remaining_width / count as u16,
-                })
-            }
+            Orientation::Horizontal => Some(match free_width_count {
+                0 => 0,
+                count => remaining_width / count as u16,
+            }),
         };
         let splitted_height = match self.orientation {
-            Orientation::Vertical => {
-                let unsized_children = self
-                    .children
-                    .iter()
-                    .filter(|(dimension, _)| dimension.h.is_none());
-                Some(match unsized_children.count() {
-                    0 => 0,
-                    count => remaining_height / count as u16,
-                })
-            }
+            Orientation::Vertical => Some(match free_height_count {
+                0 => 0,
+                count => remaining_height / count as u16,
+            }),
             Orientation::Horizontal => max_height,
         };
 
-        dimension.w = Some(0);
-        dimension.h = Some(0);
-
-        for (child_dimension, child_view) in self.children.iter_mut() {
-            let mut width_spec = match child_dimension.w {
+        // Layout children
+        let mut child_x = x;
+        let mut child_y = y;
+        for (_, child_dimension_spec, child_dimension, child_view) in children_infos.iter_mut() {
+            log::debug!("Layout LinearLayout requested: {:?}", child_dimension_spec);
+            let width_spec = match child_dimension_spec.width {
                 Some(w) => Some(w),
                 None => splitted_width,
             };
+            log::debug!("width_spec: {:?}", width_spec);
 
-            let mut height_spec = match child_dimension.h {
+            child_dimension_spec.width = match child_dimension_spec.width {
+                Some(w) => Some(w),
+                None => splitted_width,
+            };
+            child_dimension_spec.height = match child_dimension_spec.height {
                 Some(h) => Some(h),
                 None => splitted_height,
             };
 
-            if self.orientation == Orientation::Horizontal && max_width.is_some() {
-                width_spec = Some(cmp::min(
-                    width_spec.unwrap(),
-                    max_width.unwrap() - dimension.w.unwrap(),
-                ));
-            }
-
-            if self.orientation == Orientation::Vertical && max_height.is_some() {
-                height_spec = Some(cmp::min(
-                    height_spec.unwrap(),
-                    max_height.unwrap() - dimension.h.unwrap(),
-                ));
-            }
-
-            child_view.measure(child_dimension, width_spec, height_spec);
-
+            log::debug!(
+                "Layout LinearLayout child with spec: {:?}",
+                child_dimension_spec
+            );
+            child_dimension.replace(child_view.layout(child_dimension_spec, child_x, child_y));
             match self.orientation {
-                Orientation::Vertical => {
-                    dimension.w = Some(cmp::max(
-                        dimension.w.unwrap(),
-                        child_dimension.w.unwrap_or(0),
-                    ));
-                    dimension.h = Some(dimension.h.unwrap() + child_dimension.h.unwrap_or(0));
-                }
-                Orientation::Horizontal => {
-                    dimension.w = Some(dimension.w.unwrap() + child_dimension.w.unwrap_or(0));
-                    dimension.h = Some(cmp::max(
-                        dimension.h.unwrap(),
-                        child_dimension.h.unwrap_or(0),
-                    ));
-                }
+                Orientation::Vertical => child_y += child_dimension.as_ref().unwrap().height,
+                Orientation::Horizontal => child_x += child_dimension.as_ref().unwrap().width,
             }
         }
-    }
 
-    fn layout(&mut self, dimension: &mut Dimension, top: u16, left: u16) {
-        dimension.x = left;
-        dimension.y = top;
-
-        let mut x = dimension.x;
-        let mut y = dimension.y;
-
-        for (child_dimension, child_view) in self.children.iter_mut() {
-            child_view.layout(child_dimension, y, x);
-            match self.orientation {
-                Orientation::Vertical => y += child_dimension.h.unwrap(),
-                Orientation::Horizontal => x += child_dimension.w.unwrap(),
-            }
-        }
+        assert!(child_y <= y + dimension_spec.height.unwrap());
+        assert!(child_x <= x + dimension_spec.width.unwrap());
 
         // Set dirty to ensure all children are rendered on next render
-        self.dirty = true;
+        self.dirty.set(true);
+
+        dimension_spec.layout(x, y)
     }
 
-    fn render(&mut self, _dimension: &Dimension, screen: &mut Screen<W>) {
-        for (child_dimension, child_view) in self.children.iter_mut() {
-            if self.dirty || child_view.is_dirty() {
-                child_view.render(child_dimension, screen);
+    fn render(&self, _dimension: &Dimension, screen: &mut Screen<W>) {
+        for (child_dimension, child_view) in self.children.iter() {
+            if self.dirty.get() || child_view.is_dirty() {
+                child_view.render(&child_dimension.as_ref().unwrap(), screen);
             }
         }
-        self.dirty = false;
+        self.dirty.set(false);
     }
 
     fn is_layout_dirty(&self) -> bool {
-        match self.dirty {
+        match self.dirty.get() {
             true => true,
             _ => {
                 let mut dirty = false;
@@ -967,7 +960,7 @@ where
     }
 
     fn is_dirty(&self) -> bool {
-        match self.dirty {
+        match self.dirty.get() {
             true => true,
             _ => {
                 let mut dirty = false;
@@ -1013,8 +1006,8 @@ pub struct Input<E> {
     //     |-----------|
     pub view: Cursor,
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
-    pub dirty: bool,
-    width: usize,
+    pub dirty: Cell<bool>,
+    width: Cell<usize>,
 }
 
 impl<E> Input<E> {
@@ -1028,8 +1021,8 @@ impl<E> Input<E> {
             cursor: Cursor::new(0),
             view: Cursor::new(0),
             event_handler: None,
-            dirty: true,
-            width: 0,
+            dirty: Cell::new(true),
+            width: Cell::new(0),
         }
     }
 
@@ -1047,7 +1040,7 @@ impl<E> Input<E> {
         self.cursor += 1;
 
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -1065,7 +1058,7 @@ impl<E> Input<E> {
             }
         }
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -1079,23 +1072,23 @@ impl<E> Input<E> {
         );
         self.cursor = word_start;
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn delete_from_cursor_to_start(&mut self) {
         self.buf.replace_range(0..self.cursor.index(&self.buf), "");
-        self.cursor = Cursor::new(0);
-        self.view = Cursor::new(0);
+        self.cursor.set(0);
+        self.view.set(0);
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn delete_from_cursor_to_end(&mut self) {
         self.buf.replace_range(self.cursor.index(&self.buf).., "");
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -1109,37 +1102,37 @@ impl<E> Input<E> {
             }
         }
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn home(&mut self) {
-        self.cursor = Cursor::new(0);
-        self.view = Cursor::new(0);
+        self.cursor.set(0);
+        self.view.set(0);
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn end(&mut self) {
-        self.cursor = Cursor::new(self.buf.graphemes(true).count());
-        if self.cursor > self.width - 1 {
-            self.view = &self.cursor - (self.width - 1);
+        self.cursor.set(self.buf.graphemes(true).count());
+        if self.cursor > self.width.get() - 1 {
+            self.view = &self.cursor - (self.width.get() - 1);
         } else {
-            self.view = Cursor::new(0);
+            self.view.set(0);
         }
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn clear(&mut self) {
         self.buf.clear();
-        self.cursor = Cursor::new(0);
-        self.view = Cursor::new(0);
+        self.cursor.set(0);
+        self.view.set(0);
         let _ = self.tmp_buf.take();
         self.password = false;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn left(&mut self) {
@@ -1147,7 +1140,7 @@ impl<E> Input<E> {
             self.cursor -= 1;
         }
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
@@ -1156,33 +1149,31 @@ impl<E> Input<E> {
             self.cursor += 1;
         }
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn word_left(&mut self) {
-        log::debug!("Word left");
         let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
         self.cursor -= next_word(iter);
 
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn word_right(&mut self) {
-        log::debug!("Word right");
         let iter = self.buf[self.cursor.index(&self.buf)..].chars();
         self.cursor += next_word(iter);
 
         if !self.password {
-            self.dirty = true;
+            self.dirty.set(true);
         }
     }
 
     pub fn password(&mut self) {
         self.password = true;
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn validate(&mut self) -> (String, bool) {
@@ -1208,7 +1199,7 @@ impl<E> Input<E> {
         self.history_index -= 1;
         self.buf = self.history[self.history_index].clone();
         self.end();
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn next(&mut self) {
@@ -1223,7 +1214,7 @@ impl<E> Input<E> {
             self.buf = self.history[self.history_index].clone();
         }
         self.end();
-        self.dirty = true;
+        self.dirty.set(true);
     }
 }
 
@@ -1231,29 +1222,31 @@ impl<E, W> View<E, W> for Input<E>
 where
     W: Write + AsFd,
 {
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
-        self.width = dimension.w.unwrap() as usize;
+    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
+        self.width.set(dimension.width as usize);
         match self.password {
             true => {
                 goto!(screen, dimension.x, dimension.y);
                 vprint!(screen, "password: ");
                 flush!(screen);
 
-                self.dirty = false;
+                self.dirty.set(false);
             }
             false => {
                 // Max displayable size is view width less 1 for cursor
-                let max_size = (dimension.w.unwrap() - 1) as usize;
+                let max_size = (dimension.width - 1) as usize;
 
                 // cursor must always be inside the view
                 if self.cursor < self.view {
                     if self.cursor < max_size {
-                        self.view = Cursor::new(0);
+                        self.view.set(0);
                     } else {
-                        self.view = &self.cursor - (dimension.w.unwrap() as usize - 1);
+                        self.view
+                            .update(&self.cursor - (dimension.width as usize - 1));
                     }
-                } else if self.cursor > &self.view + (dimension.w.unwrap() as usize - 1) {
-                    self.view = &self.cursor - (dimension.w.unwrap() as usize - 1);
+                } else if self.cursor > &self.view + (dimension.width as usize - 1) {
+                    self.view
+                        .update(&self.cursor - (dimension.width as usize - 1));
                 }
                 assert!(self.cursor >= self.view);
                 assert!(self.cursor <= &self.view + (max_size + 1));
@@ -1274,7 +1267,7 @@ where
 
                 flush!(screen);
 
-                self.dirty = false;
+                self.dirty.set(false);
             }
         }
     }
@@ -1285,7 +1278,7 @@ where
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.get()
     }
 
     fn event(&mut self, event: &mut E) {
@@ -1304,45 +1297,32 @@ where
     }
 }
 
-pub trait Window<E, W, T>: View<E, W>
+/// Ordered vertical window giving ability to scroll
+pub struct ScrollWin<E, W, I>
 where
     W: Write + AsFd,
-    T: fmt::Display + Hash + Eq + Ord,
+    I: View<E, W> + Hash + Eq + Ord,
 {
-    fn insert(&mut self, item: T);
-    /// PageUp the window, return true if top is reached
-    fn page_up(&mut self) -> bool;
-    /// PageDown the window, return true if bottom is reached
-    fn page_down(&mut self) -> bool;
-}
-
-pub struct BufferedWin<E, W, I>
-where
-    I: fmt::Display + Hash + Eq + Ord,
-{
-    pub next_line: u16,
-    pub history: BTreeSet<I>,
-    pub view: usize,
-    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
-    pub dirty: bool,
-    width: usize,
-    height: usize,
+    next_line: u16,
+    view: usize,
+    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    dirty: Cell<bool>,
+    children: BTreeMap<I, Option<Dimension>>,
     layouts: Layouts,
 }
 
-impl<E, W, I> BufferedWin<E, W, I>
+impl<E, W, I> ScrollWin<E, W, I>
 where
-    I: fmt::Display + Hash + Eq + Ord,
+    W: Write + AsFd,
+    I: View<E, W> + Hash + Eq + Ord,
 {
     pub fn new() -> Self {
         Self {
             next_line: 0,
-            history: BTreeSet::new(),
+            children: BTreeMap::new(),
             view: 0,
             event_handler: None,
-            dirty: true,
-            width: 0,
-            height: 0,
+            dirty: Cell::new(true),
             layouts: Layouts {
                 width: Layout::match_parent(),
                 height: Layout::match_parent(),
@@ -1364,203 +1344,111 @@ where
         self
     }
 
-    fn get_rendered_items(&self) -> Vec<String> {
-        let max_len = self.width;
-        let mut buffers: Vec<String> = Vec::new();
-
-        for buf in &self.history {
-            let formatted = format!("{buf}");
-            for line in formatted.lines() {
-                let mut words = line.split_word_bounds();
-
-                let mut line_len = 0;
-                let mut chunk = String::new();
-                while let Some(word) = words.next() {
-                    let visible_word;
-                    let mut remaining = String::new();
-
-                    // We can safely unwrap here because split_word_bounds produce non empty words
-                    let first_char = word.chars().next().unwrap();
-
-                    if first_char == '\x1b' {
-                        // Handle Escape sequence: see https://www.ecma-international.org/publications/files/ECMA-ST/Ecma-048.pdf
-                        // First char is a word boundary
-                        //
-                        // We must ignore them for the visible length count but include them in the
-                        // final chunk that will be written to the terminal
-
-                        if let Some(word) = words.next() {
-                            match word {
-                                "[" => {
-                                    // Control Sequence Introducer are accepted and can safely be
-                                    // written to terminal
-                                    let mut escape = String::from("\x1b[");
-                                    let mut end = false;
-
-                                    for word in words.by_ref() {
-                                        for c in word.chars() {
-                                            // Push all char belonging to escape sequence
-                                            // but keep remaining for wrap computation
-                                            if !end {
-                                                escape.push(c);
-                                                match c {
-                                                    '\x30'..='\x3f' => {} // parameter bytes
-                                                    '\x20'..='\x2f' => {} // intermediate bytes
-                                                    '\x40'..='\x7e' => {
-                                                        // final byte
-                                                        chunk.push_str(&escape);
-                                                        end = true;
-                                                    }
-                                                    _ => {
-                                                        // Invalid escape sequence, just ignore it
-                                                        end = true;
-                                                    }
-                                                }
-                                            } else {
-                                                remaining.push(c);
-                                            }
-                                        }
-
-                                        if end {
-                                            break;
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    // Other sequence are not handled and just ignored
-                                }
-                            }
-                        } else {
-                            // Nothing is following the escape char
-                            // We can simply ignore it
-                        }
-                        visible_word = remaining.as_str();
-                    } else {
-                        visible_word = word;
-                    }
-
-                    if visible_word.is_empty() {
-                        continue;
-                    }
-
-                    let grapheme_count = visible_word.graphemes(true).count();
-
-                    if line_len + grapheme_count > max_len {
-                        // Wrap line
-                        buffers.push(chunk);
-                        chunk = String::new();
-                        line_len = 0;
-                    }
-
-                    chunk.push_str(visible_word);
-                    line_len += grapheme_count;
-                }
-
-                buffers.push(chunk);
-            }
-        }
-
-        buffers
-    }
-
     #[allow(dead_code)]
     pub fn first<'a>(&'a self) -> Option<&'a I> {
-        self.history.iter().next()
+        self.children.keys().next()
     }
-}
 
-impl<E, W, I> Window<E, W, I> for BufferedWin<E, W, I>
-where
-    W: Write + AsFd,
-    I: fmt::Display + Hash + Eq + Ord,
-{
-    fn insert(&mut self, item: I) {
+    pub fn insert(&mut self, item: I) {
         // We don't care about rendered buffer, we avoid computation here at cost of false positive
         // (set dirty while in fact it shouldn't)
-        let len = self.history.len();
-        let position = len
-            - self
-                .history
-                .iter()
-                .position(|iter| iter > &item)
-                .unwrap_or(self.history.len());
-        self.history.replace(item);
-        self.dirty |= position >= self.view && position <= self.view + self.height;
+        // XXX We should care
+        self.children.insert(item, None);
+        self.dirty.set(true)
     }
 
-    fn page_up(&mut self) -> bool {
-        let buffers = self.get_rendered_items();
-        let count = buffers.len();
+    /// PageUp the window, return true if top is reached
+    pub fn page_up(&mut self) -> bool {
+        todo!()
+        // let buffers = self.get_rendered_items();
+        // let count = buffers.len();
 
-        if count < self.height {
-            return true;
-        }
+        // if count < self.height {
+        //     return true;
+        // }
 
-        self.dirty = true;
+        // self.dirty = true;
 
-        let max = count - self.height;
+        // let max = count - self.height;
 
-        if self.view + self.height < max {
-            self.view += self.height;
-            false
-        } else {
-            self.view = max;
-            true
-        }
+        // if self.view + self.height < max {
+        //     self.view += self.height;
+        //     false
+        // } else {
+        //     self.view = max;
+        //     true
+        // }
     }
 
-    fn page_down(&mut self) -> bool {
-        self.dirty = true;
-        if self.view > self.height {
-            self.view -= self.height;
-            false
-        } else {
-            self.view = 0;
-            true
-        }
+    /// PageDown the window, return true if bottom is reached
+    pub fn page_down(&mut self) -> bool {
+        todo!()
+        //self.dirty.set(true);
+        //if self.view > self.height {
+        //    self.view -= self.height;
+        //    false
+        //} else {
+        //    self.view = 0;
+        //    true
+        //}
     }
 }
 
-impl<E, W, I> View<E, W> for BufferedWin<E, W, I>
+impl<E, W, I> View<E, W> for ScrollWin<E, W, I>
 where
     W: Write + AsFd,
-    I: fmt::Display + Hash + Eq + Ord,
+    I: View<E, W> + Hash + Eq + Ord,
 {
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
-        save_cursor!(screen);
-        self.width = dimension.w.unwrap() as usize;
-        self.height = dimension.h.unwrap() as usize;
+    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
+        // Should we measure only visible children?
+        if dimension_spec.width.is_none() {
+            // Mesure max width of each children
+            let children: Vec<_> = std::mem::replace(&mut self.children, BTreeMap::new())
+                .into_keys()
+                .collect();
+            let max_width = children
+                .into_iter()
+                .map(|mut child| {
+                    let mut child_dimension_spec = dimension_spec.clone();
+                    child.measure(&mut child_dimension_spec);
+                    self.children.insert(child, None);
+                    child_dimension_spec.width
+                })
+                .max()
+                .flatten();
+            dimension_spec.width = max_width;
+        }
+    }
 
-        self.next_line = 0;
+    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
+        // TODO should layout only visible children
+        let mut child_y = y;
 
-        let buffers = self.get_rendered_items();
-        let count = buffers.len();
-        let mut iter = buffers.iter();
+        let children: Vec<_> = std::mem::replace(&mut self.children, BTreeMap::new())
+            .into_iter()
+            .collect();
+        for (mut child, _) in children.into_iter() {
+            let dimension = child.layout(dimension_spec, x, child_y);
 
-        if count > dimension.h.unwrap() as usize {
-            for _ in 0..count - dimension.h.unwrap() as usize - self.view {
-                if iter.next().is_none() {
-                    break;
-                }
-            }
+            child_y += dimension.height;
+            self.children.insert(child, Some(dimension));
         }
 
-        for y in dimension.y..dimension.y + dimension.h.unwrap() {
-            goto!(screen, dimension.x, y);
-            for _ in dimension.x..dimension.x + dimension.w.unwrap() {
-                vprint!(screen, " ");
-            }
+        dimension_spec.layout(x, y)
+    }
 
-            goto!(screen, dimension.x, y);
-            if let Some(buf) = iter.next() {
-                vprint!(screen, "{}", buf);
-                self.next_line += 1;
-            }
+    fn render(&self, _dimension: &Dimension, screen: &mut Screen<W>) {
+        save_cursor!(screen);
+
+        for (child, child_dimension) in self.children.iter() {
+            // child dimension can be unwrapped since it must have been set during the measure
+            // phase
+            child.render(child_dimension.as_ref().unwrap(), screen);
         }
 
         restore_cursor!(screen);
 
-        self.dirty = false;
+        self.dirty.set(false);
     }
 
     fn event(&mut self, event: &mut E) {
@@ -1572,7 +1460,7 @@ where
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.get()
     }
 
     fn get_layouts(&self) -> Layouts {
@@ -1587,11 +1475,11 @@ where
 {
     items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
-    sort_item: Option<Box<dyn FnMut(&V, &V) -> cmp::Ordering>>,
+    sort_item: Option<Box<dyn Fn(&V, &V) -> cmp::Ordering>>,
     #[allow(dead_code)]
     sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
-    dirty: bool,
+    dirty: Cell<bool>,
     layouts: Layouts,
 }
 
@@ -1607,7 +1495,7 @@ where
             sort_item: None,
             sort_group: None,
             event_handler: None,
-            dirty: true,
+            dirty: Cell::new(true),
             layouts: Layouts {
                 width: Layout::match_parent(),
                 height: Layout::match_parent(),
@@ -1651,7 +1539,7 @@ where
     #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn with_sort_item_by<F>(mut self, compare: F) -> Self
     where
-        F: FnMut(&V, &V) -> cmp::Ordering + 'static,
+        F: Fn(&V, &V) -> cmp::Ordering + 'static,
     {
         self.sort_item = Some(Box::new(compare));
         self
@@ -1681,7 +1569,7 @@ where
             vacant.insert(HashSet::new());
         }
 
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn insert(&mut self, item: V, group: Option<G>) {
@@ -1701,14 +1589,15 @@ where
             }
         }
 
-        self.dirty = true;
+        self.dirty.set(true);
     }
 
     pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
         match self.items.entry(group) {
             Entry::Vacant(_) => Err(()),
             Entry::Occupied(mut occupied) => {
-                self.dirty |= occupied.get_mut().remove(&item);
+                self.dirty
+                    .set(self.dirty.get() || occupied.get_mut().remove(&item));
                 Ok(())
             }
         }
@@ -1721,15 +1610,10 @@ where
     G: fmt::Display + Hash + Eq,
     V: fmt::Display + Hash + Eq,
 {
-    fn measure(
-        &mut self,
-        dimension: &mut Dimension,
-        width_spec: Option<u16>,
-        height_spec: Option<u16>,
-    ) {
+    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
         let layouts = self.get_layouts();
-        dimension.w = match layouts.width.behavior {
-            LayoutBehavior::MatchParent => width_spec,
+        dimension_spec.width = match layouts.width.behavior {
+            LayoutBehavior::MatchParent => dimension_spec.width,
             LayoutBehavior::WrapContent(_) => {
                 let mut width: u16 = 0;
                 for (group, items) in &self.items {
@@ -1751,19 +1635,19 @@ where
                     }
                 }
 
-                match width_spec {
+                match dimension_spec.width {
                     Some(width_spec) => Some(cmp::min(width_spec, width)),
                     None => Some(width),
                 }
             }
-            LayoutBehavior::Absolute(width) => match width_spec {
+            LayoutBehavior::Absolute(width) => match dimension_spec.width {
                 Some(width_spec) => Some(cmp::min(width, width_spec)),
                 None => Some(width),
             },
         };
 
-        dimension.h = match layouts.height.behavior {
-            LayoutBehavior::MatchParent => height_spec,
+        dimension_spec.height = match layouts.height.behavior {
+            LayoutBehavior::MatchParent => dimension_spec.height,
             LayoutBehavior::WrapContent(_) => {
                 let mut height: u16 = 0;
                 for (group, items) in &self.items {
@@ -1774,27 +1658,27 @@ where
                     height += items.len() as u16;
                 }
 
-                match height_spec {
+                match dimension_spec.height {
                     Some(height_spec) => Some(cmp::min(height_spec, height)),
                     None => Some(height),
                 }
             }
-            LayoutBehavior::Absolute(height) => match height_spec {
+            LayoutBehavior::Absolute(height) => match dimension_spec.height {
                 Some(height_spec) => Some(cmp::min(height, height_spec)),
                 None => Some(height),
             },
         };
     }
 
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
         save_cursor!(screen);
 
         let mut y = dimension.y;
-        let width: usize = dimension.w.unwrap().into();
+        let width: usize = dimension.width.into();
 
-        for y in dimension.y..dimension.y + dimension.h.unwrap() {
+        for y in dimension.y..dimension.y + dimension.height {
             goto!(screen, dimension.x, y);
-            for _ in dimension.x..dimension.x + dimension.w.unwrap() {
+            for _ in dimension.x..dimension.x + dimension.width {
                 vprint!(screen, " ");
             }
 
@@ -1802,7 +1686,7 @@ where
         }
 
         for (group, items) in &self.items {
-            if y > dimension.y + dimension.h.unwrap() {
+            if y > dimension.y + dimension.height {
                 break;
             }
 
@@ -1818,12 +1702,12 @@ where
             }
 
             let mut items = items.iter().collect::<Vec<&V>>();
-            if let Some(sort) = &mut self.sort_item {
+            if let Some(sort) = &self.sort_item {
                 items.sort_by(|a, b| sort(*a, *b));
             }
 
             for item in items {
-                if y > dimension.y + dimension.h.unwrap() {
+                if y > dimension.y + dimension.height {
                     break;
                 }
 
@@ -1844,7 +1728,7 @@ where
 
         restore_cursor!(screen);
 
-        self.dirty = false;
+        self.dirty.set(false);
     }
 
     fn event(&mut self, event: &mut E) {
@@ -1856,7 +1740,7 @@ where
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty.get()
     }
 
     fn get_layouts(&self) -> Layouts {

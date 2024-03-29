@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Represent a position in a rendered string (starting at 0)
@@ -5,41 +7,41 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Cursor(1) on "être" points on 't'
 /// corresponding byte index is 2
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Cursor(usize);
+pub struct Cursor(Cell<usize>);
 
 impl Cursor {
     pub fn new(value: usize) -> Self {
-        Self(value)
+        Self(Cell::new(value))
     }
 
     pub fn from_index(input: &str, index: usize) -> Result<Self, ()> {
         let mut value = 0;
         for (indice, grapheme) in input.grapheme_indices(true) {
             if indice <= index && index < indice + grapheme.len() {
-                return Ok(Self(value));
+                return Ok(Self(Cell::new(value)));
             }
             value += 1;
         }
 
         if index == input.len() {
-            Ok(Self(value))
+            Ok(Self(Cell::new(value)))
         } else {
             Err(())
         }
     }
 
     pub fn index(&self, input: &str) -> usize {
-        match input.grapheme_indices(true).nth(self.0) {
+        match input.grapheme_indices(true).nth(self.0.get()) {
             Some((indice, _)) => indice,
             None => input.len(),
         }
     }
 
     pub fn try_index(&self, input: &str) -> Result<usize, ()> {
-        match input.grapheme_indices(true).nth(self.0) {
+        match input.grapheme_indices(true).nth(self.0.get()) {
             Some((indice, _)) => Ok(indice),
             None => {
-                if input.grapheme_indices(true).count() == self.0 {
+                if input.grapheme_indices(true).count() == self.0.get() {
                     Ok(input.len())
                 } else {
                     Err(())
@@ -49,7 +51,15 @@ impl Cursor {
     }
 
     pub fn get(&self) -> usize {
-        self.0
+        self.0.get()
+    }
+
+    pub fn set(&self, value: usize) {
+        self.0.set(value)
+    }
+
+    pub fn update(&self, other: Self) {
+        self.0.set(other.get())
     }
 }
 
@@ -57,13 +67,13 @@ impl std::ops::Add<usize> for &Cursor {
     type Output = Cursor;
 
     fn add(self, other: usize) -> <Self as std::ops::Add<usize>>::Output {
-        Cursor(self.0 + other)
+        Cursor::new(self.get() + other)
     }
 }
 
 impl std::ops::AddAssign<usize> for Cursor {
     fn add_assign(&mut self, other: usize) {
-        self.0 += other
+        self.set(self.get() + other)
     }
 }
 
@@ -71,13 +81,13 @@ impl std::ops::Sub<usize> for &Cursor {
     type Output = Cursor;
 
     fn sub(self, other: usize) -> <Self as std::ops::Sub<usize>>::Output {
-        Cursor(self.0 - other)
+        Cursor::new(self.get() - other)
     }
 }
 
 impl std::ops::SubAssign<usize> for Cursor {
     fn sub_assign(&mut self, other: usize) {
-        self.0 -= other
+        self.set(self.get() - other)
     }
 }
 
@@ -85,13 +95,13 @@ impl std::ops::Add for &Cursor {
     type Output = Cursor;
 
     fn add(self, other: Self) -> <Self as std::ops::Add<Self>>::Output {
-        Cursor(self.0 + other.0)
+        Cursor::new(self.get() + other.get())
     }
 }
 
 impl std::ops::AddAssign for Cursor {
     fn add_assign(&mut self, other: Self) {
-        self.0 += other.0
+        self.set(self.get() + other.get())
     }
 }
 
@@ -99,25 +109,25 @@ impl std::ops::Sub for &Cursor {
     type Output = Cursor;
 
     fn sub(self, other: Self) -> <Self as std::ops::Sub<Self>>::Output {
-        Cursor(self.0 - other.0)
+        Cursor::new(self.get() - other.get())
     }
 }
 
 impl std::ops::SubAssign for Cursor {
     fn sub_assign(&mut self, other: Self) {
-        self.0 -= other.0
+        self.set(self.get() - other.get())
     }
 }
 
 impl std::cmp::PartialOrd<usize> for Cursor {
     fn partial_cmp(&self, other: &usize) -> Option<std::cmp::Ordering> {
-        Some(self.0.cmp(other))
+        Some(self.get().cmp(other))
     }
 }
 
 impl std::cmp::PartialEq<usize> for Cursor {
     fn eq(&self, other: &usize) -> bool {
-        self.0.eq(other)
+        self.get().eq(other)
     }
 }
 
