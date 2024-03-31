@@ -35,9 +35,11 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::i18n;
 use crate::message::{Direction, Message, XmppMessageType};
+use crate::terminus::LayoutParam;
 use crate::terminus::{
-    self, BufferedScreen, Dimension, DimensionSpec, FrameLayout, Input, Layout, Layouts,
-    LinearLayout, ListView, Orientation, Screen, ScrollWin, View,
+    self, frame_layout::FrameLayout, input::Input, linear_layout::LinearLayout,
+    linear_layout::Orientation, list_view::ListView, scroll_win::ScrollWin, BufferedScreen,
+    Dimension, DimensionSpec, LayoutParams, Screen, View,
 };
 use crate::{contact, conversation};
 
@@ -170,10 +172,10 @@ where
         }
     }
 
-    fn get_layouts(&self) -> Layouts {
-        Layouts {
-            width: Layout::match_parent(),
-            height: Layout::absolute(1),
+    fn get_layout(&self) -> LayoutParams {
+        LayoutParams {
+            width: LayoutParam::MatchParent,
+            height: LayoutParam::Absolute(1),
         }
     }
 }
@@ -356,10 +358,10 @@ where
         }
     }
 
-    fn get_layouts(&self) -> Layouts {
-        Layouts {
-            width: Layout::match_parent(),
-            height: Layout::absolute(1),
+    fn get_layout(&self) -> LayoutParams {
+        LayoutParams {
+            width: LayoutParam::MatchParent,
+            height: LayoutParam::Absolute(1),
         }
     }
 }
@@ -678,10 +680,10 @@ impl UIMod {
             }
         });
 
-        layout.push(title_bar);
-        layout.push(frame);
-        layout.push(win_bar);
-        layout.push(input);
+        layout.push(title_bar, 0);
+        layout.push(frame, 1);
+        layout.push(win_bar, 0);
+        layout.push(input, 0);
 
         Self {
             screen,
@@ -798,14 +800,14 @@ impl UIMod {
                             _ => {}
                         }
                     });
-                layout.push(chanwin);
+                layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
                 let roster =
                     ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
-                        .with_layouts(Layouts {
-                            width: Layout::wrap_content(),
-                            height: Layout::match_parent(),
+                        .with_layout(LayoutParams {
+                            width: LayoutParam::WrapContent,
+                            height: LayoutParam::MatchParent,
                         })
                         .with_none_group()
                         .with_unique_item()
@@ -822,7 +824,7 @@ impl UIMod {
                             }
                             _ => {}
                         });
-                layout.push(roster);
+                layout.push(roster, 3);
 
                 self.add_window(channel.get_name(), Box::new(layout));
                 self.conversations
@@ -891,16 +893,16 @@ impl ModTrait for UIMod {
 
         let mut console = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal).with_event(
             |layout, event| {
-                for (_, child_view) in layout.children.iter_mut() {
-                    child_view.event(event);
+                for child in layout.children.iter_mut() {
+                    child.view.event(event);
                 }
             },
         );
         console.push(
             ScrollWin::<UIEvent, Stdout, Message>::new()
-                .with_layouts(Layouts {
-                    width: Layout::wrap_content().with_relative_max(0.7),
-                    height: Layout::match_parent(),
+                .with_layout(LayoutParams {
+                    width: LayoutParam::WrapContent,
+                    height: LayoutParam::MatchParent,
                 })
                 .with_event(|view, event| match event {
                     UIEvent::Core(Event::Message(_, Message::Log(message))) => {
@@ -914,11 +916,12 @@ impl ModTrait for UIMod {
                     }
                     _ => {}
                 }),
+            7,
         );
         let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
-            .with_layouts(Layouts {
-                width: Layout::wrap_content().with_relative_max(0.3),
-                height: Layout::match_parent(),
+            .with_layout(LayoutParams {
+                width: LayoutParam::WrapContent,
+                height: LayoutParam::MatchParent,
             })
             .with_none_group()
             .with_sort_item()
@@ -965,7 +968,7 @@ impl ModTrait for UIMod {
                 }
                 _ => {}
             });
-        console.push(roster);
+        console.push(roster, 3);
 
         self.add_window("console".to_string(), Box::new(console));
         self.change_window("console");

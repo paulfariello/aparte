@@ -19,10 +19,8 @@ use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
-use crate::terminus::{
-    Dimension, DimensionSpec, Layout, LayoutBehavior, LayoutConstraints, Layouts, Screen, View,
-};
-use crate::{i18n, terminus};
+use crate::i18n;
+use crate::terminus::{self, Dimension, DimensionSpec, LayoutParam, LayoutParams, Screen, View};
 
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
@@ -727,29 +725,22 @@ where
     }
 
     fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
-        save_cursor!(screen);
-        goto!(screen, dimension.x, dimension.y);
+        terminus::save_cursor!(screen);
+        terminus::goto!(screen, dimension.x, dimension.y);
 
         for line in self.format(Some(dimension.width)) {
-            vprint!(screen, "{}", line);
+            terminus::vprint!(screen, "{}", line);
         }
 
-        restore_cursor!(screen);
+        terminus::restore_cursor!(screen);
     }
 
     fn event(&mut self, _event: &mut E) {}
 
-    fn get_layouts(&self) -> Layouts {
-        Layouts {
-            width: Layout {
-                behavior: LayoutBehavior::MatchParent,
-            },
-            height: Layout {
-                behavior: LayoutBehavior::WrapContent(LayoutConstraints {
-                    max: None,
-                    min: None,
-                }),
-            },
+    fn get_layout(&self) -> LayoutParams {
+        LayoutParams {
+            width: LayoutParam::MatchParent,
+            height: LayoutParam::WrapContent,
         }
     }
 }
