@@ -12,8 +12,8 @@ use std::os::fd::AsFd;
 use std::rc::Rc;
 
 use super::{
-    term_string_visible_len, term_string_visible_truncate, Dimension, DimensionSpec, LayoutParam,
-    LayoutParams, Screen, View,
+    term_string_visible_len, term_string_visible_truncate, Dimensions, LayoutParam, LayoutParams,
+    MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, Screen, View,
 };
 
 pub struct ListView<E, W, G, V>
@@ -28,7 +28,8 @@ where
     sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     dirty: Cell<bool>,
-    layout: LayoutParams,
+    layouts: LayoutParams,
+    dimensions: Option<Dimensions>,
 }
 
 impl<E, W, G, V> ListView<E, W, G, V>
@@ -44,10 +45,11 @@ where
             sort_group: None,
             event_handler: None,
             dirty: Cell::new(true),
-            layout: LayoutParams {
+            layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
             },
+            dimensions: None,
         }
     }
 
@@ -60,7 +62,7 @@ where
     }
 
     pub fn with_layout(mut self, layout: LayoutParams) -> Self {
-        self.layout = layout;
+        self.layouts = layout;
         self
     }
 
@@ -158,95 +160,111 @@ where
     G: fmt::Display + Hash + Eq,
     V: fmt::Display + Hash + Eq,
 {
-    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
-        let layouts = self.get_layout();
-        dimension_spec.width = match layouts.width {
-            LayoutParam::MatchParent => dimension_spec.width,
-            LayoutParam::WrapContent => {
-                let mut width: u16 = 0;
-                for (group, items) in &self.items {
-                    if let Some(group) = group {
-                        width =
-                            cmp::max(width, term_string_visible_len(&format!("{group}")) as u16);
-                    }
-
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        let max_width = match self.layouts.width {
+            LayoutParam::MatchParent | LayoutParam::WrapContent => self
+                .items
+                .iter()
+                .flat_map(|(group, items)| {
                     let indent = match group {
                         Some(_) => "  ",
                         None => "",
                     };
 
-                    for item in items {
-                        width = cmp::max(
-                            width,
-                            term_string_visible_len(&format!("{indent}{item}")) as u16,
-                        );
-                    }
-                }
-
-                match dimension_spec.width {
-                    Some(width_spec) => Some(cmp::min(width_spec, width)),
-                    None => Some(width),
-                }
-            }
-            LayoutParam::Absolute(width) => match dimension_spec.width {
-                Some(width_spec) => Some(cmp::min(width, width_spec)),
-                None => Some(width),
-            },
+                    group
+                        .iter()
+                        .map(|group| term_string_visible_len(&format!("{group}")) as u16)
+                        .chain(items.iter().map(move |item| {
+                            term_string_visible_len(&format!("{indent}{item}")) as u16
+                        }))
+                })
+                .max()
+                .unwrap_or(0),
+            LayoutParam::Absolute(_) => 0, // We don't care,
         };
 
-        dimension_spec.height = match layouts.height {
-            LayoutParam::MatchParent => dimension_spec.height,
-            LayoutParam::WrapContent => {
-                let mut height: u16 = 0;
-                for (group, items) in &self.items {
-                    if group.is_some() {
-                        height += 1;
-                    }
-
-                    height += items.len() as u16;
-                }
-
-                match dimension_spec.height {
-                    Some(height_spec) => Some(cmp::min(height_spec, height)),
-                    None => Some(height),
-                }
-            }
-            LayoutParam::Absolute(height) => match dimension_spec.height {
-                Some(height_spec) => Some(cmp::min(height, height_spec)),
-                None => Some(height),
-            },
+        let max_height = match self.layouts.height {
+            LayoutParam::MatchParent | LayoutParam::WrapContent => self
+                .items
+                .iter()
+                .flat_map(|(group, items)| group.iter().map(|_| ()).chain(items.iter().map(|_| ())))
+                .count() as u16,
+            LayoutParam::Absolute(_) => 0, // We don't care,
         };
+
+        RequestedDimensions {
+            width: RequestedDimension::Absolute(match (self.layouts.width, measure_specs.width) {
+                (LayoutParam::MatchParent, MeasureSpec::Unspecified) => max_width,
+                (LayoutParam::MatchParent, MeasureSpec::AtMost(at_most_width)) => at_most_width,
+                (LayoutParam::WrapContent, MeasureSpec::Unspecified) => max_width,
+                (LayoutParam::WrapContent, MeasureSpec::AtMost(at_most_width)) => {
+                    std::cmp::min(max_width, at_most_width)
+                }
+                (LayoutParam::Absolute(absolute_width), MeasureSpec::Unspecified) => absolute_width,
+                (LayoutParam::Absolute(absolute_width), MeasureSpec::AtMost(at_most_width)) => {
+                    cmp::min(absolute_width, at_most_width)
+                }
+            }),
+            height: RequestedDimension::Absolute(
+                match (self.layouts.height, measure_specs.height) {
+                    (LayoutParam::MatchParent, MeasureSpec::Unspecified) => max_height,
+                    (LayoutParam::MatchParent, MeasureSpec::AtMost(at_most_height)) => {
+                        at_most_height
+                    }
+                    (LayoutParam::WrapContent, MeasureSpec::Unspecified) => max_height,
+                    (LayoutParam::WrapContent, MeasureSpec::AtMost(at_most_height)) => {
+                        std::cmp::min(max_height, at_most_height)
+                    }
+                    (LayoutParam::Absolute(absolute_height), MeasureSpec::Unspecified) => {
+                        absolute_height
+                    }
+                    (
+                        LayoutParam::Absolute(absolute_height),
+                        MeasureSpec::AtMost(at_most_height),
+                    ) => cmp::min(absolute_height, at_most_height),
+                },
+            ),
+        }
     }
 
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
         super::save_cursor!(screen);
+        let dimensions = self.dimensions.as_ref().unwrap();
 
-        let mut y = dimension.y;
-        let width: usize = dimension.width.into();
-
-        for y in dimension.y..dimension.y + dimension.height {
-            super::goto!(screen, dimension.x, y);
-            for _ in dimension.x..dimension.x + dimension.width {
-                super::vprint!(screen, " ");
-            }
-
-            super::goto!(screen, dimension.x, y);
+        // Clean space
+        for top in dimensions.top..dimensions.top + dimensions.height {
+            super::goto!(screen, dimensions.left, top);
+            super::vprint!(screen, "{: <1$}", "", dimensions.width as usize);
         }
 
+        // Draw items
+        let mut top = dimensions.top;
+        let usize_width = dimensions.width as usize;
+
         for (group, items) in &self.items {
-            if y > dimension.y + dimension.height {
+            if top > dimensions.top + dimensions.height {
                 break;
             }
 
-            super::goto!(screen, dimension.x, y);
+            super::goto!(screen, dimensions.left, top);
 
             if group.is_some() {
                 let mut disp = format!("{}", group.as_ref().unwrap());
-                if term_string_visible_len(&disp) > width {
-                    disp = term_string_visible_truncate(&disp, width, Some("…"));
+                if term_string_visible_len(&disp) > usize_width {
+                    disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
                 }
                 super::vprint!(screen, "{}", disp);
-                y += 1;
+                top += 1;
             }
 
             let mut items = items.iter().collect::<Vec<&V>>();
@@ -255,22 +273,22 @@ where
             }
 
             for item in items {
-                if y > dimension.y + dimension.height {
+                if top > dimensions.top + dimensions.height {
                     break;
                 }
 
-                super::goto!(screen, dimension.x, y);
+                super::goto!(screen, dimensions.left, top);
 
                 let mut disp = match group {
                     Some(_) => format!("  {item}"),
                     None => format!("{item}"),
                 };
-                if term_string_visible_len(&disp) > width {
-                    disp = term_string_visible_truncate(&disp, width, Some("…"));
+                if term_string_visible_len(&disp) > usize_width {
+                    disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
                 }
                 super::vprint!(screen, "{}", disp);
 
-                y += 1;
+                top += 1;
             }
         }
 
@@ -287,11 +305,13 @@ where
         }
     }
 
-    fn is_dirty(&self) -> bool {
-        self.dirty.get()
+    fn is_layout_dirty(&self) -> bool {
+        (matches!(self.layouts.width, LayoutParam::WrapContent)
+            || matches!(self.layouts.height, LayoutParam::WrapContent))
+            && self.is_dirty()
     }
 
-    fn get_layout(&self) -> LayoutParams {
-        self.layout.clone()
+    fn is_dirty(&self) -> bool {
+        self.dirty.get()
     }
 }

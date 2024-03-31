@@ -9,7 +9,8 @@ use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    next_word, term_string_visible_len, Dimension, LayoutParam, LayoutParams, Screen, View,
+    next_word, term_string_visible_len, Dimensions, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, Screen, View,
 };
 
 pub struct Input<E> {
@@ -31,6 +32,7 @@ pub struct Input<E> {
     pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     pub dirty: Cell<bool>,
     width: Cell<usize>,
+    dimensions: Option<Dimensions>,
 }
 
 impl<E> Input<E> {
@@ -46,6 +48,7 @@ impl<E> Input<E> {
             event_handler: None,
             dirty: Cell::new(true),
             width: Cell::new(0),
+            dimensions: None,
         }
     }
 
@@ -245,11 +248,30 @@ impl<E, W> View<E, W> for Input<E>
 where
     W: Write + AsFd,
 {
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
-        self.width.set(dimension.width as usize);
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::Absolute(1),
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+        let dimensions = self.dimensions.as_ref().unwrap();
+
+        self.width.set(dimensions.width as usize);
         match self.password {
             true => {
-                super::goto!(screen, dimension.x, dimension.y);
+                super::goto!(screen, dimensions.left, dimensions.top);
                 super::vprint!(screen, "password: ");
                 super::flush!(screen);
 
@@ -257,7 +279,7 @@ where
             }
             false => {
                 // Max displayable size is view width less 1 for cursor
-                let max_size = (dimension.width - 1) as usize;
+                let max_size = (dimensions.width - 1) as usize;
 
                 // cursor must always be inside the view
                 if self.cursor < self.view {
@@ -265,11 +287,11 @@ where
                         self.view.set(0);
                     } else {
                         self.view
-                            .update(&self.cursor - (dimension.width as usize - 1));
+                            .update(&self.cursor - (dimensions.width as usize - 1));
                     }
-                } else if self.cursor > &self.view + (dimension.width as usize - 1) {
+                } else if self.cursor > &self.view + (dimensions.width as usize - 1) {
                     self.view
-                        .update(&self.cursor - (dimension.width as usize - 1));
+                        .update(&self.cursor - (dimensions.width as usize - 1));
                 }
                 assert!(self.cursor >= self.view);
                 assert!(self.cursor <= &self.view + (max_size + 1));
@@ -279,14 +301,23 @@ where
                 let buf = &self.buf[start_index..end_index];
                 let cursor = &self.cursor - &self.view;
 
-                super::goto!(screen, dimension.x, dimension.y);
-                for _ in 0..max_size {
-                    super::vprint!(screen, " ");
+                if dimensions.left == 1 {
+                    // Use fast erase if possible
+                    super::goto!(screen, dimensions.left + dimensions.width, dimensions.top);
+                    super::vprint!(screen, "{}", "\x1B[1K");
+                    super::goto!(screen, dimensions.left, dimensions.top);
+                    super::vprint!(screen, "{}", buf);
+                } else {
+                    super::goto!(screen, dimensions.left, dimensions.top);
+                    let padding = dimensions.width - term_string_visible_len(&buf) as u16;
+                    super::vprint!(screen, "{}{: <1$}", buf, padding as usize);
                 }
 
-                super::goto!(screen, dimension.x, dimension.y);
-                super::vprint!(screen, "{}", buf);
-                super::goto!(screen, dimension.x + cursor.get() as u16, dimension.y);
+                super::goto!(
+                    screen,
+                    dimensions.left + cursor.get() as u16,
+                    dimensions.top
+                );
 
                 super::flush!(screen);
 
@@ -309,13 +340,6 @@ where
             let handler = Rc::clone(handler);
             let handler = &mut *handler.borrow_mut();
             handler(self, event);
-        }
-    }
-
-    fn get_layout(&self) -> LayoutParams {
-        LayoutParams {
-            width: LayoutParam::MatchParent,
-            height: LayoutParam::Absolute(1),
         }
     }
 }

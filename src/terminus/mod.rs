@@ -1,11 +1,12 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#[cfg(test)]
-use mockall::automock;
-use std::cmp;
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::{cmp, iter::Sum};
+
+#[cfg(test)]
+use mockall::automock;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
@@ -208,15 +209,7 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
     output
 }
 
-#[derive(Debug, Clone)]
-pub enum LayoutConstraint {
-    #[allow(dead_code)]
-    Absolute(u16),
-    #[allow(dead_code)]
-    Relative(f32),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum LayoutParam {
     MatchParent,
     WrapContent,
@@ -229,35 +222,133 @@ pub struct LayoutParams {
     pub height: LayoutParam,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Copy)]
 pub enum MeasureSpec {
+    #[default]
     Unspecified,
-    Exactly(u16),
     AtMost(u16),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct DimensionSpec {
-    pub width: Option<u16>,
-    pub height: Option<u16>,
+pub struct MeasureSpecs {
+    pub width: MeasureSpec,
+    pub height: MeasureSpec,
 }
 
-impl DimensionSpec {
-    pub fn layout(&self, x: u16, y: u16) -> Dimension {
-        Dimension {
-            x,
-            y,
-            width: self.width.unwrap(),
-            height: self.height.unwrap(),
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum RequestedDimension {
+    ExpandMax,
+    Absolute(u16),
+}
+
+impl Sum for RequestedDimension {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(
+            RequestedDimension::Absolute(0),
+            |sum, requested_dimension| match (sum, requested_dimension) {
+                (RequestedDimension::Absolute(a), RequestedDimension::Absolute(b)) => {
+                    RequestedDimension::Absolute(a + b)
+                }
+                _ => RequestedDimension::ExpandMax,
+            },
+        )
+    }
+}
+
+impl Eq for RequestedDimension {}
+
+impl Ord for RequestedDimension {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        match (self, other) {
+            (RequestedDimension::ExpandMax, RequestedDimension::ExpandMax) => cmp::Ordering::Equal,
+            (RequestedDimension::ExpandMax, RequestedDimension::Absolute(_)) => {
+                cmp::Ordering::Greater
+            }
+            (RequestedDimension::Absolute(_), RequestedDimension::ExpandMax) => cmp::Ordering::Less,
+            (RequestedDimension::Absolute(a), RequestedDimension::Absolute(b)) => a.cmp(b),
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct Dimension {
-    pub x: u16,
-    pub y: u16,
-    pub width: u16,
+impl PartialEq<u16> for RequestedDimension {
+    fn eq(&self, other: &u16) -> bool {
+        match self {
+            RequestedDimension::ExpandMax => false,
+            RequestedDimension::Absolute(dimension) => dimension.eq(other),
+        }
+    }
+}
+
+impl PartialOrd<u16> for RequestedDimension {
+    fn partial_cmp(&self, other: &u16) -> Option<cmp::Ordering> {
+        match self {
+            RequestedDimension::ExpandMax => Some(cmp::Ordering::Greater),
+            RequestedDimension::Absolute(dimension) => dimension.partial_cmp(other),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestedDimensions {
+    pub height: RequestedDimension,
+    pub width: RequestedDimension,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Dimensions {
+    pub top: u16,
+    pub left: u16,
     pub height: u16,
+    pub width: u16,
+}
+
+impl Dimensions {
+    fn reconcile_dimension(
+        measure_spec: &MeasureSpec,
+        requested_dimension: &RequestedDimension,
+    ) -> u16 {
+        match (measure_spec, requested_dimension) {
+            (MeasureSpec::Unspecified, RequestedDimension::ExpandMax) => panic!(
+                "Cannot resolve unspecified measure spec with expand max requested dimension"
+            ),
+            (MeasureSpec::Unspecified, RequestedDimension::Absolute(dimension)) => *dimension,
+            (MeasureSpec::AtMost(dimension), RequestedDimension::ExpandMax) => *dimension,
+            (MeasureSpec::AtMost(at_most), RequestedDimension::Absolute(requested)) => {
+                cmp::min(*at_most, *requested)
+            }
+        }
+    }
+    pub fn reconcile(
+        measure_specs: &MeasureSpecs,
+        requested_dimensions: &RequestedDimensions,
+        top: u16,
+        left: u16,
+    ) -> Self {
+        Self {
+            top,
+            left,
+            width: Self::reconcile_dimension(&measure_specs.width, &requested_dimensions.width),
+            height: Self::reconcile_dimension(&measure_specs.height, &requested_dimensions.height),
+        }
+    }
+}
+
+impl Into<MeasureSpecs> for Dimensions {
+    fn into(self) -> MeasureSpecs {
+        MeasureSpecs {
+            width: MeasureSpec::AtMost(self.width),
+            height: MeasureSpec::AtMost(self.height),
+        }
+    }
+}
+
+impl Into<MeasureSpecs> for &Dimensions {
+    fn into(self) -> MeasureSpecs {
+        MeasureSpecs {
+            width: MeasureSpec::AtMost(self.width),
+            height: MeasureSpec::AtMost(self.height),
+        }
+    }
 }
 
 /// Represent any component that can be displayed.
@@ -277,35 +368,7 @@ where
     W: Write + AsFd,
 {
     /// Compute the wanted dimension given passed width and height
-    ///
-    /// dimension_spec is IN/OUT var:
-    ///  - IN: constraints
-    ///  - OUT: desired dimension
-    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
-        let layout = self.get_layout();
-
-        dimension_spec.width = match layout.width {
-            LayoutParam::MatchParent => dimension_spec.width,
-            LayoutParam::WrapContent => {
-                panic!("If view can handle content, then it must define its own measure function")
-            }
-            LayoutParam::Absolute(width) => match dimension_spec.width {
-                Some(width_spec) => Some(cmp::min(width, width_spec)),
-                None => Some(width),
-            },
-        };
-
-        dimension_spec.height = match layout.height {
-            LayoutParam::MatchParent => dimension_spec.height,
-            LayoutParam::WrapContent => {
-                panic!("If view can handle content, then it must define its own measure function")
-            }
-            LayoutParam::Absolute(height) => match dimension_spec.height {
-                Some(height_spec) => Some(cmp::min(height, height_spec)),
-                None => Some(height),
-            },
-        };
-    }
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions;
 
     /// Apply the definitive dimension given the top and left position
     ///
@@ -313,37 +376,19 @@ where
     /// If a dimension is None, then it can be modified, otherwise the dimension must be considered a hard constraint.
     ///
     /// Parent has responsability of storing resulting dimension for all its children.
-    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
-        dimension_spec.layout(x, y)
-    }
+    fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>);
+    fn render(&self, screen: &mut Screen<W>);
 
-    /// If the layout of the current view is dirty. Meaning its content requires that its dimension
-    /// changes
-    fn is_layout_dirty(&self) -> bool {
-        match self.get_layout() {
-            LayoutParams {
-                width: LayoutParam::WrapContent,
-                ..
-            } => self.is_dirty(),
-            LayoutParams {
-                height: LayoutParam::WrapContent,
-                ..
-            } => self.is_dirty(),
-            _ => false,
-        }
-    }
+    /// Tell if the dimension of the view wants to change.
+    fn is_layout_dirty(&self) -> bool;
 
     /// If this view requires to be rendered
     fn is_dirty(&self) -> bool;
 
     /// Handle an event
     fn event(&mut self, event: &mut E);
-
-    /// Get the desired layout
-    fn get_layout(&self) -> LayoutParams;
 }
 
 #[macro_export]

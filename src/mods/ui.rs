@@ -34,13 +34,13 @@ use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::cursor::Cursor;
 use crate::i18n;
-use crate::message::{Direction, Message, XmppMessageType};
-use crate::terminus::LayoutParam;
+use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::terminus::{
     self, frame_layout::FrameLayout, input::Input, linear_layout::LinearLayout,
     linear_layout::Orientation, list_view::ListView, scroll_win::ScrollWin, BufferedScreen,
-    Dimension, DimensionSpec, LayoutParams, Screen, View,
+    Dimensions, LayoutParams, MeasureSpecs, Screen, View,
 };
+use crate::terminus::{LayoutParam, MeasureSpec, RequestedDimension, RequestedDimensions};
 use crate::{contact, conversation};
 
 // Debounce rendering at 350ms pace (based on Doherty Threshold)
@@ -58,6 +58,7 @@ struct TitleBar {
     subjects: HashMap<String, HashMap<String, String>>,
     dirty: Cell<bool>,
     pub color: ColorTuple,
+    dimensions: Option<Dimensions>,
 }
 
 impl TitleBar {
@@ -67,6 +68,7 @@ impl TitleBar {
             subjects: HashMap::new(),
             dirty: Cell::new(true),
             color: color.clone(),
+            dimensions: None,
         }
     }
 
@@ -90,14 +92,28 @@ impl<W> View<UIEvent, W> for TitleBar
 where
     W: Write + AsFd,
 {
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
-        save_cursor!(screen);
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
 
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
         );
+        save_cursor!(screen);
+        let dimensions = self.dimensions.as_ref().unwrap();
+
+        goto!(screen, dimensions.left, dimensions.top);
         vprint!(
             screen,
             "{}{}{}",
@@ -106,20 +122,16 @@ where
             termion::style::Bold,
         );
 
-        vprint!(screen, "{}", " ".repeat(dimension.width.into()));
+        vprint!(screen, "{}", " ".repeat(dimensions.width.into()));
 
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
+        goto!(screen, dimensions.left, dimensions.top);
 
         if let Some(name) = &self.name {
             let clean_name =
-                terminus::term_string_visible_truncate(name, dimension.width.into(), Some("…"));
+                terminus::term_string_visible_truncate(name, dimensions.width.into(), Some("…"));
             vprint!(screen, "{}", clean_name);
 
-            let remaining = dimension.width
+            let remaining = dimensions.width
                 - terminus::term_string_visible_len(&clean_name) as u16
                 - " – ".len() as u16;
             if remaining > 0 {
@@ -149,6 +161,10 @@ where
         self.dirty.set(false);
     }
 
+    fn is_layout_dirty(&self) -> bool {
+        false
+    }
+
     fn is_dirty(&self) -> bool {
         self.dirty.get()
     }
@@ -171,13 +187,6 @@ where
             _ => {}
         }
     }
-
-    fn get_layout(&self) -> LayoutParams {
-        LayoutParams {
-            width: LayoutParam::MatchParent,
-            height: LayoutParam::Absolute(1),
-        }
-    }
 }
 
 struct WinBar {
@@ -187,6 +196,7 @@ struct WinBar {
     highlighted: HashMap<String, (u64, u64)>,
     dirty: Cell<bool>,
     pub color: ColorTuple,
+    dimensions: Option<Dimensions>,
 }
 
 impl WinBar {
@@ -198,6 +208,7 @@ impl WinBar {
             highlighted: HashMap::new(),
             dirty: Cell::new(true),
             color: color.clone(),
+            dimensions: None,
         }
     }
 
@@ -233,27 +244,37 @@ impl<W> View<UIEvent, W> for WinBar
 where
     W: Write + AsFd,
 {
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
         save_cursor!(screen);
+        let dimensions = self.dimensions.as_ref().unwrap();
 
         let mut written = 0;
 
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
+        goto!(screen, dimensions.left, dimensions.top);
         vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
 
-        for _ in 0..dimension.width {
+        for _ in 0..dimensions.width {
             vprint!(screen, " ");
         }
 
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
+        goto!(screen, dimensions.left, dimensions.top);
         if let Some(connection) = &self.connection {
             vprint!(screen, " {}", connection);
             written += 1 + connection.len();
@@ -273,7 +294,7 @@ where
                 0
             };
 
-            if window.len() + written + remaining_len > dimension.width as usize {
+            if window.len() + written + remaining_len > dimensions.width as usize {
                 if !first {
                     vprint!(screen, ", +{}", remaining);
                 }
@@ -329,6 +350,10 @@ where
         self.dirty.set(false);
     }
 
+    fn is_layout_dirty(&self) -> bool {
+        false
+    }
+
     fn is_dirty(&self) -> bool {
         self.dirty.get()
     }
@@ -355,13 +380,6 @@ where
                 self.highlight_window(&conversation.get_jid().to_string(), *important);
             }
             _ => {}
-        }
-    }
-
-    fn get_layout(&self) -> LayoutParams {
-        LayoutParams {
-            width: LayoutParam::MatchParent,
-            height: LayoutParam::Absolute(1),
         }
     }
 }
@@ -574,11 +592,10 @@ pub struct UIMod {
     root: LinearLayout<UIEvent, Stdout>,
     last_render: Instant,
     debounced: u32,
-    dimension: Option<Dimension>,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
-    #[allow(dead_code)]
     panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
+    dimensions: Dimensions,
 }
 
 impl UIMod {
@@ -685,10 +702,11 @@ impl UIMod {
         layout.push(win_bar, 0);
         layout.push(input, 0);
 
+        let (width, height) = termion::terminal_size().unwrap();
+
         Self {
             screen,
             root: layout,
-            dimension: None,
             windows: Vec::new(),
             unread_windows: HashMap::new(),
             current_window: None,
@@ -698,6 +716,12 @@ impl UIMod {
             panic_handler,
             last_render: Instant::now(),
             debounced: 0,
+            dimensions: Dimensions {
+                top: 1,
+                left: 1,
+                height,
+                width,
+            },
         }
     }
 
@@ -716,28 +740,33 @@ impl UIMod {
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin =
-                    ScrollWin::<UIEvent, Stdout, Message>::new().with_event(move |view, event| {
+                let chatwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event(
+                    move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                                 match message.direction {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == chat_for_event.contact {
-                                            view.insert(Message::Xmpp(message.clone()));
+                                            view.insert(MessageView::from(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == chat_for_event.contact {
-                                            view.insert(Message::Xmpp(message.clone()));
+                                            view.insert(MessageView::from(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                 }
                             }
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
                                 if view.page_up() {
-                                    let from = view.first().map(|message| message.timestamp());
+                                    let from =
+                                        view.first().map(|message| message.message.timestamp());
                                     scheduler.schedule(Event::LoadChatHistory {
                                         account: chat_for_event.account.clone(),
                                         contact: chat_for_event.contact.clone(),
@@ -750,7 +779,8 @@ impl UIMod {
                             }
                             _ => {}
                         }
-                    });
+                    },
+                );
 
                 self.add_window(chat.contact.to_string(), Box::new(chatwin));
                 self.conversations
@@ -765,28 +795,33 @@ impl UIMod {
                     });
 
                 let channel_for_event = channel.clone();
-                let chanwin =
-                    ScrollWin::<UIEvent, Stdout, Message>::new().with_event(move |view, event| {
+                let chanwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event(
+                    move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                                 match message.direction {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == channel_for_event.jid {
-                                            view.insert(Message::Xmpp(message.clone()));
+                                            view.insert(MessageView::from(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == channel_for_event.jid {
-                                            view.insert(Message::Xmpp(message.clone()));
+                                            view.insert(MessageView::from(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                 }
                             }
                             UIEvent::Core(Event::Key(Key::PageUp)) => {
                                 if view.page_up() {
-                                    let from = view.first().map(|message| message.timestamp());
+                                    let from =
+                                        view.first().map(|message| message.message.timestamp());
                                     scheduler.schedule(Event::LoadChannelHistory {
                                         account: channel_for_event.account.clone(),
                                         jid: channel_for_event.jid.clone(),
@@ -799,7 +834,8 @@ impl UIMod {
                             }
                             _ => {}
                         }
-                    });
+                    },
+                );
                 layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
@@ -882,14 +918,14 @@ impl ModTrait for UIMod {
         vprint!(&mut self.screen, "{}", termion::clear::All);
 
         let (width, height) = termion::terminal_size().unwrap();
-        let mut dimension_spec = terminus::DimensionSpec {
-            width: Some(width),
-            height: Some(height),
+        let measure_specs = terminus::MeasureSpecs {
+            width: terminus::MeasureSpec::AtMost(width),
+            height: terminus::MeasureSpec::AtMost(height),
         };
-        self.root.measure(&mut dimension_spec);
-        let dimension = self.root.layout(&mut dimension_spec, 1, 1);
-        self.root.render(&dimension, &mut self.screen);
-        self.dimension = Some(dimension);
+        let requested_dimensions = self.root.measure(&measure_specs);
+        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
+        self.root.layout(&self.dimensions);
+        self.root.render(&mut self.screen);
 
         let mut console = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal).with_event(
             |layout, event| {
@@ -899,14 +935,14 @@ impl ModTrait for UIMod {
             },
         );
         console.push(
-            ScrollWin::<UIEvent, Stdout, Message>::new()
+            ScrollWin::<UIEvent, Stdout, MessageView>::new()
                 .with_layout(LayoutParams {
-                    width: LayoutParam::WrapContent,
+                    width: LayoutParam::MatchParent,
                     height: LayoutParam::MatchParent,
                 })
                 .with_event(|view, event| match event {
                     UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                        view.insert(Message::Log(message.clone()));
+                        view.insert(MessageView::from(Message::Log(message.clone())));
                     }
                     UIEvent::Core(Event::Key(Key::PageUp)) => {
                         view.page_up();
@@ -1104,14 +1140,15 @@ impl ModTrait for UIMod {
             }
             Event::WindowChange => {
                 let (width, height) = termion::terminal_size().unwrap();
-                let mut dimension_spec = DimensionSpec {
-                    width: Some(width),
-                    height: Some(height),
+                let measure_specs = MeasureSpecs {
+                    width: MeasureSpec::AtMost(width),
+                    height: MeasureSpec::AtMost(height),
                 };
-                self.root.measure(&mut dimension_spec);
-                let dimension = self.root.layout(&mut dimension_spec, 1, 1);
-                self.root.render(&dimension, &mut self.screen);
-                self.dimension = Some(dimension);
+                let requested_dimensions = self.root.measure(&measure_specs);
+                self.dimensions =
+                    Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
+                self.root.layout(&self.dimensions);
+                self.root.render(&mut self.screen);
             }
             Event::Close(window) => {
                 if window != "console" {
@@ -1284,30 +1321,20 @@ impl ModTrait for UIMod {
         // Debounce rendering
         if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
             // Update rendering
-            if self.root.is_layout_dirty() {
-                log::debug!("Render (saved {} rendering)", self.debounced);
-                self.last_render = Instant::now();
-                self.debounced = 0;
+            log::debug!("Render (saved {} rendering)", self.debounced);
+            self.last_render = Instant::now();
+            self.debounced = 0;
 
-                let (width, height) = termion::terminal_size().unwrap();
-                let mut dimension_spec = DimensionSpec {
-                    width: Some(width),
-                    height: Some(height),
-                };
-                self.root.measure(&mut dimension_spec);
-                let dimension = self.root.layout(&mut dimension_spec, 1, 1);
-                self.root.render(&dimension, &mut self.screen);
-                flush!(self.screen);
-                self.dimension = Some(dimension);
-            } else if self.root.is_dirty() {
-                log::debug!("Render (saved {} rendering)", self.debounced);
-                self.last_render = Instant::now();
-                self.debounced = 0;
-
-                let dimension: &Dimension = self.dimension.as_ref().unwrap();
-                self.root.render(dimension, &mut self.screen);
-                flush!(self.screen);
-            }
+            let (width, height) = termion::terminal_size().unwrap();
+            let measure_specs = MeasureSpecs {
+                width: MeasureSpec::AtMost(width),
+                height: MeasureSpec::AtMost(height),
+            };
+            let requested_dimensions = self.root.measure(&measure_specs);
+            self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
+            self.root.layout(&self.dimensions);
+            self.root.render(&mut self.screen);
+            flush!(self.screen);
         } else {
             log::debug!("Debounce rendering");
             if self.debounced == 0 {

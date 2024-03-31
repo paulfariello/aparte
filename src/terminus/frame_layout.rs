@@ -8,7 +8,10 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::rc::Rc;
 
-use super::{Dimension, DimensionSpec, LayoutParam, LayoutParams, Screen, View};
+use super::{
+    Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension, RequestedDimensions,
+    Screen, View,
+};
 
 /// Component that can hold multiple children but display only one at a time
 pub struct FrameLayout<E, W, K>
@@ -20,7 +23,7 @@ where
     current: Option<K>,
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     dirty: Cell<bool>,
-    layout: LayoutParams,
+    layouts: LayoutParams,
 }
 
 impl<E, W, K> FrameLayout<E, W, K>
@@ -34,7 +37,7 @@ where
             current: None,
             event_handler: None,
             dirty: Cell::new(true),
-            layout: LayoutParams {
+            layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
             },
@@ -51,7 +54,7 @@ where
 
     #[allow(unused)]
     pub fn with_layout(mut self, layout: LayoutParams) -> Self {
-        self.layout = layout;
+        self.layouts = layout;
         self
     }
 
@@ -126,34 +129,45 @@ where
     K: Hash + Eq + Clone,
     W: Write + AsFd,
 {
-    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
-        if let Some(child) = self.get_current_mut() {
-            child.measure(dimension_spec);
-        }
-    }
-
-    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
-        if let Some(child) = self.get_current_mut() {
-            child.layout(dimension_spec, x, y)
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        // TODO take self.layouts into account
+        if let Some(child) = self.get_current() {
+            child.measure(measure_specs)
         } else {
-            dimension_spec.layout(x, y)
+            RequestedDimensions {
+                width: RequestedDimension::Absolute(0),
+                height: RequestedDimension::Absolute(0),
+            }
         }
     }
 
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        if let Some(child) = self.get_current_mut() {
+            child.layout(dimensions)
+        }
+    }
+
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!("rendering {}", std::any::type_name::<Self>(),);
         if let Some(child) = self.get_current() {
             if self.dirty.get() || child.is_dirty() {
-                child.render(dimension, screen);
+                child.render(screen);
             }
         }
         self.dirty.set(false);
     }
 
     fn is_layout_dirty(&self) -> bool {
-        self.dirty.get()
-            || self
-                .get_current()
-                .map_or(false, |child| child.is_layout_dirty())
+        match (self.layouts.width, self.layouts.height) {
+            (_, LayoutParam::WrapContent) | (LayoutParam::WrapContent, _) => {
+                self.dirty.get()
+                    || self
+                        .get_current()
+                        .map_or(false, |child| child.is_layout_dirty())
+            }
+            _ => false,
+        }
     }
 
     fn is_dirty(&self) -> bool {
@@ -170,9 +184,5 @@ where
                 child.event(event);
             }
         }
-    }
-
-    fn get_layout(&self) -> LayoutParams {
-        self.layout.clone()
     }
 }

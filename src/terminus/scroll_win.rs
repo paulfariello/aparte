@@ -2,13 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::rc::Rc;
 
-use super::{Dimension, DimensionSpec, LayoutParam, LayoutParams, Screen, View};
+use super::{
+    Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension, RequestedDimensions,
+    Screen, View,
+};
 
 /// Ordered vertical window giving ability to scroll
 pub struct ScrollWin<E, W, I>
@@ -20,8 +23,9 @@ where
     view: usize,
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     dirty: Cell<bool>,
-    children: BTreeMap<I, Option<Dimension>>,
-    layout: LayoutParams,
+    children: BTreeSet<I>,
+    dimensions: Option<Dimensions>,
+    layouts: LayoutParams,
 }
 
 impl<E, W, I> ScrollWin<E, W, I>
@@ -32,14 +36,15 @@ where
     pub fn new() -> Self {
         Self {
             next_line: 0,
-            children: BTreeMap::new(),
+            children: BTreeSet::new(),
             view: 0,
             event_handler: None,
             dirty: Cell::new(true),
-            layout: LayoutParams {
+            layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
             },
+            dimensions: None,
         }
     }
 
@@ -52,22 +57,22 @@ where
     }
 
     #[allow(unused)]
-    pub fn with_layout(mut self, layout: LayoutParams) -> Self {
-        self.layout = layout;
+    pub fn with_layout(mut self, layouts: LayoutParams) -> Self {
+        self.layouts = layouts;
         self
     }
 
     #[allow(dead_code)]
     pub fn first<'a>(&'a self) -> Option<&'a I> {
-        self.children.keys().next()
+        self.children.iter().next()
     }
 
     pub fn insert(&mut self, item: I) {
         // We don't care about rendered buffer, we avoid computation here at cost of false positive
         // (set dirty while in fact it shouldn't)
         // XXX We should care
-        self.children.insert(item, None);
-        self.dirty.set(true)
+        self.children.insert(item);
+        self.dirty.set(true);
     }
 
     /// PageUp the window, return true if top is reached
@@ -105,6 +110,11 @@ where
         //    true
         //}
     }
+
+    pub fn visible_children<'a>(&'a self) -> impl Iterator<Item = &'a I> {
+        // TODO filter
+        self.children.iter().filter(|_| true)
+    }
 }
 
 impl<E, W, I> View<E, W> for ScrollWin<E, W, I>
@@ -112,51 +122,84 @@ where
     W: Write + AsFd,
     I: View<E, W> + Hash + Eq + Ord,
 {
-    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // Should we measure only visible children?
-        if dimension_spec.width.is_none() {
-            // Mesure max width of each children
-            let children: Vec<_> = std::mem::replace(&mut self.children, BTreeMap::new())
-                .into_keys()
-                .collect();
-            let max_width = children
-                .into_iter()
-                .map(|mut child| {
-                    let mut child_dimension_spec = dimension_spec.clone();
-                    child.measure(&mut child_dimension_spec);
-                    self.children.insert(child, None);
-                    child_dimension_spec.width
-                })
-                .max()
-                .flatten();
-            dimension_spec.width = max_width;
+        // Mesure max width of each children
+        let (widths, heights): (Vec<RequestedDimension>, Vec<RequestedDimension>) = self
+            .children
+            .iter()
+            .map(|child| {
+                let child_measure_spec = measure_specs.clone();
+                let requested_dimensions = child.measure(&child_measure_spec);
+                (requested_dimensions.width, requested_dimensions.height)
+            })
+            .unzip();
+
+        let max_child_width = widths
+            .into_iter()
+            .max()
+            .unwrap_or(RequestedDimension::Absolute(0));
+        let total_child_height = heights.into_iter().sum();
+
+        let requested_width = match self.layouts.width {
+            LayoutParam::MatchParent => RequestedDimension::ExpandMax,
+            LayoutParam::WrapContent => max_child_width,
+            LayoutParam::Absolute(absolute_width) => RequestedDimension::Absolute(absolute_width),
+        };
+
+        let requested_height = match self.layouts.height {
+            LayoutParam::MatchParent => RequestedDimension::ExpandMax,
+            LayoutParam::WrapContent => total_child_height,
+            LayoutParam::Absolute(absolute_height) => RequestedDimension::Absolute(absolute_height),
+        };
+
+        RequestedDimensions {
+            width: requested_width,   // We let parent reconcile
+            height: requested_height, // We let parent reconcile
         }
     }
 
-    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
         // TODO should layout only visible children
-        let mut child_y = y;
+        let mut child_top = dimensions.top;
+        let measure_specs: MeasureSpecs = dimensions.into();
 
-        let children: Vec<_> = std::mem::replace(&mut self.children, BTreeMap::new())
+        let children: Vec<_> = std::mem::replace(&mut self.children, BTreeSet::new())
             .into_iter()
             .collect();
-        for (mut child, _) in children.into_iter() {
-            let dimension = child.layout(dimension_spec, x, child_y);
+        for mut child in children.into_iter() {
+            let requested_dimensions = child.measure(&measure_specs);
+            let mut child_dimensions = Dimensions::reconcile(
+                &measure_specs,
+                &requested_dimensions,
+                child_top,
+                dimensions.left,
+            );
 
-            child_y += dimension.height;
-            self.children.insert(child, Some(dimension));
+            // Force full width
+            child_dimensions.width = dimensions.width;
+            child.layout(&child_dimensions);
+
+            child_top += child_dimensions.height;
+            self.children.insert(child);
         }
 
-        dimension_spec.layout(x, y)
+        self.dimensions = Some(dimensions.clone());
     }
 
-    fn render(&self, _dimension: &Dimension, screen: &mut Screen<W>) {
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
         super::save_cursor!(screen);
 
-        for (child, child_dimension) in self.children.iter() {
+        for child in self.visible_children() {
             // child dimension can be unwrapped since it must have been set during the measure
             // phase
-            child.render(child_dimension.as_ref().unwrap(), screen);
+            child.render(screen);
         }
 
         super::restore_cursor!(screen);
@@ -172,11 +215,13 @@ where
         }
     }
 
-    fn is_dirty(&self) -> bool {
-        self.dirty.get()
+    fn is_layout_dirty(&self) -> bool {
+        (matches!(self.layouts.width, LayoutParam::WrapContent)
+            || matches!(self.layouts.height, LayoutParam::WrapContent))
+            && self.is_dirty()
     }
 
-    fn get_layout(&self) -> LayoutParams {
-        self.layout.clone()
+    fn is_dirty(&self) -> bool {
+        self.dirty.get()
     }
 }

@@ -53,6 +53,7 @@ sixel-image = "0.1.0"
 
 [dev-dependencies]
 mockall = "^0.9"
+test-log = "*"
 
 [profile.release]
 debug = true

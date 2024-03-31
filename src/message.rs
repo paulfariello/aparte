@@ -1,15 +1,16 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::cmp::{self, Ordering};
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::hash::{self, Hash};
+use std::io::Write;
+use std::os::fd::AsFd;
+
 use chrono::offset::{Local, TimeZone};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use sixel_image::SixelImage;
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::hash;
-use std::io::Write;
-use std::os::fd::AsFd;
 use termion::color;
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
@@ -20,7 +21,10 @@ use xmpp_parsers::{BareJid, Jid};
 use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::i18n;
-use crate::terminus::{self, Dimension, DimensionSpec, LayoutParam, LayoutParams, Screen, View};
+use crate::terminus::{
+    self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, Screen, View,
+};
 
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
@@ -513,9 +517,50 @@ impl TryFrom<Message> for xmpp_parsers::Element {
     }
 }
 
-impl Message {
+#[derive(Debug, Clone)]
+pub struct MessageView {
+    pub message: Message,
+    dimensions: Option<Dimensions>,
+}
+
+impl Eq for MessageView {}
+
+impl PartialEq for MessageView {
+    fn eq(&self, other: &Self) -> bool {
+        self.message.eq(&other.message)
+    }
+}
+
+impl PartialOrd for MessageView {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.message.partial_cmp(&other.message)
+    }
+}
+
+impl Ord for MessageView {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.message.cmp(&other.message)
+    }
+}
+
+impl Hash for MessageView {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.message.hash(state)
+    }
+}
+
+impl From<Message> for MessageView {
+    fn from(message: Message) -> Self {
+        MessageView {
+            message,
+            dimensions: None,
+        }
+    }
+}
+
+impl MessageView {
     fn format(&self, max_width: Option<u16>) -> Vec<String> {
-        match self {
+        match &self.message {
             Message::Log(message) => {
                 let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
                 match &message.body {
@@ -683,7 +728,9 @@ impl Message {
 
                 let grapheme_count = visible_word.graphemes(true).count();
 
-                if max_width.map_or(false, |max_len| line_len + grapheme_count > max_len.into()) {
+                if max_width.map_or(false, |max_width| {
+                    line_len + grapheme_count > max_width as usize
+                }) {
                     // Wrap line
                     buffers.push(chunk);
                     chunk = String::new();
@@ -701,35 +748,63 @@ impl Message {
     }
 }
 
-impl<E, W> View<E, W> for Message
+impl<E, W> View<E, W> for MessageView
 where
     W: Write + AsFd,
 {
-    fn is_dirty(&self) -> bool {
-        todo!()
-    }
-
-    fn measure(&mut self, dimension_spec: &mut DimensionSpec) {
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // TODO: we could avoid creating the real buffers
-        let buffers = self.format(dimension_spec.width);
-        dimension_spec.height = Some(buffers.len() as u16);
+        match measure_specs.width {
+            MeasureSpec::Unspecified => RequestedDimensions {
+                height: RequestedDimension::Absolute(1),
+                width: RequestedDimension::Absolute(
+                    self.format(None)
+                        .iter()
+                        .next()
+                        .map_or(0, |line| term_string_visible_len(&line) as u16),
+                ),
+            },
+            MeasureSpec::AtMost(at_most_width) => {
+                let formatted = self.format(Some(at_most_width));
+                RequestedDimensions {
+                    height: RequestedDimension::Absolute(formatted.len() as u16),
+                    width: RequestedDimension::Absolute(cmp::min(
+                        formatted.iter().map(|line| line.len()).max().unwrap_or(0) as u16,
+                        at_most_width,
+                    )),
+                }
+            }
+        }
     }
 
-    fn layout(&mut self, dimension_spec: &DimensionSpec, x: u16, y: u16) -> Dimension {
-        let buffers = self.format(dimension_spec.width);
-
-        let mut dimension = dimension_spec.layout(x, y);
-        dimension.height = buffers.len() as u16;
-
-        dimension
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, dimension: &Dimension, screen: &mut Screen<W>) {
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+        let dimensions = self.dimensions.as_ref().unwrap();
         terminus::save_cursor!(screen);
-        terminus::goto!(screen, dimension.x, dimension.y);
 
-        for line in self.format(Some(dimension.width)) {
-            terminus::vprint!(screen, "{}", line);
+        let mut top = dimensions.top;
+        for line in self.format(Some(dimensions.width)) {
+            if dimensions.left == 1 {
+                // Use fast erase if possible
+                terminus::goto!(screen, dimensions.left + dimensions.width, top);
+                terminus::vprint!(screen, "{}", "\x1B[1K");
+                terminus::goto!(screen, dimensions.left, top);
+                terminus::vprint!(screen, "{}", line);
+            } else {
+                terminus::goto!(screen, dimensions.left, top);
+                let padding = dimensions.width - term_string_visible_len(&line) as u16;
+                terminus::vprint!(screen, "{: <1$}", line, padding as usize);
+            }
+            top += 1;
         }
 
         terminus::restore_cursor!(screen);
@@ -737,10 +812,11 @@ where
 
     fn event(&mut self, _event: &mut E) {}
 
-    fn get_layout(&self) -> LayoutParams {
-        LayoutParams {
-            width: LayoutParam::MatchParent,
-            height: LayoutParam::WrapContent,
-        }
+    fn is_layout_dirty(&self) -> bool {
+        <MessageView as View<E, W>>::is_dirty(self)
+    }
+
+    fn is_dirty(&self) -> bool {
+        false
     }
 }
