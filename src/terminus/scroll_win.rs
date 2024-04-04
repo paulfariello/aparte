@@ -83,6 +83,23 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
 
+        let total_children_height: u16 = self
+            .children
+            .iter()
+            .map(|child| match child.measure(&measure_specs).height {
+                RequestedDimension::ExpandMax => dimensions.height,
+                RequestedDimension::Absolute(child_height) => child_height,
+            })
+            .sum();
+
+        if total_children_height < dimensions.height {
+            // All children fits in the current dimensions
+            // don't bother to page up
+            return true;
+        }
+
+        self.dirty.set(true);
+
         // Look for children index that correspond to a page up
         let mut remaining_height = dimensions.height;
         for (i, child) in self
@@ -97,7 +114,6 @@ where
             };
             if child_height > remaining_height {
                 self.bottom_visible_child_index += i;
-                self.dirty.set(true);
                 break;
             }
             remaining_height -= child_height;
@@ -113,7 +129,28 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
 
+        let total_children_height: u16 = self
+            .children
+            .iter()
+            .map(|child| match child.measure(&measure_specs).height {
+                RequestedDimension::ExpandMax => dimensions.height,
+                RequestedDimension::Absolute(child_height) => {
+                    log::debug!("Child height: {}", child_height);
+                    child_height
+                }
+            })
+            .sum();
+
+        if total_children_height < dimensions.height {
+            // All children fits in the current dimensions
+            // don't bother to page down
+            return true;
+        }
+
+        self.dirty.set(true);
+
         // Look for children index that correspond to a page down
+
         let mut remaining_height = dimensions.height;
         for (i, child) in self
             .children
@@ -126,7 +163,6 @@ where
             };
             if child_height > remaining_height {
                 self.bottom_visible_child_index -= i;
-                self.dirty.set(true);
                 break;
             }
             remaining_height -= child_height;

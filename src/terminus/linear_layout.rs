@@ -164,7 +164,7 @@ where
             let requested_dimensions = child.view.measure(&measure_specs);
 
             match requested_dimensions.height {
-                RequestedDimension::ExpandMax => height = dimensions.width,
+                RequestedDimension::ExpandMax => height = dimensions.height,
                 RequestedDimension::Absolute(requested_width) => {
                     height = std::cmp::max(height, requested_width)
                 }
@@ -197,7 +197,7 @@ where
             let child_dimensions = Dimensions {
                 top: child_top,
                 left: child_left,
-                height: height,
+                height,
                 width: child_width,
             };
 
@@ -527,7 +527,7 @@ mod tests {
                 top: 1,
                 left: 1,
                 width: 20,
-                height: 100,
+                height: 200,
             }))
             .times(1)
             .return_const(());
@@ -537,7 +537,7 @@ mod tests {
                 top: 1,
                 left: 21,
                 width: 40,
-                height: 100,
+                height: 200,
             }))
             .times(1)
             .return_const(());
@@ -547,7 +547,7 @@ mod tests {
                 top: 1,
                 left: 61,
                 width: 40,
-                height: 100,
+                height: 200,
             }))
             .times(1)
             .return_const(());
@@ -561,7 +561,7 @@ mod tests {
             top: 1,
             left: 1,
             width: 100,
-            height: 100,
+            height: 200,
         });
     }
 }
