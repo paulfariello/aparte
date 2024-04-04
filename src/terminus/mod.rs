@@ -333,20 +333,11 @@ impl Dimensions {
     }
 }
 
-impl Into<MeasureSpecs> for Dimensions {
-    fn into(self) -> MeasureSpecs {
+impl From<&Dimensions> for MeasureSpecs {
+    fn from(dimensions: &Dimensions) -> Self {
         MeasureSpecs {
-            width: MeasureSpec::AtMost(self.width),
-            height: MeasureSpec::AtMost(self.height),
-        }
-    }
-}
-
-impl Into<MeasureSpecs> for &Dimensions {
-    fn into(self) -> MeasureSpecs {
-        MeasureSpecs {
-            width: MeasureSpec::AtMost(self.width),
-            height: MeasureSpec::AtMost(self.height),
+            width: MeasureSpec::AtMost(dimensions.width),
+            height: MeasureSpec::AtMost(dimensions.height),
         }
     }
 }

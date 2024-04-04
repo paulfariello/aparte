@@ -103,8 +103,7 @@ where
 
         log::debug!("layout with vertical orientation");
         for child in self.children.iter_mut() {
-            let child_dimension_spec = dimensions.clone();
-            let measure_specs: MeasureSpecs = child_dimension_spec.into();
+            let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
             match requested_dimensions.height {
@@ -128,8 +127,7 @@ where
         let child_left = dimensions.left;
 
         for child in self.children.iter_mut() {
-            let child_dimension_spec = dimensions.clone();
-            let measure_specs: MeasureSpecs = child_dimension_spec.into();
+            let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
             let child_height = match requested_dimensions.height {
@@ -162,8 +160,7 @@ where
 
         log::debug!("layout with horizontal orientation");
         for child in self.children.iter_mut() {
-            let child_dimension_spec = dimensions.clone();
-            let measure_specs: MeasureSpecs = child_dimension_spec.into();
+            let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
             match requested_dimensions.height {
@@ -187,8 +184,7 @@ where
         let mut child_left = dimensions.left;
 
         for child in self.children.iter_mut() {
-            let child_dimension_spec = dimensions.clone();
-            let measure_specs: MeasureSpecs = child_dimension_spec.into();
+            let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
             let child_width = match requested_dimensions.width {
