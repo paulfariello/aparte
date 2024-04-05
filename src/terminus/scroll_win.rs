@@ -70,10 +70,15 @@ where
     }
 
     pub fn insert(&mut self, item: I) {
+        // If view index is on last child, then keep it there
+        let stick_to_bottom = self.bottom_visible_child_index + 1 == self.children.len();
+        if self.children.insert(item) && stick_to_bottom {
+            self.bottom_visible_child_index += 1;
+        }
+
         // We don't care about rendered buffer, we avoid computation here at cost of false positive
         // (set dirty while in fact it shouldn't)
         // XXX We should care
-        self.children.insert(item);
         self.dirty.set(true);
     }
 
@@ -113,7 +118,7 @@ where
                 RequestedDimension::Absolute(child_height) => child_height,
             };
             if child_height > remaining_height {
-                self.bottom_visible_child_index += i;
+                self.bottom_visible_child_index -= i;
                 break;
             }
             remaining_height -= child_height;
@@ -152,20 +157,26 @@ where
         // Look for children index that correspond to a page down
 
         let mut remaining_height = dimensions.height;
-        for (i, child) in self
+        match self
             .children
-            .range(self.bottom_visible_child()..)
+            .range(self.bottom_visible_child()..) // We want to keep last visible child on top
             .enumerate()
-        {
-            let child_height = match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height,
-                RequestedDimension::Absolute(child_height) => child_height,
-            };
-            if child_height > remaining_height {
-                self.bottom_visible_child_index -= i;
-                break;
-            }
-            remaining_height -= child_height;
+            .find_map(|(i, child)| {
+                let child_height = match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(child_height) => child_height,
+                };
+                if child_height > remaining_height {
+                    Some(i)
+                } else {
+                    remaining_height -= child_height;
+                    None
+                }
+            }) {
+            // Stopped before last children
+            Some(i) => self.bottom_visible_child_index += i,
+            // Reach bottom
+            None => self.bottom_visible_child_index = self.children.len() - 1,
         }
 
         log::debug!("View at: {}", self.bottom_visible_child_index);
@@ -173,9 +184,13 @@ where
     }
 
     fn bottom_visible_child<'a>(&'a self) -> &'a I {
+        log::debug!(
+            "{} ?> {}",
+            self.bottom_visible_child_index,
+            self.children.len()
+        );
         self.children
             .iter()
-            .rev()
             .nth(self.bottom_visible_child_index)
             .expect(INVALID_VIEW)
     }
@@ -215,9 +230,10 @@ where
             .collect();
 
         // Layout only visiable children
-        let last_visible_child_index = children.len() - self.bottom_visible_child_index;
-        let first_visible_child_index = last_visible_child_index - visible_children_count;
-        for child in children[first_visible_child_index..last_visible_child_index]
+        let last_visible_child_index = self.bottom_visible_child_index;
+        // If we have only 1 visible children, first is 0 and last is also 0
+        let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
+        for child in children[first_visible_child_index..=last_visible_child_index]
             .iter_mut()
             .rev()
         {
@@ -261,9 +277,9 @@ where
             .collect();
 
         // Layout only visiable children
-        let last_visible_child_index = children.len() - self.bottom_visible_child_index;
-        let first_visible_child_index = last_visible_child_index - visible_children_count;
-        for child in children[first_visible_child_index..last_visible_child_index].iter_mut() {
+        let last_visible_child_index = self.bottom_visible_child_index;
+        let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
+        for child in children[first_visible_child_index..=last_visible_child_index].iter_mut() {
             let requested_dimensions = child.measure(&measure_specs);
             let mut child_dimensions = Dimensions::reconcile(
                 &measure_specs,
@@ -602,6 +618,72 @@ mod tests {
         // Then
         let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&second_view, &first_view]);
+    }
+
+    #[test]
+    fn test_visible_children_page_up_then_down_unaligned() {
+        // Given
+        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+
+        let first_view = MockView {
+            ord: 0,
+            height: 10,
+            ..Default::default()
+        };
+        let second_view = MockView {
+            ord: 1,
+            height: 10,
+            ..Default::default()
+        };
+        let third_view = MockView {
+            ord: 2,
+            height: 10,
+            ..Default::default()
+        };
+        let fourth_view = MockView {
+            ord: 3,
+            height: 10,
+            ..Default::default()
+        };
+        let fifth_view = MockView {
+            ord: 4,
+            height: 1,
+            ..Default::default()
+        };
+
+        scroll_win.insert(first_view.clone());
+        scroll_win.insert(second_view.clone());
+        scroll_win.insert(third_view.clone());
+        scroll_win.insert(fourth_view.clone());
+
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 20,
+            top: 1,
+            left: 1,
+        });
+
+        // When
+        scroll_win.page_up();
+
+        // Then
+        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        assert_eq!(visible_children, vec![&second_view, &first_view]);
+
+        // When
+        scroll_win.insert(fifth_view.clone());
+        scroll_win.page_down();
+
+        // Then
+        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        assert_eq!(visible_children, vec![&fourth_view, &third_view]);
+
+        // When
+        scroll_win.page_down();
+
+        // Then
+        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        assert_eq!(visible_children, vec![&fifth_view, &fourth_view]);
     }
 
     /// Ensure children are layout at the top of the view if they cannot fill it
