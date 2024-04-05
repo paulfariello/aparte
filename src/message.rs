@@ -177,6 +177,9 @@ impl Message {
                     .iter()
                     .find_map(|payload| Delay::try_from(payload.clone()).ok()),
             };
+            let timestamp = delay
+                .map(|delay| delay.stamp.0)
+                .unwrap_or(LocalTz::now().into());
             let to = match message.to.clone() {
                 Some(to) => to,
                 None => account.clone().into(),
@@ -188,37 +191,16 @@ impl Message {
                         && from.clone().domain() == account.domain()
                     {
                         Ok(Message::outgoing_chat(
-                            id,
-                            delay
-                                .map(|delay| delay.stamp.0)
-                                .unwrap_or(LocalTz::now().into()),
-                            &from,
-                            &to,
-                            &bodies,
-                            archive,
+                            id, timestamp, &from, &to, &bodies, archive,
                         ))
                     } else {
                         Ok(Message::incoming_chat(
-                            id,
-                            delay
-                                .map(|delay| delay.stamp.0)
-                                .unwrap_or(LocalTz::now().into()),
-                            &from,
-                            &to,
-                            &bodies,
-                            archive,
+                            id, timestamp, &from, &to, &bodies, archive,
                         ))
                     }
                 }
                 XmppParsersMessageType::Groupchat => Ok(Message::incoming_channel(
-                    id,
-                    delay
-                        .map(|delay| delay.stamp.0)
-                        .unwrap_or(LocalTz::now().into()),
-                    &from,
-                    &to,
-                    &bodies,
-                    archive,
+                    id, timestamp, &from, &to, &bodies, archive,
                 )),
                 _ => Err(()),
             }
@@ -427,7 +409,6 @@ impl Message {
         }
     }
 
-    #[allow(dead_code)]
     pub fn id<'a>(&'a self) -> &'a str {
         match self {
             Message::Xmpp(VersionedXmppMessage { id, .. })
@@ -435,7 +416,6 @@ impl Message {
         }
     }
 
-    #[allow(dead_code)]
     pub fn timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
         match self {
             Message::Xmpp(message) => message.get_original_timestamp(),

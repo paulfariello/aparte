@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,11 +16,15 @@ use crate::message::Message;
 use crate::mods::disco;
 use crate::mods::messages;
 
-pub struct CorrectionMod {}
+pub struct CorrectionMod {
+    waiting_corrections: HashMap<String, Vec<XmppParsersMessage>>,
+}
 
 impl CorrectionMod {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            waiting_corrections: HashMap::new(),
+        }
     }
 
     fn handle_replace(
@@ -45,21 +50,57 @@ impl CorrectionMod {
                         replace.id
                     ),
                 }
-                Event::Message(Some(account.clone()), original.clone())
+                Some(Event::Message(Some(account.clone()), original.clone()))
             } else {
-                let mut message = message.clone();
-                message
-                    .payloads
-                    .retain(|payload| !payload.is("replace", ns::MESSAGE_CORRECT));
-                Event::RawMessage {
-                    account: account.clone(),
-                    message,
-                    delay: None,
-                    archive,
-                }
+                log::info!("Missing original message: {}", replace.id);
+                let waiting_corrections = self
+                    .waiting_corrections
+                    .entry(replace.id)
+                    .or_insert(Vec::new());
+                waiting_corrections.push(message.clone());
+                None
             }
         };
-        aparte.schedule(event);
+
+        if let Some(event) = event {
+            aparte.schedule(event);
+        }
+    }
+
+    fn handle_original_message(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+        delay: &Option<Delay>,
+        archive: bool,
+    ) {
+        log::info!(
+            "Got missing original message: {}, scheduling original and corrections",
+            message.id.as_ref().unwrap()
+        );
+        let original = Event::RawMessage {
+            account: account.clone(),
+            message: message.clone(),
+            delay: delay.clone(),
+            archive,
+        };
+
+        aparte.schedule(original);
+        for correction in self
+            .waiting_corrections
+            .remove(message.id.as_ref().unwrap()) // id is not None (guaranteed by caller)
+            .unwrap_or(Vec::new())
+            .into_iter()
+        {
+            let correction = Event::RawMessage {
+                account: account.clone(),
+                message: correction,
+                delay: None,
+                archive,
+            };
+            aparte.schedule(correction);
+        }
     }
 }
 
@@ -84,6 +125,12 @@ impl ModTrait for CorrectionMod {
             }
         }
 
+        if let Some(id) = message.id.as_ref() {
+            if self.waiting_corrections.get(id).is_some() {
+                return 1f64;
+            }
+        }
+
         0f64
     }
 
@@ -92,9 +139,15 @@ impl ModTrait for CorrectionMod {
         aparte: &mut Aparte,
         account: &Account,
         message: &XmppParsersMessage,
-        _delay: &Option<Delay>,
+        delay: &Option<Delay>,
         archive: bool,
     ) {
+        if let Some(id) = message.id.as_ref() {
+            if self.waiting_corrections.get(id).is_some() {
+                self.handle_original_message(aparte, account, message, delay, archive);
+            }
+        }
+
         for payload in message.payloads.iter() {
             if let Ok(replace) = Replace::try_from(payload.clone()) {
                 self.handle_replace(aparte, account, message, replace, archive);
