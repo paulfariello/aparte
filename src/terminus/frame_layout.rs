@@ -8,6 +8,8 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::rc::Rc;
 
+use crate::terminus::clear_screen;
+
 use super::{
     Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension, RequestedDimensions,
     Screen, View,
@@ -24,6 +26,7 @@ where
     event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
     dirty: Cell<bool>,
     layouts: LayoutParams,
+    dimensions: Option<Dimensions>,
 }
 
 impl<E, W, K> FrameLayout<E, W, K>
@@ -41,6 +44,7 @@ where
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
             },
+            dimensions: None,
         }
     }
 
@@ -143,6 +147,7 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
         if let Some(child) = self.get_current_mut() {
             child.layout(dimensions)
         }
@@ -150,6 +155,9 @@ where
 
     fn render(&self, screen: &mut Screen<W>) {
         log::debug!("rendering {}", std::any::type_name::<Self>(),);
+        if self.dirty.get() {
+            clear_screen(self.dimensions.as_ref().unwrap(), screen)
+        }
         if let Some(child) = self.get_current() {
             if self.dirty.get() || child.is_dirty() {
                 child.render(screen);

@@ -209,6 +209,24 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
     output
 }
 
+pub fn clear_screen<W>(dimensions: &Dimensions, screen: &mut Screen<W>)
+where
+    W: AsFd + Write,
+{
+    if dimensions.left == 1 {
+        for top in dimensions.top..dimensions.top + dimensions.height {
+            // Use fast erase if possible
+            goto!(screen, 1 + dimensions.width, top);
+            vprint!(screen, "{}", "\x1B[1K");
+        }
+    } else {
+        for top in dimensions.top..dimensions.top + dimensions.height {
+            goto!(screen, dimensions.left, top);
+            vprint!(screen, "{: <1$}", "", dimensions.width as usize);
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum LayoutParam {
     MatchParent,
