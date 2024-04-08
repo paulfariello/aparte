@@ -566,7 +566,7 @@ impl MessageView {
                 }
             }
             Message::Xmpp(message) => {
-                let author = terminus::clean(&match &message.type_ {
+                let author = terminus::clean_str(&match &message.type_ {
                     XmppMessageType::Channel => match &message.from_full {
                         Jid::Full(from) => from.resource().to_string(),
                         Jid::Bare(from) => from.to_string(),
@@ -620,10 +620,10 @@ impl MessageView {
                 };
 
                 if let Some(line) = iter.next() {
-                    buffer.push_str(&terminus::clean(line));
+                    buffer.push_str(&terminus::clean_str(line));
                 }
                 for line in iter {
-                    buffer.push_str(format!("\n{}{}", padding, terminus::clean(line)).as_str());
+                    buffer.push_str(format!("\n{}{}", padding, terminus::clean_str(line)).as_str());
                 }
 
                 self.format_text(buffer, max_width)

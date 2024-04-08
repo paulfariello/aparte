@@ -180,7 +180,7 @@ where
                     window.to_string(),
                     subjects
                         .iter()
-                        .map(|(lang, subject)| (lang.clone(), terminus::clean(subject)))
+                        .map(|(lang, subject)| (lang.clone(), terminus::clean_str(subject)))
                         .collect(),
                 );
             }
@@ -361,16 +361,16 @@ where
     fn event(&mut self, event: &mut UIEvent) {
         match event {
             UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_current_window(&terminus::clean(name));
+                self.set_current_window(&terminus::clean_str(name));
             }
             UIEvent::AddWindow(name, _) => {
-                self.add_window(terminus::clean(name));
+                self.add_window(terminus::clean_str(name));
             }
             UIEvent::Core(Event::Close(window)) => {
                 self.del_window(window);
             }
             UIEvent::Core(Event::Connected(account, _)) => {
-                self.connection = Some(terminus::clean(&account.to_string()));
+                self.connection = Some(terminus::clean_str(&account.to_string()));
                 self.dirty.set(true);
             }
             UIEvent::Core(Event::Notification {
@@ -391,7 +391,7 @@ impl fmt::Display for contact::Group {
             "{}{}{}{}{}",
             color::Bg(color::Reset),
             color::Fg(color::Yellow),
-            terminus::clean(&self.0),
+            terminus::clean_str(&self.0),
             color::Bg(color::Reset),
             color::Fg(color::Reset)
         )
@@ -445,10 +445,10 @@ impl fmt::Display for RosterItem {
                 let disp = match &contact.name {
                     Some(name) => format!(
                         "{} ({})",
-                        terminus::clean(name),
-                        terminus::clean(&contact.jid.to_string()),
+                        terminus::clean_str(name),
+                        terminus::clean_str(&contact.jid.to_string()),
                     ),
-                    None => terminus::clean(&contact.jid.to_string()),
+                    None => terminus::clean_str(&contact.jid.to_string()),
                 };
 
                 write!(f, "{}{}", disp, color::Fg(color::Reset))
@@ -456,14 +456,14 @@ impl fmt::Display for RosterItem {
 
             Self::Bookmark(bookmark) => {
                 let disp = match &bookmark.name {
-                    Some(name) => terminus::clean(name),
-                    None => terminus::clean(&bookmark.jid.to_string()),
+                    Some(name) => terminus::clean_str(name),
+                    None => terminus::clean_str(&bookmark.jid.to_string()),
                 };
 
                 write!(f, "{}{}", disp, color::Fg(color::Reset))
             }
             Self::Window(window) => {
-                let disp = terminus::clean(window);
+                let disp = terminus::clean_str(window);
 
                 write!(f, "{disp}")
             }
@@ -480,7 +480,7 @@ impl fmt::Display for conversation::Occupant {
             f,
             "{}{}{}",
             color::Fg(color::Rgb(r, g, b)),
-            terminus::clean(&nick),
+            terminus::clean_str(&nick),
             color::Fg(color::Reset)
         )
     }

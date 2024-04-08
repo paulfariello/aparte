@@ -128,7 +128,7 @@ fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
 }
 
 /// Remove all terminal specific chars sequences
-pub fn clean(string: &str) -> String {
+pub fn clean_str(string: &str) -> String {
     let mut output = String::new();
     let mut iter = string.chars();
 
@@ -491,7 +491,7 @@ mod tests {
         let input = "test \x1b[5mBlink";
 
         // When
-        let cleaned = clean(input);
+        let cleaned = clean_str(input);
 
         // Then
         assert_eq!(cleaned, "test Blink");
