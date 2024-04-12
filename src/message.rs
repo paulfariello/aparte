@@ -772,7 +772,10 @@ where
         terminus::save_cursor!(screen);
 
         let mut top = dimensions.top;
-        for line in self.format(Some(dimensions.width)) {
+        let formatted = self.format(Some(dimensions.width));
+
+        // Format as much as possible starting from bottom line
+        for line in &formatted[formatted.len() - dimensions.height as usize..] {
             if dimensions.left == 1 {
                 // Use fast erase if possible
                 terminus::goto!(screen, dimensions.left + dimensions.width, top);
@@ -798,5 +801,219 @@ where
 
     fn is_dirty(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::io::Stdout;
+    use std::rc::Rc;
+    use std::time::UNIX_EPOCH;
+
+    use chrono::Utc;
+    use test_log::test;
+
+    use termion::raw::IntoRawMode as _;
+    use termion::screen::IntoAlternateScreen as _;
+
+    use crate::terminus::BufferedScreen;
+
+    use super::*;
+
+    struct MockWriter {
+        stdout: Rc<RefCell<Vec<u8>>>,
+        fd: Stdout,
+    }
+
+    impl std::io::Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.stdout.borrow_mut().extend(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl AsFd for MockWriter {
+        fn as_fd<'a>(&'a self) -> std::os::unix::prelude::BorrowedFd<'a> {
+            self.fd.as_fd()
+        }
+    }
+
+    fn log_mesasge_view(log: &str) -> (impl View<(), MockWriter>, DateTime<Local>) {
+        let epoch: DateTime<Utc> = DateTime::from(UNIX_EPOCH);
+        (
+            MessageView {
+                message: Message::Log(LogMessage {
+                    id: String::from(""),
+                    timestamp: epoch.clone().into(),
+                    body: Body::Text(String::from(log)),
+                }),
+                dimensions: None,
+            },
+            Local.from_utc_datetime(&epoch.naive_utc()),
+        )
+    }
+
+    fn mock_screen() -> (Rc<RefCell<Vec<u8>>>, Screen<MockWriter>) {
+        let stdout = Rc::new(RefCell::new(Vec::new()));
+        let mock_writer = MockWriter {
+            stdout: stdout.clone(),
+            fd: std::io::stdout(),
+        };
+        let mut screen = BufferedScreen::new(
+            mock_writer
+                .into_raw_mode()
+                .unwrap()
+                .into_alternate_screen()
+                .unwrap(),
+        );
+
+        let _ = screen.flush();
+        let _ = stdout.take();
+
+        (stdout, screen)
+    }
+
+    fn raw_formatted_log_message_line(
+        timestamp: Option<DateTime<Local>>,
+        top: u16,
+        width: u16,
+        log: &str,
+    ) -> String {
+        if let Some(timestamp) = timestamp {
+            format!(
+                "{}{}{}{}",
+                termion::cursor::Goto(width + 1, top),
+                "\x1B[1K",
+                termion::cursor::Goto(1, top),
+                format!(
+                    "{}{}{} - {}",
+                    color::Bg(color::Reset),
+                    color::Fg(color::Reset),
+                    timestamp.format("%T"),
+                    log,
+                ),
+            )
+        } else {
+            format!(
+                "{}{}{}{}",
+                termion::cursor::Goto(width + 1, top),
+                "\x1B[1K",
+                termion::cursor::Goto(1, top),
+                log,
+            )
+        }
+    }
+
+    fn with_cursor_restoration(message: String) -> String {
+        format!(
+            "{}{}{}",
+            termion::cursor::Save,
+            message,
+            termion::cursor::Restore,
+        )
+    }
+
+    #[test]
+    fn test_render_single_line() {
+        // Given
+        let (mut message_view, timestamp) = log_mesasge_view("a log");
+        let (stdout, mut screen) = mock_screen();
+
+        // When
+        message_view.layout(&Dimensions {
+            top: 1,
+            left: 1,
+            height: 1,
+            width: 100,
+        });
+        message_view.render(&mut screen);
+
+        // Then
+        let _ = screen.flush();
+        let output = stdout.take();
+        assert_eq!(
+            output,
+            with_cursor_restoration(raw_formatted_log_message_line(
+                Some(timestamp),
+                1,
+                100,
+                "a log"
+            ))
+            .as_bytes()
+        );
+    }
+
+    #[test]
+    fn test_render_multiple_lines() {
+        // Given
+        // a log that should render in more than width
+        // 00:00:00 - a very very long long message log
+        // is 44 char long but we allow only 2 lines of 40.
+        let (mut message_view, timestamp) = log_mesasge_view("a very very long long message log");
+        let (stdout, mut screen) = mock_screen();
+
+        // When
+        message_view.layout(&Dimensions {
+            top: 1,
+            left: 1,
+            height: 2,
+            width: 40,
+        });
+        message_view.render(&mut screen);
+
+        // Then
+        // we should render:
+        // 00:00:00 - a very very long long message
+        //  log
+        let _ = screen.flush();
+        let output = stdout.take();
+        assert_eq!(
+            output,
+            with_cursor_restoration(format!(
+                "{}{}",
+                raw_formatted_log_message_line(
+                    Some(timestamp),
+                    1,
+                    40,
+                    "a very very long long message"
+                ),
+                raw_formatted_log_message_line(None, 2, 40, " log")
+            ))
+            .as_bytes()
+        );
+    }
+
+    #[test]
+    fn test_render_partial_lines() {
+        // Given
+        // a log that should render in more than width
+        // 00:00:00 - a very very long long message log
+        // is 44 char long but we allow only 1 line of 40.
+        let (mut message_view, _timestamp) = log_mesasge_view("a very very long long message log");
+        let (stdout, mut screen) = mock_screen();
+
+        // When
+        message_view.layout(&Dimensions {
+            top: 1,
+            left: 1,
+            height: 1,
+            width: 40,
+        });
+        message_view.render(&mut screen);
+
+        // Then
+        // we should only render:
+        //  log
+        let _ = screen.flush();
+        let output = stdout.take();
+        assert_eq!(
+            output,
+            with_cursor_restoration(raw_formatted_log_message_line(None, 1, 40, " log")).as_bytes()
+        );
     }
 }
