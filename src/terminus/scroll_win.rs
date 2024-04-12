@@ -9,8 +9,8 @@ use std::os::fd::AsFd;
 use std::rc::Rc;
 
 use super::{
-    Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    Screen, View,
+    Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, Screen, View,
 };
 
 const MISSING_DIMENSIONS: &'static str = "Missing dimensions";
@@ -184,11 +184,6 @@ where
     }
 
     fn bottom_visible_child<'a>(&'a self) -> &'a I {
-        log::debug!(
-            "{} ?> {}",
-            self.bottom_visible_child_index,
-            self.children.len()
-        );
         self.children
             .iter()
             .nth(self.bottom_visible_child_index)
@@ -204,13 +199,15 @@ where
             .range(..=self.bottom_visible_child())
             .rev()
             .take_while(move |child| {
-                let child_height = match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
-                    RequestedDimension::Absolute(child_height) => child_height,
-                };
-                remaining_height >= child_height && {
-                    remaining_height -= child_height;
+                if remaining_height > 0 {
+                    let child_height = match child.measure(&measure_specs).height {
+                        RequestedDimension::ExpandMax => dimensions.height,
+                        RequestedDimension::Absolute(child_height) => child_height,
+                    };
+                    remaining_height -= std::cmp::min(remaining_height, child_height);
                     true
+                } else {
+                    false
                 }
             })
     }
@@ -220,7 +217,7 @@ where
 
         // Start layout at bottom of the view
         let mut child_top = dimensions.top + dimensions.height;
-        let measure_specs: MeasureSpecs = dimensions.into();
+        let mut measure_specs: MeasureSpecs = dimensions.into();
 
         let visible_children_count = self.visible_children().count();
 
@@ -251,6 +248,13 @@ where
             // Fix top
             child_top -= child_dimensions.height;
             child_dimensions.top = child_top;
+
+            // Update measure_specs
+            let MeasureSpec::AtMost(measure_spec_height) = measure_specs.height else {
+                unreachable!()
+            };
+            measure_specs.height =
+                MeasureSpec::AtMost(measure_spec_height - child_dimensions.height);
 
             // Finally layout child with correct dimensions
             child.layout(&child_dimensions);
@@ -429,7 +433,7 @@ mod tests {
     struct MockView {
         ord: usize,
         height: u16,
-        top: Option<u16>,
+        dimensions: Option<Dimensions>,
     }
 
     impl PartialOrd for MockView {
@@ -470,7 +474,7 @@ mod tests {
         }
 
         fn layout(&mut self, dimensions: &Dimensions) {
-            self.top.replace(dimensions.top);
+            self.dimensions.replace(dimensions.clone());
         }
 
         fn render(&self, _screen: &mut Screen<W>) {
@@ -647,7 +651,7 @@ mod tests {
         };
         let fifth_view = MockView {
             ord: 4,
-            height: 1,
+            height: 10,
             ..Default::default()
         };
 
@@ -711,7 +715,10 @@ mod tests {
         // Then
         let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&first_view]);
-        assert_eq!(visible_children[0].top, Some(1));
+        assert_eq!(
+            visible_children[0].dimensions.as_ref().map(|d| d.top),
+            Some(1)
+        );
     }
 
     #[test]
@@ -750,8 +757,14 @@ mod tests {
         // Then
         let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&third_view, &second_view]);
-        assert_eq!(visible_children[0].top, Some(11));
-        assert_eq!(visible_children[1].top, Some(1));
+        assert_eq!(
+            visible_children[0].dimensions.as_ref().map(|d| d.top),
+            Some(11)
+        );
+        assert_eq!(
+            visible_children[1].dimensions.as_ref().map(|d| d.top),
+            Some(1)
+        );
     }
 
     #[test]
@@ -766,5 +779,62 @@ mod tests {
             top: 1,
             left: 1,
         });
+    }
+
+    #[test]
+    fn test_layout_partial_child() {
+        // Given
+        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+
+        let first_view = MockView {
+            ord: 0,
+            height: 20,
+            ..Default::default()
+        };
+        let second_view = MockView {
+            ord: 1,
+            height: 10,
+            ..Default::default()
+        };
+        let third_view = MockView {
+            ord: 2,
+            height: 10,
+            ..Default::default()
+        };
+
+        scroll_win.insert(first_view.clone());
+        scroll_win.insert(second_view.clone());
+        scroll_win.insert(third_view.clone());
+
+        // When
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 30,
+            top: 1,
+            left: 1,
+        });
+
+        // Then
+        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        assert_eq!(
+            visible_children,
+            vec![&third_view, &second_view, &first_view]
+        );
+        assert_eq!(
+            visible_children[0].dimensions.as_ref().map(|d| d.top),
+            Some(21)
+        );
+        assert_eq!(
+            visible_children[1].dimensions.as_ref().map(|d| d.top),
+            Some(11)
+        );
+        assert_eq!(
+            visible_children[2].dimensions.as_ref().map(|d| d.top),
+            Some(1)
+        );
+        assert_eq!(
+            visible_children[2].dimensions.as_ref().map(|d| d.height),
+            Some(10)
+        );
     }
 }
