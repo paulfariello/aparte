@@ -27,6 +27,8 @@ use crate::terminus::{
     RequestedDimensions, Screen, View,
 };
 
+const LOGO: &[u8] = include_bytes!("aparte.six");
+
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
     pub id: String,
@@ -144,16 +146,10 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone)]
-pub enum Body {
-    Text(String),
-    Image(SixelImage),
-}
-
-#[derive(Debug, Clone)]
 pub struct LogMessage {
     pub id: String,
     pub timestamp: DateTime<FixedOffset>,
-    pub body: Body,
+    pub body: String,
 }
 
 #[derive(Debug, Clone)]
@@ -418,7 +414,7 @@ impl Message {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
             timestamp: LocalTz::now().into(),
-            body: Body::Text(msg),
+            body: msg,
         })
     }
 
@@ -438,14 +434,7 @@ impl Message {
     pub fn body<'a>(&'a self) -> &'a str {
         match self {
             Message::Xmpp(message) => message.get_last_body(),
-            Message::Log(LogMessage {
-                body: Body::Text(body),
-                ..
-            }) => body,
-            Message::Log(LogMessage {
-                body: Body::Image(image),
-                ..
-            }) => todo!(),
+            Message::Log(LogMessage { body, .. }) => body,
         }
     }
 
@@ -541,6 +530,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
 pub struct MessageView {
     pub message: Message,
     dimensions: Option<Dimensions>,
+    image: Option<SixelImage>,
 }
 
 impl Eq for MessageView {}
@@ -571,107 +561,131 @@ impl Hash for MessageView {
 
 impl From<Message> for MessageView {
     fn from(message: Message) -> Self {
+        let image_cache = match &message {
+            Message::Xmpp(message) => message
+                .history
+                .iter()
+                .max()
+                .map(|version| {
+                    version
+                        .oobs
+                        .iter()
+                        .find(|oob| oob.url.ends_with(".jpg"))
+                        .map(|_| SixelImage::new(LOGO).unwrap())
+                })
+                .flatten(),
+            Message::Log(_) => None,
+        };
         MessageView {
             message,
             dimensions: None,
+            image: image_cache,
         }
     }
 }
 
 impl MessageView {
-    fn format(&self, max_width: Option<u16>) -> Vec<String> {
-        match &self.message {
-            Message::Log(message) => {
-                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                match &message.body {
-                    Body::Text(body) => {
-                        let mut lines = Vec::new();
-                        for line in body.lines() {
-                            lines.append(&mut self.format_text(
-                                format!(
-                                    "{}{}{} - {}",
-                                    color::Bg(color::Reset),
-                                    color::Fg(color::Reset),
-                                    timestamp.format("%T"),
-                                    line
-                                ),
-                                max_width,
-                            ))
-                        }
-                        lines
-                    }
-                    Body::Image(image) => {
-                        vec![String::from("image with Sixel")]
-                    }
-                }
-            }
-            Message::Xmpp(message) => {
-                let author = terminus::clean_str(&match &message.type_ {
-                    XmppMessageType::Channel => match &message.from_full {
-                        Jid::Full(from) => from.resource().to_string(),
-                        Jid::Bare(from) => from.to_string(),
-                    },
-                    XmppMessageType::Chat => message.from.to_string(),
-                });
+    fn format_log(message: &LogMessage, max_width: Option<u16>) -> Vec<String> {
+        let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
+        let mut lines = Vec::new();
+        for line in message.body.lines() {
+            lines.append(&mut Self::format_text(
+                format!(
+                    "{}{}{} - {}",
+                    color::Bg(color::Reset),
+                    color::Fg(color::Reset),
+                    timestamp.format("%T"),
+                    line
+                ),
+                max_width,
+            ))
+        }
+        lines
+    }
 
-                let timestamp =
-                    Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
-                let body = message.get_last_body();
-                let me = body.starts_with("/me");
-                let padding_len = match me {
-                    true => format!("{} - {}: ", timestamp.format("%T"), author).len(),
-                    false => format!("{} - * {}", timestamp.format("%T"), author).len(),
-                };
-                let padding = " ".repeat(padding_len);
+    fn format_header(message: &VersionedXmppMessage) -> String {
+        let author = terminus::clean_str(&match &message.type_ {
+            XmppMessageType::Channel => match &message.from_full {
+                Jid::Full(from) => from.resource().to_string(),
+                Jid::Bare(from) => from.to_string(),
+            },
+            XmppMessageType::Chat => message.from.to_string(),
+        });
 
-                let (r, g, b) = id_to_rgb(&author);
+        let timestamp = Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
+        let body = message.get_last_body();
+        let me = body.starts_with("/me");
 
-                let mut attributes = "".to_string();
-                if message.has_multiple_version() {
-                    attributes.push_str("✎ ");
-                }
+        let (r, g, b) = id_to_rgb(&author);
 
-                let mut buffer = match me {
-                    true => format!(
-                        "{}{}{} - {}* {}{}{}",
-                        color::Bg(color::Reset),
-                        color::Fg(color::Reset),
-                        timestamp.format("%T"),
-                        attributes,
-                        color::Fg(color::Rgb(r, g, b)),
-                        author,
-                        color::Fg(color::Reset)
-                    ),
-                    false => format!(
-                        "{}{}{} - {}{}{}:{} ",
-                        color::Bg(color::Reset),
-                        color::Fg(color::Reset),
-                        timestamp.format("%T"),
-                        attributes,
-                        color::Fg(color::Rgb(r, g, b)),
-                        author,
-                        color::Fg(color::Reset)
-                    ),
-                };
+        let mut attributes = "".to_string();
+        if message.has_multiple_version() {
+            attributes.push_str("✎ ");
+        }
 
-                let mut iter = match me {
-                    true => body.strip_prefix("/me").unwrap().lines(),
-                    false => body.lines(),
-                };
-
-                if let Some(line) = iter.next() {
-                    buffer.push_str(&terminus::clean_str(line));
-                }
-                for line in iter {
-                    buffer.push_str(format!("\n{}{}", padding, terminus::clean_str(line)).as_str());
-                }
-
-                self.format_text(buffer, max_width)
-            }
+        match me {
+            true => format!(
+                "{}{}{} - {}* {}{}{}",
+                color::Bg(color::Reset),
+                color::Fg(color::Reset),
+                timestamp.format("%T"),
+                attributes,
+                color::Fg(color::Rgb(r, g, b)),
+                author,
+                color::Fg(color::Reset)
+            ),
+            false => format!(
+                "{}{}{} - {}{}{}:{} ",
+                color::Bg(color::Reset),
+                color::Fg(color::Reset),
+                timestamp.format("%T"),
+                attributes,
+                color::Fg(color::Rgb(r, g, b)),
+                author,
+                color::Fg(color::Reset)
+            ),
         }
     }
 
-    fn format_text(&self, text: String, max_width: Option<u16>) -> Vec<String> {
+    fn format_xmpp_text(message: &VersionedXmppMessage, max_width: Option<u16>) -> Vec<String> {
+        let mut buffer = Self::format_header(message);
+
+        let padding_len = buffer.len();
+        let padding = " ".repeat(padding_len);
+
+        let body = message.get_last_body();
+        let mut iter = body.strip_prefix("/me").unwrap_or(body).lines();
+
+        if let Some(line) = iter.next() {
+            buffer.push_str(&terminus::clean_str(line));
+        }
+        for line in iter {
+            buffer.push_str(format!("\n{}{}", padding, terminus::clean_str(line)).as_str());
+        }
+
+        Self::format_text(buffer, max_width)
+    }
+
+    fn is_image(&self) -> bool {
+        match &self.message {
+            Message::Log(_) => false,
+            Message::Xmpp(message) => message
+                .history
+                .iter()
+                .max()
+                .map(|version| version.oobs.iter().any(|oob| oob.url.ends_with(".jpg")))
+                .unwrap_or(false),
+        }
+    }
+
+    fn format(&self, max_width: Option<u16>) -> Vec<String> {
+        match &self.message {
+            Message::Log(message) => Self::format_log(message, max_width),
+            Message::Xmpp(message) => Self::format_xmpp_text(message, max_width),
+        }
+    }
+
+    fn format_text(text: String, max_width: Option<u16>) -> Vec<String> {
         let mut buffers: Vec<String> = Vec::new();
         for line in text.lines() {
             let mut words = line.split_word_bounds();
@@ -766,48 +780,11 @@ impl MessageView {
 
         buffers
     }
-}
 
-impl<E, W> View<E, W> for MessageView
-where
-    W: Write + AsFd,
-{
-    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
-        // TODO: we could avoid creating the real buffers
-        match measure_specs.width {
-            MeasureSpec::Unspecified => RequestedDimensions {
-                height: RequestedDimension::Absolute(1),
-                width: RequestedDimension::Absolute(
-                    self.format(None)
-                        .iter()
-                        .next()
-                        .map_or(0, |line| term_string_visible_len(&line) as u16),
-                ),
-            },
-            MeasureSpec::AtMost(at_most_width) => {
-                let formatted = self.format(Some(at_most_width));
-                RequestedDimensions {
-                    height: RequestedDimension::Absolute(formatted.len() as u16),
-                    width: RequestedDimension::Absolute(cmp::min(
-                        formatted.iter().map(|line| line.len()).max().unwrap_or(0) as u16,
-                        at_most_width,
-                    )),
-                }
-            }
-        }
-    }
-
-    fn layout(&mut self, dimensions: &Dimensions) {
-        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
-    }
-
-    fn render(&self, screen: &mut Screen<W>) {
-        log::debug!(
-            "rendering {} at {:?}",
-            std::any::type_name::<Self>(),
-            self.dimensions
-        );
+    fn render_text<W>(&self, screen: &mut Screen<W>)
+    where
+        W: Write + AsFd,
+    {
         let dimensions = self.dimensions.as_ref().unwrap();
         terminus::save_cursor!(screen);
 
@@ -831,6 +808,91 @@ where
         }
 
         terminus::restore_cursor!(screen);
+    }
+
+    fn render_image<W>(&self, screen: &mut Screen<W>)
+    where
+        W: Write + AsFd,
+    {
+        let Message::Xmpp(message) = &self.message else {
+            unreachable!()
+        };
+        let dimensions = self.dimensions.as_ref().unwrap();
+
+        let header = Self::format_header(message);
+
+        terminus::save_cursor!(screen);
+
+        terminus::goto!(screen, dimensions.left, dimensions.top);
+        terminus::vprint!(screen, "{}", header);
+        terminus::vprint!(screen, "{}", self.image.as_ref().unwrap().serialize());
+        terminus::restore_cursor!(screen);
+    }
+}
+
+impl<E, W> View<E, W> for MessageView
+where
+    W: Write + AsFd,
+{
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        // TODO: we could avoid creating the real buffers
+        if let Some(image) = &self.image {
+            let term_size_pixel =
+                termion::terminal_size_pixels().expect("Can't get terminal pixel size");
+            let term_size = termion::terminal_size().expect("Can't get terminal size");
+
+            let resolution = (
+                term_size_pixel.0 / term_size.0,
+                term_size_pixel.1 / term_size.1,
+            );
+
+            let (x, y) = image.pixel_size();
+
+            RequestedDimensions {
+                height: RequestedDimension::Absolute((y as u16).div_ceil(resolution.1)),
+                width: RequestedDimension::Absolute((x as u16).div_ceil(resolution.0)),
+            }
+        } else {
+            match measure_specs.width {
+                MeasureSpec::Unspecified => RequestedDimensions {
+                    height: RequestedDimension::Absolute(1),
+                    width: RequestedDimension::Absolute(
+                        self.format(None)
+                            .iter()
+                            .next()
+                            .map_or(0, |line| term_string_visible_len(&line) as u16),
+                    ),
+                },
+                MeasureSpec::AtMost(at_most_width) => {
+                    let formatted = self.format(Some(at_most_width));
+                    RequestedDimensions {
+                        height: RequestedDimension::Absolute(formatted.len() as u16),
+                        width: RequestedDimension::Absolute(cmp::min(
+                            formatted.iter().map(|line| line.len()).max().unwrap_or(0) as u16,
+                            at_most_width,
+                        )),
+                    }
+                }
+            }
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, screen: &mut Screen<W>) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+        if self.image.is_some() {
+            self.render_image(screen)
+        } else {
+            self.render_text(screen)
+        }
     }
 
     fn event(&mut self, _event: &mut E) {}
@@ -890,9 +952,10 @@ mod tests {
                 message: Message::Log(LogMessage {
                     id: String::from(""),
                     timestamp: epoch.clone().into(),
-                    body: Body::Text(String::from(log)),
+                    body: String::from(log),
                 }),
                 dimensions: None,
+                image: None,
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )

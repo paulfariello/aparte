@@ -48,7 +48,7 @@ use crate::config::Config;
 use crate::conversation::{Channel, Conversation};
 use crate::crypto::CryptoEngine;
 use crate::cursor::Cursor;
-use crate::message::{Body, LogMessage, Message};
+use crate::message::{LogMessage, Message};
 use crate::mods;
 use crate::storage::Storage;
 use crate::{
@@ -64,8 +64,6 @@ const WELCOME: &str = r#"
 ▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
 "#;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-const LOGO: &[u8] = include_bytes!("aparte.six");
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -1093,14 +1091,6 @@ impl Aparte {
     pub fn start(&mut self) {
         self.log(color::rainbow(WELCOME));
         self.log(format!("Version: {VERSION}"));
-
-        let logo = SixelImage::new(LOGO).unwrap();
-        let message = Message::Log(LogMessage {
-            id: Uuid::new_v4().to_string(),
-            timestamp: LocalTz::now().into(),
-            body: Body::Image(logo),
-        });
-        self.schedule(Event::Message(None, message));
 
         for (name, account) in self.config.accounts.clone() {
             if account.autoconnect {
