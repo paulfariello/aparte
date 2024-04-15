@@ -580,7 +580,7 @@ Example:
         let id = Uuid::new_v4().to_string();
         let from: Jid = account.clone().into();
         let timestamp = LocalTz::now();
-        let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, &bodies, false);
+        let message = Message::outgoing_chat(id, timestamp.into(), &from, &jid, bodies, None, false);
         aparte.schedule(Event::Message(Some(account.clone()), message.clone()));
 
         aparte.send(&account, message);
@@ -734,7 +734,8 @@ mod me {
                             timestamp,
                             &from,
                             &to,
-                            &bodies,
+                            bodies,
+                            None,
                             false,
                         ))
                     }
@@ -755,7 +756,8 @@ mod me {
                             timestamp,
                             &from,
                             &to,
-                            &bodies,
+                            bodies,
+                            None,
                             false,
                         ))
                     }

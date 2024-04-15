@@ -20,8 +20,8 @@ flexi_logger = "^0.27"
 backtrace = "^0.3"
 futures = "^0.3"
 tokio = { version = "^1.10", features = ["full"] }
-tokio-xmpp = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git" }
-xmpp-parsers = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git" }
+tokio-xmpp = { path = "../xmpp-rs/tokio-xmpp" }
+xmpp-parsers = { path = "../xmpp-rs/parsers" }
 rpassword = "^3.0"
 uuid = { version = "^1.7", features = ["v4"]  }
 termion = { path = "../termion/" } # "3.0.0" + d57468cdc106699585dd0fea0361998293c26574

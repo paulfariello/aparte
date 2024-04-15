@@ -16,6 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
+use xmpp_parsers::oob::Oob;
 use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
@@ -31,6 +32,7 @@ pub struct XmppMessageVersion {
     pub id: String,
     pub timestamp: DateTime<FixedOffset>,
     pub bodies: HashMap<String, String>,
+    pub oobs: Vec<Oob>,
 }
 
 impl Eq for XmppMessageVersion {}
@@ -102,6 +104,12 @@ impl VersionedXmppMessage {
             .map(|(lang, body)| (lang.clone(), body.0.clone()))
             .collect();
 
+        let oobs: Vec<Oob> = message
+            .payloads
+            .iter()
+            .filter_map(|payload| Oob::try_from(payload.clone()).ok())
+            .collect();
+
         let delay = message
             .payloads
             .iter()
@@ -114,6 +122,7 @@ impl VersionedXmppMessage {
             id,
             timestamp,
             bodies,
+            oobs,
         });
     }
 
@@ -170,6 +179,11 @@ impl Message {
                 .iter()
                 .map(|(lang, body)| (lang.clone(), body.0.clone()))
                 .collect();
+            let oobs: Vec<_> = message
+                .payloads
+                .iter()
+                .filter_map(|payload| Oob::try_from(payload.clone()).ok())
+                .collect();
             let delay = match delay {
                 Some(delay) => Some(delay.clone()),
                 None => message
@@ -191,16 +205,34 @@ impl Message {
                         && from.clone().domain() == account.domain()
                     {
                         Ok(Message::outgoing_chat(
-                            id, timestamp, &from, &to, &bodies, archive,
+                            id,
+                            timestamp,
+                            &from,
+                            &to,
+                            bodies,
+                            Some(oobs),
+                            archive,
                         ))
                     } else {
                         Ok(Message::incoming_chat(
-                            id, timestamp, &from, &to, &bodies, archive,
+                            id,
+                            timestamp,
+                            &from,
+                            &to,
+                            bodies,
+                            Some(oobs),
+                            archive,
                         ))
                     }
                 }
                 XmppParsersMessageType::Groupchat => Ok(Message::incoming_channel(
-                    id, timestamp, &from, &to, &bodies, archive,
+                    id,
+                    timestamp,
+                    &from,
+                    &to,
+                    bodies,
+                    Some(oobs),
+                    archive,
                 )),
                 _ => Err(()),
             }
@@ -263,7 +295,8 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from: &Jid,
         to: &Jid,
-        bodies: &HashMap<String, String>,
+        bodies: HashMap<String, String>,
+        oobs: Option<Vec<Oob>>,
         archive: bool,
     ) -> Self {
         let id = id.into();
@@ -271,7 +304,8 @@ impl Message {
         let version = XmppMessageVersion {
             id: id.clone(),
             timestamp,
-            bodies: bodies.clone(),
+            bodies,
+            oobs: oobs.unwrap_or(Vec::new()),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -292,7 +326,8 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from: &Jid,
         to: &Jid,
-        bodies: &HashMap<String, String>,
+        bodies: HashMap<String, String>,
+        oobs: Option<Vec<Oob>>,
         archive: bool,
     ) -> Self {
         let id = id.into();
@@ -300,7 +335,8 @@ impl Message {
         let version = XmppMessageVersion {
             id: id.clone(),
             timestamp,
-            bodies: bodies.clone(),
+            bodies,
+            oobs: oobs.unwrap_or(Vec::new()),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -321,7 +357,8 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from: &Jid,
         to: &Jid,
-        bodies: &HashMap<String, String>,
+        bodies: HashMap<String, String>,
+        oobs: Option<Vec<Oob>>,
         archive: bool,
     ) -> Self {
         let id = id.into();
@@ -329,7 +366,8 @@ impl Message {
         let version = XmppMessageVersion {
             id: id.clone(),
             timestamp,
-            bodies: bodies.clone(),
+            bodies,
+            oobs: oobs.unwrap_or(Vec::new()),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -350,7 +388,8 @@ impl Message {
         timestamp: DateTime<FixedOffset>,
         from: &Jid,
         to: &Jid,
-        bodies: &HashMap<String, String>,
+        bodies: HashMap<String, String>,
+        oobs: Option<Vec<Oob>>,
         archive: bool,
     ) -> Self {
         let id = id.into();
@@ -358,7 +397,8 @@ impl Message {
         let version = XmppMessageVersion {
             id: id.clone(),
             timestamp,
-            bodies: bodies.clone(),
+            bodies,
+            oobs: oobs.unwrap_or(Vec::new()),
         };
 
         Message::Xmpp(VersionedXmppMessage {

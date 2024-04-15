@@ -1236,7 +1236,8 @@ impl ModTrait for UIMod {
                                                 timestamp,
                                                 &from,
                                                 &to,
-                                                &bodies,
+                                                bodies,
+                                                None,
                                                 false,
                                             );
                                             aparte.schedule(Event::SendMessage(
@@ -1261,7 +1262,8 @@ impl ModTrait for UIMod {
                                                 timestamp,
                                                 &from,
                                                 &to,
-                                                &bodies,
+                                                bodies,
+                                                None,
                                                 false,
                                             );
                                             aparte.schedule(Event::SendMessage(
