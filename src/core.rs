@@ -20,7 +20,6 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
-use sixel_image::SixelImage;
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
@@ -48,7 +47,7 @@ use crate::config::Config;
 use crate::conversation::{Channel, Conversation};
 use crate::crypto::CryptoEngine;
 use crate::cursor::Cursor;
-use crate::message::{LogMessage, Message};
+use crate::message::Message;
 use crate::mods;
 use crate::storage::Storage;
 use crate::{

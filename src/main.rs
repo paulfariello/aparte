@@ -22,6 +22,7 @@ mod color;
 mod crypto;
 mod cursor;
 mod i18n;
+mod image;
 mod mods;
 mod storage;
 mod word;

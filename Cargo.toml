@@ -49,7 +49,9 @@ base64 = "0.21.7"
 sha1 = "0.10.6"
 itertools = "0.12.1"
 secrecy = { version = "0.8.0", features = ["serde"] }
-sixel-image = "0.1.0"
+sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1" }
+reqwest = "0.12.3"
+image = "0.25.1"
 
 [dev-dependencies]
 mockall = "^0.9"

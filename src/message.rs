@@ -2,15 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cmp::{self, Ordering};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::hash::{self, Hash};
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::os::fd::AsFd;
+use std::sync::{Arc, RwLock};
 
+use anyhow::Result;
 use chrono::offset::{Local, TimeZone};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
-use sixel_image::SixelImage;
+use image::io::Reader as ImageReader;
+use image::Rgb;
+use sixel_image::{Pixel, SixelColor, SixelImage};
 use termion::color;
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
@@ -21,7 +25,9 @@ use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
+use crate::core::Aparte;
 use crate::i18n;
+use crate::image::uniform_quantization;
 use crate::terminus::{
     self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, Screen, View,
@@ -530,7 +536,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
 pub struct MessageView {
     pub message: Message,
     dimensions: Option<Dimensions>,
-    image: Option<SixelImage>,
+    image: Arc<RwLock<Option<SixelImage>>>,
 }
 
 impl Eq for MessageView {}
@@ -561,7 +567,7 @@ impl Hash for MessageView {
 
 impl From<Message> for MessageView {
     fn from(message: Message) -> Self {
-        let image_cache = match &message {
+        let image = match &message {
             Message::Xmpp(message) => message
                 .history
                 .iter()
@@ -571,20 +577,97 @@ impl From<Message> for MessageView {
                         .oobs
                         .iter()
                         .find(|oob| oob.url.ends_with(".jpg"))
-                        .map(|_| SixelImage::new(LOGO).unwrap())
+                        .map(|oob| {
+                            let image: Arc<RwLock<Option<SixelImage>>> =
+                                Arc::new(RwLock::new(None));
+                            Aparte::spawn({
+                                let url = oob.url.clone();
+                                let image = Arc::clone(&image);
+                                async move {
+                                    log::debug!("Loading OOB: {}", url);
+                                    match Self::load_oob(&url).await {
+                                        Ok(sixel) => {
+                                            log::debug!("Loaded OOB from {}", url);
+                                            let mut image = image.write().unwrap();
+                                            *image = Some(sixel);
+                                        }
+                                        Err(err) => log::error!("{}", err),
+                                    }
+                                }
+                            });
+                            image
+                        })
                 })
-                .flatten(),
-            Message::Log(_) => None,
+                .flatten()
+                .unwrap_or(Arc::new(RwLock::new(None))),
+            Message::Log(_) => Arc::new(RwLock::new(None)),
         };
         MessageView {
             message,
             dimensions: None,
-            image: image_cache,
+            image,
         }
     }
 }
 
 impl MessageView {
+    async fn load_oob(url: &str) -> Result<SixelImage> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(180))
+            .send()
+            .await?;
+        log::debug!(
+            "Got http response, expected image size: {:?}",
+            response.content_length()
+        );
+        let raw_image = response.bytes().await?;
+        log::debug!("Got raw image, size: {}", raw_image.len());
+        let image_reader = ImageReader::new(Cursor::new(raw_image)).with_guessed_format()?;
+        log::debug!("Guessed image format: {:?}", image_reader.format());
+        let image = image_reader.decode()?;
+        let image = image.resize_to_fill(300, 300, image::imageops::FilterType::CatmullRom);
+        let rgb8 = image.to_rgb8();
+
+        // Build registers
+        let pixels: Vec<Rgb<u8>> = uniform_quantization(rgb8.pixels().cloned().collect());
+        let palette: HashSet<Rgb<u8>> = pixels.iter().cloned().collect();
+        assert!(palette.len() < u16::MAX as usize);
+        let color_registers: BTreeMap<u16, SixelColor> = palette
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, pixel)| {
+                (
+                    index as u16,
+                    SixelColor::Rgb(pixel.0[0], pixel.0[1], pixel.0[2]),
+                )
+            })
+            .collect();
+        let palette: HashMap<Rgb<u8>, u16> = palette
+            .into_iter()
+            .enumerate()
+            .map(|(index, pixel)| (pixel, index as u16))
+            .collect();
+
+        let sixel_pixels: Vec<Vec<Pixel>> = pixels
+            .iter()
+            .map(|pixel| Pixel {
+                on: true,
+                color: *palette.get(pixel).unwrap(),
+            })
+            .collect::<Vec<_>>()
+            .chunks(image.width() as usize)
+            .map(|line| line.iter().cloned().collect::<Vec<Pixel>>())
+            .collect();
+
+        Ok(SixelImage {
+            color_registers,
+            pixels: sixel_pixels,
+        })
+    }
+
     fn format_log(message: &LogMessage, max_width: Option<u16>) -> Vec<String> {
         let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
         let mut lines = Vec::new();
@@ -664,18 +747,6 @@ impl MessageView {
         }
 
         Self::format_text(buffer, max_width)
-    }
-
-    fn is_image(&self) -> bool {
-        match &self.message {
-            Message::Log(_) => false,
-            Message::Xmpp(message) => message
-                .history
-                .iter()
-                .max()
-                .map(|version| version.oobs.iter().any(|oob| oob.url.ends_with(".jpg")))
-                .unwrap_or(false),
-        }
     }
 
     fn format(&self, max_width: Option<u16>) -> Vec<String> {
@@ -825,7 +896,11 @@ impl MessageView {
 
         terminus::goto!(screen, dimensions.left, dimensions.top);
         terminus::vprint!(screen, "{}", header);
-        terminus::vprint!(screen, "{}", self.image.as_ref().unwrap().serialize());
+        if let Some(image) = self.image.read().unwrap().as_ref() {
+            terminus::vprint!(screen, "{}", image.serialize());
+        } else {
+            terminus::vprint!(screen, "…");
+        }
         terminus::restore_cursor!(screen);
     }
 }
@@ -836,7 +911,7 @@ where
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // TODO: we could avoid creating the real buffers
-        if let Some(image) = &self.image {
+        if let Some(image) = self.image.read().unwrap().as_ref() {
             let term_size_pixel =
                 termion::terminal_size_pixels().expect("Can't get terminal pixel size");
             let term_size = termion::terminal_size().expect("Can't get terminal size");
@@ -888,7 +963,7 @@ where
             std::any::type_name::<Self>(),
             self.dimensions
         );
-        if self.image.is_some() {
+        if self.image.read().unwrap().is_some() {
             self.render_image(screen)
         } else {
             self.render_text(screen)
@@ -955,7 +1030,7 @@ mod tests {
                     body: String::from(log),
                 }),
                 dimensions: None,
-                image: None,
+                image: Arc::new(RwLock::new(None)),
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )
