@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cmp::{self, Ordering};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash::{self, Hash};
 use std::io::{Cursor, Write};
@@ -13,8 +13,7 @@ use anyhow::Result;
 use chrono::offset::{Local, TimeZone};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
-use image::Rgb;
-use sixel_image::{Pixel, SixelColor, SixelImage};
+use sixel_image::SixelImage;
 use termion::color;
 use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
@@ -27,7 +26,7 @@ use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::core::Aparte;
 use crate::i18n;
-use crate::image::uniform_quantization;
+use crate::image::convert_to_sixel;
 use crate::terminus::{
     self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, Screen, View,
@@ -626,44 +625,9 @@ impl MessageView {
         log::debug!("Guessed image format: {:?}", image_reader.format());
         let image = image_reader.decode()?;
         let image = image.resize_to_fill(300, 300, image::imageops::FilterType::CatmullRom);
-        let rgb8 = image.to_rgb8();
 
         // Build registers
-        let pixels: Vec<Rgb<u8>> = uniform_quantization(rgb8.pixels().cloned().collect());
-        let palette: HashSet<Rgb<u8>> = pixels.iter().cloned().collect();
-        assert!(palette.len() < u16::MAX as usize);
-        let color_registers: BTreeMap<u16, SixelColor> = palette
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(index, pixel)| {
-                (
-                    index as u16,
-                    SixelColor::Rgb(pixel.0[0], pixel.0[1], pixel.0[2]),
-                )
-            })
-            .collect();
-        let palette: HashMap<Rgb<u8>, u16> = palette
-            .into_iter()
-            .enumerate()
-            .map(|(index, pixel)| (pixel, index as u16))
-            .collect();
-
-        let sixel_pixels: Vec<Vec<Pixel>> = pixels
-            .iter()
-            .map(|pixel| Pixel {
-                on: true,
-                color: *palette.get(pixel).unwrap(),
-            })
-            .collect::<Vec<_>>()
-            .chunks(image.width() as usize)
-            .map(|line| line.iter().cloned().collect::<Vec<Pixel>>())
-            .collect();
-
-        Ok(SixelImage {
-            color_registers,
-            pixels: sixel_pixels,
-        })
+        convert_to_sixel(image)
     }
 
     fn format_log(message: &LogMessage, max_width: Option<u16>) -> Vec<String> {
