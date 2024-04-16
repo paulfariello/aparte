@@ -33,8 +33,6 @@ use crate::terminus::{
     RequestedDimensions, Screen, View,
 };
 
-const LOGO: &[u8] = include_bytes!("aparte.six");
-
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
     pub id: String,
@@ -499,7 +497,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
                 Direction::Outgoing => match message.type_ {
                     XmppMessageType::Chat => {
                         let mut xmpp_message = xmpp_parsers::message::Message::new(Some(
-                            Jid::Bare(message.to.clone()),
+                            Jid::from(message.to.clone()),
                         ));
                         xmpp_message.id = Some(message.id.clone());
                         xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
@@ -513,7 +511,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
                     }
                     XmppMessageType::Channel => {
                         let mut xmpp_message = xmpp_parsers::message::Message::new(Some(
-                            Jid::Bare(message.to.clone()),
+                            Jid::from(message.to.clone()),
                         ));
                         xmpp_message.id = Some(message.id.clone());
                         xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
@@ -688,9 +686,9 @@ impl MessageView {
 
     fn format_header(message: &VersionedXmppMessage) -> String {
         let author = terminus::clean_str(&match &message.type_ {
-            XmppMessageType::Channel => match &message.from_full {
-                Jid::Full(from) => from.resource().to_string(),
-                Jid::Bare(from) => from.to_string(),
+            XmppMessageType::Channel => match &message.from_full.try_as_full() {
+                Ok(full_jid) => full_jid.resource().to_string(),
+                Err(bare_jid) => bare_jid.to_string(),
             },
             XmppMessageType::Chat => message.from.to_string(),
         });

@@ -370,7 +370,7 @@ impl CryptoEngineTrait for OmemoEngine {
             .collect();
 
         let mut xmpp_message =
-            xmpp_parsers::message::Message::new(Some(Jid::Bare(message.to.clone())));
+            xmpp_parsers::message::Message::new(Some(Jid::from(message.to.clone())));
         xmpp_message.id = Some(message.id.clone());
         xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
         xmpp_message.bodies.insert(
@@ -632,7 +632,7 @@ impl OmemoMod {
 
         let signal_storage = self
             .signal_stores
-            .get_mut(&account)
+            .get_mut(account)
             .context("Missing signal store")?;
 
         // XEP 0384 4.1 The Device ID is a randomly generated integer between 1 and 2^31 - 1.
@@ -699,7 +699,7 @@ impl OmemoMod {
     ) -> Result<()> {
         let signal_store = self
             .signal_stores
-            .get(&account)
+            .get(account)
             .ok_or(anyhow!("OMEMO not configured for {account}"))?;
 
         let identities = match jid {
@@ -1098,7 +1098,7 @@ impl OmemoMod {
             items: vec![],
         };
         let pubsub = pubsub::PubSub::Items(items);
-        Iq::from_get(id, pubsub).with_to(Jid::Bare(contact.clone()))
+        Iq::from_get(id, pubsub).with_to(Jid::from(contact.clone()))
     }
 
     fn set_devices_iq(jid: &BareJid, devices: legacy_omemo::DeviceList) -> Iq {
@@ -1117,7 +1117,7 @@ impl OmemoMod {
             },
             publish_options: None,
         };
-        Iq::from_set(id, pubsub).with_to(Jid::Bare(jid.clone()))
+        Iq::from_set(id, pubsub).with_to(Jid::from(jid.clone()))
     }
 
     fn subscribe_to_device_list_iq(contact: &BareJid, subscriber: &BareJid) -> Iq {
@@ -1125,11 +1125,11 @@ impl OmemoMod {
         let pubsub = pubsub::PubSub::Subscribe {
             subscribe: Some(pubsub::pubsub::Subscribe {
                 node: Some(pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap()),
-                jid: Jid::Bare(subscriber.clone()),
+                jid: Jid::from(subscriber.clone()),
             }),
             options: None,
         };
-        Iq::from_set(id, pubsub).with_to(Jid::Bare(contact.clone()))
+        Iq::from_set(id, pubsub).with_to(Jid::from(contact.clone()))
     }
 
     fn get_bundle_iq(contact: &BareJid, device_id: u32) -> Iq {
@@ -1143,7 +1143,7 @@ impl OmemoMod {
             items: vec![],
         };
         let pubsub = pubsub::PubSub::Items(items);
-        Iq::from_get(id, pubsub).with_to(Jid::Bare(contact.clone()))
+        Iq::from_get(id, pubsub).with_to(Jid::from(contact.clone()))
     }
 
     fn publish_bundle_iq(
@@ -1196,7 +1196,7 @@ impl OmemoMod {
             },
             publish_options: None,
         };
-        Iq::from_set(id, pubsub).with_to(Jid::Bare(jid.clone()))
+        Iq::from_set(id, pubsub).with_to(Jid::from(jid.clone()))
     }
 }
 

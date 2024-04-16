@@ -8,7 +8,7 @@ use std::fmt;
 use anyhow::Result;
 use uuid::Uuid;
 use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::{ns, presence, roster, BareJid, Jid};
+use xmpp_parsers::{ns, presence, roster, BareJid};
 
 use crate::account::Account;
 use crate::contact;
@@ -111,10 +111,7 @@ impl ModTrait for ContactMod {
             }
             Event::Presence(account, presence) => {
                 if let Some(from) = &presence.from {
-                    let jid = match from {
-                        Jid::Bare(jid) => jid.clone(),
-                        Jid::Full(jid) => jid.to_bare(),
-                    };
+                    let jid = from.clone().into_bare();
                     let index = ContactIndex {
                         account: account.clone(),
                         jid,

@@ -151,7 +151,7 @@ impl ModTrait for ConversationMod {
                 self.conversations.insert(index, conversation);
             }
             Event::Presence(account, presence) => {
-                if let Some(Jid::Full(from)) = &presence.from {
+                if let Some(Ok(from)) = &presence.from.clone().map(Jid::try_into_full) {
                     let index = ConversationIndex {
                         account: account.clone(),
                         jid: from.to_bare(),

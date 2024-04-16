@@ -91,7 +91,7 @@ impl Query {
         let id = Uuid::new_v4().hyphenated().to_string();
         (
             queryid,
-            Iq::from_set(id, query).with_to(Jid::Bare(self.jid.clone())),
+            Iq::from_set(id, query).with_to(Jid::from(self.jid.clone())),
         )
     }
 }

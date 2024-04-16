@@ -514,7 +514,7 @@ Examples:
                 }
             }).filter_map(|conversation| {
                 if let Some(Conversation::Channel(channel)) = conversation {
-                    Some(channel.jid.into_inner())
+                    Some(channel.jid.to_string())
                 } else {
                     None
                 }
@@ -619,8 +619,8 @@ Example:
                 match bookmarks.get_by_name(&muc) {
                     Some(bookmark) => {
                         match bookmark.nick {
-                            Some(nick) => Jid::Full(bookmark.jid.with_resource_str(&nick).context("Invalid nick")?),
-                            None => Jid::Bare(bookmark.jid.clone()),
+                            Some(nick) => Jid::from(bookmark.jid.with_resource_str(&nick).context("Invalid nick")?),
+                            None => Jid::from(bookmark.jid.clone()),
                         }
                     },
                     None => Jid::from_str(&muc)?
@@ -1119,15 +1119,16 @@ impl Aparte {
     }
 
     pub fn connect(&mut self, connection_info: &ConnectionInfo, password: Password) {
-        let account: Account = match Jid::from_str(&connection_info.jid) {
-            Ok(Jid::Full(jid)) => jid,
-            Ok(Jid::Bare(jid)) => {
+        let account: Account = match Jid::from_str(&connection_info.jid).map(Jid::try_into_full) {
+            Ok(Ok(full_jid)) => full_jid,
+            Ok(Err(bare_jid)) => {
                 let rand_string: String = rand::thread_rng()
                     .sample_iter(&rand::distributions::Alphanumeric)
                     .take(5)
                     .map(char::from)
                     .collect();
-                jid.with_resource_str(&format!("aparte_{rand_string}"))
+                bare_jid
+                    .with_resource_str(&format!("aparte_{rand_string}"))
                     .unwrap()
             }
             Err(err) => {
@@ -1322,17 +1323,17 @@ impl Aparte {
                 channel,
                 user_request,
             } => {
-                let to = match channel.clone() {
-                    Jid::Full(jid) => jid,
-                    Jid::Bare(jid) => {
+                let to = match channel.try_as_full() {
+                    Ok(full_jid) => full_jid.clone(),
+                    Err(bare_jid) => {
                         let node = account.node().clone().unwrap();
-                        jid.with_resource_str(&node.to_string()).unwrap()
+                        bare_jid.with_resource_str(&node.to_string()).unwrap()
                     }
                 };
                 let from: Jid = account.clone().into();
 
                 let mut presence = Presence::new(PresenceType::None);
-                presence = presence.with_to(Jid::Full(to.clone()));
+                presence = presence.with_to(Jid::from(to.clone()));
                 presence = presence.with_from(from);
                 presence.add_payload(Muc::new());
                 self.send(&account, presence);

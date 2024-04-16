@@ -296,7 +296,7 @@ mod bookmarks_v1 {
         let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS))),
-                jid: Jid::Full(account.clone()),
+                jid: Jid::from(account.clone()),
             }),
             options: None,
         };
@@ -536,7 +536,7 @@ mod bookmarks_v2 {
     fn delete_iq(conference: BareJid) -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
         let item = Item {
-            id: Some(ItemId(conference.into_inner())),
+            id: Some(ItemId(conference.to_string())),
             payload: None,
             publisher: None,
         };
@@ -586,7 +586,7 @@ mod bookmarks_v2 {
         let pubsub = PubSub::Subscribe {
             subscribe: Some(pubsub::Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS2))),
-                jid: Jid::Full(account.clone()),
+                jid: Jid::from(account.clone()),
             }),
             options: None,
         };
@@ -804,8 +804,8 @@ impl BookmarksMod {
             aparte.schedule(Event::Bookmark(account.clone(), bookmark.clone()));
             if bookmark.autojoin {
                 let jid = match &bookmark.nick {
-                    Some(nick) => Jid::Full(bookmark.jid.clone().with_resource_str(&nick).unwrap()), // TODO avoid unwrap
-                    None => Jid::Bare(bookmark.jid.clone()),
+                    Some(nick) => Jid::from(bookmark.jid.clone().with_resource_str(&nick).unwrap()), // TODO avoid unwrap
+                    None => Jid::from(bookmark.jid.clone()),
                 };
                 log::info!("Autojoin {}", jid.to_string());
                 aparte.schedule(Event::Join {
