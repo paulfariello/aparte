@@ -624,9 +624,9 @@ impl MessageView {
         let image_reader = ImageReader::new(Cursor::new(raw_image)).with_guessed_format()?;
         log::debug!("Guessed image format: {:?}", image_reader.format());
         let image = image_reader.decode()?;
-        let image = image.resize_to_fill(300, 300, image::imageops::FilterType::CatmullRom);
+        let image = image.resize_to_fill(300, 300, image::imageops::FilterType::Nearest);
 
-        // Build registers
+        log::debug!("Convert {} to oob", url);
         convert_to_sixel(image)
     }
 
