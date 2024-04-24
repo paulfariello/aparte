@@ -156,12 +156,10 @@ where
     fn render(&self, screen: &mut Screen<W>) {
         log::debug!("rendering {}", std::any::type_name::<Self>(),);
         if self.dirty.get() {
-            clear_screen(self.dimensions.as_ref().unwrap(), screen)
+            clear_screen(self.dimensions.as_ref().unwrap(), screen);
         }
         if let Some(child) = self.get_current() {
-            if self.dirty.get() || child.is_dirty() {
-                child.render(screen);
-            }
+            child.render(screen);
         }
         self.dirty.set(false);
     }

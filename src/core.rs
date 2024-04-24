@@ -158,7 +158,7 @@ pub enum Event {
     },
     Subject(Account, Jid, HashMap<String, String>),
     Omemo(mods::omemo::OmemoEvent),
-    UIRender,
+    UIRender(bool),
 }
 
 pub enum Mod {

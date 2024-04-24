@@ -24,7 +24,7 @@ use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
-use crate::core::Aparte;
+use crate::core::{Aparte, AparteAsync, Event};
 use crate::i18n;
 use crate::image::convert_to_sixel;
 use crate::terminus::{
@@ -562,8 +562,8 @@ impl Hash for MessageView {
     }
 }
 
-impl From<Message> for MessageView {
-    fn from(message: Message) -> Self {
+impl MessageView {
+    pub fn new(aparte: &mut AparteAsync, message: Message) -> Self {
         let image = match &message {
             Message::Xmpp(message) => message
                 .history
@@ -580,6 +580,7 @@ impl From<Message> for MessageView {
                             Aparte::spawn({
                                 let url = oob.url.clone();
                                 let image = Arc::clone(&image);
+                                let mut aparte = aparte.clone();
                                 async move {
                                     log::debug!("Loading OOB: {}", url);
                                     match Self::load_oob(&url).await {
@@ -587,6 +588,7 @@ impl From<Message> for MessageView {
                                             log::debug!("Loaded OOB from {}", url);
                                             let mut image = image.write().unwrap();
                                             *image = Some(sixel);
+                                            aparte.schedule(Event::UIRender(false));
                                         }
                                         Err(err) => log::error!("{}", err),
                                     }
@@ -605,9 +607,6 @@ impl From<Message> for MessageView {
             image,
         }
     }
-}
-
-impl MessageView {
     async fn load_oob(url: &str) -> Result<SixelImage> {
         let client = reqwest::Client::new();
         let response = client
@@ -851,6 +850,8 @@ impl MessageView {
             unreachable!()
         };
         let dimensions = self.dimensions.as_ref().unwrap();
+
+        terminus::clear_screen(dimensions, screen);
 
         let header = Self::format_header(message);
 

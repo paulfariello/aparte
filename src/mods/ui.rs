@@ -735,12 +735,13 @@ impl UIMod {
         }
     }
 
-    fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
+    fn add_conversation(&mut self, aparte: &mut Aparte, conversation: Conversation) {
         let scheduler = self.get_scheduler();
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event(
+                let chatwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event({
+                    let mut aparte = aparte.proxy();
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -748,17 +749,19 @@ impl UIMod {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == chat_for_event.contact {
-                                            view.insert(MessageView::from(Message::Xmpp(
-                                                message.clone(),
-                                            )));
+                                            view.insert(MessageView::new(
+                                                &mut aparte,
+                                                Message::Xmpp(message.clone()),
+                                            ));
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == chat_for_event.contact {
-                                            view.insert(MessageView::from(Message::Xmpp(
-                                                message.clone(),
-                                            )));
+                                            view.insert(MessageView::new(
+                                                &mut aparte,
+                                                Message::Xmpp(message.clone()),
+                                            ));
                                         }
                                     }
                                 }
@@ -779,8 +782,8 @@ impl UIMod {
                             }
                             _ => {}
                         }
-                    },
-                );
+                    }
+                });
 
                 self.add_window(chat.contact.to_string(), Box::new(chatwin));
                 self.conversations
@@ -795,7 +798,8 @@ impl UIMod {
                     });
 
                 let channel_for_event = channel.clone();
-                let chanwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event(
+                let chanwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event({
+                    let mut aparte = aparte.proxy();
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -803,17 +807,19 @@ impl UIMod {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == channel_for_event.jid {
-                                            view.insert(MessageView::from(Message::Xmpp(
-                                                message.clone(),
-                                            )));
+                                            view.insert(MessageView::new(
+                                                &mut aparte,
+                                                Message::Xmpp(message.clone()),
+                                            ));
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == channel_for_event.jid {
-                                            view.insert(MessageView::from(Message::Xmpp(
-                                                message.clone(),
-                                            )));
+                                            view.insert(MessageView::new(
+                                                &mut aparte,
+                                                Message::Xmpp(message.clone()),
+                                            ));
                                         }
                                     }
                                 }
@@ -834,8 +840,8 @@ impl UIMod {
                             }
                             _ => {}
                         }
-                    },
-                );
+                    }
+                });
                 layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
@@ -914,7 +920,7 @@ impl UIMod {
 }
 
 impl ModTrait for UIMod {
-    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
+    fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         vprint!(&mut self.screen, "{}", termion::clear::All);
 
         let (width, height) = termion::terminal_size().unwrap();
@@ -940,17 +946,23 @@ impl ModTrait for UIMod {
                     width: LayoutParam::MatchParent,
                     height: LayoutParam::MatchParent,
                 })
-                .with_event(|view, event| match event {
-                    UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                        view.insert(MessageView::from(Message::Log(message.clone())));
+                .with_event({
+                    let mut aparte = aparte.proxy();
+                    move |view, event| match event {
+                        UIEvent::Core(Event::Message(_, Message::Log(message))) => {
+                            view.insert(MessageView::new(
+                                &mut aparte,
+                                Message::Log(message.clone()),
+                            ));
+                        }
+                        UIEvent::Core(Event::Key(Key::PageUp)) => {
+                            view.page_up();
+                        }
+                        UIEvent::Core(Event::Key(Key::PageDown)) => {
+                            view.page_down();
+                        }
+                        _ => {}
                     }
-                    UIEvent::Core(Event::Key(Key::PageUp)) => {
-                        view.page_up();
-                    }
-                    UIEvent::Core(Event::Key(Key::PageDown)) => {
-                        view.page_down();
-                    }
-                    _ => {}
                 }),
             7,
         );
@@ -1312,9 +1324,9 @@ impl ModTrait for UIMod {
                     important: *important,
                 }));
             }
-            Event::UIRender => {
+            Event::UIRender(force) => {
                 log::debug!("Force render");
-                force_render = true;
+                force_render |= force;
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
@@ -1345,7 +1357,7 @@ impl ModTrait for UIMod {
                     let mut aparte = aparte.proxy();
                     async move {
                         thread::sleep(Duration::new(0, UI_DEBOUNCE_NS));
-                        aparte.schedule(Event::UIRender)
+                        aparte.schedule(Event::UIRender(true))
                     }
                 })
             }
