@@ -101,68 +101,75 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
     }
 
     fn render(&self, screen: &mut Screen<W>) {
-        log::debug!(
-            "rendering {} at {:?}",
-            std::any::type_name::<Self>(),
-            self.dimensions
-        );
-        save_cursor!(screen);
-        let dimensions = self.dimensions.as_ref().unwrap();
+        if self.dirty.replace(false) {
+            log::debug!(
+                "rendering {} at {:?}",
+                std::any::type_name::<Self>(),
+                self.dimensions
+            );
+            save_cursor!(screen);
+            let dimensions = self.dimensions.as_ref().unwrap();
 
-        goto!(screen, dimensions.left, dimensions.top);
-        vprint!(
-            screen,
-            "{}{}{}",
-            self.color.bg,
-            self.color.fg,
-            termion::style::Bold,
-        );
+            goto!(screen, dimensions.left, dimensions.top);
+            vprint!(
+                screen,
+                "{}{}{}",
+                self.color.bg,
+                self.color.fg,
+                termion::style::Bold,
+            );
 
-        vprint!(screen, "{}", " ".repeat(dimensions.width.into()));
+            vprint!(screen, "{}", " ".repeat(dimensions.width.into()));
 
-        goto!(screen, dimensions.left, dimensions.top);
+            goto!(screen, dimensions.left, dimensions.top);
 
-        if let Some(name) = &self.name {
-            let clean_name =
-                terminus::term_string_visible_truncate(name, dimensions.width.into(), Some("…"));
-            vprint!(screen, "{}", clean_name);
+            if let Some(name) = &self.name {
+                let clean_name = terminus::term_string_visible_truncate(
+                    name,
+                    dimensions.width.into(),
+                    Some("…"),
+                );
+                vprint!(screen, "{}", clean_name);
 
-            let remaining = dimensions.width
-                - terminus::term_string_visible_len(&clean_name) as u16
-                - " – ".len() as u16;
-            if remaining > 0 {
-                let subjects = self.subjects.get(name).unwrap();
-                if !subjects.is_empty() {
-                    if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
-                        let clean_subject = terminus::term_string_visible_truncate(
-                            subject,
-                            remaining.into(),
-                            Some("…"),
-                        );
-                        vprint!(screen, " — {}", clean_subject);
+                let remaining = dimensions.width
+                    - terminus::term_string_visible_len(&clean_name) as u16
+                    - " – ".len() as u16;
+                if remaining > 0 {
+                    let subjects = self.subjects.get(name).unwrap();
+                    if !subjects.is_empty() {
+                        if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
+                            let clean_subject = terminus::term_string_visible_truncate(
+                                subject,
+                                remaining.into(),
+                                Some("…"),
+                            );
+                            vprint!(screen, " — {}", clean_subject);
+                        }
                     }
                 }
             }
+
+            vprint!(
+                screen,
+                "{}{}{}",
+                color::Bg(color::Reset),
+                color::Fg(color::Reset),
+                termion::style::NoBold
+            );
+
+            restore_cursor!(screen);
         }
-
-        vprint!(
-            screen,
-            "{}{}{}",
-            color::Bg(color::Reset),
-            color::Fg(color::Reset),
-            termion::style::NoBold
-        );
-
-        restore_cursor!(screen);
-        self.dirty.set(false);
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        false
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
     }
 
     fn is_dirty(&self) -> bool {
@@ -253,105 +260,109 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
     }
 
     fn render(&self, screen: &mut Screen<W>) {
-        log::debug!(
-            "rendering {} at {:?}",
-            std::any::type_name::<Self>(),
-            self.dimensions
-        );
-        save_cursor!(screen);
-        let dimensions = self.dimensions.as_ref().unwrap();
+        if self.dirty.replace(false) {
+            log::debug!(
+                "rendering {} at {:?}",
+                std::any::type_name::<Self>(),
+                self.dimensions
+            );
+            save_cursor!(screen);
+            let dimensions = self.dimensions.as_ref().unwrap();
 
-        let mut written = 0;
+            let mut written = 0;
 
-        goto!(screen, dimensions.left, dimensions.top);
-        vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
+            goto!(screen, dimensions.left, dimensions.top);
+            vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
 
-        for _ in 0..dimensions.width {
-            vprint!(screen, " ");
-        }
+            for _ in 0..dimensions.width {
+                vprint!(screen, " ");
+            }
 
-        goto!(screen, dimensions.left, dimensions.top);
-        if let Some(connection) = &self.connection {
-            vprint!(screen, " {}", connection);
-            written += 1 + connection.len();
-        }
+            goto!(screen, dimensions.left, dimensions.top);
+            if let Some(connection) = &self.connection {
+                vprint!(screen, " {}", connection);
+                written += 1 + connection.len();
+            }
 
-        let mut first = true;
-        let mut remaining = self.highlighted.len();
+            let mut first = true;
+            let mut remaining = self.highlighted.len();
 
-        let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
-        sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
+            let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
+            sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
 
-        for (window, state) in sorted {
-            // Keep space for at least ", +X]"
-            let remaining_len = if remaining > 1 {
-                format!("{remaining}").len() + 4
-            } else {
-                0
-            };
+            for (window, state) in sorted {
+                // Keep space for at least ", +X]"
+                let remaining_len = if remaining > 1 {
+                    format!("{remaining}").len() + 4
+                } else {
+                    0
+                };
 
-            if window.len() + written + remaining_len > dimensions.width as usize {
-                if !first {
-                    vprint!(screen, ", +{}", remaining);
+                if window.len() + written + remaining_len > dimensions.width as usize {
+                    if !first {
+                        vprint!(screen, ", +{}", remaining);
+                    }
+                    break;
                 }
-                break;
+
+                if first {
+                    vprint!(screen, " [");
+                    written += 3; // Also count the closing bracket
+                    first = false;
+                } else {
+                    vprint!(screen, ", ");
+                    written += 2;
+                }
+
+                if state.1 > 0 {
+                    vprint!(
+                        screen,
+                        "{}{}{} ({}{}{}, {})",
+                        termion::style::Bold,
+                        window,
+                        termion::style::NoBold,
+                        termion::style::Bold,
+                        state.1,
+                        termion::style::NoBold,
+                        state.0,
+                    );
+                    written += window.len();
+                    written += 5; // " (" + ", " + ")"
+                    written += state.0.to_string().len();
+                    written += state.1.to_string().len();
+                } else {
+                    vprint!(screen, "{} ({})", window, state.0);
+                    written += window.len();
+                    written += 3; // " (" + ")"
+                    written += state.0.to_string().len();
+                }
+                remaining -= 1;
             }
 
-            if first {
-                vprint!(screen, " [");
-                written += 3; // Also count the closing bracket
-                first = false;
-            } else {
-                vprint!(screen, ", ");
-                written += 2;
+            if !first {
+                vprint!(screen, "]");
             }
 
-            if state.1 > 0 {
-                vprint!(
-                    screen,
-                    "{}{}{} ({}{}{}, {})",
-                    termion::style::Bold,
-                    window,
-                    termion::style::NoBold,
-                    termion::style::Bold,
-                    state.1,
-                    termion::style::NoBold,
-                    state.0,
-                );
-                written += window.len();
-                written += 5; // " (" + ", " + ")"
-                written += state.0.to_string().len();
-                written += state.1.to_string().len();
-            } else {
-                vprint!(screen, "{} ({})", window, state.0);
-                written += window.len();
-                written += 3; // " (" + ")"
-                written += state.0.to_string().len();
-            }
-            remaining -= 1;
+            vprint!(
+                screen,
+                "{}{}",
+                color::Bg(color::Reset),
+                color::Fg(color::Reset)
+            );
+
+            restore_cursor!(screen);
         }
-
-        if !first {
-            vprint!(screen, "]");
-        }
-
-        vprint!(
-            screen,
-            "{}{}",
-            color::Bg(color::Reset),
-            color::Fg(color::Reset)
-        );
-
-        restore_cursor!(screen);
-        self.dirty.set(false);
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        false
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
     }
 
     fn is_dirty(&self) -> bool {

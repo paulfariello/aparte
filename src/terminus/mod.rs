@@ -382,18 +382,37 @@ where
     /// Apply the definitive dimension given the top and left position
     ///
     /// dimension are the definitive dimension.
-    /// If a dimension is None, then it can be modified, otherwise the dimension must be considered a hard constraint.
     ///
-    /// Parent has responsability of storing resulting dimension for all its children.
+    /// View has responsability of storing dimension for later rendering if needed.
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
+    /// A view must not decide wether rendering should be avoided inside this function.
+    /// Such decision is made with parent and with the help of is_dirty()
     fn render(&self, screen: &mut Screen<W>);
 
-    /// Tell if the dimension of the view wants to change.
-    fn is_layout_dirty(&self) -> bool;
+    /// Force dirty state on view
+    fn set_dirty(&mut self);
 
     /// If this view requires to be rendered
+    // we could avoid this function if view could decide wether they can avoid rendering on their
+    // own:
+    //  - layout has changed
+    //  - content has changed
+    // but a parent could have changed without impacting layout (FrameLayout is such an example)
+    // then we must have a way to force rendering.
+    //
+    // Other option is to keep is_dirty to tell about layout change and/or content change
+    // and let render be an equivalent of force rendering.
+    //
+    // But then what happens with ScrollWin:
+    //  - 1 child is dirty (content only)
+    //
+    //  - is_dirty() is called on ScrollWin -> return true
+    //  - render() is called on ScrollWin -> render all children
+    //
+    // If 1 child is dirty with content change only, then the layout phase from parent will not set
+    // dirty any other children
     fn is_dirty(&self) -> bool;
 
     /// Handle an event

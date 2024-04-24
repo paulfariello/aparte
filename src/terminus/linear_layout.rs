@@ -6,7 +6,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::rc::Rc;
 
-use crate::terminus::RequestedDimension;
+use crate::terminus::{clear_screen, RequestedDimension};
 
 use super::{
     Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimensions, Screen, View,
@@ -252,6 +252,10 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
         match self.orientation {
             Orientation::Horizontal => self.layout_horizontal(dimensions),
             Orientation::Vertical => self.layout_vertical(dimensions),
@@ -260,35 +264,27 @@ where
 
     fn render(&self, screen: &mut Screen<W>) {
         log::debug!("rendering {}", std::any::type_name::<Self>());
-        for child in self.children.iter() {
-            child.view.render(screen);
+        let was_dirty = self.dirty.replace(false);
+        if was_dirty {
+            clear_screen(self.dimensions.as_ref().unwrap(), screen);
         }
-        self.dirty.set(false);
+
+        for child in self.children.iter() {
+            if was_dirty || child.view.is_dirty() {
+                child.view.render(screen);
+            }
+        }
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        match (self.layouts.width, self.layouts.height) {
-            (_, LayoutParam::WrapContent) | (LayoutParam::WrapContent, _) => {
-                // Nothing else than children can affect layout
-                self.children
-                    .iter()
-                    .any(|child| child.view.is_layout_dirty())
-            }
-            _ => false,
-        }
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
+        self.children
+            .iter_mut()
+            .for_each(|child| child.view.set_dirty());
     }
 
     fn is_dirty(&self) -> bool {
-        match self.dirty.get() {
-            true => true,
-            _ => {
-                let mut dirty = false;
-                for child in self.children.iter() {
-                    dirty |= child.view.is_dirty()
-                }
-                dirty
-            }
-        }
+        self.dirty.get() || self.children.iter().any(|child| child.view.is_dirty())
     }
 
     fn event(&mut self, event: &mut E) {
@@ -563,5 +559,23 @@ mod tests {
             width: 100,
             height: 200,
         });
+    }
+
+    #[test]
+    fn test_set_dirty_to_children() {
+        // Given
+        let mut layout = LinearLayout::<(), File>::new(Orientation::Horizontal);
+
+        // Then
+        let mut first_view = MockView::new();
+        first_view.expect_set_dirty().times(1).return_const(());
+        let mut second_view = MockView::new();
+        second_view.expect_set_dirty().times(1).return_const(());
+
+        // When
+        layout.push(first_view, 1);
+        layout.push(second_view, 2);
+
+        layout.set_dirty();
     }
 }

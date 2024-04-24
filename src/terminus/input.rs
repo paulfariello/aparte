@@ -257,78 +257,78 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
     }
 
     fn render(&self, screen: &mut Screen<W>) {
-        log::debug!(
-            "rendering {} at {:?}",
-            std::any::type_name::<Self>(),
-            self.dimensions
-        );
-        let dimensions = self.dimensions.as_ref().unwrap();
+        if self.dirty.replace(false) {
+            log::debug!(
+                "rendering {} at {:?}",
+                std::any::type_name::<Self>(),
+                self.dimensions
+            );
+            let dimensions = self.dimensions.as_ref().unwrap();
 
-        self.width.set(dimensions.width as usize);
-        match self.password {
-            true => {
-                super::goto!(screen, dimensions.left, dimensions.top);
-                super::vprint!(screen, "password: ");
-                super::flush!(screen);
+            self.width.set(dimensions.width as usize);
+            match self.password {
+                true => {
+                    super::goto!(screen, dimensions.left, dimensions.top);
+                    super::vprint!(screen, "password: ");
+                    super::flush!(screen);
+                }
+                false => {
+                    // Max displayable size is view width less 1 for cursor
+                    let max_size = (dimensions.width - 1) as usize;
 
-                self.dirty.set(false);
-            }
-            false => {
-                // Max displayable size is view width less 1 for cursor
-                let max_size = (dimensions.width - 1) as usize;
-
-                // cursor must always be inside the view
-                if self.cursor < self.view {
-                    if self.cursor < max_size {
-                        self.view.set(0);
-                    } else {
+                    // cursor must always be inside the view
+                    if self.cursor < self.view {
+                        if self.cursor < max_size {
+                            self.view.set(0);
+                        } else {
+                            self.view
+                                .update(&self.cursor - (dimensions.width as usize - 1));
+                        }
+                    } else if self.cursor > &self.view + (dimensions.width as usize - 1) {
                         self.view
                             .update(&self.cursor - (dimensions.width as usize - 1));
                     }
-                } else if self.cursor > &self.view + (dimensions.width as usize - 1) {
-                    self.view
-                        .update(&self.cursor - (dimensions.width as usize - 1));
+                    assert!(self.cursor >= self.view);
+                    assert!(self.cursor <= &self.view + (max_size + 1));
+
+                    let start_index = self.view.index(&self.buf);
+                    let end_index = (&self.view + max_size).index(&self.buf);
+                    let buf = &self.buf[start_index..end_index];
+                    let cursor = &self.cursor - &self.view;
+
+                    if dimensions.left == 1 {
+                        // Use fast erase if possible
+                        super::goto!(screen, dimensions.left + dimensions.width, dimensions.top);
+                        super::vprint!(screen, "{}", "\x1B[1K");
+                        super::goto!(screen, dimensions.left, dimensions.top);
+                        super::vprint!(screen, "{}", buf);
+                    } else {
+                        super::goto!(screen, dimensions.left, dimensions.top);
+                        let padding = dimensions.width - term_string_visible_len(&buf) as u16;
+                        super::vprint!(screen, "{}{: <1$}", buf, padding as usize);
+                    }
+
+                    super::goto!(
+                        screen,
+                        dimensions.left + cursor.get() as u16,
+                        dimensions.top
+                    );
+
+                    super::flush!(screen);
                 }
-                assert!(self.cursor >= self.view);
-                assert!(self.cursor <= &self.view + (max_size + 1));
-
-                let start_index = self.view.index(&self.buf);
-                let end_index = (&self.view + max_size).index(&self.buf);
-                let buf = &self.buf[start_index..end_index];
-                let cursor = &self.cursor - &self.view;
-
-                if dimensions.left == 1 {
-                    // Use fast erase if possible
-                    super::goto!(screen, dimensions.left + dimensions.width, dimensions.top);
-                    super::vprint!(screen, "{}", "\x1B[1K");
-                    super::goto!(screen, dimensions.left, dimensions.top);
-                    super::vprint!(screen, "{}", buf);
-                } else {
-                    super::goto!(screen, dimensions.left, dimensions.top);
-                    let padding = dimensions.width - term_string_visible_len(&buf) as u16;
-                    super::vprint!(screen, "{}{: <1$}", buf, padding as usize);
-                }
-
-                super::goto!(
-                    screen,
-                    dimensions.left + cursor.get() as u16,
-                    dimensions.top
-                );
-
-                super::flush!(screen);
-
-                self.dirty.set(false);
             }
         }
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        // Content can never change Input dimension
-        false
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
     }
 
     fn is_dirty(&self) -> bool {

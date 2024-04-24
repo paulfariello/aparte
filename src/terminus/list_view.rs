@@ -229,72 +229,75 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
     }
 
     fn render(&self, screen: &mut Screen<W>) {
-        log::debug!(
-            "rendering {} at {:?}",
-            std::any::type_name::<Self>(),
-            self.dimensions
-        );
-        super::save_cursor!(screen);
-        let dimensions = self.dimensions.as_ref().unwrap();
+        if self.dirty.replace(false) {
+            log::debug!(
+                "rendering {} at {:?}",
+                std::any::type_name::<Self>(),
+                self.dimensions
+            );
+            super::save_cursor!(screen);
+            let dimensions = self.dimensions.as_ref().unwrap();
 
-        // Clean space
-        for top in dimensions.top..dimensions.top + dimensions.height {
-            super::goto!(screen, dimensions.left, top);
-            super::vprint!(screen, "{: <1$}", "", dimensions.width as usize);
-        }
-
-        // Draw items
-        let mut top = dimensions.top;
-        let usize_width = dimensions.width as usize;
-
-        for (group, items) in &self.items {
-            if top > dimensions.top + dimensions.height {
-                break;
+            // Clean space
+            for top in dimensions.top..dimensions.top + dimensions.height {
+                super::goto!(screen, dimensions.left, top);
+                super::vprint!(screen, "{: <1$}", "", dimensions.width as usize);
             }
 
-            super::goto!(screen, dimensions.left, top);
+            // Draw items
+            let mut top = dimensions.top;
+            let usize_width = dimensions.width as usize;
 
-            if group.is_some() {
-                let mut disp = format!("{}", group.as_ref().unwrap());
-                if term_string_visible_len(&disp) > usize_width {
-                    disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
-                }
-                super::vprint!(screen, "{}", disp);
-                top += 1;
-            }
-
-            let mut items = items.iter().collect::<Vec<&V>>();
-            if let Some(sort) = &self.sort_item {
-                items.sort_by(|a, b| sort(*a, *b));
-            }
-
-            for item in items {
+            for (group, items) in &self.items {
                 if top > dimensions.top + dimensions.height {
                     break;
                 }
 
                 super::goto!(screen, dimensions.left, top);
 
-                let mut disp = match group {
-                    Some(_) => format!("  {item}"),
-                    None => format!("{item}"),
-                };
-                if term_string_visible_len(&disp) > usize_width {
-                    disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
+                if group.is_some() {
+                    let mut disp = format!("{}", group.as_ref().unwrap());
+                    if term_string_visible_len(&disp) > usize_width {
+                        disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
+                    }
+                    super::vprint!(screen, "{}", disp);
+                    top += 1;
                 }
-                super::vprint!(screen, "{}", disp);
 
-                top += 1;
+                let mut items = items.iter().collect::<Vec<&V>>();
+                if let Some(sort) = &self.sort_item {
+                    items.sort_by(|a, b| sort(*a, *b));
+                }
+
+                for item in items {
+                    if top > dimensions.top + dimensions.height {
+                        break;
+                    }
+
+                    super::goto!(screen, dimensions.left, top);
+
+                    let mut disp = match group {
+                        Some(_) => format!("  {item}"),
+                        None => format!("{item}"),
+                    };
+                    if term_string_visible_len(&disp) > usize_width {
+                        disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
+                    }
+                    super::vprint!(screen, "{}", disp);
+
+                    top += 1;
+                }
             }
+
+            super::restore_cursor!(screen);
         }
-
-        super::restore_cursor!(screen);
-
-        self.dirty.set(false);
     }
 
     fn event(&mut self, event: &mut E) {
@@ -305,10 +308,8 @@ where
         }
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        (matches!(self.layouts.width, LayoutParam::WrapContent)
-            || matches!(self.layouts.height, LayoutParam::WrapContent))
-            && self.is_dirty()
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
     }
 
     fn is_dirty(&self) -> bool {

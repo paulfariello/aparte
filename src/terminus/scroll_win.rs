@@ -353,7 +353,10 @@ where
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
 
-        self.dimensions.replace(dimensions.clone());
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
 
         if self.children.is_empty() {
             // Don't bother
@@ -385,6 +388,12 @@ where
             self.dimensions
         );
 
+        let was_dirty = self.dirty.replace(false);
+
+        if was_dirty {
+            super::clear_screen(self.dimensions.as_ref().unwrap(), screen);
+        }
+
         if self.children.is_empty() {
             // Don't bother
             return;
@@ -393,14 +402,14 @@ where
         super::save_cursor!(screen);
 
         for child in self.visible_children() {
-            // child dimension can be unwrapped since it must have been set during the measure
-            // phase
-            child.render(screen);
+            // Render only if view has been set dirty (forced by parent) or if child required
+            // rendering
+            if was_dirty || child.is_dirty() {
+                child.render(screen);
+            }
         }
 
         super::restore_cursor!(screen);
-
-        self.dirty.set(false);
     }
 
     fn event(&mut self, event: &mut E) {
@@ -411,14 +420,18 @@ where
         }
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        (matches!(self.layouts.width, LayoutParam::WrapContent)
-            || matches!(self.layouts.height, LayoutParam::WrapContent))
-            && self.is_dirty()
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
+        std::mem::replace(&mut self.children, BTreeSet::new())
+            .into_iter()
+            .for_each(|mut child| {
+                child.set_dirty();
+                self.children.insert(child);
+            });
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty.get()
+        self.visible_children().any(|child| child.is_dirty())
     }
 }
 
@@ -430,10 +443,11 @@ mod tests {
     use super::*;
 
     #[derive(Debug, Clone, Default)]
-    struct MockView {
-        ord: usize,
-        height: u16,
-        dimensions: Option<Dimensions>,
+    pub struct MockView {
+        pub ord: usize,
+        pub height: u16,
+        pub dimensions: Option<Dimensions>,
+        pub dirty: bool,
     }
 
     impl PartialOrd for MockView {
@@ -481,12 +495,12 @@ mod tests {
             unreachable!()
         }
 
-        fn is_layout_dirty(&self) -> bool {
-            unreachable!()
+        fn set_dirty(&mut self) {
+            self.dirty = true;
         }
 
         fn is_dirty(&self) -> bool {
-            unreachable!()
+            self.dirty
         }
 
         fn event(&mut self, _event: &mut E) {
@@ -836,5 +850,107 @@ mod tests {
             visible_children[2].dimensions.as_ref().map(|d| d.height),
             Some(10)
         );
+    }
+
+    #[test]
+    fn test_set_dirty_to_children() {
+        // Given
+        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+
+        let first_view = MockView {
+            ord: 0,
+            height: 10,
+            ..Default::default()
+        };
+        let second_view = MockView {
+            ord: 1,
+            height: 10,
+            ..Default::default()
+        };
+        scroll_win.insert(first_view);
+        scroll_win.insert(second_view);
+
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 30,
+            top: 1,
+            left: 1,
+        });
+
+        // When
+        scroll_win.set_dirty();
+
+        // Then
+        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        assert_eq!(visible_children[0].dirty, true);
+        assert_eq!(visible_children[1].dirty, true);
+    }
+
+    #[test]
+    fn test_is_dirty_if_at_least_one_visible_child_is_dirty() {
+        // Given
+        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+
+        let first_view = MockView {
+            ord: 0,
+            height: 10,
+            dirty: true,
+            ..Default::default()
+        };
+        let second_view = MockView {
+            ord: 1,
+            height: 10,
+            dirty: false,
+            ..Default::default()
+        };
+        scroll_win.insert(first_view);
+        scroll_win.insert(second_view);
+
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 30,
+            top: 1,
+            left: 1,
+        });
+
+        // When
+        let dirty = scroll_win.is_dirty();
+
+        // Then
+        assert_eq!(dirty, true);
+    }
+
+    #[test]
+    fn test_is_not_dirty_if_no_visible_child_is_dirty() {
+        // Given
+        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+
+        let first_view = MockView {
+            ord: 0,
+            height: 10,
+            dirty: true,
+            ..Default::default()
+        };
+        let second_view = MockView {
+            ord: 1,
+            height: 10,
+            dirty: false,
+            ..Default::default()
+        };
+        scroll_win.insert(first_view);
+        scroll_win.insert(second_view);
+
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 10,
+            top: 1,
+            left: 1,
+        });
+
+        // When
+        let dirty = scroll_win.is_dirty();
+
+        // Then
+        assert_eq!(dirty, false);
     }
 }

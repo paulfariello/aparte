@@ -7,6 +7,7 @@ use std::convert::TryFrom;
 use std::hash::{self, Hash};
 use std::io::{Cursor, Write};
 use std::os::fd::AsFd;
+use std::sync::atomic::{self, AtomicBool};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
@@ -534,6 +535,7 @@ pub struct MessageView {
     pub message: Message,
     dimensions: Option<Dimensions>,
     image: Arc<RwLock<Option<SixelImage>>>,
+    dirty: Arc<AtomicBool>,
 }
 
 impl Eq for MessageView {}
@@ -564,6 +566,7 @@ impl Hash for MessageView {
 
 impl MessageView {
     pub fn new(aparte: &mut AparteAsync, message: Message) -> Self {
+        let dirty = Arc::new(AtomicBool::new(true));
         let image = match &message {
             Message::Xmpp(message) => message
                 .history
@@ -581,6 +584,7 @@ impl MessageView {
                                 let url = oob.url.clone();
                                 let image = Arc::clone(&image);
                                 let mut aparte = aparte.clone();
+                                let dirty = Arc::clone(&dirty);
                                 async move {
                                     log::debug!("Loading OOB: {}", url);
                                     match Self::load_oob(&url).await {
@@ -588,6 +592,7 @@ impl MessageView {
                                             log::debug!("Loaded OOB from {}", url);
                                             let mut image = image.write().unwrap();
                                             *image = Some(sixel);
+                                            dirty.store(true, atomic::Ordering::Relaxed);
                                             aparte.schedule(Event::UIRender(false));
                                         }
                                         Err(err) => log::error!("{}", err),
@@ -605,6 +610,7 @@ impl MessageView {
             message,
             dimensions: None,
             image,
+            dirty,
         }
     }
     async fn load_oob(url: &str) -> Result<SixelImage> {
@@ -917,7 +923,11 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
+
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.store(true, atomic::Ordering::Relaxed);
+            self.dimensions.replace(dimensions.clone());
+        }
     }
 
     fn render(&self, screen: &mut Screen<W>) {
@@ -926,21 +936,23 @@ where
             std::any::type_name::<Self>(),
             self.dimensions
         );
-        if self.image.read().unwrap().is_some() {
-            self.render_image(screen)
-        } else {
-            self.render_text(screen)
+        if self.dirty.swap(false, atomic::Ordering::Relaxed) {
+            if self.image.read().unwrap().is_some() {
+                self.render_image(screen)
+            } else {
+                self.render_text(screen)
+            }
         }
     }
 
     fn event(&mut self, _event: &mut E) {}
 
-    fn is_layout_dirty(&self) -> bool {
-        <MessageView as View<E, W>>::is_dirty(self)
+    fn set_dirty(&mut self) {
+        self.dirty.store(true, atomic::Ordering::Relaxed);
     }
 
     fn is_dirty(&self) -> bool {
-        false
+        self.dirty.load(atomic::Ordering::Relaxed)
     }
 }
 
@@ -994,6 +1006,7 @@ mod tests {
                 }),
                 dimensions: None,
                 image: Arc::new(RwLock::new(None)),
+                dirty: Arc::new(AtomicBool::new(true)),
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )

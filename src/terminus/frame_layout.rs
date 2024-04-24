@@ -63,8 +63,10 @@ where
     }
 
     pub fn set_current(&mut self, key: K) {
-        self.current = Some(key);
-        self.dirty.set(true);
+        if self.current.as_ref() != Some(&key) {
+            self.current = Some(key);
+            self.set_dirty();
+        }
     }
 
     pub fn get_current_mut<'a>(&'a mut self) -> Option<&'a mut Box<dyn View<E, W>>> {
@@ -147,7 +149,10 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        self.dimensions.replace(dimensions.clone());
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dirty.set(true);
+            self.dimensions.replace(dimensions.clone());
+        }
         if let Some(child) = self.get_current_mut() {
             child.layout(dimensions)
         }
@@ -155,25 +160,23 @@ where
 
     fn render(&self, screen: &mut Screen<W>) {
         log::debug!("rendering {}", std::any::type_name::<Self>(),);
-        if self.dirty.get() {
+        let was_dirty = self.dirty.replace(false);
+        if was_dirty {
             clear_screen(self.dimensions.as_ref().unwrap(), screen);
         }
+
         if let Some(child) = self.get_current() {
-            child.render(screen);
+            if was_dirty || child.is_dirty() {
+                child.render(screen);
+            }
         }
-        self.dirty.set(false);
     }
 
-    fn is_layout_dirty(&self) -> bool {
-        match (self.layouts.width, self.layouts.height) {
-            (_, LayoutParam::WrapContent) | (LayoutParam::WrapContent, _) => {
-                self.dirty.get()
-                    || self
-                        .get_current()
-                        .map_or(false, |child| child.is_layout_dirty())
-            }
-            _ => false,
-        }
+    fn set_dirty(&mut self) {
+        self.dirty.set(true);
+        self.get_current_mut()
+            .iter_mut()
+            .for_each(|current| current.set_dirty());
     }
 
     fn is_dirty(&self) -> bool {
@@ -190,5 +193,54 @@ where
                 child.event(event);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+    use test_log::test;
+
+    use super::*;
+    use crate::terminus::MockView;
+
+    #[test]
+    fn test_set_dirty_to_current_child() {
+        // Given
+        let mut layout = FrameLayout::<(), File, u8>::new();
+
+        // Then
+        let first_view = MockView::new();
+        let mut second_view = MockView::new();
+        second_view.expect_set_dirty().times(2).return_const(());
+
+        // When
+        layout.insert(1, first_view);
+        layout.insert(2, second_view);
+
+        // Set current triggers dirty once
+        layout.set_current(2);
+
+        // Set dirty triggers dirty once again
+        layout.set_dirty();
+    }
+
+    #[test]
+    fn test_set_child_dirty_when_changing_current() {
+        // Given
+        let mut layout = FrameLayout::<(), File, u8>::new();
+
+        // Then
+        let first_view = MockView::new();
+        let mut second_view = MockView::new();
+        second_view.expect_set_dirty().times(1).return_const(());
+
+        // When
+        layout.insert(1, first_view);
+        layout.insert(2, second_view);
+
+        layout.set_current(2);
+        // Not changing current shouldn't trigger dirty
+        layout.set_current(2);
     }
 }
