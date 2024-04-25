@@ -3190,6 +3190,7 @@ dependencies = [
 [[package]]
 name = "termion"
 version = "3.0.0"
+source = "git+https://gitlab.redox-os.org/redox-os/termion.git?rev=1ce26d61#1ce26d61fbddb63dc72132fe5a0c2584db485e17"
 dependencies = [
  "libc",
  "libredox 0.0.2",
