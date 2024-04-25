@@ -75,11 +75,6 @@ where
         if self.children.insert(item) && stick_to_bottom {
             self.bottom_visible_child_index += 1;
         }
-
-        // We don't care about rendered buffer, we avoid computation here at cost of false positive
-        // (set dirty while in fact it shouldn't)
-        // XXX We should care
-        self.dirty.set(true);
     }
 
     /// PageUp the window, return true if top is reached
@@ -102,8 +97,6 @@ where
             // don't bother to page up
             return true;
         }
-
-        self.dirty.set(true);
 
         // Look for children index that correspond to a page up
         let mut remaining_height = dimensions.height;
@@ -151,8 +144,6 @@ where
             // don't bother to page down
             return true;
         }
-
-        self.dirty.set(true);
 
         // Look for children index that correspond to a page down
 

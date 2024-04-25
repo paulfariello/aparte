@@ -60,6 +60,7 @@ where
             view: Box::new(view),
             weight,
         });
+        self.dirty.set(true);
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self

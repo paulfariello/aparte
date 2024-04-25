@@ -213,6 +213,7 @@ pub fn clear_screen<W>(dimensions: &Dimensions, screen: &mut Screen<W>)
 where
     W: AsFd + Write,
 {
+    log::debug!("Clear screen: {:?}", dimensions);
     if dimensions.left == 1 {
         for top in dimensions.top..dimensions.top + dimensions.height {
             // Use fast erase if possible
