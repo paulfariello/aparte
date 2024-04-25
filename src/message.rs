@@ -959,7 +959,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::io::Stdout;
+    use std::fs::File;
     use std::rc::Rc;
     use std::time::UNIX_EPOCH;
 
@@ -975,7 +975,7 @@ mod tests {
 
     struct MockWriter {
         stdout: Rc<RefCell<Vec<u8>>>,
-        fd: Stdout,
+        inner: File,
     }
 
     impl std::io::Write for MockWriter {
@@ -991,7 +991,7 @@ mod tests {
 
     impl AsFd for MockWriter {
         fn as_fd<'a>(&'a self) -> std::os::unix::prelude::BorrowedFd<'a> {
-            self.fd.as_fd()
+            self.inner.as_fd()
         }
     }
 
@@ -1016,7 +1016,7 @@ mod tests {
         let stdout = Rc::new(RefCell::new(Vec::new()));
         let mock_writer = MockWriter {
             stdout: stdout.clone(),
-            fd: std::io::stdout(),
+            inner: File::open("/dev/ptmx").unwrap(),
         };
         let mut screen = BufferedScreen::new(
             mock_writer
