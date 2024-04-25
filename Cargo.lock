@@ -1588,6 +1588,7 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 [[package]]
 name = "jid"
 version = "0.10.0"
+source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
 dependencies = [
  "memchr",
  "minidom",
@@ -1832,6 +1833,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 [[package]]
 name = "minidom"
 version = "0.15.2"
+source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
 dependencies = [
  "rxml",
 ]
@@ -2787,6 +2789,7 @@ checksum = "e86697c916019a8588c99b5fac3cead74ec0b4b819707a682fd4d23fa0ce1ba1"
 [[package]]
 name = "sasl"
 version = "0.5.1"
+source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
 dependencies = [
  "base64 0.21.7",
  "getrandom 0.2.14",
@@ -3399,6 +3402,7 @@ dependencies = [
 [[package]]
 name = "tokio-xmpp"
 version = "3.5.0"
+source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
 dependencies = [
  "bytes 1.6.0",
  "futures",
@@ -4038,6 +4042,7 @@ dependencies = [
 [[package]]
 name = "xmpp-parsers"
 version = "0.20.0"
+source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
 dependencies = [
  "base64 0.21.7",
  "blake2",
