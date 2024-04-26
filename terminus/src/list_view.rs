@@ -19,6 +19,17 @@ use super::{
 type SortItemHandler<V> = Box<dyn Fn(&V, &V) -> cmp::Ordering>;
 type SortGroupHandler<G> = Box<dyn FnMut(&G, &G) -> cmp::Ordering>;
 
+#[derive(Debug)]
+pub struct NonExistentGroup;
+
+impl fmt::Display for NonExistentGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Non-existent group")
+    }
+}
+
+impl std::error::Error for NonExistentGroup {}
+
 pub struct ListView<E, W, G, V>
 where
     G: fmt::Display + Hash + Eq,
@@ -38,7 +49,7 @@ impl<E, W, G, V> Default for ListView<E, W, G, V>
 where
     G: fmt::Display + Hash + Eq,
     V: fmt::Display + Hash + Eq,
- {
+{
     fn default() -> Self {
         Self::new()
     }
@@ -154,9 +165,9 @@ where
         self.dirty.set(true);
     }
 
-    pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), ()> {
+    pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), NonExistentGroup> {
         match self.items.entry(group) {
-            Entry::Vacant(_) => Err(()),
+            Entry::Vacant(_) => Err(NonExistentGroup),
             Entry::Occupied(mut occupied) => {
                 self.dirty
                     .set(self.dirty.get() || occupied.get_mut().remove(&item));
