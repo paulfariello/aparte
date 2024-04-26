@@ -18,6 +18,7 @@ Features
   - [x] Consistent color generation
   - [x] MAM
   - [x] Omemo (no MUC support currently)
+  - [x] Display image with Sixel support
 
 Install
 =======
