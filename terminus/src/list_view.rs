@@ -244,7 +244,7 @@ where
                 std::any::type_name::<Self>(),
                 self.dimensions
             );
-            super::save_cursor!(screen);
+            crate::save_cursor!(screen);
             let dimensions = self.dimensions.as_ref().unwrap();
 
             // Clean space
@@ -298,7 +298,7 @@ where
                 }
             }
 
-            super::restore_cursor!(screen);
+            crate::restore_cursor!(screen);
         }
     }
 

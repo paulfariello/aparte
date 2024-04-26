@@ -8,7 +8,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::rc::Rc;
 
-use crate::terminus::clear_screen;
+use crate::clear_screen;
 
 use super::{
     Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension,
@@ -199,7 +199,7 @@ mod tests {
     use test_log::test;
 
     use super::*;
-    use crate::terminus::MockView;
+    use crate::MockView;
 
     #[test]
     fn test_set_dirty_to_current_child() {

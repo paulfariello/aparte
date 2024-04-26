@@ -1,0 +1,16 @@
+[package]
+name = "terminus"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+linked-hash-map = "^0.5"
+log = "^0.4"
+termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
+unicode-segmentation = "^1.6"
+
+[dev-dependencies]
+mockall = "^0.9"
+test-log = "*"

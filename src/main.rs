@@ -6,9 +6,8 @@
 
 use anyhow::Result;
 use clap::Parser;
+use terminus;
 
-#[macro_use]
-mod terminus;
 mod account;
 mod async_iq;
 mod config;
@@ -20,7 +19,6 @@ mod message;
 mod command;
 mod color;
 mod crypto;
-mod cursor;
 mod i18n;
 mod image;
 mod mods;

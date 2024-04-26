@@ -7,13 +7,13 @@ use std::str::FromStr;
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use terminus::cursor::Cursor;
 use xmpp_parsers::BareJid;
 
 use crate::account::Account;
 use crate::command::Command;
 use crate::conversation::Conversation;
 use crate::core::{Aparte, Event, ModTrait};
-use crate::cursor::Cursor;
 use crate::mods::conversation::ConversationMod;
 use crate::word::Words;
 

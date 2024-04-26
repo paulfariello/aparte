@@ -19,6 +19,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use terminus::cursor::Cursor;
 use termion::color;
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
@@ -32,7 +33,6 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
-use crate::cursor::Cursor;
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::terminus::{
@@ -112,11 +112,11 @@ where
                 std::any::type_name::<Self>(),
                 self.dimensions
             );
-            save_cursor!(screen);
+            terminus::save_cursor!(screen);
             let dimensions = self.dimensions.as_ref().unwrap();
 
-            goto!(screen, dimensions.left, dimensions.top);
-            vprint!(
+            terminus::goto!(screen, dimensions.left, dimensions.top);
+            terminus::vprint!(
                 screen,
                 "{}{}{}",
                 self.color.bg,
@@ -124,9 +124,9 @@ where
                 termion::style::Bold,
             );
 
-            vprint!(screen, "{}", " ".repeat(dimensions.width.into()));
+            terminus::vprint!(screen, "{}", " ".repeat(dimensions.width.into()));
 
-            goto!(screen, dimensions.left, dimensions.top);
+            terminus::goto!(screen, dimensions.left, dimensions.top);
 
             if let Some(name) = &self.name {
                 let clean_name = terminus::term_string_visible_truncate(
@@ -134,7 +134,7 @@ where
                     dimensions.width.into(),
                     Some("…"),
                 );
-                vprint!(screen, "{}", clean_name);
+                terminus::vprint!(screen, "{}", clean_name);
 
                 let remaining = dimensions.width
                     - terminus::term_string_visible_len(&clean_name) as u16
@@ -148,13 +148,13 @@ where
                                 remaining.into(),
                                 Some("…"),
                             );
-                            vprint!(screen, " — {}", clean_subject);
+                            terminus::vprint!(screen, " — {}", clean_subject);
                         }
                     }
                 }
             }
 
-            vprint!(
+            terminus::vprint!(
                 screen,
                 "{}{}{}",
                 color::Bg(color::Reset),
@@ -162,7 +162,7 @@ where
                 termion::style::NoBold
             );
 
-            restore_cursor!(screen);
+            terminus::restore_cursor!(screen);
         }
     }
 
@@ -271,21 +271,21 @@ where
                 std::any::type_name::<Self>(),
                 self.dimensions
             );
-            save_cursor!(screen);
+            terminus::save_cursor!(screen);
             let dimensions = self.dimensions.as_ref().unwrap();
 
             let mut written = 0;
 
-            goto!(screen, dimensions.left, dimensions.top);
-            vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
+            terminus::goto!(screen, dimensions.left, dimensions.top);
+            terminus::vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
 
             for _ in 0..dimensions.width {
-                vprint!(screen, " ");
+                terminus::vprint!(screen, " ");
             }
 
-            goto!(screen, dimensions.left, dimensions.top);
+            terminus::goto!(screen, dimensions.left, dimensions.top);
             if let Some(connection) = &self.connection {
-                vprint!(screen, " {}", connection);
+                terminus::vprint!(screen, " {}", connection);
                 written += 1 + connection.len();
             }
 
@@ -305,22 +305,22 @@ where
 
                 if window.len() + written + remaining_len > dimensions.width as usize {
                     if !first {
-                        vprint!(screen, ", +{}", remaining);
+                        terminus::vprint!(screen, ", +{}", remaining);
                     }
                     break;
                 }
 
                 if first {
-                    vprint!(screen, " [");
+                    terminus::vprint!(screen, " [");
                     written += 3; // Also count the closing bracket
                     first = false;
                 } else {
-                    vprint!(screen, ", ");
+                    terminus::vprint!(screen, ", ");
                     written += 2;
                 }
 
                 if state.1 > 0 {
-                    vprint!(
+                    terminus::vprint!(
                         screen,
                         "{}{}{} ({}{}{}, {})",
                         termion::style::Bold,
@@ -336,7 +336,7 @@ where
                     written += state.0.to_string().len();
                     written += state.1.to_string().len();
                 } else {
-                    vprint!(screen, "{} ({})", window, state.0);
+                    terminus::vprint!(screen, "{} ({})", window, state.0);
                     written += window.len();
                     written += 3; // " (" + ")"
                     written += state.0.to_string().len();
@@ -345,17 +345,17 @@ where
             }
 
             if !first {
-                vprint!(screen, "]");
+                terminus::vprint!(screen, "]");
             }
 
-            vprint!(
+            terminus::vprint!(
                 screen,
                 "{}{}",
                 color::Bg(color::Reset),
                 color::Fg(color::Reset)
             );
 
-            restore_cursor!(screen);
+            terminus::restore_cursor!(screen);
         }
     }
 
@@ -930,7 +930,7 @@ impl UIMod {
 
 impl ModTrait for UIMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        vprint!(&mut self.screen, "{}", termion::clear::All);
+        terminus::vprint!(&mut self.screen, "{}", termion::clear::All);
 
         let (width, height) = termion::terminal_size().unwrap();
         let measure_specs = terminus::MeasureSpecs {
@@ -1326,7 +1326,7 @@ impl ModTrait for UIMod {
                 important,
             } => {
                 if *important && aparte.config.bell {
-                    vprint!(self.screen, "\x07");
+                    terminus::vprint!(self.screen, "\x07");
                 }
                 self.root.event(&mut UIEvent::Core(Event::Notification {
                     conversation: conversation.clone(),
@@ -1357,7 +1357,7 @@ impl ModTrait for UIMod {
             self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
             self.root.layout(&self.dimensions);
             self.root.render(&mut self.screen);
-            flush!(self.screen);
+            terminus::flush!(self.screen);
         } else {
             log::debug!("Debounce rendering");
             if self.debounced == 0 {

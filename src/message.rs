@@ -16,7 +16,7 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
 use sixel_image::SixelImage;
 use termion::color;
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};

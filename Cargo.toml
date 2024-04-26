@@ -1,3 +1,4 @@
+workspace = { members = ["terminus"] }
 [package]
 name = "aparte"
 version = "0.4.0-dev"
@@ -15,43 +16,43 @@ no-cursor-save = []
 strict = []
 
 [dependencies]
-log = "^0.4"
-flexi_logger = "^0.27"
+aes-gcm = "0.10.3"
+anyhow = "^1.0"
+async-trait = "0.1.41" # same as libsignal
 backtrace = "^0.3"
-futures = "^0.3"
-tokio = { version = "^1.10", features = ["full"] }
-tokio-xmpp = { git = "https://gitlab.com/paulfariello/xmpp-rs.git", rev = "ce493e82" } # Correspond to https://gitlab.com/xmpp-rs/xmpp-rs/-/merge_requests/309
-xmpp-parsers = { git = "https://gitlab.com/paulfariello/xmpp-rs.git", rev = "ce493e82" }
-rpassword = "^3.0"
-uuid = { version = "^1.7", features = ["v4"]  }
-termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
-derive-error = "0.0.4"
+base64 = "0.21.7"
 bytes = "^0.5"
-dirs = "^2.0"
 chrono = "^0.4"
-serde = { version = "^1.0", features = ["derive"] }
-toml = "^0.5"
-unicode-segmentation = "^1.6"
-rand = "0.7.3" # same as libsignal
-linked_hash_set = "^0.1"
-textwrap = "^0.12"
-linked-hash-map = "^0.5"
-hsluv = "^0.1"
-fuzzy-matcher = "^0.3"
 clap = { version = "4.0.32", features = ["derive"] }
+derive-error = "0.0.4"
 diesel = { version = "^2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "r2d2"] }
 diesel_migrations = "^2.0"
-anyhow = "^1.0"
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.20.0" }
-async-trait = "0.1.41" # same as libsignal
-aes-gcm = "0.10.3"
-base64 = "0.21.7"
-sha1 = "0.10.6"
-itertools = "0.12.1"
-secrecy = { version = "0.8.0", features = ["serde"] }
-sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1" }
-reqwest = "0.12.3"
+dirs = "^2.0"
+flexi_logger = "^0.27"
+futures = "^0.3"
+fuzzy-matcher = "^0.3"
+hsluv = "^0.1"
 image = "0.25.1"
+itertools = "0.12.1"
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.20.0" }
+linked_hash_set = "^0.1"
+log = "^0.4"
+rand = "0.7.3" # same as libsignal
+reqwest = "0.12.3"
+rpassword = "^3.0"
+secrecy = { version = "0.8.0", features = ["serde"] }
+serde = { version = "^1.0", features = ["derive"] }
+sha1 = "0.10.6"
+sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1" }
+terminus = { path = "terminus" }
+termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
+textwrap = "^0.12"
+tokio = { version = "^1.10", features = ["full"] }
+tokio-xmpp = { git = "https://gitlab.com/paulfariello/xmpp-rs.git", rev = "ce493e82" } # Correspond to https://gitlab.com/xmpp-rs/xmpp-rs/-/merge_requests/309
+toml = "^0.5"
+unicode-segmentation = "^1.6"
+uuid = { version = "^1.7", features = ["v4"]  }
+xmpp-parsers = { git = "https://gitlab.com/paulfariello/xmpp-rs.git", rev = "ce493e82" }
 
 [dev-dependencies]
 mockall = "^0.9"

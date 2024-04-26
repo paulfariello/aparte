@@ -13,6 +13,7 @@ use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod cursor;
 pub mod frame_layout;
 pub mod input;
 pub mod linear_layout;
@@ -448,7 +449,7 @@ macro_rules! vprint {
 #[macro_export]
 macro_rules! goto {
     ($screen:expr, $x:expr, $y:expr) => {
-        $crate::terminus::vprint!($screen, "{}", termion::cursor::Goto($x, $y));
+        $crate::vprint!($screen, "{}", ::termion::cursor::Goto($x, $y));
     };
 }
 
@@ -460,9 +461,10 @@ macro_rules! flush {
 }
 
 //#[cfg(not(feature = "no-cursor-save"))]
+#[macro_export]
 macro_rules! save_cursor {
     ($screen:expr) => {
-        crate::terminus::vprint!($screen, "{}", termion::cursor::Save);
+        $crate::vprint!($screen, "{}", ::termion::cursor::Save);
     };
 }
 
@@ -475,9 +477,10 @@ macro_rules! save_cursor {
 //}
 
 //#[cfg(not(feature = "no-cursor-save"))]
+#[macro_export]
 macro_rules! restore_cursor {
     ($screen:expr) => {
-        crate::terminus::vprint!($screen, "{}", termion::cursor::Restore);
+        $crate::vprint!($screen, "{}", ::termion::cursor::Restore);
     };
 }
 
@@ -490,8 +493,6 @@ macro_rules! restore_cursor {
 //}
 
 impl<E, W> dyn View<E, W> where W: Write {}
-
-pub(crate) use {flush, goto, restore_cursor, save_cursor, vprint};
 
 #[cfg(test)]
 mod tests {

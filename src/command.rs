@@ -2,11 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use anyhow::{anyhow, Result};
-use unicode_segmentation::UnicodeSegmentation;
+use terminus::cursor::Cursor;
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::account::Account;
 use crate::core::Aparte;
-use crate::cursor::Cursor;
 
 #[derive(Debug, Clone)]
 pub struct Command {

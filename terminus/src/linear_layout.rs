@@ -6,7 +6,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 use std::rc::Rc;
 
-use crate::terminus::{clear_screen, RequestedDimension};
+use crate::{clear_screen, RequestedDimension};
 
 use super::{
     Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimensions, Screen,
@@ -306,7 +306,7 @@ mod tests {
     use test_log::test;
 
     use super::*;
-    use crate::terminus::{MockView, RequestedDimension};
+    use crate::{MockView, RequestedDimension};
 
     #[test]
     fn test_vertical_layout_children_evenly() {

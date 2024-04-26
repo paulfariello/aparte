@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use unicode_segmentation::UnicodeSegmentation;
+
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use xmpp_parsers::{muc, BareJid, Jid};
 

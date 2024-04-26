@@ -196,7 +196,6 @@ dependencies = [
  "image",
  "itertools 0.12.1",
  "libsignal-protocol",
- "linked-hash-map",
  "linked_hash_set",
  "log",
  "mockall",
@@ -207,6 +206,7 @@ dependencies = [
  "serde",
  "sha1",
  "sixel-image",
+ "terminus",
  "termion",
  "test-log",
  "textwrap",
@@ -3204,6 +3204,18 @@ dependencies = [
  "fastrand",
  "rustix",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "terminus"
+version = "0.1.0"
+dependencies = [
+ "linked-hash-map",
+ "log",
+ "mockall",
+ "termion",
+ "test-log",
+ "unicode-segmentation",
 ]
 
 [[package]]
