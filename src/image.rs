@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    convert::identity,
-};
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use image::{DynamicImage, Rgb};
@@ -166,7 +163,7 @@ impl PixelTree {
             depth: 0,
             next_id: Some(PixelNodeId(0)),
             tree: self,
-            pixel: pixel.clone(),
+            pixel: *pixel,
         }
     }
 
@@ -175,11 +172,7 @@ impl PixelTree {
         // Prune children if needed
         let children = {
             let node = self.get(node_id);
-            node.children
-                .iter()
-                .cloned()
-                .filter_map(identity)
-                .collect::<Vec<_>>()
+            node.children.iter().cloned().flatten().collect::<Vec<_>>()
         };
         for child_id in children {
             self.prune_node(&child_id);
@@ -283,7 +276,7 @@ pub fn adaptative_spatial_subdivision(
 
 fn ass_classification(tree: &mut PixelTree, pixels: &[Rgb<u8>]) {
     for pixel in pixels {
-        tree.insert(pixel.clone());
+        tree.insert(*pixel);
     }
 }
 
@@ -365,7 +358,7 @@ pub fn convert_to_sixel(image: DynamicImage) -> Result<SixelImage> {
             })
             .collect::<Vec<Pixel>>()
             .chunks(image.width() as usize)
-            .map(|line| line.iter().cloned().collect::<Vec<Pixel>>())
+            .map(|line| line.to_vec())
             .collect(),
     })
 }

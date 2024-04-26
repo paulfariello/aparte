@@ -11,8 +11,8 @@ use std::rc::Rc;
 use crate::terminus::clear_screen;
 
 use super::{
-    Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    Screen, View,
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, Screen, View,
 };
 
 /// Component that can hold multiple children but display only one at a time
@@ -23,7 +23,7 @@ where
 {
     children: HashMap<K, Box<dyn View<E, W>>>,
     current: Option<K>,
-    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    event_handler: Option<EventHandler<Self, E>>,
     dirty: Cell<bool>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
@@ -69,7 +69,7 @@ where
         }
     }
 
-    pub fn get_current_mut<'a>(&'a mut self) -> Option<&'a mut Box<dyn View<E, W>>> {
+    pub fn get_current_mut(&mut self) -> Option<&mut Box<dyn View<E, W>>> {
         if let Some(current) = &self.current {
             if let Some(child) = self.children.get_mut(current) {
                 Some(child)
@@ -81,11 +81,10 @@ where
         }
     }
 
-    #[allow(unused)]
-    pub fn get_current<'a>(&'a self) -> Option<&'a Box<dyn View<E, W>>> {
+    pub fn get_current(&self) -> Option<&dyn View<E, W>> {
         if let Some(current) = &self.current {
             if let Some(child) = self.children.get(current) {
-                Some(child)
+                Some(child.as_ref())
             } else {
                 unreachable!();
             }
@@ -95,7 +94,7 @@ where
     }
 
     #[allow(unused)]
-    pub fn get_current_key<'a>(&'a self) -> Option<&'a K> {
+    pub fn get_current_key(&self) -> Option<&K> {
         self.current.as_ref()
     }
 
@@ -118,15 +117,13 @@ where
         }
     }
 
-    pub fn iter_children_mut<'a>(
-        &'a mut self,
-    ) -> impl Iterator<Item = &'a mut Box<dyn View<E, W>>> {
+    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E, W>>> {
         self.children.iter_mut().map(|(_, child)| child)
     }
 
     #[allow(unused)]
-    pub fn iter_children<'a>(&'a self) -> impl Iterator<Item = &'a Box<dyn View<E, W>>> {
-        self.children.iter().map(|(_, child)| child)
+    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E, W>>> {
+        self.children.values()
     }
 }
 

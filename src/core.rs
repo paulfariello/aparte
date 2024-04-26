@@ -9,6 +9,7 @@ use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Read;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
@@ -401,7 +402,7 @@ Examples:
     },
     password: Password = {
         lookup: |aparte, _command| {
-            aparte.config.accounts.get(&account_name).map(|account| account.password.clone()).flatten()
+            aparte.config.accounts.get(&account_name).and_then(|account| account.password.clone())
         }
     },
 },
@@ -504,7 +505,7 @@ Examples:
             let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
             ui.get_windows().iter().map(|window| {
                 if let Some(account) = aparte.current_account() {
-                    if let Ok(jid) = BareJid::from_str(&window) {
+                    if let Ok(jid) = BareJid::from_str(window) {
                         conversation_mod.get(&account, &jid).cloned()
                     } else {
                         None
@@ -814,8 +815,8 @@ macro_rules! error(
 );
 
 pub struct Aparte {
-    pub command_parsers: Arc<HashMap<String, CommandParser>>,
-    mods: Arc<HashMap<TypeId, RwLock<Mod>>>,
+    pub command_parsers: Rc<HashMap<String, CommandParser>>,
+    mods: Rc<HashMap<TypeId, RwLock<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
     event_tx: mpsc::UnboundedSender<Event>,
@@ -860,8 +861,8 @@ impl Aparte {
         let (send_tx, send_rx) = mpsc::unbounded_channel();
 
         let mut aparte = Self {
-            command_parsers: Arc::new(HashMap::new()),
-            mods: Arc::new(HashMap::new()),
+            command_parsers: Rc::new(HashMap::new()),
+            mods: Rc::new(HashMap::new()),
             connections: HashMap::new(),
             storage: Storage::new(storage_path)?,
             current_connection: None,
@@ -875,19 +876,21 @@ impl Aparte {
             read_password: AtomicBool::new(false),
         };
 
-        aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::new()));
-        aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::new()));
-        aparte.add_mod(Mod::Contact(mods::contact::ContactMod::new()));
-        aparte.add_mod(Mod::Conversation(mods::conversation::ConversationMod::new()));
+        aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::default()));
+        aparte.add_mod(Mod::Carbons(mods::carbons::CarbonsMod::default()));
+        aparte.add_mod(Mod::Contact(mods::contact::ContactMod::default()));
+        aparte.add_mod(Mod::Conversation(
+            mods::conversation::ConversationMod::default(),
+        ));
         aparte.add_mod(Mod::Disco(mods::disco::DiscoMod::new(
             "client", "console", "Aparté", "en",
         )));
-        aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::new()));
+        aparte.add_mod(Mod::Bookmarks(mods::bookmarks::BookmarksMod::default()));
         aparte.add_mod(Mod::UI(mods::ui::UIMod::new(&config)));
-        aparte.add_mod(Mod::Mam(mods::mam::MamMod::new()));
-        aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::new()));
-        aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::new()));
-        aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::new()));
+        aparte.add_mod(Mod::Mam(mods::mam::MamMod::default()));
+        aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::default()));
+        aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::default()));
+        aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::default()));
 
         Ok(aparte)
     }
@@ -895,8 +898,8 @@ impl Aparte {
     pub fn handle_raw_command(
         &mut self,
         account: &Option<Account>,
-        context: &String,
-        buf: &String,
+        context: &str,
+        buf: &str,
     ) -> Result<()> {
         let command_name = Command::parse_name(buf)?;
 
@@ -920,7 +923,7 @@ impl Aparte {
 
     pub fn add_mod(&mut self, r#mod: Mod) {
         log::info!("Add mod `{}`", r#mod);
-        let mods = Arc::get_mut(&mut self.mods).unwrap();
+        let mods = Rc::get_mut(&mut self.mods).unwrap();
         // TODO ensure mod is not inserted twice
         match r#mod {
             Mod::Completion(r#mod) => {
@@ -1024,7 +1027,7 @@ impl Aparte {
             ui.event_stream()
         };
 
-        let mut rt = TokioRuntime::new().unwrap();
+        let rt = TokioRuntime::new().unwrap();
 
         let tx_for_signal = self.event_tx.clone();
         rt.spawn(async move {
@@ -1059,7 +1062,7 @@ impl Aparte {
         });
 
         let local_set = tokio::task::LocalSet::new();
-        local_set.block_on(&mut rt, async move {
+        local_set.block_on(&rt, async move {
             self.schedule(Event::Start);
             let mut event_rx = self.event_rx.take().unwrap();
             let mut send_rx = self.send_rx.take().unwrap();
@@ -1067,7 +1070,7 @@ impl Aparte {
             loop {
                 tokio::select! {
                     event = event_rx.recv() => match event {
-                        Some(event) => if let Err(_) = self.handle_event(event) {
+                        Some(event) => if self.handle_event(event).is_err() {
                             break;
                         },
                         None => {
@@ -1251,30 +1254,25 @@ impl Aparte {
             }
             Event::Command(command) => {
                 self.read_password.swap(false, Relaxed);
-                match self.handle_command(command) {
-                    Err(err) => self.log(err),
-                    Ok(()) => {}
+                if let Err(err) = self.handle_command(command) {
+                    self.log(err);
                 }
             }
             Event::RawCommand(account, context, buf) => {
-                match self.handle_raw_command(&account, &context, &buf) {
-                    Err(err) => self.log(err),
-                    Ok(()) => {}
+                if let Err(err) = self.handle_raw_command(&account, &context, &buf) {
+                    self.log(err);
                 }
             }
             Event::SendMessage(account, message) => {
                 self.schedule(Event::Message(Some(account.clone()), message.clone()));
 
                 // Encrypt if required
-                let encryption = message
-                    .encryption_recipient()
-                    .map(|recipient| {
-                        let mut crypto_engines = self.crypto_engines.lock().unwrap();
-                        crypto_engines
-                            .get_mut(&(account.clone(), recipient))
-                            .map(|crypto_engine| crypto_engine.encrypt(self, &account, &message))
-                    })
-                    .flatten();
+                let encryption = message.encryption_recipient().and_then(|recipient| {
+                    let mut crypto_engines = self.crypto_engines.lock().unwrap();
+                    crypto_engines
+                        .get_mut(&(account.clone(), recipient))
+                        .map(|crypto_engine| crypto_engine.encrypt(self, &account, &message))
+                });
 
                 match encryption {
                     Some(Ok(encrypted_message)) => self.send(&account, encrypted_message),
@@ -1325,10 +1323,9 @@ impl Aparte {
             } => {
                 let to = match channel.try_as_full() {
                     Ok(full_jid) => full_jid.clone(),
-                    Err(bare_jid) => {
-                        let node = account.node().clone().unwrap();
-                        bare_jid.with_resource_str(&node.to_string()).unwrap()
-                    }
+                    Err(bare_jid) => bare_jid
+                        .with_resource_str(account.node().as_ref().unwrap())
+                        .unwrap(),
                 };
                 let from: Jid = account.clone().into();
 
@@ -1584,7 +1581,7 @@ impl Aparte {
     }
 
     pub fn add_command(&mut self, command_parser: CommandParser) {
-        let command_parsers = Arc::get_mut(&mut self.command_parsers).unwrap();
+        let command_parsers = Rc::get_mut(&mut self.command_parsers).unwrap();
         command_parsers.insert(command_parser.name.to_string(), command_parser);
     }
 

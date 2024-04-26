@@ -13,17 +13,12 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::message::Message;
 use crate::mods::disco;
 
+#[derive(Default)]
 pub struct MessagesMod {
     messages: HashMap<Option<Account>, HashMap<String, Message>>,
 }
 
 impl MessagesMod {
-    pub fn new() -> Self {
-        Self {
-            messages: HashMap::new(),
-        }
-    }
-
     pub fn get<'a>(&'a self, account: &Option<Account>, id: &String) -> Option<&'a Message> {
         self.messages.get(account)?.get(id)
     }
@@ -37,10 +32,7 @@ impl MessagesMod {
     }
 
     pub fn handle_message(&mut self, account: &Option<Account>, message: &Message) {
-        let messages = self
-            .messages
-            .entry(account.clone())
-            .or_insert(HashMap::new());
+        let messages = self.messages.entry(account.clone()).or_default();
         messages.insert(message.id().to_string(), message.clone());
     }
 
@@ -155,9 +147,8 @@ impl ModTrait for MessagesMod {
     }
 
     fn on_event(&mut self, _aparte: &mut Aparte, event: &Event) {
-        match event {
-            Event::Message(account, message) => self.handle_message(account, message),
-            _ => {}
+        if let Event::Message(account, message) = event {
+            self.handle_message(account, message)
         }
     }
 }

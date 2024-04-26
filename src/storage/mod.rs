@@ -166,8 +166,7 @@ impl Storage {
         log::debug!("Get own identity key pair");
         let identity = self
             .get_omemo_own_device(account)?
-            .map(|device| device.identity)
-            .flatten()
+            .and_then(|device| device.identity)
             .ok_or(anyhow!("Missing own device identity"))?;
         Ok(libsignal_protocol::IdentityKeyPair::try_from(
             identity.as_ref(),
@@ -191,11 +190,7 @@ impl Storage {
         // The return value represents whether an existing identity was replaced (`Ok(true)`). If it is
         // new or hasn't changed, the return value should be `Ok(false)`.
         let ret = if let Some(stored) = self.get_omemo_identity(account, address)? {
-            if &stored != identity {
-                true
-            } else {
-                false
-            }
+            &stored != identity
         } else {
             false
         };

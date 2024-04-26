@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::fmt;
+use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::Arc;
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -17,6 +17,7 @@ use crate::cursor::Cursor;
 use crate::mods::conversation::ConversationMod;
 use crate::word::Words;
 
+#[derive(Default)]
 pub struct CompletionMod {
     /// List of possible completions for current raw_buf
     completions: Option<Vec<String>>,
@@ -25,13 +26,6 @@ pub struct CompletionMod {
 }
 
 impl CompletionMod {
-    pub fn new() -> CompletionMod {
-        CompletionMod {
-            completions: None,
-            current_completion: 0,
-        }
-    }
-
     pub fn autocomplete(
         &mut self,
         aparte: &mut Aparte,
@@ -118,7 +112,7 @@ impl CompletionMod {
                         .map(|c| c.0.to_string())
                         .collect()
                 } else {
-                    let command_parsers = Arc::clone(&aparte.command_parsers);
+                    let command_parsers = Rc::clone(&aparte.command_parsers);
                     if let Some(parser) = command_parsers.get(&command.args[0]) {
                         if command.cursor - 1 < parser.autocompletions.len() {
                             if let Some(completion) = &parser.autocompletions[command.cursor - 1] {
@@ -149,36 +143,32 @@ impl CompletionMod {
             }
         } else {
             let conversation = BareJid::from_str(context);
-            match (account, &conversation) {
-                (Some(account), Ok(conversation)) => {
-                    let conversation_mod = aparte.get_mod::<ConversationMod>();
-                    if let Some(Conversation::Channel(channel)) =
-                        conversation_mod.get(account, conversation)
-                    {
-                        let words =
-                            Words::new(&raw_buf[..cursor.index(raw_buf)]).collect::<Vec<_>>();
-                        let current_word = *words.last().unwrap_or(&"");
+            if let (Some(account), Ok(conversation)) = (account, &conversation) {
+                let conversation_mod = aparte.get_mod::<ConversationMod>();
+                if let Some(Conversation::Channel(channel)) =
+                    conversation_mod.get(account, conversation)
+                {
+                    let words = Words::new(&raw_buf[..cursor.index(raw_buf)]).collect::<Vec<_>>();
+                    let current_word = *words.last().unwrap_or(&"");
 
-                        let append = if words.len() <= 1 { ": " } else { " " };
+                    let append = if words.len() <= 1 { ": " } else { " " };
 
-                        // Collect completion candidates
-                        self.completions = Some(
-                            channel
-                                .occupants
-                                .iter()
-                                .filter_map(|(_, occupant)| {
-                                    if occupant.nick.starts_with(current_word) {
-                                        Some(occupant.nick.clone() + append)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect(),
-                        );
-                        self.current_completion = 0;
-                    }
+                    // Collect completion candidates
+                    self.completions = Some(
+                        channel
+                            .occupants
+                            .iter()
+                            .filter_map(|(_, occupant)| {
+                                if occupant.nick.starts_with(current_word) {
+                                    Some(occupant.nick.clone() + append)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    );
+                    self.current_completion = 0;
                 }
-                _ => {}
             }
         }
     }

@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::io::Write;
 use std::os::fd::AsFd;
+use std::rc::Rc;
 use std::{cmp, iter::Sum};
 
 #[cfg(test)]
@@ -18,6 +20,8 @@ pub mod list_view;
 pub mod scroll_win;
 
 pub type Screen<W> = BufferedScreen<AlternateScreen<RawTerminal<W>>>;
+
+pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 
 pub struct BufferedScreen<W: Write> {
     inner: W,
@@ -232,6 +236,7 @@ where
 pub enum LayoutParam {
     MatchParent,
     WrapContent,
+    #[allow(unused)]
     Absolute(u16),
 }
 
@@ -254,7 +259,7 @@ pub struct MeasureSpecs {
     pub height: MeasureSpec,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RequestedDimension {
     ExpandMax,
     Absolute(u16),
@@ -286,6 +291,12 @@ impl Ord for RequestedDimension {
             (RequestedDimension::Absolute(_), RequestedDimension::ExpandMax) => cmp::Ordering::Less,
             (RequestedDimension::Absolute(a), RequestedDimension::Absolute(b)) => a.cmp(b),
         }
+    }
+}
+
+impl PartialOrd for RequestedDimension {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -437,7 +448,7 @@ macro_rules! vprint {
 #[macro_export]
 macro_rules! goto {
     ($screen:expr, $x:expr, $y:expr) => {
-        crate::terminus::vprint!($screen, "{}", termion::cursor::Goto($x, $y));
+        $crate::terminus::vprint!($screen, "{}", termion::cursor::Goto($x, $y));
     };
 }
 

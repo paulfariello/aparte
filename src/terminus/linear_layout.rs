@@ -9,7 +9,8 @@ use std::rc::Rc;
 use crate::terminus::{clear_screen, RequestedDimension};
 
 use super::{
-    Dimensions, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimensions, Screen, View,
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimensions, Screen,
+    View,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +29,7 @@ pub struct Child<E, W> {
 pub struct LinearLayout<E, W> {
     pub orientation: Orientation,
     pub children: Vec<Child<E, W>>,
-    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    pub event_handler: Option<EventHandler<Self, E>>,
     pub dirty: Cell<bool>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
@@ -77,14 +78,11 @@ where
         self
     }
 
-    pub fn iter_children_mut<'a>(
-        &'a mut self,
-    ) -> impl Iterator<Item = &'a mut Box<dyn View<E, W>>> {
+    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E, W>>> {
         self.children.iter_mut().map(|child| &mut child.view)
     }
 
-    #[allow(unused)]
-    pub fn iter_children<'a>(&'a self) -> impl Iterator<Item = &'a Box<dyn View<E, W>>> {
+    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E, W>>> {
         self.children.iter().map(|child| &child.view)
     }
 

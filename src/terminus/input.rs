@@ -9,7 +9,7 @@ use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    next_word, term_string_visible_len, Dimensions, MeasureSpecs, RequestedDimension,
+    next_word, term_string_visible_len, Dimensions, EventHandler, MeasureSpecs, RequestedDimension,
     RequestedDimensions, Screen, View,
 };
 
@@ -29,7 +29,7 @@ pub struct Input<E> {
     //     | view      |
     //     |-----------|
     pub view: Cursor,
-    pub event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    pub event_handler: Option<EventHandler<Self, E>>,
     pub dirty: Cell<bool>,
     width: Cell<usize>,
     dimensions: Option<Dimensions>,
@@ -311,7 +311,7 @@ where
                         super::vprint!(screen, "{}", buf);
                     } else {
                         super::goto!(screen, dimensions.left, dimensions.top);
-                        let padding = dimensions.width - term_string_visible_len(&buf) as u16;
+                        let padding = dimensions.width - term_string_visible_len(buf) as u16;
                         super::vprint!(screen, "{}{: <1$}", buf, padding as usize);
                     }
 

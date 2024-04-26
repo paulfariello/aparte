@@ -9,12 +9,12 @@ use std::os::fd::AsFd;
 use std::rc::Rc;
 
 use super::{
-    Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, Screen, View,
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    RequestedDimension, RequestedDimensions, Screen, View,
 };
 
-const MISSING_DIMENSIONS: &'static str = "Missing dimensions";
-const INVALID_VIEW: &'static str = "Invalid view detected";
+const MISSING_DIMENSIONS: &str = "Missing dimensions";
+const INVALID_VIEW: &str = "Invalid view detected";
 
 /// Ordered vertical window giving ability to scroll
 pub struct ScrollWin<E, W, I>
@@ -24,7 +24,7 @@ where
 {
     /// Index in children of last visible child (bottom child)
     bottom_visible_child_index: usize,
-    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    event_handler: Option<EventHandler<Self, E>>,
     dirty: Cell<bool>,
     children: BTreeSet<I>,
     dimensions: Option<Dimensions>,
@@ -64,8 +64,7 @@ where
         self
     }
 
-    #[allow(dead_code)]
-    pub fn first<'a>(&'a self) -> Option<&'a I> {
+    pub fn first(&self) -> Option<&I> {
         self.children.iter().next()
     }
 
@@ -174,7 +173,7 @@ where
         true
     }
 
-    fn bottom_visible_child<'a>(&'a self) -> &'a I {
+    fn bottom_visible_child(&self) -> &I {
         self.children
             .iter()
             .nth(self.bottom_visible_child_index)
@@ -182,7 +181,7 @@ where
     }
 
     /// List visible children starting from bottom
-    pub fn visible_children<'a>(&'a self) -> impl Iterator<Item = &'a I> {
+    pub fn visible_children(&self) -> impl Iterator<Item = &'_ I> {
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
         let mut remaining_height = dimensions.height;
@@ -213,9 +212,7 @@ where
         let visible_children_count = self.visible_children().count();
 
         // Empty the BTreeSet so we can mutate children
-        let mut children: Vec<_> = std::mem::replace(&mut self.children, BTreeSet::new())
-            .into_iter()
-            .collect();
+        let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
 
         // Layout only visiable children
         let last_visible_child_index = self.bottom_visible_child_index;
@@ -267,9 +264,7 @@ where
         let visible_children_count = self.visible_children().count();
 
         // Empty the BTreeSet so we can mutate children
-        let mut children: Vec<_> = std::mem::replace(&mut self.children, BTreeSet::new())
-            .into_iter()
-            .collect();
+        let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
 
         // Layout only visiable children
         let last_visible_child_index = self.bottom_visible_child_index;
@@ -413,7 +408,7 @@ where
 
     fn set_dirty(&mut self) {
         self.dirty.set(true);
-        std::mem::replace(&mut self.children, BTreeSet::new())
+        std::mem::take(&mut self.children)
             .into_iter()
             .for_each(|mut child| {
                 child.set_dirty();

@@ -17,13 +17,10 @@ use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
 use crate::mods::disco;
 
+#[derive(Default)]
 pub struct CarbonsMod {}
 
 impl CarbonsMod {
-    pub fn new() -> Self {
-        Self {}
-    }
-
     fn enable(&self) -> Element {
         let id = Uuid::new_v4().hyphenated().to_string();
         let iq = Iq::from_set(id, carbons::Enable);
@@ -91,9 +88,8 @@ impl ModTrait for CarbonsMod {
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
-        match event {
-            Event::Connected(account, _jid) => aparte.send(account, self.enable()),
-            _ => {}
+        if let Event::Connected(account, _jid) = event {
+            aparte.send(account, self.enable());
         }
     }
 }

@@ -43,19 +43,14 @@ pub struct ContactIndex {
     jid: BareJid,
 }
 
+#[derive(Default)]
 pub struct ContactMod {
     pub contacts: HashMap<ContactIndex, contact::Contact>,
 }
 
 impl ContactMod {
-    pub fn new() -> Self {
-        Self {
-            contacts: HashMap::new(),
-        }
-    }
-
     async fn get_roster(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
-        let response = aparte.iq(&account, Self::get_roster_iq()).await?;
+        let response = aparte.iq(account, Self::get_roster_iq()).await?;
 
         if let IqType::Result(Some(payload)) = response.payload.clone() {
             if payload.is("query", ns::ROSTER) {

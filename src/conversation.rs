@@ -79,14 +79,14 @@ pub enum Conversation {
 }
 
 impl Conversation {
-    pub fn get_account<'a>(&'a self) -> &'a Account {
+    pub fn get_account(&self) -> &Account {
         match self {
             Conversation::Chat(chat) => &chat.account,
             Conversation::Channel(channel) => &channel.account,
         }
     }
 
-    pub fn get_jid<'a>(&'a self) -> &'a BareJid {
+    pub fn get_jid(&self) -> &BareJid {
         match self {
             Conversation::Chat(chat) => &chat.contact,
             Conversation::Channel(channel) => &channel.jid,

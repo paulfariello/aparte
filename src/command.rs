@@ -23,7 +23,7 @@ impl Command {
         Command::parse_with_cursor(account, context, buf, cursor)
     }
 
-    pub fn parse_name<'a>(buf: &'a str) -> Result<&'a str> {
+    pub fn parse_name(buf: &str) -> Result<&str> {
         if &buf[0..1] != "/" {
             anyhow::bail!("Missing starting /");
         }
@@ -245,12 +245,14 @@ impl Command {
     }
 }
 
+type AutoCompletion = Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>;
+
 pub struct CommandParser {
     pub name: &'static str,
     pub help: String,
     pub parse: fn(&Option<Account>, &str, &str) -> anyhow::Result<Command>,
     pub exec: fn(&mut Aparte, Command) -> anyhow::Result<()>,
-    pub autocompletions: Vec<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>,
+    pub autocompletions: Vec<Option<AutoCompletion>>,
 }
 
 #[macro_export]
@@ -276,7 +278,12 @@ macro_rules! build_subcommand_map(
 macro_rules! parse_lookup_arg(
     ($aparte:ident, $command:ident, $({})?) => (None);
     ($aparte:ident, $command:ident, $({ lookup: |$lookup_aparte:ident, $lookup_command:ident| $lookup:block $(, $($tail:tt)*)? })?) => (
-        $((|$lookup_aparte: &mut Aparte, $lookup_command: &mut Command| $lookup)($aparte, &mut $command))?
+        $({
+            let $lookup_aparte: &mut Aparte = $aparte;
+            let $lookup_command: &mut Command = &mut $command;
+
+            $lookup
+        })?
     );
     ($aparte:ident, $command:ident, $({ completion: |$completion_aparte:ident, $completion_command:ident| $lookup:block $(, $($tail:tt)*)? })?) => (
         parse_lookup_arg!($aparte, $command, { $($($tail)*)? })
@@ -393,6 +400,7 @@ macro_rules! generate_command_autocompletions(
 macro_rules! generate_sub_autocompletion(
     ($completion:ident, {}) => ();
     ($completion:ident, { $subname:tt: $sub:ident $(, $($tail:tt)*)? }) => (
+        #[allow(clippy::vec_init_then_push)]
         $completion.push(String::from($subname));
         generate_sub_autocompletion!($completion, { $($($tail)*)? });
     );
@@ -403,8 +411,12 @@ macro_rules! generate_arg_autocompletion(
     ($autocompletions:ident, $type:ty, {}) => ();
     ($autocompletions:ident, $type:ty, { lookup: |$aparte:ident, $command:ident| $completion:block $(, $($tail:tt)*)? }) => ();
     ($autocompletions:ident, $type:ty, { children: $subs:tt $(, $($tail:tt)*)? }) => (
-        let mut sub = vec![];
-        generate_sub_autocompletion!(sub, $subs);
+        #[allow(clippy::vec_init_then_push)]
+        let sub = {
+            let mut sub = vec![];
+            generate_sub_autocompletion!(sub, $subs);
+            sub
+        };
         $autocompletions.push(Some(Box::new(move |_: &mut Aparte, _: Command| -> Vec<String> { sub.clone() })));
         generate_arg_autocompletion!($autocompletions, $type, { $($($tail)*)? });
     );
@@ -508,10 +520,13 @@ macro_rules! command_def (
             }
 
             pub fn new() -> CommandParser {
-                #[allow(unused_mut)]
-                let mut autocompletions = Vec::<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>::new();
+                #[allow(unused_mut, clippy::vec_init_then_push)]
+                let autocompletions = {
+                    let mut autocompletions = Vec::<Option<Box<dyn Fn(&mut Aparte, Command) -> Vec<String>>>>::new();
 
-                generate_command_autocompletions!(autocompletions, $args);
+                    generate_command_autocompletions!(autocompletions, $args);
+                    autocompletions
+                };
 
                 CommandParser {
                     name: stringify!($name),

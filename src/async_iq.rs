@@ -45,10 +45,7 @@ impl Future for IqFuture {
         match pending_iq.remove(&self.uuid) {
             None => panic!("Iq response has already been consumed"),
             Some(PendingIqState::Waiting(_)) => {
-                pending_iq.insert(
-                    self.uuid.clone(),
-                    PendingIqState::Waiting(Some(cx.waker().clone())),
-                );
+                pending_iq.insert(self.uuid, PendingIqState::Waiting(Some(cx.waker().clone())));
                 Poll::Pending
             }
             Some(PendingIqState::Finished(iq)) => Poll::Ready(Ok(iq)),

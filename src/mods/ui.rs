@@ -74,9 +74,7 @@ impl TitleBar {
 
     fn set_name(&mut self, name: &str) {
         self.name = Some(name.to_string());
-        self.subjects
-            .entry(name.to_string())
-            .or_insert(HashMap::new());
+        self.subjects.entry(name.to_string()).or_default();
         self.dirty.set(true);
     }
 
@@ -605,7 +603,7 @@ pub struct UIMod {
     debounced: u32,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
-    panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
+    _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
     dimensions: Dimensions,
 }
 
@@ -724,7 +722,7 @@ impl UIMod {
             conversations: HashMap::new(),
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
-            panic_handler,
+            _panic_handler: panic_handler,
             last_render: Instant::now(),
             debounced: 0,
             dimensions: Dimensions {
@@ -865,17 +863,17 @@ impl UIMod {
                         .with_none_group()
                         .with_unique_item()
                         .with_sort_item()
-                        .with_event(move |view, event| match event {
-                            UIEvent::Core(Event::Occupant {
+                        .with_event(move |view, event| {
+                            if let UIEvent::Core(Event::Occupant {
                                 conversation,
                                 occupant,
                                 ..
-                            }) => {
+                            }) = event
+                            {
                                 if roster_jid == *conversation {
                                     view.insert(occupant.clone(), Some(occupant.role));
                                 }
                             }
-                            _ => {}
                         });
                 layout.push(roster, 3);
 

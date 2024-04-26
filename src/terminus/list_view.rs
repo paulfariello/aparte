@@ -12,9 +12,12 @@ use std::os::fd::AsFd;
 use std::rc::Rc;
 
 use super::{
-    term_string_visible_len, term_string_visible_truncate, Dimensions, LayoutParam, LayoutParams,
-    MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, Screen, View,
+    term_string_visible_len, term_string_visible_truncate, Dimensions, EventHandler, LayoutParam,
+    LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, Screen, View,
 };
+
+type SortItemHandler<V> = Box<dyn Fn(&V, &V) -> cmp::Ordering>;
+type SortGroupHandler<G> = Box<dyn FnMut(&G, &G) -> cmp::Ordering>;
 
 pub struct ListView<E, W, G, V>
 where
@@ -23,10 +26,9 @@ where
 {
     items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
-    sort_item: Option<Box<dyn Fn(&V, &V) -> cmp::Ordering>>,
-    #[allow(dead_code)]
-    sort_group: Option<Box<dyn FnMut(&G, &G) -> cmp::Ordering>>,
-    event_handler: Option<Rc<RefCell<Box<dyn FnMut(&mut Self, &mut E)>>>>,
+    sort_item: Option<SortItemHandler<V>>,
+    sort_group: Option<SortGroupHandler<G>>,
+    event_handler: Option<EventHandler<Self, E>>,
     dirty: Cell<bool>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,

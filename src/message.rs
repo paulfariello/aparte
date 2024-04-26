@@ -85,16 +85,16 @@ pub struct VersionedXmppMessage {
 }
 
 impl VersionedXmppMessage {
-    pub fn get_last_bodies<'a>(&'a self) -> impl Iterator<Item = (&'a String, &'a String)> {
+    pub fn get_last_bodies(&self) -> impl Iterator<Item = (&String, &String)> {
         let last = self.history.iter().max().unwrap();
         last.bodies.iter()
     }
-    pub fn get_last_body<'a>(&'a self) -> &'a str {
+    pub fn get_last_body(&self) -> &str {
         let last = self.history.iter().max().unwrap();
         last.get_best_body(vec![])
     }
 
-    pub fn get_original_timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
+    pub fn get_original_timestamp(&self) -> &DateTime<FixedOffset> {
         let first = self.history.iter().min().unwrap();
         &first.timestamp
     }
@@ -305,7 +305,7 @@ impl Message {
             id: id.clone(),
             timestamp,
             bodies,
-            oobs: oobs.unwrap_or(Vec::new()),
+            oobs: oobs.unwrap_or_default(),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -336,7 +336,7 @@ impl Message {
             id: id.clone(),
             timestamp,
             bodies,
-            oobs: oobs.unwrap_or(Vec::new()),
+            oobs: oobs.unwrap_or_default(),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -367,7 +367,7 @@ impl Message {
             id: id.clone(),
             timestamp,
             bodies,
-            oobs: oobs.unwrap_or(Vec::new()),
+            oobs: oobs.unwrap_or_default(),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -398,7 +398,7 @@ impl Message {
             id: id.clone(),
             timestamp,
             bodies,
-            oobs: oobs.unwrap_or(Vec::new()),
+            oobs: oobs.unwrap_or_default(),
         };
 
         Message::Xmpp(VersionedXmppMessage {
@@ -435,21 +435,21 @@ impl Message {
         }
     }
 
-    pub fn body<'a>(&'a self) -> &'a str {
+    pub fn body(&self) -> &str {
         match self {
             Message::Xmpp(message) => message.get_last_body(),
             Message::Log(LogMessage { body, .. }) => body,
         }
     }
 
-    pub fn id<'a>(&'a self) -> &'a str {
+    pub fn id(&self) -> &str {
         match self {
             Message::Xmpp(VersionedXmppMessage { id, .. })
             | Message::Log(LogMessage { id, .. }) => id,
         }
     }
 
-    pub fn timestamp<'a>(&'a self) -> &'a DateTime<FixedOffset> {
+    pub fn timestamp(&self) -> &DateTime<FixedOffset> {
         match self {
             Message::Xmpp(message) => message.get_original_timestamp(),
             Message::Log(LogMessage { timestamp, .. }) => timestamp,
@@ -548,7 +548,7 @@ impl PartialEq for MessageView {
 
 impl PartialOrd for MessageView {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.message.partial_cmp(&other.message)
+        Some(self.cmp(other))
     }
 }
 
@@ -572,7 +572,7 @@ impl MessageView {
                 .history
                 .iter()
                 .max()
-                .map(|version| {
+                .and_then(|version| {
                     version
                         .oobs
                         .iter()
@@ -602,7 +602,6 @@ impl MessageView {
                             image
                         })
                 })
-                .flatten()
                 .unwrap_or(Arc::new(RwLock::new(None))),
             Message::Log(_) => Arc::new(RwLock::new(None)),
         };
@@ -744,45 +743,38 @@ impl MessageView {
                     // We must ignore them for the visible length count but include them in the
                     // final chunk that will be written to the terminal
 
-                    if let Some(word) = words.next() {
-                        match word {
-                            "[" => {
-                                // Control Sequence Introducer are accepted and can safely be
-                                // written to terminal
-                                let mut escape = String::from("\x1b[");
-                                let mut end = false;
+                    if let Some("[") = words.next() {
+                        // Control Sequence Introducer are accepted and can safely be
+                        // written to terminal
+                        let mut escape = String::from("\x1b[");
+                        let mut end = false;
 
-                                for word in words.by_ref() {
-                                    for c in word.chars() {
-                                        // Push all char belonging to escape sequence
-                                        // but keep remaining for wrap computation
-                                        if !end {
-                                            escape.push(c);
-                                            match c {
-                                                '\x30'..='\x3f' => {} // parameter bytes
-                                                '\x20'..='\x2f' => {} // intermediate bytes
-                                                '\x40'..='\x7e' => {
-                                                    // final byte
-                                                    chunk.push_str(&escape);
-                                                    end = true;
-                                                }
-                                                _ => {
-                                                    // Invalid escape sequence, just ignore it
-                                                    end = true;
-                                                }
-                                            }
-                                        } else {
-                                            remaining.push(c);
+                        for word in words.by_ref() {
+                            for c in word.chars() {
+                                // Push all char belonging to escape sequence
+                                // but keep remaining for wrap computation
+                                if !end {
+                                    escape.push(c);
+                                    match c {
+                                        '\x30'..='\x3f' => {} // parameter bytes
+                                        '\x20'..='\x2f' => {} // intermediate bytes
+                                        '\x40'..='\x7e' => {
+                                            // final byte
+                                            chunk.push_str(&escape);
+                                            end = true;
+                                        }
+                                        _ => {
+                                            // Invalid escape sequence, just ignore it
+                                            end = true;
                                         }
                                     }
-
-                                    if end {
-                                        break;
-                                    }
+                                } else {
+                                    remaining.push(c);
                                 }
                             }
-                            _ => {
-                                // Other sequence are not handled and just ignored
+
+                            if end {
+                                break;
                             }
                         }
                     } else {
@@ -839,7 +831,7 @@ impl MessageView {
                 terminus::vprint!(screen, "{}", line);
             } else {
                 terminus::goto!(screen, dimensions.left, top);
-                let padding = dimensions.width - term_string_visible_len(&line) as u16;
+                let padding = dimensions.width - term_string_visible_len(line) as u16;
                 terminus::vprint!(screen, "{: <1$}", line, padding as usize);
             }
             top += 1;
@@ -902,9 +894,8 @@ where
                     height: RequestedDimension::Absolute(1),
                     width: RequestedDimension::Absolute(
                         self.format(None)
-                            .iter()
-                            .next()
-                            .map_or(0, |line| term_string_visible_len(&line) as u16),
+                            .first()
+                            .map_or(0, |line| term_string_visible_len(line) as u16),
                     ),
                 },
                 MeasureSpec::AtMost(at_most_width) => {

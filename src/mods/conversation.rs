@@ -19,18 +19,13 @@ struct ConversationIndex {
     jid: BareJid,
 }
 
+#[derive(Default)]
 pub struct ConversationMod {
     /// Collections of currently opened conversations.
     conversations: HashMap<ConversationIndex, conversation::Conversation>,
 }
 
 impl ConversationMod {
-    pub fn new() -> Self {
-        Self {
-            conversations: HashMap::new(),
-        }
-    }
-
     pub fn get<'a>(
         &'a self,
         account: &Account,
@@ -86,49 +81,47 @@ impl ModTrait for ConversationMod {
                 };
                 self.conversations.insert(index, conversation);
             }
-            Event::Message(account, message) => {
-                if let message::Message::Xmpp(message) = message {
-                    let account = account.as_ref().unwrap();
-                    let index = ConversationIndex {
+            Event::Message(account, message::Message::Xmpp(message)) => {
+                let account = account.as_ref().unwrap();
+                let index = ConversationIndex {
+                    account: account.clone(),
+                    jid: message.from.clone(),
+                };
+
+                // Create a conversation for incomming chat messages
+                if message.type_ == message::XmppMessageType::Chat
+                    && message.direction == message::Direction::Incoming
+                    && self.conversations.get(&index).is_none()
+                {
+                    let conversation = conversation::Conversation::Chat(conversation::Chat {
                         account: account.clone(),
-                        jid: message.from.clone(),
-                    };
+                        contact: message.from.clone(),
+                    });
+                    self.conversations.insert(index.clone(), conversation);
+                }
 
-                    // Create a conversation for incomming chat messages
-                    if message.type_ == message::XmppMessageType::Chat
-                        && message.direction == message::Direction::Incoming
-                        && self.conversations.get(&index).is_none()
-                    {
-                        let conversation = conversation::Conversation::Chat(conversation::Chat {
-                            account: account.clone(),
-                            contact: message.from.clone(),
-                        });
-                        self.conversations.insert(index.clone(), conversation);
-                    }
-
-                    // Schedule a notification
-                    if !message.archive && message.direction == message::Direction::Incoming {
-                        let conversation = self.conversations.get(&index);
-                        if let Some(conversation) = conversation {
-                            let important = match &conversation {
-                                conversation::Conversation::Chat(_) => true,
-                                conversation::Conversation::Channel(channel) => {
-                                    // Look for mentions
-                                    let mut mention = false;
-                                    let body = message.get_last_body();
-                                    for word in body.split_word_bounds() {
-                                        if channel.nick == word {
-                                            mention = true;
-                                        }
+                // Schedule a notification
+                if !message.archive && message.direction == message::Direction::Incoming {
+                    let conversation = self.conversations.get(&index);
+                    if let Some(conversation) = conversation {
+                        let important = match &conversation {
+                            conversation::Conversation::Chat(_) => true,
+                            conversation::Conversation::Channel(channel) => {
+                                // Look for mentions
+                                let mut mention = false;
+                                let body = message.get_last_body();
+                                for word in body.split_word_bounds() {
+                                    if channel.nick == word {
+                                        mention = true;
                                     }
-                                    mention
                                 }
-                            };
-                            aparte.schedule(Event::Notification {
-                                conversation: conversation.clone(),
-                                important,
-                            });
-                        }
+                                mention
+                            }
+                        };
+                        aparte.schedule(Event::Notification {
+                            conversation: conversation.clone(),
+                            important,
+                        });
                     }
                 }
             }

@@ -118,8 +118,9 @@ r#"/bookmark add|del|edit"#,
     },
 });
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 enum Backend {
+    #[default]
     BookmarksV1,
     BookmarksV2,
 }
@@ -188,7 +189,7 @@ mod bookmarks_v1 {
     pub async fn update(
         aparte: &mut AparteAsync,
         account: &Account,
-        bookmarks: &Vec<contact::Bookmark>,
+        bookmarks: &[contact::Bookmark],
     ) -> Result<()> {
         match aparte.iq(account, update_iq(bookmarks)).await?.payload {
             IqType::Result(_) => Ok(()),
@@ -200,7 +201,7 @@ mod bookmarks_v1 {
         }
     }
 
-    fn update_iq(bookmarks: &Vec<contact::Bookmark>) -> Iq {
+    fn update_iq(bookmarks: &[contact::Bookmark]) -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
         let confs = bookmarks
             .iter()
@@ -602,6 +603,7 @@ mod bookmarks_v2 {
     }
 }
 
+#[derive(Default)]
 pub struct BookmarksMod {
     backend: Backend,
     pub bookmarks: Vec<contact::Bookmark>,
@@ -610,15 +612,6 @@ pub struct BookmarksMod {
 }
 
 impl BookmarksMod {
-    pub fn new() -> Self {
-        Self {
-            backend: Backend::BookmarksV1,
-            bookmarks: vec![],
-            bookmarks_by_name: HashMap::new(),
-            bookmarks_by_jid: HashMap::new(),
-        }
-    }
-
     async fn init_backend(
         aparte: &mut AparteAsync,
         account: &Account,
@@ -626,8 +619,8 @@ impl BookmarksMod {
     ) -> Result<()> {
         log::info!("Init bookmarks");
         match backend {
-            Backend::BookmarksV1 => bookmarks_v1::init(aparte, &account).await,
-            Backend::BookmarksV2 => bookmarks_v2::init(aparte, &account).await,
+            Backend::BookmarksV1 => bookmarks_v1::init(aparte, account).await,
+            Backend::BookmarksV2 => bookmarks_v2::init(aparte, account).await,
         }
     }
 
@@ -638,8 +631,8 @@ impl BookmarksMod {
     ) -> Result<()> {
         log::info!("Fetch bookmarks");
         let bookmarks = match backend {
-            Backend::BookmarksV1 => bookmarks_v1::get_bookmarks(aparte, &account).await?,
-            Backend::BookmarksV2 => bookmarks_v2::get_bookmarks(aparte, &account).await?,
+            Backend::BookmarksV1 => bookmarks_v1::get_bookmarks(aparte, account).await?,
+            Backend::BookmarksV2 => bookmarks_v2::get_bookmarks(aparte, account).await?,
         };
         aparte.schedule(Event::BookmarksUpdate(account.clone(), bookmarks));
 
@@ -687,18 +680,17 @@ impl BookmarksMod {
             .get(&name)
             .context("Unknown bookmark")?;
         let bookmark = self.bookmarks.get_mut(*index).unwrap();
-        match jid {
-            Some(jid) => bookmark.jid = jid,
-            None => {}
+        if let Some(jid) = jid {
+            bookmark.jid = jid;
         }
         match nick {
             Some(nick) if nick.is_empty() => bookmark.nick = None,
             Some(nick) => bookmark.nick = Some(nick),
             None => {}
         }
-        match autojoin {
-            Some(autojoin) => bookmark.autojoin = autojoin,
-            None => {}
+
+        if let Some(autojoin) = autojoin {
+            bookmark.autojoin = autojoin;
         }
 
         Aparte::spawn({
@@ -717,9 +709,8 @@ impl BookmarksMod {
                     }
                 };
 
-                match ret {
-                    Err(err) => crate::error!(aparte, err, "Can't edit bookmark"),
-                    Ok(()) => {}
+                if let Err(err) = ret {
+                    crate::error!(aparte, err, "Can't edit bookmark")
                 }
             }
         });
@@ -783,7 +774,7 @@ impl BookmarksMod {
         &mut self,
         aparte: &mut Aparte,
         account: &Account,
-        bookmarks: &Vec<Bookmark>,
+        bookmarks: &[Bookmark],
     ) -> Result<()> {
         let added: Vec<contact::Bookmark> = bookmarks
             .iter()
@@ -797,14 +788,14 @@ impl BookmarksMod {
             .cloned()
             .collect();
 
-        self.bookmarks = bookmarks.clone();
+        self.bookmarks = bookmarks.to_owned();
         self.update_indexes();
 
         for bookmark in added.iter() {
             aparte.schedule(Event::Bookmark(account.clone(), bookmark.clone()));
             if bookmark.autojoin {
                 let jid = match &bookmark.nick {
-                    Some(nick) => Jid::from(bookmark.jid.clone().with_resource_str(&nick).unwrap()), // TODO avoid unwrap
+                    Some(nick) => Jid::from(bookmark.jid.clone().with_resource_str(nick).unwrap()), // TODO avoid unwrap
                     None => Jid::from(bookmark.jid.clone()),
                 };
                 log::info!("Autojoin {}", jid.to_string());
@@ -862,36 +853,32 @@ impl ModTrait for BookmarksMod {
                         if let Err(err) = Self::get_bookmarks(&mut aparte, &account, &backend).await
                         {
                             crate::error!(aparte, err, "Can't get bookmarks");
-                            return;
                         }
                     }
                 });
             }
             Event::BookmarksUpdate(account, bookmarks) => {
-                if let Err(err) = self.handle_bookmarks(aparte, account, &bookmarks) {
+                if let Err(err) = self.handle_bookmarks(aparte, account, bookmarks) {
                     crate::error!(aparte, err, "Cannot update bookmarks");
                 }
             }
             Event::PubSub {
                 account,
                 from: _,
-                event,
-            } => match event {
-                PubSubEvent::PublishedItems { node, items } => match &node.0 as &str {
-                    ns::BOOKMARKS | ns::BOOKMARKS2 => {
-                        let items = items.iter().cloned().map(|item| item.0).collect();
+                event: PubSubEvent::PublishedItems { node, items },
+            } => match &node.0 as &str {
+                ns::BOOKMARKS | ns::BOOKMARKS2 => {
+                    let items = items.iter().cloned().map(|item| item.0).collect();
 
-                        let bookmarks = match self.backend {
-                            Backend::BookmarksV1 => bookmarks_v1::handle(items),
-                            Backend::BookmarksV2 => bookmarks_v2::handle(items),
-                        };
+                    let bookmarks = match self.backend {
+                        Backend::BookmarksV1 => bookmarks_v1::handle(items),
+                        Backend::BookmarksV2 => bookmarks_v2::handle(items),
+                    };
 
-                        if let Err(err) = self.handle_bookmarks(aparte, account, &bookmarks) {
-                            crate::error!(aparte, err, "Cannot update bookmarks");
-                        }
+                    if let Err(err) = self.handle_bookmarks(aparte, account, &bookmarks) {
+                        crate::error!(aparte, err, "Cannot update bookmarks");
                     }
-                    _ => {}
-                },
+                }
                 _ => {}
             },
             _ => {}

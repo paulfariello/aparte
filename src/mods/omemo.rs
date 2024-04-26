@@ -347,7 +347,7 @@ impl CryptoEngineTrait for OmemoEngine {
                     None,
                 )
                 .now_or_never()
-                .map_or(None, |encrypted| match encrypted {
+                .and_then(|encrypted| match encrypted {
                     Ok(CiphertextMessage::SignalMessage(msg)) => Some(legacy_omemo::Key {
                         rid: device.id.try_into().unwrap(),
                         prekey: legacy_omemo::IsPreKey::False,
@@ -488,7 +488,7 @@ impl CryptoEngineTrait for OmemoEngine {
             payload_and_mac.extend(payload.data);
             payload_and_mac.extend(mac);
 
-            let cipher = Aes128Gcm::new(&dek);
+            let cipher = Aes128Gcm::new(dek);
             let nonce = aes_gcm::Nonce::<<Aes128Gcm as AeadCore>::NonceSize>::from_slice(
                 encrypted.header.iv.data.as_slice(),
             );
@@ -506,6 +506,7 @@ impl CryptoEngineTrait for OmemoEngine {
     }
 }
 
+#[derive(Default)]
 pub struct OmemoMod {
     signal_stores: HashMap<Account, SignalStorage>,
 }
@@ -527,12 +528,6 @@ fn fingerprint(pub_key: &PublicKey) -> String {
 }
 
 impl OmemoMod {
-    pub fn new() -> Self {
-        Self {
-            signal_stores: HashMap::new(),
-        }
-    }
-
     fn configure(&mut self, aparte: &mut Aparte, account: &Account) -> Result<()> {
         log::info!("Configure omemo for {account}");
         let signal_store = SignalStorage::new(account.clone(), aparte.storage.clone());
@@ -660,7 +655,7 @@ impl OmemoMod {
                     libsignal_protocol::PreKeyId::from(*i),
                     &libsignal_protocol::PreKeyRecord::new(
                         libsignal_protocol::PreKeyId::from(*i),
-                        &pre_key,
+                        pre_key,
                     ),
                     None,
                 )
@@ -703,7 +698,7 @@ impl OmemoMod {
             .ok_or(anyhow!("OMEMO not configured for {account}"))?;
 
         let identities = match jid {
-            None => vec![IdentityKeyPair::try_from(
+            None => vec![*IdentityKeyPair::try_from(
                 signal_store
                     .storage
                     .get_omemo_own_device(account)?
@@ -712,13 +707,12 @@ impl OmemoMod {
                     .context("Missing identity for device")?
                     .as_slice(),
             )?
-            .public_key()
-            .clone()],
+            .public_key()],
             Some(jid) => signal_store
                 .storage
-                .get_omemo_contact_identities(&account, jid)?
+                .get_omemo_contact_identities(account, jid)?
                 .into_iter()
-                .map(|identity| identity.public_key().clone())
+                .map(|identity| *identity.public_key())
                 .collect(),
         };
 
@@ -778,10 +772,9 @@ impl OmemoMod {
             .iter()
             .filter(|device| device.id != own_device)
         {
-            let device =
-                aparte
-                    .storage
-                    .upsert_omemo_contact_device(account, jid, device.id.try_into()?)?;
+            let device = aparte
+                .storage
+                .upsert_omemo_contact_device(account, jid, device.id)?;
 
             log::info!("Update {jid}'s OMEMO device {0} bundle", device.id);
             let device_id = device.id.try_into().context("Corrupted device id")?;
@@ -940,6 +933,7 @@ impl OmemoMod {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn ensure_device_bundle_is_published(
         aparte: &mut AparteAsync,
         account: &Account,
@@ -979,6 +973,7 @@ impl OmemoMod {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn publish_bundle(
         aparte: &mut AparteAsync,
         account: &Account,
@@ -1248,7 +1243,7 @@ impl ModTrait for OmemoMod {
                 OmemoEvent::ShowFingerprints { account, jid } => {
                     let account = account.clone();
 
-                    if let Err(e) = self.show_fingerprints(aparte, &account, &jid) {
+                    if let Err(e) = self.show_fingerprints(aparte, &account, jid) {
                         crate::error!(aparte, e, "Cannot get own OMEMO fingerprint");
                     }
                 }

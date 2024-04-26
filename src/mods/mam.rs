@@ -96,6 +96,7 @@ impl Query {
     }
 }
 
+#[derive(Default)]
 pub struct MamMod {
     /// Queries indexed by queryid
     queries: HashMap<String, Query>,
@@ -105,13 +106,6 @@ pub struct MamMod {
 }
 
 impl MamMod {
-    pub fn new() -> Self {
-        Self {
-            queries: HashMap::new(),
-            iq2id: HashMap::new(),
-        }
-    }
-
     fn query(&mut self, aparte: &mut Aparte, account: &Account, query: Query) {
         let (queryid, iq) = query.start();
         self.queries.insert(queryid.clone(), query);
@@ -123,16 +117,15 @@ impl MamMod {
         if let Some(id) = &result.queryid {
             if let Some(query) = self.queries.get_mut(&id.0) {
                 query.count -= 1;
-                match (result.forwarded.delay, result.forwarded.stanza) {
-                    (Some(delay), Some(message)) => {
-                        aparte.schedule(Event::RawMessage {
-                            account: account.clone(),
-                            message,
-                            delay: Some(delay),
-                            archive: true,
-                        });
-                    }
-                    _ => {}
+                if let (Some(delay), Some(message)) =
+                    (result.forwarded.delay, result.forwarded.stanza)
+                {
+                    aparte.schedule(Event::RawMessage {
+                        account: account.clone(),
+                        message,
+                        delay: Some(delay),
+                        archive: true,
+                    });
                 }
             }
         }

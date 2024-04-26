@@ -60,7 +60,7 @@ impl DiscoMod {
         let resp = aparte
             .iq(
                 account,
-                Self::disco_info_query_iq(&Jid::from_str(&jid.domain().to_string()).unwrap(), None),
+                Self::disco_info_query_iq(&Jid::from_str(jid.domain().as_ref()).unwrap(), None),
             )
             .await?;
 
@@ -131,8 +131,8 @@ impl ModTrait for DiscoMod {
                     server_features.extend(features.clone());
                 }
             }
-            Event::Iq(account, iq) => match iq.payload.clone() {
-                IqType::Get(el) => {
+            Event::Iq(account, iq) => {
+                if let IqType::Get(el) = iq.payload.clone() {
                     if let Ok(_disco) = disco::DiscoInfoQuery::try_from(el) {
                         let id = iq.id.clone();
                         let disco = self.get_disco();
@@ -140,8 +140,7 @@ impl ModTrait for DiscoMod {
                         aparte.send(account, iq);
                     }
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }

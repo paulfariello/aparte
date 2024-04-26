@@ -16,17 +16,12 @@ use crate::message::Message;
 use crate::mods::disco;
 use crate::mods::messages;
 
+#[derive(Default)]
 pub struct CorrectionMod {
     waiting_corrections: HashMap<String, Vec<XmppParsersMessage>>,
 }
 
 impl CorrectionMod {
-    pub fn new() -> Self {
-        Self {
-            waiting_corrections: HashMap::new(),
-        }
-    }
-
     fn handle_replace(
         &mut self,
         aparte: &mut Aparte,
@@ -53,10 +48,7 @@ impl CorrectionMod {
                 Some(Event::Message(Some(account.clone()), original.clone()))
             } else {
                 log::info!("Missing original message: {}", replace.id);
-                let waiting_corrections = self
-                    .waiting_corrections
-                    .entry(replace.id)
-                    .or_insert(Vec::new());
+                let waiting_corrections = self.waiting_corrections.entry(replace.id).or_default();
                 waiting_corrections.push(message.clone());
                 None
             }
@@ -90,7 +82,7 @@ impl CorrectionMod {
         for correction in self
             .waiting_corrections
             .remove(message.id.as_ref().unwrap()) // id is not None (guaranteed by caller)
-            .unwrap_or(Vec::new())
+            .unwrap_or_default()
             .into_iter()
         {
             let correction = Event::RawMessage {
@@ -156,20 +148,18 @@ impl ModTrait for CorrectionMod {
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
-        match event {
-            Event::RawMessage {
-                account,
-                message,
-                delay: _,
-                archive,
-            } => {
-                for payload in message.payloads.iter() {
-                    if let Ok(replace) = Replace::try_from(payload.clone()) {
-                        self.handle_replace(aparte, account, message, replace, *archive);
-                    }
+        if let Event::RawMessage {
+            account,
+            message,
+            delay: _,
+            archive,
+        } = event
+        {
+            for payload in message.payloads.iter() {
+                if let Ok(replace) = Replace::try_from(payload.clone()) {
+                    self.handle_replace(aparte, account, message, replace, *archive);
                 }
             }
-            _ => {}
         }
     }
 }
