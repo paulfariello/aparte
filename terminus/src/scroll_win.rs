@@ -108,12 +108,14 @@ where
 
         // Look for children index that correspond to a page up
         let mut remaining_height = dimensions.height;
-        for (i, child) in self
-            .children
-            .range(..=self.bottom_visible_child())
-            .rev()
-            .enumerate()
-        {
+
+        let range = if let Some(bottom_visible_child) = self.bottom_visible_child() {
+            self.children.range(..=bottom_visible_child)
+        } else {
+            self.children.range(..)
+        };
+
+        for (i, child) in range.rev().enumerate() {
             let child_height = match child.measure(&measure_specs).height {
                 RequestedDimension::ExpandMax => dimensions.height,
                 RequestedDimension::Absolute(child_height) => child_height,
@@ -156,22 +158,23 @@ where
         // Look for children index that correspond to a page down
 
         let mut remaining_height = dimensions.height;
-        match self
-            .children
-            .range(self.bottom_visible_child()..) // We want to keep last visible child on top
-            .enumerate()
-            .find_map(|(i, child)| {
-                let child_height = match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
-                    RequestedDimension::Absolute(child_height) => child_height,
-                };
-                if child_height > remaining_height {
-                    Some(i)
-                } else {
-                    remaining_height -= child_height;
-                    None
-                }
-            }) {
+        let range = if let Some(bottom_visible_child) = self.bottom_visible_child() {
+            self.children.range(bottom_visible_child..)
+        } else {
+            self.children.range(..)
+        };
+        match range.enumerate().find_map(|(i, child)| {
+            let child_height = match child.measure(&measure_specs).height {
+                RequestedDimension::ExpandMax => dimensions.height,
+                RequestedDimension::Absolute(child_height) => child_height,
+            };
+            if child_height > remaining_height {
+                Some(i)
+            } else {
+                remaining_height -= child_height;
+                None
+            }
+        }) {
             // Stopped before last children
             Some(i) => self.bottom_visible_child_index += i,
             // Reach bottom
@@ -182,11 +185,17 @@ where
         true
     }
 
-    fn bottom_visible_child(&self) -> &I {
-        self.children
-            .iter()
-            .nth(self.bottom_visible_child_index)
-            .expect(INVALID_VIEW)
+    fn bottom_visible_child(&self) -> Option<&I> {
+        if self.children.is_empty() {
+            None
+        } else {
+            Some(
+                self.children
+                    .iter()
+                    .nth(self.bottom_visible_child_index)
+                    .expect(INVALID_VIEW),
+            )
+        }
     }
 
     /// List visible children starting from bottom
@@ -194,21 +203,24 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
         let mut remaining_height = dimensions.height;
-        self.children
-            .range(..=self.bottom_visible_child())
-            .rev()
-            .take_while(move |child| {
-                if remaining_height > 0 {
-                    let child_height = match child.measure(&measure_specs).height {
-                        RequestedDimension::ExpandMax => dimensions.height,
-                        RequestedDimension::Absolute(child_height) => child_height,
-                    };
-                    remaining_height -= std::cmp::min(remaining_height, child_height);
-                    true
-                } else {
-                    false
-                }
-            })
+        let range = if let Some(bottom_visible_child) = self.bottom_visible_child() {
+            self.children.range(..=bottom_visible_child)
+        } else {
+            self.children.range(..)
+        };
+
+        range.rev().take_while(move |child| {
+            if remaining_height > 0 {
+                let child_height = match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(child_height) => child_height,
+                };
+                remaining_height -= std::cmp::min(remaining_height, child_height);
+                true
+            } else {
+                false
+            }
+        })
     }
 
     fn layout_from_bottom(&mut self) {
