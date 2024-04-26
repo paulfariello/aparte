@@ -2,7 +2,7 @@ use std::{cell::Cell, fmt};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct InvalidIndex;
 
 impl fmt::Display for InvalidIndex {
