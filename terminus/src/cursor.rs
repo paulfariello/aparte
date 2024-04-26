@@ -1,6 +1,17 @@
-use std::cell::Cell;
+use std::{cell::Cell, fmt};
 
 use unicode_segmentation::UnicodeSegmentation;
+
+#[derive(Debug)]
+pub struct InvalidIndex;
+
+impl fmt::Display for InvalidIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Invalid index")
+    }
+}
+
+impl std::error::Error for InvalidIndex {}
 
 /// Represent a position in a rendered string (starting at 0)
 ///
@@ -14,7 +25,7 @@ impl Cursor {
         Self(Cell::new(value))
     }
 
-    pub fn from_index(input: &str, index: usize) -> Result<Self, ()> {
+    pub fn from_index(input: &str, index: usize) -> Result<Self, InvalidIndex> {
         let mut value = 0;
         for (indice, grapheme) in input.grapheme_indices(true) {
             if indice <= index && index < indice + grapheme.len() {
@@ -26,7 +37,7 @@ impl Cursor {
         if index == input.len() {
             Ok(Self(Cell::new(value)))
         } else {
-            Err(())
+            Err(InvalidIndex)
         }
     }
 
@@ -37,14 +48,14 @@ impl Cursor {
         }
     }
 
-    pub fn try_index(&self, input: &str) -> Result<usize, ()> {
+    pub fn try_index(&self, input: &str) -> Result<usize, InvalidIndex> {
         match input.grapheme_indices(true).nth(self.0.get()) {
             Some((indice, _)) => Ok(indice),
             None => {
                 if input.grapheme_indices(true).count() == self.0.get() {
                     Ok(input.len())
                 } else {
-                    Err(())
+                    Err(InvalidIndex)
                 }
             }
         }
