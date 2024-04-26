@@ -72,7 +72,6 @@ where
         self
     }
 
-    #[allow(unused)]
     pub fn with_layouts(mut self, layouts: LayoutParams) -> Self {
         self.layouts = layouts;
         self

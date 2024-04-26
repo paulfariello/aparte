@@ -35,7 +35,7 @@ impl<E, W, I> Default for ScrollWin<E, W, I>
 where
     W: Write + AsFd,
     I: View<E, W> + Hash + Eq + Ord,
- {
+{
     fn default() -> Self {
         Self::new()
     }
@@ -68,7 +68,6 @@ where
         self
     }
 
-    #[allow(unused)]
     pub fn with_layout(mut self, layouts: LayoutParams) -> Self {
         self.layouts = layouts;
         self

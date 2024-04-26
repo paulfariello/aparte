@@ -33,7 +33,7 @@ impl<E, W, K> Default for FrameLayout<E, W, K>
 where
     K: Hash + Eq + Clone,
     W: Write + AsFd,
- {
+{
     fn default() -> Self {
         Self::new()
     }
@@ -66,7 +66,6 @@ where
         self
     }
 
-    #[allow(unused)]
     pub fn with_layout(mut self, layout: LayoutParams) -> Self {
         self.layouts = layout;
         self
@@ -103,12 +102,10 @@ where
         }
     }
 
-    #[allow(unused)]
     pub fn get_current_key(&self) -> Option<&K> {
         self.current.as_ref()
     }
 
-    #[allow(unused)]
     pub fn insert<T>(&mut self, key: K, view: T)
     where
         T: View<E, W> + 'static,
@@ -131,7 +128,6 @@ where
         self.children.iter_mut().map(|(_, child)| child)
     }
 
-    #[allow(unused)]
     pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E, W>>> {
         self.children.values()
     }

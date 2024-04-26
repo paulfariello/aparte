@@ -237,7 +237,6 @@ where
 pub enum LayoutParam {
     MatchParent,
     WrapContent,
-    #[allow(unused)]
     Absolute(u16),
 }
 

@@ -109,7 +109,6 @@ where
         self
     }
 
-    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn with_sort_item_by<F>(mut self, compare: F) -> Self
     where
         F: Fn(&V, &V) -> cmp::Ordering + 'static,
@@ -118,7 +117,6 @@ where
         self
     }
 
-    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn with_sort_group(mut self) -> Self
     where
         G: Ord,
@@ -127,7 +125,6 @@ where
         self
     }
 
-    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn with_sort_group_by<F>(mut self, compare: F) -> Self
     where
         F: FnMut(&G, &G) -> cmp::Ordering + 'static,
@@ -136,7 +133,6 @@ where
         self
     }
 
-    #[allow(unused)] // XXX Should be removed once terminus is in its own crate
     pub fn add_group(&mut self, group: G) {
         if let Entry::Vacant(vacant) = self.items.entry(Some(group)) {
             vacant.insert(HashSet::new());
