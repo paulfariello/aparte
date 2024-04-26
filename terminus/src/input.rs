@@ -35,6 +35,12 @@ pub struct Input<E> {
     dimensions: Option<Dimensions>,
 }
 
+impl<E> Default for Input<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E> Input<E> {
     pub fn new() -> Self {
         Self {

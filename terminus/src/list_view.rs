@@ -34,6 +34,16 @@ where
     dimensions: Option<Dimensions>,
 }
 
+impl<E, W, G, V> Default for ListView<E, W, G, V>
+where
+    G: fmt::Display + Hash + Eq,
+    V: fmt::Display + Hash + Eq,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E, W, G, V> ListView<E, W, G, V>
 where
     G: fmt::Display + Hash + Eq,

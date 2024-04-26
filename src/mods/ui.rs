@@ -19,7 +19,17 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use terminus::cursor::Cursor;
+use terminus::{
+    self,
+    cursor::Cursor,
+    frame_layout::FrameLayout,
+    input::Input,
+    linear_layout::{LinearLayout, Orientation},
+    list_view::ListView,
+    scroll_win::ScrollWin,
+    BufferedScreen, Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    RequestedDimension, RequestedDimensions, Screen, View,
+};
 use termion::color;
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
@@ -35,12 +45,6 @@ use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
-use crate::terminus::{
-    self, frame_layout::FrameLayout, input::Input, linear_layout::LinearLayout,
-    linear_layout::Orientation, list_view::ListView, scroll_win::ScrollWin, BufferedScreen,
-    Dimensions, LayoutParams, MeasureSpecs, Screen, View,
-};
-use crate::terminus::{LayoutParam, MeasureSpec, RequestedDimension, RequestedDimensions};
 use crate::{contact, conversation};
 
 // Debounce rendering at 350ms pace (based on Doherty Threshold)

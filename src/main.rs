@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use clap::Parser;
-use terminus;
 
 mod account;
 mod async_iq;

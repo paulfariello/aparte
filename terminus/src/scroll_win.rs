@@ -31,6 +31,16 @@ where
     layouts: LayoutParams,
 }
 
+impl<E, W, I> Default for ScrollWin<E, W, I>
+where
+    W: Write + AsFd,
+    I: View<E, W> + Hash + Eq + Ord,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E, W, I> ScrollWin<E, W, I>
 where
     W: Write + AsFd,
@@ -868,8 +878,8 @@ mod tests {
 
         // Then
         let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
-        assert_eq!(visible_children[0].dirty, true);
-        assert_eq!(visible_children[1].dirty, true);
+        assert!(visible_children[0].dirty);
+        assert!(visible_children[1].dirty);
     }
 
     #[test]
@@ -903,7 +913,7 @@ mod tests {
         let dirty = scroll_win.is_dirty();
 
         // Then
-        assert_eq!(dirty, true);
+        assert!(dirty);
     }
 
     #[test]
@@ -937,6 +947,6 @@ mod tests {
         let dirty = scroll_win.is_dirty();
 
         // Then
-        assert_eq!(dirty, false);
+        assert!(!dirty);
     }
 }

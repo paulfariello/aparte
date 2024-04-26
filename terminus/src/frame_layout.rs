@@ -29,6 +29,16 @@ where
     dimensions: Option<Dimensions>,
 }
 
+impl<E, W, K> Default for FrameLayout<E, W, K>
+where
+    K: Hash + Eq + Clone,
+    W: Write + AsFd,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E, W, K> FrameLayout<E, W, K>
 where
     K: Hash + Eq + Clone,

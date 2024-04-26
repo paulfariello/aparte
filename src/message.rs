@@ -21,6 +21,10 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
 #[cfg(feature = "image")]
 use sixel_image::SixelImage;
+use terminus::{
+    self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, Screen, View,
+};
 use termion::color;
 use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
@@ -39,10 +43,6 @@ use crate::core::Event;
 use crate::i18n;
 #[cfg(feature = "image")]
 use crate::image::convert_to_sixel;
-use crate::terminus::{
-    self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, Screen, View,
-};
 
 #[derive(Debug, Clone)]
 pub struct XmppMessageVersion {
@@ -1004,7 +1004,7 @@ mod tests {
     use termion::raw::IntoRawMode as _;
     use termion::screen::IntoAlternateScreen as _;
 
-    use crate::terminus::BufferedScreen;
+    use terminus::BufferedScreen;
 
     use super::*;
 
@@ -1025,7 +1025,7 @@ mod tests {
     }
 
     impl AsFd for MockWriter {
-        fn as_fd<'a>(&'a self) -> std::os::unix::prelude::BorrowedFd<'a> {
+        fn as_fd(&self) -> std::os::unix::prelude::BorrowedFd<'_> {
             self.inner.as_fd()
         }
     }
@@ -1036,7 +1036,7 @@ mod tests {
             MessageView {
                 message: Message::Log(LogMessage {
                     id: String::from(""),
-                    timestamp: epoch.clone().into(),
+                    timestamp: epoch.into(),
                     body: String::from(log),
                 }),
                 dimensions: None,
@@ -1076,17 +1076,14 @@ mod tests {
     ) -> String {
         if let Some(timestamp) = timestamp {
             format!(
-                "{}{}{}{}",
+                "{}{}{}{}{}{} - {}",
                 termion::cursor::Goto(width + 1, top),
                 "\x1B[1K",
                 termion::cursor::Goto(1, top),
-                format!(
-                    "{}{}{} - {}",
-                    color::Bg(color::Reset),
-                    color::Fg(color::Reset),
-                    timestamp.format("%T"),
-                    log,
-                ),
+                color::Bg(color::Reset),
+                color::Fg(color::Reset),
+                timestamp.format("%T"),
+                log,
             )
         } else {
             format!(
