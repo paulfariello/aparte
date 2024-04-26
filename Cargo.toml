@@ -14,6 +14,7 @@ exclude = [
 [features]
 no-cursor-save = []
 strict = []
+image = ["dep:image", "dep:sixel-image", "dep:reqwest"]
 
 [dependencies]
 aes-gcm = "0.10.3"
@@ -32,18 +33,18 @@ flexi_logger = "^0.27"
 futures = "^0.3"
 fuzzy-matcher = "^0.3"
 hsluv = "^0.1"
-image = "0.25.1"
+image = { version = "0.25.1", optional = true }
 itertools = "0.12.1"
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.20.0" }
 linked_hash_set = "^0.1"
 log = "^0.4"
 rand = "0.7.3" # same as libsignal
-reqwest = "0.12.3"
+reqwest = { version = "0.12.3", optional = true }
 rpassword = "^3.0"
 secrecy = { version = "0.8.0", features = ["serde"] }
 serde = { version = "^1.0", features = ["derive"] }
 sha1 = "0.10.6"
-sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1" }
+sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1", optional = true }
 terminus = { path = "terminus" }
 termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
 textwrap = "^0.12"

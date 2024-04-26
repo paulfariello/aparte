@@ -5,15 +5,21 @@ use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::hash::{self, Hash};
-use std::io::{Cursor, Write};
+#[cfg(feature = "image")]
+use std::io::Cursor;
+use std::io::Write;
 use std::os::fd::AsFd;
 use std::sync::atomic::{self, AtomicBool};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(feature = "image")]
+use std::sync::RwLock;
 
 use anyhow::Result;
 use chrono::offset::{Local, TimeZone};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
+#[cfg(feature = "image")]
 use image::io::Reader as ImageReader;
+#[cfg(feature = "image")]
 use sixel_image::SixelImage;
 use termion::color;
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -25,8 +31,13 @@ use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
-use crate::core::{Aparte, AparteAsync, Event};
+#[cfg(feature = "image")]
+use crate::core::Aparte;
+use crate::core::AparteAsync;
+#[cfg(feature = "image")]
+use crate::core::Event;
 use crate::i18n;
+#[cfg(feature = "image")]
 use crate::image::convert_to_sixel;
 use crate::terminus::{
     self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
@@ -534,6 +545,7 @@ impl TryFrom<Message> for xmpp_parsers::Element {
 pub struct MessageView {
     pub message: Message,
     dimensions: Option<Dimensions>,
+    #[cfg(feature = "image")]
     image: Arc<RwLock<Option<SixelImage>>>,
     dirty: Arc<AtomicBool>,
 }
@@ -565,6 +577,16 @@ impl Hash for MessageView {
 }
 
 impl MessageView {
+    #[cfg(not(feature = "image"))]
+    pub fn new(_aparte: &mut AparteAsync, message: Message) -> Self {
+        MessageView {
+            message,
+            dimensions: None,
+            dirty: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    #[cfg(feature = "image")]
     pub fn new(aparte: &mut AparteAsync, message: Message) -> Self {
         let dirty = Arc::new(AtomicBool::new(true));
         let image = match &message {
@@ -612,6 +634,8 @@ impl MessageView {
             dirty,
         }
     }
+
+    #[cfg(feature = "image")]
     async fn load_oob(url: &str) -> Result<SixelImage> {
         let client = reqwest::Client::new();
         let response = client
@@ -840,6 +864,7 @@ impl MessageView {
         terminus::restore_cursor!(screen);
     }
 
+    #[cfg(feature = "image")]
     fn render_image<W>(&self, screen: &mut Screen<W>)
     where
         W: Write + AsFd,
@@ -864,6 +889,50 @@ impl MessageView {
         }
         terminus::restore_cursor!(screen);
     }
+
+    fn measure_text(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        match measure_specs.width {
+            MeasureSpec::Unspecified => RequestedDimensions {
+                height: RequestedDimension::Absolute(1),
+                width: RequestedDimension::Absolute(
+                    self.format(None)
+                        .first()
+                        .map_or(0, |line| term_string_visible_len(line) as u16),
+                ),
+            },
+            MeasureSpec::AtMost(at_most_width) => {
+                let formatted = self.format(Some(at_most_width));
+                RequestedDimensions {
+                    height: RequestedDimension::Absolute(formatted.len() as u16),
+                    width: RequestedDimension::Absolute(cmp::min(
+                        formatted.iter().map(|line| line.len()).max().unwrap_or(0) as u16,
+                        at_most_width,
+                    )),
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "image")]
+    fn measure_image(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        let image = self.image.read().unwrap();
+        let image = image.as_ref().unwrap();
+        let term_size_pixel =
+            termion::terminal_size_pixels().expect("Can't get terminal pixel size");
+        let term_size = termion::terminal_size().expect("Can't get terminal size");
+
+        let resolution = (
+            term_size_pixel.0 / term_size.0,
+            term_size_pixel.1 / term_size.1,
+        );
+
+        let (x, y) = image.pixel_size();
+
+        RequestedDimensions {
+            height: RequestedDimension::Absolute((y as u16).div_ceil(resolution.1)),
+            width: RequestedDimension::Absolute((x as u16).div_ceil(resolution.0)),
+        }
+    }
 }
 
 impl<E, W> View<E, W> for MessageView
@@ -872,44 +941,15 @@ where
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // TODO: we could avoid creating the real buffers
-        if let Some(image) = self.image.read().unwrap().as_ref() {
-            let term_size_pixel =
-                termion::terminal_size_pixels().expect("Can't get terminal pixel size");
-            let term_size = termion::terminal_size().expect("Can't get terminal size");
-
-            let resolution = (
-                term_size_pixel.0 / term_size.0,
-                term_size_pixel.1 / term_size.1,
-            );
-
-            let (x, y) = image.pixel_size();
-
-            RequestedDimensions {
-                height: RequestedDimension::Absolute((y as u16).div_ceil(resolution.1)),
-                width: RequestedDimension::Absolute((x as u16).div_ceil(resolution.0)),
-            }
+        #[cfg(feature = "image")]
+        if self.image.read().unwrap().is_some() {
+            self.measure_image(measure_specs)
         } else {
-            match measure_specs.width {
-                MeasureSpec::Unspecified => RequestedDimensions {
-                    height: RequestedDimension::Absolute(1),
-                    width: RequestedDimension::Absolute(
-                        self.format(None)
-                            .first()
-                            .map_or(0, |line| term_string_visible_len(line) as u16),
-                    ),
-                },
-                MeasureSpec::AtMost(at_most_width) => {
-                    let formatted = self.format(Some(at_most_width));
-                    RequestedDimensions {
-                        height: RequestedDimension::Absolute(formatted.len() as u16),
-                        width: RequestedDimension::Absolute(cmp::min(
-                            formatted.iter().map(|line| line.len()).max().unwrap_or(0) as u16,
-                            at_most_width,
-                        )),
-                    }
-                }
-            }
+            self.measure_text(measure_specs)
         }
+
+        #[cfg(not(feature = "image"))]
+        self.measure_text(measure_specs)
     }
 
     fn layout(&mut self, dimensions: &Dimensions) {
@@ -928,11 +968,15 @@ where
             self.dimensions
         );
         if self.dirty.swap(false, atomic::Ordering::Relaxed) {
+            #[cfg(feature = "image")]
             if self.image.read().unwrap().is_some() {
                 self.render_image(screen)
             } else {
                 self.render_text(screen)
             }
+
+            #[cfg(not(feature = "image"))]
+            self.render_text(screen)
         }
     }
 
@@ -996,6 +1040,7 @@ mod tests {
                     body: String::from(log),
                 }),
                 dimensions: None,
+                #[cfg(feature = "image")]
                 image: Arc::new(RwLock::new(None)),
                 dirty: Arc::new(AtomicBool::new(true)),
             },
