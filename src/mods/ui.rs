@@ -116,7 +116,6 @@ where
                 std::any::type_name::<Self>(),
                 self.dimensions
             );
-            terminus::save_cursor!(screen);
             let dimensions = self.dimensions.as_ref().unwrap();
 
             terminus::goto!(screen, dimensions.left, dimensions.top);
@@ -165,8 +164,6 @@ where
                 color::Fg(color::Reset),
                 termion::style::NoBold
             );
-
-            terminus::restore_cursor!(screen);
         }
     }
 
@@ -275,7 +272,6 @@ where
                 std::any::type_name::<Self>(),
                 self.dimensions
             );
-            terminus::save_cursor!(screen);
             let dimensions = self.dimensions.as_ref().unwrap();
 
             let mut written = 0;
@@ -358,8 +354,6 @@ where
                 color::Bg(color::Reset),
                 color::Fg(color::Reset)
             );
-
-            terminus::restore_cursor!(screen);
         }
     }
 
@@ -945,6 +939,7 @@ impl ModTrait for UIMod {
         self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
         self.root.layout(&self.dimensions);
         self.root.render(&mut self.screen);
+        terminus::restore_cursor!(&mut self.screen);
 
         let mut console = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal).with_event(
             |layout, event| {
@@ -1174,6 +1169,7 @@ impl ModTrait for UIMod {
                     Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
                 self.root.layout(&self.dimensions);
                 self.root.render(&mut self.screen);
+                terminus::restore_cursor!(&mut self.screen);
             }
             Event::Close(window) => {
                 if window != "console" {
@@ -1361,6 +1357,7 @@ impl ModTrait for UIMod {
             self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
             self.root.layout(&self.dimensions);
             self.root.render(&mut self.screen);
+            terminus::restore_cursor!(&mut self.screen);
             terminus::flush!(self.screen);
         } else {
             log::debug!("Debounce rendering");

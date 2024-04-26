@@ -840,7 +840,6 @@ impl MessageView {
         W: Write + AsFd,
     {
         let dimensions = self.dimensions.as_ref().unwrap();
-        terminus::save_cursor!(screen);
 
         let mut top = dimensions.top;
         let formatted = self.format(Some(dimensions.width));
@@ -860,8 +859,6 @@ impl MessageView {
             }
             top += 1;
         }
-
-        terminus::restore_cursor!(screen);
     }
 
     #[cfg(feature = "image")]
@@ -878,8 +875,6 @@ impl MessageView {
 
         let header = Self::format_header(message);
 
-        terminus::save_cursor!(screen);
-
         terminus::goto!(screen, dimensions.left, dimensions.top);
         terminus::vprint!(screen, "{}", header);
         if let Some(image) = self.image.read().unwrap().as_ref() {
@@ -887,7 +882,6 @@ impl MessageView {
         } else {
             terminus::vprint!(screen, "…");
         }
-        terminus::restore_cursor!(screen);
     }
 
     fn measure_text(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
@@ -1096,15 +1090,6 @@ mod tests {
         }
     }
 
-    fn with_cursor_restoration(message: String) -> String {
-        format!(
-            "{}{}{}",
-            termion::cursor::Save,
-            message,
-            termion::cursor::Restore,
-        )
-    }
-
     #[test]
     fn test_render_single_line() {
         // Given
@@ -1125,13 +1110,7 @@ mod tests {
         let output = stdout.take();
         assert_eq!(
             output,
-            with_cursor_restoration(raw_formatted_log_message_line(
-                Some(timestamp),
-                1,
-                100,
-                "a log"
-            ))
-            .as_bytes()
+            raw_formatted_log_message_line(Some(timestamp), 1, 100, "a log").as_bytes()
         );
     }
 
@@ -1161,7 +1140,7 @@ mod tests {
         let output = stdout.take();
         assert_eq!(
             output,
-            with_cursor_restoration(format!(
+            format!(
                 "{}{}",
                 raw_formatted_log_message_line(
                     Some(timestamp),
@@ -1170,7 +1149,7 @@ mod tests {
                     "a very very long long message"
                 ),
                 raw_formatted_log_message_line(None, 2, 40, " log")
-            ))
+            )
             .as_bytes()
         );
     }
@@ -1200,7 +1179,7 @@ mod tests {
         let output = stdout.take();
         assert_eq!(
             output,
-            with_cursor_restoration(raw_formatted_log_message_line(None, 1, 40, " log")).as_bytes()
+            raw_formatted_log_message_line(None, 1, 40, " log").as_bytes()
         );
     }
 }

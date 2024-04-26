@@ -12,7 +12,6 @@ exclude = [
 ]
 
 [features]
-no-cursor-save = []
 strict = []
 image = ["dep:image", "dep:sixel-image", "dep:reqwest"]
 

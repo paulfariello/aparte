@@ -394,8 +394,6 @@ where
             return;
         }
 
-        super::save_cursor!(screen);
-
         for child in self.visible_children() {
             // Render only if view has been set dirty (forced by parent) or if child required
             // rendering
@@ -403,8 +401,6 @@ where
                 child.render(screen);
             }
         }
-
-        super::restore_cursor!(screen);
     }
 
     fn event(&mut self, event: &mut E) {

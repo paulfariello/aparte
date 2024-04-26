@@ -459,7 +459,6 @@ macro_rules! flush {
     };
 }
 
-//#[cfg(not(feature = "no-cursor-save"))]
 #[macro_export]
 macro_rules! save_cursor {
     ($screen:expr) => {
@@ -467,29 +466,12 @@ macro_rules! save_cursor {
     };
 }
 
-//#[cfg(feature = "no-cursor-save")]
-//#[macro_export]
-//macro_rules! save_cursor {
-//    ($screen:expr) => {
-//        let (cursor_x, cursor_y) = $screen.cursor_pos().unwrap();
-//    };
-//}
-
-//#[cfg(not(feature = "no-cursor-save"))]
 #[macro_export]
 macro_rules! restore_cursor {
     ($screen:expr) => {
         $crate::vprint!($screen, "{}", ::termion::cursor::Restore);
     };
 }
-
-//#[cfg(feature = "no-cursor-save")]
-//#[macro_export]
-//macro_rules! restore_cursor {
-//    ($screen:expr) => {
-//        goto!($screen, cursor_x, cursor_y);
-//    };
-//}
 
 impl<E, W> dyn View<E, W> where W: Write {}
 

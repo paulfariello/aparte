@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use crate::cursor::Cursor;
+use crate::{flush, goto, save_cursor, vprint};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::os::fd::AsFd;
@@ -281,9 +282,9 @@ where
             self.width.set(dimensions.width as usize);
             match self.password {
                 true => {
-                    super::goto!(screen, dimensions.left, dimensions.top);
-                    super::vprint!(screen, "password: ");
-                    super::flush!(screen);
+                    goto!(screen, dimensions.left, dimensions.top);
+                    vprint!(screen, "password: ");
+                    flush!(screen);
                 }
                 false => {
                     // Max displayable size is view width less 1 for cursor
@@ -311,23 +312,22 @@ where
 
                     if dimensions.left == 1 {
                         // Use fast erase if possible
-                        super::goto!(screen, dimensions.left + dimensions.width, dimensions.top);
-                        super::vprint!(screen, "{}", "\x1B[1K");
-                        super::goto!(screen, dimensions.left, dimensions.top);
-                        super::vprint!(screen, "{}", buf);
+                        goto!(screen, dimensions.left + dimensions.width, dimensions.top);
+                        vprint!(screen, "{}", "\x1B[1K");
+                        goto!(screen, dimensions.left, dimensions.top);
+                        vprint!(screen, "{}", buf);
                     } else {
-                        super::goto!(screen, dimensions.left, dimensions.top);
+                        goto!(screen, dimensions.left, dimensions.top);
                         let padding = dimensions.width - term_string_visible_len(buf) as u16;
-                        super::vprint!(screen, "{}{: <1$}", buf, padding as usize);
+                        vprint!(screen, "{}{: <1$}", buf, padding as usize);
                     }
 
-                    super::goto!(
+                    goto!(
                         screen,
                         dimensions.left + cursor.get() as u16,
                         dimensions.top
                     );
-
-                    super::flush!(screen);
+                    save_cursor!(screen);
                 }
             }
         }
