@@ -21,6 +21,8 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
+use secrecy::Secret;
+use shlex::Shlex;
 use terminus::cursor::Cursor;
 use termion::event::Key;
 use tokio::runtime::Runtime as TokioRuntime;
@@ -380,6 +382,13 @@ pub struct Connection {
     pub account: FullJid,
 }
 
+fn strip_trailing_newline(input: &str) -> &str {
+    input
+        .strip_suffix("\r\n")
+        .or(input.strip_suffix("\n"))
+        .unwrap_or(input)
+}
+
 command_def!(connect,
 r#"/connect <account>
 
@@ -402,6 +411,19 @@ Examples:
     },
     password: Password = {
         lookup: |aparte, _command| {
+            let eval_password = aparte.config.accounts.get(&account_name).and_then(|account| account.eval_password.clone());
+            if let Some(eval_password) = eval_password {
+                let lex = Shlex::new(&eval_password);
+                let cmd_vec: Vec<String> = lex.collect();
+                let cmd_output = std::process::Command::new(&cmd_vec[0]).args(&cmd_vec[1..]).output();
+                if let Ok(cmd_output) = cmd_output {
+                    if cmd_output.status.success() {
+                        let output_string = String::from_utf8(cmd_output.stdout).unwrap();
+                        let pwd = strip_trailing_newline(&output_string).to_string();
+                        return Some(Secret::from(pwd));
+                    }
+                }
+            }
             aparte.config.accounts.get(&account_name).and_then(|account| account.password.clone())
         }
     },
@@ -420,6 +442,7 @@ Examples:
                 port: None,
                 autoconnect: false,
                 password: None,
+                eval_password: None,
             }
         } else {
             anyhow::bail!("Unknown account or invalid jid {account_name}");

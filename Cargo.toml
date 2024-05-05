@@ -53,6 +53,7 @@ toml = "^0.5"
 unicode-segmentation = "^1.6"
 uuid = { version = "^1.7", features = ["v4"]  }
 xmpp-parsers = { git = "https://gitlab.com/paulfariello/xmpp-rs.git", rev = "ce493e82" }
+shlex = "1.0"
 
 [dev-dependencies]
 mockall = "^0.9"

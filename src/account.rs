@@ -24,4 +24,5 @@ pub struct ConnectionInfo {
     pub autoconnect: bool,
     #[serde(skip_serializing)]
     pub password: Option<Password>,
+    pub eval_password: Option<String>,
 }
