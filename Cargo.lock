@@ -1595,7 +1595,7 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 [[package]]
 name = "jid"
 version = "0.10.0"
-source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
+source = "git+https://gitlab.com/xmpp-rs/xmpp-rs.git?rev=ccd46047#ccd46047befb2c2bb8f7bcd72b74193bfeac06b3"
 dependencies = [
  "memchr",
  "minidom",
@@ -1840,7 +1840,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 [[package]]
 name = "minidom"
 version = "0.15.2"
-source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
+source = "git+https://gitlab.com/xmpp-rs/xmpp-rs.git?rev=ccd46047#ccd46047befb2c2bb8f7bcd72b74193bfeac06b3"
 dependencies = [
  "rxml",
 ]
@@ -2805,13 +2805,13 @@ checksum = "e86697c916019a8588c99b5fac3cead74ec0b4b819707a682fd4d23fa0ce1ba1"
 [[package]]
 name = "sasl"
 version = "0.5.1"
-source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
+source = "git+https://gitlab.com/xmpp-rs/xmpp-rs.git?rev=ccd46047#ccd46047befb2c2bb8f7bcd72b74193bfeac06b3"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.0",
  "getrandom 0.2.14",
  "hmac 0.12.1",
  "pbkdf2",
- "sha-1",
+ "sha1",
  "sha2 0.10.8",
 ]
 
@@ -2932,17 +2932,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "sha-1"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5058ada175748e33390e40e872bd0fe59a19f265d0158daa551c5a88a76009c"
-dependencies = [
- "cfg-if 1.0.0",
- "cpufeatures",
- "digest 0.10.7",
 ]
 
 [[package]]
@@ -3430,12 +3419,12 @@ dependencies = [
 [[package]]
 name = "tokio-xmpp"
 version = "3.5.0"
-source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
+source = "git+https://gitlab.com/xmpp-rs/xmpp-rs.git?rev=ccd46047#ccd46047befb2c2bb8f7bcd72b74193bfeac06b3"
 dependencies = [
  "bytes 1.6.0",
  "futures",
  "hickory-resolver",
- "idna 0.4.0",
+ "idna 0.5.0",
  "log",
  "minidom",
  "rand 0.8.5",
@@ -4070,9 +4059,9 @@ dependencies = [
 [[package]]
 name = "xmpp-parsers"
 version = "0.20.0"
-source = "git+https://gitlab.com/paulfariello/xmpp-rs.git?rev=ce493e82#ce493e82d2a046e69aa993e055f021b46fdebc1a"
+source = "git+https://gitlab.com/xmpp-rs/xmpp-rs.git?rev=ccd46047#ccd46047befb2c2bb8f7bcd72b74193bfeac06b3"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.0",
  "blake2",
  "chrono",
  "digest 0.10.7",

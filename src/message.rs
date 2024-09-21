@@ -7,10 +7,6 @@ use std::convert::TryFrom;
 use std::hash::{self, Hash};
 #[cfg(feature = "image")]
 use std::io::Cursor;
-use std::io::Write;
-use std::os::fd::AsFd;
-use std::sync::atomic::{self, AtomicBool};
-use std::sync::Arc;
 #[cfg(feature = "image")]
 use std::sync::RwLock;
 
@@ -21,9 +17,10 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
 #[cfg(feature = "image")]
 use sixel_image::SixelImage;
+use terminus::rendering::ScreenFrame;
 use terminus::{
     self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, Screen, View,
+    RequestedDimensions, View,
 };
 use termion::color;
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -77,8 +74,8 @@ impl PartialOrd for XmppMessageVersion {
 }
 
 impl XmppMessageVersion {
-    pub fn get_best_body<'a>(&'a self, prefered_langs: Vec<&str>) -> &'a String {
-        i18n::get_best(&self.bodies, prefered_langs).unwrap().1
+    pub fn get_best_body<'a>(&'a self, preferred_langs: Vec<&str>) -> &'a String {
+        i18n::get_best(&self.bodies, preferred_langs).unwrap().1
     }
 }
 
@@ -547,7 +544,6 @@ pub struct MessageView {
     dimensions: Option<Dimensions>,
     #[cfg(feature = "image")]
     image: Arc<RwLock<Option<SixelImage>>>,
-    dirty: Arc<AtomicBool>,
 }
 
 impl Eq for MessageView {}
@@ -582,13 +578,11 @@ impl MessageView {
         MessageView {
             message,
             dimensions: None,
-            dirty: Arc::new(AtomicBool::new(true)),
         }
     }
 
     #[cfg(feature = "image")]
     pub fn new(aparte: &mut AparteAsync, message: Message) -> Self {
-        let dirty = Arc::new(AtomicBool::new(true));
         let image = match &message {
             Message::Xmpp(message) => message
                 .history
@@ -606,7 +600,6 @@ impl MessageView {
                                 let url = oob.url.clone();
                                 let image = Arc::clone(&image);
                                 let mut aparte = aparte.clone();
-                                let dirty = Arc::clone(&dirty);
                                 async move {
                                     log::debug!("Loading OOB: {}", url);
                                     match Self::load_oob(&url).await {
@@ -614,7 +607,6 @@ impl MessageView {
                                             log::debug!("Loaded OOB from {}", url);
                                             let mut image = image.write().unwrap();
                                             *image = Some(sixel);
-                                            dirty.store(true, atomic::Ordering::Relaxed);
                                             aparte.schedule(Event::UIRender(false));
                                         }
                                         Err(err) => log::error!("{}", err),
@@ -631,7 +623,6 @@ impl MessageView {
             message,
             dimensions: None,
             image,
-            dirty,
         }
     }
 
@@ -663,13 +654,7 @@ impl MessageView {
         let mut lines = Vec::new();
         for line in message.body.lines() {
             lines.append(&mut Self::format_text(
-                format!(
-                    "{}{}{} - {}",
-                    color::Bg(color::Reset),
-                    color::Fg(color::Reset),
-                    timestamp.format("%T"),
-                    line
-                ),
+                format!("{} - {}", timestamp.format("%T"), line),
                 max_width,
             ))
         }
@@ -835,28 +820,13 @@ impl MessageView {
         buffers
     }
 
-    fn render_text<W>(&self, screen: &mut Screen<W>)
-    where
-        W: Write + AsFd,
-    {
-        let dimensions = self.dimensions.as_ref().unwrap();
-
-        let mut top = dimensions.top;
-        let formatted = self.format(Some(dimensions.width));
+    fn render_text(&self, frame: &mut ScreenFrame) {
+        let mut top = 0;
+        let formatted = self.format(Some(frame.width()));
 
         // Format as much as possible starting from bottom line
-        for line in &formatted[formatted.len() - dimensions.height as usize..] {
-            if dimensions.left == 1 {
-                // Use fast erase if possible
-                terminus::goto!(screen, dimensions.left + dimensions.width, top);
-                terminus::vprint!(screen, "{}", "\x1B[1K");
-                terminus::goto!(screen, dimensions.left, top);
-                terminus::vprint!(screen, "{}", line);
-            } else {
-                terminus::goto!(screen, dimensions.left, top);
-                let padding = dimensions.width - term_string_visible_len(line) as u16;
-                terminus::vprint!(screen, "{: <1$}", line, padding as usize);
-            }
+        for line in &formatted[formatted.len() - frame.height() as usize..] {
+            frame.write_at((0, top), line);
             top += 1;
         }
     }
@@ -875,7 +845,7 @@ impl MessageView {
 
         let header = Self::format_header(message);
 
-        terminus::goto!(screen, dimensions.left, dimensions.top);
+        screen.goto(dimensions.left, dimensions.top);
         terminus::vprint!(screen, "{}", header);
         if let Some(image) = self.image.read().unwrap().as_ref() {
             terminus::vprint!(screen, "{}", image.serialize());
@@ -929,10 +899,7 @@ impl MessageView {
     }
 }
 
-impl<E, W> View<E, W> for MessageView
-where
-    W: Write + AsFd,
-{
+impl<E> View<E> for MessageView {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // TODO: we could avoid creating the real buffers
         #[cfg(feature = "image")]
@@ -949,40 +916,28 @@ where
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
 
-        if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.store(true, atomic::Ordering::Relaxed);
-            self.dimensions.replace(dimensions.clone());
-        }
+        self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, screen: &mut Screen<W>) {
+    fn render(&self, mut frame: ScreenFrame) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
             self.dimensions
         );
-        if self.dirty.swap(false, atomic::Ordering::Relaxed) {
-            #[cfg(feature = "image")]
-            if self.image.read().unwrap().is_some() {
-                self.render_image(screen)
-            } else {
-                self.render_text(screen)
-            }
 
-            #[cfg(not(feature = "image"))]
-            self.render_text(screen)
+        #[cfg(feature = "image")]
+        if self.image.read().unwrap().is_some() {
+            self.render_image(&mut frame)
+        } else {
+            self.render_text(&mut frame)
         }
+
+        #[cfg(not(feature = "image"))]
+        self.render_text(&mut frame)
     }
 
     fn event(&mut self, _event: &mut E) {}
-
-    fn set_dirty(&mut self) {
-        self.dirty.store(true, atomic::Ordering::Relaxed);
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty.load(atomic::Ordering::Relaxed)
-    }
 }
 
 #[cfg(test)]
@@ -1036,7 +991,6 @@ mod tests {
                 dimensions: None,
                 #[cfg(feature = "image")]
                 image: Arc::new(RwLock::new(None)),
-                dirty: Arc::new(AtomicBool::new(true)),
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )
