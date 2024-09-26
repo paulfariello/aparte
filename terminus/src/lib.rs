@@ -17,6 +17,7 @@ use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod charxel;
 pub mod cursor;
 pub mod frame_layout;
 pub mod input;
@@ -112,7 +113,7 @@ fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
 }
 
 pub fn is_clean_str(string: &str) -> bool {
-    !string.chars().find(|c| *c == '\x1b').is_some()
+    !string.chars().any(|c| c == '\x1b')
 }
 
 /// Remove all terminal specific chars sequences
@@ -348,72 +349,66 @@ impl From<&Dimensions> for MeasureSpecs {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NamedColor {
-    Black(termion::color::Black),
-    Blue(termion::color::Blue),
-    Cyan(termion::color::Cyan),
-    Green(termion::color::Green),
-    LightBlack(termion::color::LightBlack),
-    LightBlue(termion::color::LightBlue),
-    LightCyan(termion::color::LightCyan),
-    LightGreen(termion::color::LightGreen),
-    LightMagenta(termion::color::LightMagenta),
-    LightRed(termion::color::LightRed),
-    LightWhite(termion::color::LightWhite),
-    LightYellow(termion::color::LightYellow),
-    Magenta(termion::color::Magenta),
-    Red(termion::color::Red),
-    White(termion::color::White),
-    Yellow(termion::color::Yellow),
-}
-
-impl PartialEq for NamedColor {
-    fn eq(&self, other: &Self) -> bool {
-        std::mem::discriminant(self).eq(&std::mem::discriminant(other))
-    }
+    Black,
+    Blue,
+    Cyan,
+    Green,
+    LightBlack,
+    LightBlue,
+    LightCyan,
+    LightGreen,
+    LightMagenta,
+    LightRed,
+    LightWhite,
+    LightYellow,
+    Magenta,
+    Red,
+    White,
+    Yellow,
 }
 
 impl NamedColor {
     pub fn write_fg(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NamedColor::Black(color) => color.write_fg(f),
-            NamedColor::Blue(color) => color.write_fg(f),
-            NamedColor::Cyan(color) => color.write_fg(f),
-            NamedColor::Green(color) => color.write_fg(f),
-            NamedColor::LightBlack(color) => color.write_fg(f),
-            NamedColor::LightBlue(color) => color.write_fg(f),
-            NamedColor::LightCyan(color) => color.write_fg(f),
-            NamedColor::LightGreen(color) => color.write_fg(f),
-            NamedColor::LightMagenta(color) => color.write_fg(f),
-            NamedColor::LightRed(color) => color.write_fg(f),
-            NamedColor::LightWhite(color) => color.write_fg(f),
-            NamedColor::LightYellow(color) => color.write_fg(f),
-            NamedColor::Magenta(color) => color.write_fg(f),
-            NamedColor::Red(color) => color.write_fg(f),
-            NamedColor::White(color) => color.write_fg(f),
-            NamedColor::Yellow(color) => color.write_fg(f),
+            NamedColor::Black => termion::color::Black.write_fg(f),
+            NamedColor::Blue => termion::color::Blue.write_fg(f),
+            NamedColor::Cyan => termion::color::Cyan.write_fg(f),
+            NamedColor::Green => termion::color::Green.write_fg(f),
+            NamedColor::LightBlack => termion::color::LightBlack.write_fg(f),
+            NamedColor::LightBlue => termion::color::LightBlue.write_fg(f),
+            NamedColor::LightCyan => termion::color::LightCyan.write_fg(f),
+            NamedColor::LightGreen => termion::color::LightGreen.write_fg(f),
+            NamedColor::LightMagenta => termion::color::LightMagenta.write_fg(f),
+            NamedColor::LightRed => termion::color::LightRed.write_fg(f),
+            NamedColor::LightWhite => termion::color::LightWhite.write_fg(f),
+            NamedColor::LightYellow => termion::color::LightYellow.write_fg(f),
+            NamedColor::Magenta => termion::color::Magenta.write_fg(f),
+            NamedColor::Red => termion::color::Red.write_fg(f),
+            NamedColor::White => termion::color::White.write_fg(f),
+            NamedColor::Yellow => termion::color::Yellow.write_fg(f),
         }
     }
 
     pub fn write_bg(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            NamedColor::Black(color) => color.write_bg(f),
-            NamedColor::Blue(color) => color.write_bg(f),
-            NamedColor::Cyan(color) => color.write_bg(f),
-            NamedColor::Green(color) => color.write_bg(f),
-            NamedColor::LightBlack(color) => color.write_bg(f),
-            NamedColor::LightBlue(color) => color.write_bg(f),
-            NamedColor::LightCyan(color) => color.write_bg(f),
-            NamedColor::LightGreen(color) => color.write_bg(f),
-            NamedColor::LightMagenta(color) => color.write_bg(f),
-            NamedColor::LightRed(color) => color.write_bg(f),
-            NamedColor::LightWhite(color) => color.write_bg(f),
-            NamedColor::LightYellow(color) => color.write_bg(f),
-            NamedColor::Magenta(color) => color.write_bg(f),
-            NamedColor::Red(color) => color.write_bg(f),
-            NamedColor::White(color) => color.write_bg(f),
-            NamedColor::Yellow(color) => color.write_bg(f),
+            NamedColor::Black => termion::color::Black.write_bg(f),
+            NamedColor::Blue => termion::color::Blue.write_bg(f),
+            NamedColor::Cyan => termion::color::Cyan.write_bg(f),
+            NamedColor::Green => termion::color::Green.write_bg(f),
+            NamedColor::LightBlack => termion::color::LightBlack.write_bg(f),
+            NamedColor::LightBlue => termion::color::LightBlue.write_bg(f),
+            NamedColor::LightCyan => termion::color::LightCyan.write_bg(f),
+            NamedColor::LightGreen => termion::color::LightGreen.write_bg(f),
+            NamedColor::LightMagenta => termion::color::LightMagenta.write_bg(f),
+            NamedColor::LightRed => termion::color::LightRed.write_bg(f),
+            NamedColor::LightWhite => termion::color::LightWhite.write_bg(f),
+            NamedColor::LightYellow => termion::color::LightYellow.write_bg(f),
+            NamedColor::Magenta => termion::color::Magenta.write_bg(f),
+            NamedColor::Red => termion::color::Red.write_bg(f),
+            NamedColor::White => termion::color::White.write_bg(f),
+            NamedColor::Yellow => termion::color::Yellow.write_bg(f),
         }
     }
 }
@@ -421,7 +416,7 @@ impl NamedColor {
 #[derive(Default, Copy, Clone, Debug, PartialEq)]
 pub enum Color {
     Named(NamedColor),
-    Rgb(termion::color::Rgb),
+    Rgb(u8, u8, u8),
     #[default]
     Default,
 }
@@ -433,7 +428,7 @@ fn parse_rgb_str(s: &str) -> Result<Color, String> {
         Red(u8),
         Green(u8, Option<u8>),
         Blue(u8, u8, Option<u8>),
-        Rgb(termion::color::Rgb),
+        Rgb(u8, u8, u8),
     }
 
     let mut state = State::Initial;
@@ -459,19 +454,15 @@ fn parse_rgb_str(s: &str) -> Result<Color, String> {
                 (State::Blue(red, green, None), digit @ ('0'..='9' | 'a'..='f')) => Ok(
                     State::Blue(red, green, Some(digit.to_digit(16).unwrap() as u8 * 16)),
                 ),
-                (State::Blue(red, green, Some(nibble)), digit @ ('0'..='9' | 'a'..='f')) => {
-                    Ok(State::Rgb(termion::color::Rgb(
-                        red,
-                        green,
-                        nibble + digit.to_digit(16).unwrap() as u8,
-                    )))
-                }
+                (State::Blue(red, green, Some(nibble)), digit @ ('0'..='9' | 'a'..='f')) => Ok(
+                    State::Rgb(red, green, nibble + digit.to_digit(16).unwrap() as u8),
+                ),
                 _ => Err(format!("Invalid rgb string {}", s)),
             }?;
     }
 
     match state {
-        State::Rgb(rgb) => Ok(Color::Rgb(rgb)),
+        State::Rgb(r, g, b) => Ok(Color::Rgb(r, g, b)),
         _ => Err(format!("Invalid rgb string {}", s)),
     }
 }
@@ -481,39 +472,23 @@ impl FromStr for Color {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Black" | "black" => Ok(Color::Named(NamedColor::Black(termion::color::Black))),
-            "Blue" | "blue" => Ok(Color::Named(NamedColor::Blue(termion::color::Blue))),
-            "Cyan" | "cyan" => Ok(Color::Named(NamedColor::Cyan(termion::color::Cyan))),
-            "Green" | "green" => Ok(Color::Named(NamedColor::Green(termion::color::Green))),
-            "LightBlack" | "lightblack" => Ok(Color::Named(NamedColor::LightBlack(
-                termion::color::LightBlack,
-            ))),
-            "LightBlue" | "lightblue" => Ok(Color::Named(NamedColor::LightBlue(
-                termion::color::LightBlue,
-            ))),
-            "LightCyan" | "lightcyan" => Ok(Color::Named(NamedColor::LightCyan(
-                termion::color::LightCyan,
-            ))),
-            "LightGreen" | "lightgreen" => Ok(Color::Named(NamedColor::LightGreen(
-                termion::color::LightGreen,
-            ))),
-            "LightMagenta" | "lightmagenta" => Ok(Color::Named(NamedColor::LightMagenta(
-                termion::color::LightMagenta,
-            ))),
-            "LightRed" | "lightred" => {
-                Ok(Color::Named(NamedColor::LightRed(termion::color::LightRed)))
-            }
-            "LightWhite" | "lightwhite" => Ok(Color::Named(NamedColor::LightWhite(
-                termion::color::LightWhite,
-            ))),
-            "LightYellow" | "lightyellow" => Ok(Color::Named(NamedColor::LightYellow(
-                termion::color::LightYellow,
-            ))),
-            "Magenta" | "magenta" => Ok(Color::Named(NamedColor::Magenta(termion::color::Magenta))),
-            "Red" | "red" => Ok(Color::Named(NamedColor::Red(termion::color::Red))),
-            "White" | "white" => Ok(Color::Named(NamedColor::White(termion::color::White))),
-            "Yellow" | "yellow" => Ok(Color::Named(NamedColor::Yellow(termion::color::Yellow))),
-            _ if s.starts_with("#") => parse_rgb_str(s),
+            "Black" | "black" => Ok(Color::Named(NamedColor::Black)),
+            "Blue" | "blue" => Ok(Color::Named(NamedColor::Blue)),
+            "Cyan" | "cyan" => Ok(Color::Named(NamedColor::Cyan)),
+            "Green" | "green" => Ok(Color::Named(NamedColor::Green)),
+            "LightBlack" | "lightblack" => Ok(Color::Named(NamedColor::LightBlack)),
+            "LightBlue" | "lightblue" => Ok(Color::Named(NamedColor::LightBlue)),
+            "LightCyan" | "lightcyan" => Ok(Color::Named(NamedColor::LightCyan)),
+            "LightGreen" | "lightgreen" => Ok(Color::Named(NamedColor::LightGreen)),
+            "LightMagenta" | "lightmagenta" => Ok(Color::Named(NamedColor::LightMagenta)),
+            "LightRed" | "lightred" => Ok(Color::Named(NamedColor::LightRed)),
+            "LightWhite" | "lightwhite" => Ok(Color::Named(NamedColor::LightWhite)),
+            "LightYellow" | "lightyellow" => Ok(Color::Named(NamedColor::LightYellow)),
+            "Magenta" | "magenta" => Ok(Color::Named(NamedColor::Magenta)),
+            "Red" | "red" => Ok(Color::Named(NamedColor::Red)),
+            "White" | "white" => Ok(Color::Named(NamedColor::White)),
+            "Yellow" | "yellow" => Ok(Color::Named(NamedColor::Yellow)),
+            _ if s.starts_with('#') => parse_rgb_str(s),
             _ => Err(format!("Invalid color {}", s)),
         }
     }
@@ -569,7 +544,7 @@ impl fmt::Display for FgColor {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
             Color::Named(color) => color.write_fg(f),
-            Color::Rgb(color) => color.write_fg(f),
+            Color::Rgb(r, g, b) => termion::color::Rgb(r, g, b).write_fg(f),
             Color::Default => termion::color::Reset.write_fg(f),
         }
     }
@@ -579,7 +554,7 @@ impl fmt::Display for BgColor {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
             Color::Named(color) => color.write_bg(f),
-            Color::Rgb(color) => color.write_bg(f),
+            Color::Rgb(r, g, b) => termion::color::Rgb(r, g, b).write_bg(f),
             Color::Default => termion::color::Reset.write_bg(f),
         }
     }
@@ -587,27 +562,27 @@ impl fmt::Display for BgColor {
 
 #[derive(Clone, Copy)]
 pub enum Style {
-    Bold(termion::style::Bold),
-    Faint(termion::style::Faint),
-    Italic(termion::style::Italic),
-    Underline(termion::style::Underline),
-    Blink(termion::style::Blink),
-    Invert(termion::style::Invert),
-    CrossedOut(termion::style::CrossedOut),
-    Framed(termion::style::Framed),
+    Bold,
+    Faint,
+    Italic,
+    Underline,
+    Blink,
+    Invert,
+    CrossedOut,
+    Framed,
 }
 
 impl Debug for Style {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Style::Bold(_) => f.write_str("Bold"),
-            Style::Faint(_) => f.write_str("Faint"),
-            Style::Italic(_) => f.write_str("Italic"),
-            Style::Underline(_) => f.write_str("Underline"),
-            Style::Blink(_) => f.write_str("Blink"),
-            Style::Invert(_) => f.write_str("Invert"),
-            Style::CrossedOut(_) => f.write_str("CrossedOut"),
-            Style::Framed(_) => f.write_str("Framed"),
+            Style::Bold => f.write_str("Bold"),
+            Style::Faint => f.write_str("Faint"),
+            Style::Italic => f.write_str("Italic"),
+            Style::Underline => f.write_str("Underline"),
+            Style::Blink => f.write_str("Blink"),
+            Style::Invert => f.write_str("Invert"),
+            Style::CrossedOut => f.write_str("CrossedOut"),
+            Style::Framed => f.write_str("Framed"),
         }
     }
 }
@@ -650,6 +625,7 @@ pub trait View<E> {
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
+    #[allow(clippy::needless_lifetimes)]
     fn render<'a>(&self, frame: ScreenFrame<'a>);
 
     /// Handle an event
@@ -744,7 +720,7 @@ mod tests {
         let rgb = parse_rgb_str(input);
 
         // Then
-        assert_eq!(rgb, Ok(Color::Rgb(termion::color::Rgb(0x01, 0x22, 0xa3))));
+        assert_eq!(rgb, Ok(Color::Rgb(0x01, 0x22, 0xa3)));
     }
 
     #[test]
@@ -780,7 +756,7 @@ mod tests {
         let rgb = Color::from_str(input);
 
         // Then
-        assert_eq!(rgb, Ok(Color::Rgb(termion::color::Rgb(0x01, 0x22, 0xa3))));
+        assert_eq!(rgb, Ok(Color::Rgb(0x01, 0x22, 0xa3)));
     }
 
     #[test]
@@ -792,10 +768,7 @@ mod tests {
         let rgb = Color::from_str(input);
 
         // Then
-        assert_eq!(
-            rgb,
-            Ok(Color::Named(NamedColor::Cyan(termion::color::Cyan)))
-        );
+        assert_eq!(rgb, Ok(Color::Named(NamedColor::Cyan)));
     }
 
     #[test]

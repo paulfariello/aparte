@@ -1,54 +1,9 @@
-use std::{
-    collections::HashSet,
-    ops::{Index, IndexMut},
-};
-
-use unicode_segmentation::UnicodeSegmentation;
+use std::ops::{Index, IndexMut};
 
 use crate::{
-    is_clean_str, term_string_visible_len, BgColor, CursorPos, Dimensions, FgColor, Style,
+    charxel::{Charxel, IntoCharxels},
+    BgColor, CursorPos, Dimensions, FgColor, Style,
 };
-
-#[derive(Debug, Clone, PartialEq)]
-struct Grapheme(String);
-
-impl std::fmt::Display for Grapheme {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl Default for Grapheme {
-    fn default() -> Self {
-        Grapheme(String::from(" "))
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct Charxel {
-    grapheme: Grapheme,
-    foreground: FgColor,
-    background: BgColor,
-    styles: HashSet<Style>,
-}
-
-impl Charxel {
-    pub fn set_background(&mut self, color: BgColor) {
-        self.background = color;
-    }
-
-    pub fn set_foreground(&mut self, color: FgColor) {
-        self.foreground = color;
-    }
-
-    pub fn set_styles(&mut self, styles: Vec<Style>) {
-        self.styles = HashSet::from_iter(styles.into_iter());
-    }
-
-    pub fn set_grapheme(&mut self, grapheme: String) {
-        self.grapheme = Grapheme(grapheme);
-    }
-}
 
 #[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub struct ScreenSize {
@@ -140,34 +95,31 @@ impl OffscreenRenderBuffer {
         self.cursor = pos;
     }
 
-    fn compute_diff(&self, reference_lines: &Vec<OffscreenLine>) -> Vec<ContinuousDiff> {
+    fn compute_diff(&self, reference_lines: &[OffscreenLine]) -> Vec<ContinuousDiff> {
         let mut diffs: Vec<ContinuousDiff> = vec![];
         let mut current_diff: Option<ContinuousDiff> = None;
 
         for (i, (ref_charxel, charxel)) in reference_lines
             .iter()
-            .map(|line| line.charxels.iter())
-            .flatten()
-            .zip(self.lines.iter().map(|line| line.charxels.iter()).flatten())
+            .flat_map(|line| line.charxels.iter())
+            .zip(self.lines.iter().flat_map(|line| line.charxels.iter()))
             .enumerate()
         {
             if charxel == ref_charxel {
                 if let Some(diff) = current_diff.take() {
                     diffs.push(diff);
                 }
+            } else if let Some(diff) = current_diff.as_mut() {
+                diff.charxels.push(charxel.clone());
             } else {
-                if let Some(diff) = current_diff.as_mut() {
-                    diff.charxels.push(charxel.clone());
-                } else {
-                    let diff = ContinuousDiff {
-                        pos: CursorPos {
-                            top: (i / (self.size.width as usize)) as u16,
-                            left: (i % (self.size.width as usize)) as u16,
-                        },
-                        charxels: vec![charxel.clone()],
-                    };
-                    current_diff = Some(diff);
-                }
+                let diff = ContinuousDiff {
+                    pos: CursorPos {
+                        top: (i / (self.size.width as usize)) as u16,
+                        left: (i % (self.size.width as usize)) as u16,
+                    },
+                    charxels: vec![charxel.clone()],
+                };
+                current_diff = Some(diff);
             }
         }
 
@@ -297,58 +249,26 @@ impl<'a> ScreenFrame<'a> {
     pub fn set_styles(&mut self, styles: Vec<Style>) {
         for i in self.dimensions.top..self.dimensions.height {
             for j in self.dimensions.left..self.dimensions.width {
-                self.offscreen[i][j].set_styles(styles.clone());
+                self.offscreen[i][j].set_styles(&styles);
             }
         }
     }
 
-    fn full_write(
-        &mut self,
-        str: &str,
-        styles: Option<Vec<Style>>,
-        background: Option<BgColor>,
-        foreground: Option<FgColor>,
-    ) {
-        assert!(is_clean_str(str));
-        for grapheme in str.graphemes(true) {
-            let mut charxel = &mut self.offscreen[self.dimensions.top + self.cursor.top]
-                [self.dimensions.left + self.cursor.left];
+    pub fn write(&mut self, charxels: impl IntoCharxels) {
+        for charxel in charxels.into_charxels() {
+            self.offscreen[self.dimensions.top + self.cursor.top]
+                [self.dimensions.left + self.cursor.left] = charxel;
 
-            charxel.set_grapheme(grapheme.to_string());
-            if let Some(styles) = styles.as_ref() {
-                charxel.set_styles(styles.clone());
-            }
-            if let Some(background) = background {
-                charxel.set_background(background);
-            }
-            if let Some(foreground) = foreground {
-                charxel.set_foreground(foreground);
-            }
-            self.cursor.left += term_string_visible_len(grapheme) as u16;
+            self.cursor.left += 1;
         }
     }
 
-    pub fn write<S>(&mut self, str: S)
-    where
-        S: AsRef<str>,
-    {
-        self.full_write(str.as_ref(), None, None, None)
-    }
-
-    pub fn write_at<CP>(&mut self, at: CP, str: &str)
+    pub fn write_at<CP>(&mut self, at: CP, str: impl IntoCharxels)
     where
         CP: Into<CursorPos>,
     {
         self.cursor = at.into();
-        log::debug!("write `{}' at {:?}", str, self.cursor);
-        self.full_write(str, None, None, None)
-    }
-
-    pub fn write_with_style<S>(&mut self, str: S, style: Style)
-    where
-        S: AsRef<str>,
-    {
-        self.full_write(str.as_ref(), Some(vec![style]), None, None)
+        self.write(str.into_charxels())
     }
 
     pub fn set_cursor(&mut self, position: CursorPos) {

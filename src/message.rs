@@ -8,6 +8,8 @@ use std::hash::{self, Hash};
 #[cfg(feature = "image")]
 use std::io::Cursor;
 #[cfg(feature = "image")]
+use std::sync::Arc;
+#[cfg(feature = "image")]
 use std::sync::RwLock;
 
 use anyhow::Result;
@@ -17,13 +19,12 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
 #[cfg(feature = "image")]
 use sixel_image::SixelImage;
+use terminus::charxel::{Charxel, Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
 use terminus::{
-    self, term_string_visible_len, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, View,
+    self, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, View,
 };
 use termion::color;
-use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
@@ -161,7 +162,7 @@ pub enum Direction {
 pub struct LogMessage {
     pub id: String,
     pub timestamp: DateTime<FixedOffset>,
-    pub body: String,
+    pub body: Charxels,
 }
 
 #[derive(Debug, Clone)]
@@ -422,11 +423,11 @@ impl Message {
         })
     }
 
-    pub fn log(msg: String) -> Self {
+    pub fn log(msg: impl IntoCharxels) -> Self {
         Message::Log(LogMessage {
             id: Uuid::new_v4().to_string(),
             timestamp: LocalTz::now().into(),
-            body: msg,
+            body: msg.into_charxels(),
         })
     }
 
@@ -443,10 +444,10 @@ impl Message {
         }
     }
 
-    pub fn body(&self) -> &str {
+    pub fn body(&self) -> Charxels {
         match self {
-            Message::Xmpp(message) => message.get_last_body(),
-            Message::Log(LogMessage { body, .. }) => body,
+            Message::Xmpp(message) => message.get_last_body().into_charxels(),
+            Message::Log(LogMessage { body, .. }) => body.clone(),
         }
     }
 
@@ -649,14 +650,13 @@ impl MessageView {
         convert_to_sixel(image)
     }
 
-    fn format_log(message: &LogMessage, max_width: Option<u16>) -> Vec<String> {
+    fn format_log(message: &LogMessage, max_width: Option<u16>) -> Vec<Charxels> {
         let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
         let mut lines = Vec::new();
         for line in message.body.lines() {
-            lines.append(&mut Self::format_text(
-                format!("{} - {}", timestamp.format("%T"), line),
-                max_width,
-            ))
+            let mut prefixed_line = format!("{} - ", timestamp.format("%T")).into_charxels();
+            prefixed_line.append(&mut line.clone());
+            lines.append(&mut Self::format_text(prefixed_line, max_width))
         }
         lines
     }
@@ -705,7 +705,7 @@ impl MessageView {
         }
     }
 
-    fn format_xmpp_text(message: &VersionedXmppMessage, max_width: Option<u16>) -> Vec<String> {
+    fn format_xmpp_text(message: &VersionedXmppMessage, max_width: Option<u16>) -> Vec<Charxels> {
         let mut buffer = Self::format_header(message);
 
         let padding_len = buffer.len();
@@ -724,93 +724,38 @@ impl MessageView {
         Self::format_text(buffer, max_width)
     }
 
-    fn format(&self, max_width: Option<u16>) -> Vec<String> {
+    fn format(&self, max_width: Option<u16>) -> Vec<Charxels> {
         match &self.message {
             Message::Log(message) => Self::format_log(message, max_width),
             Message::Xmpp(message) => Self::format_xmpp_text(message, max_width),
         }
     }
 
-    fn format_text(text: String, max_width: Option<u16>) -> Vec<String> {
-        let mut buffers: Vec<String> = Vec::new();
+    fn format_text(text: impl IntoCharxels, max_width: Option<u16>) -> Vec<Charxels> {
+        let mut buffers: Vec<Charxels> = Vec::new();
+        let text = text.into_charxels();
         for line in text.lines() {
-            let mut words = line.split_word_bounds();
-
             let mut line_len = 0;
-            let mut chunk = String::new();
-            while let Some(word) = words.next() {
-                let visible_word;
-                let mut remaining = String::new();
-
-                // We can safely unwrap here because split_word_bounds produce non empty words
-                let first_char = word.chars().next().unwrap();
-
-                if first_char == '\x1b' {
-                    // Handle Escape sequence: see https://www.ecma-international.org/publications/files/ECMA-ST/Ecma-048.pdf
-                    // First char is a word boundary
-                    //
-                    // We must ignore them for the visible length count but include them in the
-                    // final chunk that will be written to the terminal
-
-                    if let Some("[") = words.next() {
-                        // Control Sequence Introducer are accepted and can safely be
-                        // written to terminal
-                        let mut escape = String::from("\x1b[");
-                        let mut end = false;
-
-                        for word in words.by_ref() {
-                            for c in word.chars() {
-                                // Push all char belonging to escape sequence
-                                // but keep remaining for wrap computation
-                                if !end {
-                                    escape.push(c);
-                                    match c {
-                                        '\x30'..='\x3f' => {} // parameter bytes
-                                        '\x20'..='\x2f' => {} // intermediate bytes
-                                        '\x40'..='\x7e' => {
-                                            // final byte
-                                            chunk.push_str(&escape);
-                                            end = true;
-                                        }
-                                        _ => {
-                                            // Invalid escape sequence, just ignore it
-                                            end = true;
-                                        }
-                                    }
-                                } else {
-                                    remaining.push(c);
-                                }
-                            }
-
-                            if end {
-                                break;
-                            }
-                        }
-                    } else {
-                        // Nothing is following the escape char
-                        // We can simply ignore it
-                    }
-                    visible_word = remaining.as_str();
-                } else {
-                    visible_word = word;
-                }
-
-                if visible_word.is_empty() {
-                    continue;
-                }
-
-                let grapheme_count = visible_word.graphemes(true).count();
+            let mut chunk = Charxels::default();
+            for word in line.split_word_bounds() {
+                let grapheme_count = word.len();
 
                 if max_width.map_or(false, |max_width| {
                     line_len + grapheme_count > max_width as usize
                 }) {
                     // Wrap line
                     buffers.push(chunk);
-                    chunk = String::new();
+                    chunk = Charxels::default();
                     line_len = 0;
                 }
 
-                chunk.push_str(visible_word);
+                chunk.append(
+                    &mut word
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<Charxel>>()
+                        .into_charxels(),
+                );
                 line_len += grapheme_count;
             }
 
@@ -821,36 +766,28 @@ impl MessageView {
     }
 
     fn render_text(&self, frame: &mut ScreenFrame) {
-        let mut top = 0;
         let formatted = self.format(Some(frame.width()));
 
         // Format as much as possible starting from bottom line
-        for line in &formatted[formatted.len() - frame.height() as usize..] {
-            frame.write_at((0, top), line);
-            top += 1;
+        for (top, line) in formatted[formatted.len() - frame.height() as usize..]
+            .iter()
+            .enumerate()
+        {
+            frame.write_at((0, top as u16), line);
         }
     }
 
     #[cfg(feature = "image")]
-    fn render_image<W>(&self, screen: &mut Screen<W>)
-    where
-        W: Write + AsFd,
-    {
+    fn render_image(&self, frame: &mut ScreenFrame) {
         let Message::Xmpp(message) = &self.message else {
             unreachable!()
         };
-        let dimensions = self.dimensions.as_ref().unwrap();
 
-        terminus::clear_screen(dimensions, screen);
-
-        let header = Self::format_header(message);
-
-        screen.goto(dimensions.left, dimensions.top);
-        terminus::vprint!(screen, "{}", header);
+        frame.write(Self::format_header(message));
         if let Some(image) = self.image.read().unwrap().as_ref() {
-            terminus::vprint!(screen, "{}", image.serialize());
+            frame.write(image.into_charxels());
         } else {
-            terminus::vprint!(screen, "…");
+            frame.write("…");
         }
     }
 
@@ -859,9 +796,7 @@ impl MessageView {
             MeasureSpec::Unspecified => RequestedDimensions {
                 height: RequestedDimension::Absolute(1),
                 width: RequestedDimension::Absolute(
-                    self.format(None)
-                        .first()
-                        .map_or(0, |line| term_string_visible_len(line) as u16),
+                    self.format(None).first().map_or(0, |l| l.len()),
                 ),
             },
             MeasureSpec::AtMost(at_most_width) => {
@@ -869,7 +804,7 @@ impl MessageView {
                 RequestedDimensions {
                     height: RequestedDimension::Absolute(formatted.len() as u16),
                     width: RequestedDimension::Absolute(cmp::min(
-                        formatted.iter().map(|line| line.len()).max().unwrap_or(0) as u16,
+                        formatted.iter().map(|line| line.len()).max().unwrap_or(0),
                         at_most_width,
                     )),
                 }
