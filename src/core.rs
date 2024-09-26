@@ -22,6 +22,7 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
+use terminus::charxel::IntoCharxels;
 use terminus::cursor::Cursor;
 use terminus::rendering::OffscreenRenderBuffer;
 use termion::event::Key;
@@ -30,7 +31,7 @@ use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 use tokio::{task, time};
 use uuid::Uuid;
 
@@ -61,6 +62,9 @@ use crate::{
     parse_command_args, parse_lookup_arg,
 };
 use crate::{contact, conversation};
+
+// Rendering tick at ~60fps
+const UI_TICK_MS: u64 = 16u64;
 
 const WELCOME: &str = r#"
 ▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
@@ -1083,7 +1087,7 @@ impl Aparte {
                     .into_alternate_screen()
                     .unwrap();
                 let _ = write!(&mut screen, "{}", termion::clear::All);
-                let mut interval = time::interval(Duration::from_millis(10));
+                let mut interval = time::interval(Duration::from_millis(UI_TICK_MS));
                 loop {
                     {
                         let start = Instant::now();
@@ -1130,7 +1134,7 @@ impl Aparte {
     }
 
     pub fn start(&mut self) {
-        // self.log(color::rainbow(WELCOME));
+        self.log(color::rainbow(WELCOME));
         self.log(format!("Version: {VERSION}"));
 
         for (name, account) in self.config.accounts.clone() {
@@ -1651,8 +1655,8 @@ impl Aparte {
         self.event_tx.send(event).unwrap();
     }
 
-    pub fn log<T: ToString>(&mut self, message: T) {
-        let message = Message::log(message.to_string());
+    pub fn log<T: IntoCharxels>(&mut self, message: T) {
+        let message = Message::log(message.into_charxels());
         self.schedule(Event::Message(None, message));
     }
 

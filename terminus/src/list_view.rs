@@ -266,7 +266,7 @@ where
                 if term_string_visible_len(&disp) > usize_width {
                     disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
                 }
-                frame.write_at((0, top), &disp);
+                frame.write_at((0, top), disp);
                 top += 1;
             }
 
@@ -287,7 +287,7 @@ where
                 if term_string_visible_len(&disp) > usize_width {
                     disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
                 }
-                frame.write_at((0, top), &disp);
+                frame.write_at((0, top), disp);
 
                 top += 1;
             }

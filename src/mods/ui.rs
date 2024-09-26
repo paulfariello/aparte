@@ -1,11 +1,11 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use backtrace::{Backtrace, Frame};
+use backtrace::Backtrace;
 use chrono::Local as LocalTz;
 use futures::task::{AtomicWaker, Context, Poll};
 use futures::Stream;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::{mpsc, RwLock};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use terminus::charxel::IntoCharxels as _;
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
 use terminus::Style;
@@ -101,13 +102,16 @@ impl View<UIEvent> for TitleBar {
         );
 
         frame.set_background(self.color.bg);
-        frame.set_foreground(self.color.fg);
-        frame.set_styles(vec![Style::Bold(termion::style::Bold)]);
 
         if let Some(name) = &self.name {
             let clean_name =
                 terminus::term_string_visible_truncate(name, frame.width().into(), Some("…"));
-            frame.write(&clean_name);
+            frame.write(
+                (&clean_name)
+                    .with_background(self.color.bg)
+                    .with_foreground(self.color.fg)
+                    .with_styles(&[Style::Bold]),
+            );
 
             let remaining = frame.width()
                 - terminus::term_string_visible_len(&clean_name) as u16
@@ -121,7 +125,12 @@ impl View<UIEvent> for TitleBar {
                             remaining.into(),
                             Some("…"),
                         );
-                        frame.write(format!(" — {}", clean_subject));
+                        frame.write(
+                            format!(" — {}", clean_subject)
+                                .with_background(self.color.bg)
+                                .with_foreground(self.color.fg)
+                                .with_styles(&[Style::Bold]),
+                        );
                     }
                 }
             }
@@ -255,9 +264,9 @@ impl View<UIEvent> for WinBar {
             }
 
             if state.1 > 0 {
-                frame.write_with_style(window, Style::Bold(termion::style::Bold));
+                frame.write(window.with_style(Style::Bold));
                 frame.write(" (");
-                frame.write_with_style(format!("{}", state.1), Style::Bold(termion::style::Bold));
+                frame.write(format!("{}", state.1).with_style(Style::Bold));
                 frame.write(format!(", {})", state.0));
                 written += window.len();
                 written += 5; // " (" + ", " + ")"
@@ -923,7 +932,7 @@ impl ModTrait for UIMod {
         {
             let mut render_buffer = self.render_buffer.write().unwrap();
             render_buffer.clear();
-            let frame = ScreenFrame::new(&mut *render_buffer, &self.dimensions);
+            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
             self.root.render(frame);
         }
 
@@ -1069,7 +1078,7 @@ impl ModTrait for UIMod {
                 let mut render_buffer = self.render_buffer.write().unwrap();
                 render_buffer.set_size((width, height).into());
                 render_buffer.clear();
-                let frame = ScreenFrame::new(&mut *render_buffer, &self.dimensions);
+                let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
                 self.root.render(frame);
             }
             Event::Close(window) => {
@@ -1253,7 +1262,7 @@ impl ModTrait for UIMod {
 
         let mut render_buffer = self.render_buffer.write().unwrap();
         render_buffer.clear();
-        let frame = ScreenFrame::new(&mut *render_buffer, &self.dimensions);
+        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
         self.root.render(frame);
 
         // Handle queued outgoing event

@@ -4,9 +4,12 @@
 use hsluv::hsluv_to_rgb;
 use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 use sha1::{Digest, Sha1};
-use std::{convert::TryInto, str::FromStr};
-use terminus::{BgColor, Color, ConfigColor, FgColor};
-use termion::color;
+use std::convert::TryInto;
+use terminus::{
+    charxel::{Charxel, Charxels},
+    BgColor, Color, ConfigColor, FgColor,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 fn deserialize_color<'de, C, D>(deserializer: D) -> Result<C, D::Error>
 where
@@ -38,10 +41,10 @@ pub struct ColorTuple {
 }
 
 impl ColorTuple {
-    pub fn new<B: color::Color, F: color::Color>(bg: B, fg: F) -> Self {
+    pub fn new(bg: Color, fg: Color) -> Self {
         Self {
-            bg: BgColor(Color::from_str("#0000ff").unwrap()),
-            fg: FgColor(Color::from_str("#000000").unwrap()),
+            bg: BgColor(bg),
+            fg: FgColor(fg),
         }
     }
 }
@@ -94,19 +97,23 @@ impl Rainbow {
     }
 }
 
-pub fn rainbow(input: &str) -> String {
-    let mut output = String::new();
+pub fn rainbow(input: &str) -> Charxels {
+    let mut output = Charxels::default();
     let mut rainbow = Rainbow::new(rand::random::<f64>() * 10e9);
 
-    for c in input.chars() {
+    for c in input.graphemes(true) {
         match c {
-            '\n' => rainbow.new_line(),
-            _ => {
+            "\n" => {
+                rainbow.new_line();
+                output.push(Charxel::new(c.into()));
+            }
+            c => {
                 let (r, g, b) = rainbow.get_color();
-                output.push_str(&format!("{}", color::Fg(color::Rgb(r, g, b))));
+                let mut charxel = Charxel::new(c.into());
+                charxel.set_foreground(FgColor(Color::Rgb(r, g, b)));
+                output.push(charxel);
             }
         }
-        output.push(c);
     }
 
     output
