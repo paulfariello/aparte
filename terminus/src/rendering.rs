@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    ops::{Index, IndexMut},
+    sync::atomic::AtomicBool,
+};
 
 use crate::{
     charxel::{Charxel, IntoCharxels},
@@ -26,11 +29,23 @@ impl From<(u16, u16)> for ScreenSize {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct OffscreenRenderBuffer {
     lines: Vec<OffscreenLine>,
     size: ScreenSize,
     cursor: CursorPos,
+    do_bell: AtomicBool,
+}
+
+impl Clone for OffscreenRenderBuffer {
+    fn clone(&self) -> Self {
+        Self {
+            lines: self.lines.clone(),
+            size: self.size,
+            cursor: self.cursor,
+            do_bell: AtomicBool::new(self.do_bell.load(std::sync::atomic::Ordering::Relaxed)),
+        }
+    }
 }
 
 impl Index<u16> for OffscreenRenderBuffer {
@@ -73,6 +88,11 @@ struct ContinuousDiff {
 }
 
 impl OffscreenRenderBuffer {
+    pub fn bell(&self) {
+        self.do_bell
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn set_size(&mut self, screen_size: ScreenSize) {
         self.size = screen_size;
         self.lines = vec![
@@ -209,6 +229,13 @@ impl OffscreenRenderBuffer {
         } else {
             self.full_render(screen);
             self.render_cursor(screen);
+        }
+
+        if self
+            .do_bell
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            let _ = write!(screen, "\x07");
         }
 
         let _ = screen.flush();

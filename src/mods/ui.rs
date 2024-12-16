@@ -1236,7 +1236,7 @@ impl ModTrait for UIMod {
                 important,
             } => {
                 if *important && aparte.config.bell {
-                    todo!(); // terminus::vprint!(self.render_buffer, "\x07");
+                    self.render_buffer.read().unwrap().bell();
                 }
                 self.root.event(&mut UIEvent::Core(Event::Notification {
                     conversation: conversation.clone(),
