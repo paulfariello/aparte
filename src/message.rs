@@ -35,9 +35,6 @@ use crate::account::Account;
 use crate::color::id_to_rgb;
 #[cfg(feature = "image")]
 use crate::core::Aparte;
-use crate::core::AparteAsync;
-#[cfg(feature = "image")]
-use crate::core::Event;
 use crate::i18n;
 #[cfg(feature = "image")]
 use crate::image::convert_to_sixel;
@@ -575,7 +572,7 @@ impl Hash for MessageView {
 
 impl MessageView {
     #[cfg(not(feature = "image"))]
-    pub fn new(_aparte: &mut AparteAsync, message: Message) -> Self {
+    pub fn new(message: Message) -> Self {
         MessageView {
             message,
             dimensions: None,
@@ -583,7 +580,7 @@ impl MessageView {
     }
 
     #[cfg(feature = "image")]
-    pub fn new(aparte: &mut AparteAsync, message: Message) -> Self {
+    pub fn new(message: Message) -> Self {
         let image = match &message {
             Message::Xmpp(message) => message
                 .history
@@ -600,7 +597,6 @@ impl MessageView {
                             Aparte::spawn({
                                 let url = oob.url.clone();
                                 let image = Arc::clone(&image);
-                                let mut aparte = aparte.clone();
                                 async move {
                                     log::debug!("Loading OOB: {}", url);
                                     match Self::load_oob(&url).await {
@@ -608,7 +604,6 @@ impl MessageView {
                                             log::debug!("Loaded OOB from {}", url);
                                             let mut image = image.write().unwrap();
                                             *image = Some(sixel);
-                                            aparte.schedule(Event::UIRender(false));
                                         }
                                         Err(err) => log::error!("{}", err),
                                     }
