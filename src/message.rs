@@ -24,7 +24,6 @@ use terminus::rendering::ScreenFrame;
 use terminus::{
     self, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, View,
 };
-use termion::color;
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
@@ -656,7 +655,7 @@ impl MessageView {
         lines
     }
 
-    fn format_header(message: &VersionedXmppMessage) -> String {
+    fn format_header(message: &VersionedXmppMessage) -> Charxels {
         let author = terminus::clean_str(&match &message.type_ {
             XmppMessageType::Channel => match &message.from_full.try_as_full() {
                 Ok(full_jid) => full_jid.resource().to_string(),
@@ -669,54 +668,43 @@ impl MessageView {
         let body = message.get_last_body();
         let me = body.starts_with("/me");
 
-        let (r, g, b) = id_to_rgb(&author);
+        let foreground = terminus::FgColor(id_to_rgb(&author));
 
         let mut attributes = "".to_string();
         if message.has_multiple_version() {
             attributes.push_str("✎ ");
         }
 
-        match me {
-            true => format!(
-                "{}{}{} - {}* {}{}{}",
-                color::Bg(color::Reset),
-                color::Fg(color::Reset),
-                timestamp.format("%T"),
-                attributes,
-                color::Fg(color::Rgb(r, g, b)),
-                author,
-                color::Fg(color::Reset)
-            ),
-            false => format!(
-                "{}{}{} - {}{}{}:{} ",
-                color::Bg(color::Reset),
-                color::Fg(color::Reset),
-                timestamp.format("%T"),
-                attributes,
-                color::Fg(color::Rgb(r, g, b)),
-                author,
-                color::Fg(color::Reset)
-            ),
-        }
+        let mut header = format!("{} - {}", timestamp.format("%T"), attributes).into_charxels();
+
+        let mut author = match me {
+            true => format!("* {} ", author).with_foreground(foreground),
+            false => format!("{}: ", author).with_foreground(foreground),
+        };
+
+        header.append(&mut author);
+
+        header
     }
 
     fn format_xmpp_text(message: &VersionedXmppMessage, max_width: Option<u16>) -> Vec<Charxels> {
-        let mut buffer = Self::format_header(message);
+        let mut header = Self::format_header(message);
 
-        let padding_len = buffer.len();
-        let padding = " ".repeat(padding_len);
+        let padding_len = header.len();
+        let padding = " ".repeat(padding_len.into());
 
         let body = message.get_last_body();
         let mut iter = body.strip_prefix("/me").unwrap_or(body).lines();
 
         if let Some(line) = iter.next() {
-            buffer.push_str(&terminus::clean_str(line));
+            header.append(&mut terminus::clean_str(line).into_charxels());
         }
         for line in iter {
-            buffer.push_str(format!("\n{}{}", padding, terminus::clean_str(line)).as_str());
+            header
+                .append(&mut format!("\n{}{}", padding, terminus::clean_str(line)).into_charxels());
         }
 
-        Self::format_text(buffer, max_width)
+        Self::format_text(header, max_width)
     }
 
     fn format(&self, max_width: Option<u16>) -> Vec<Charxels> {
