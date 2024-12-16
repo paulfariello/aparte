@@ -258,24 +258,24 @@ impl<'a> ScreenFrame<'a> {
     }
 
     pub fn set_background(&mut self, color: BgColor) {
-        for i in self.dimensions.top..self.dimensions.height {
-            for j in self.dimensions.left..self.dimensions.width {
+        for i in self.dimensions.top..self.dimensions.top + self.dimensions.height {
+            for j in self.dimensions.left..self.dimensions.left + self.dimensions.width {
                 self.offscreen[i][j].set_background(color);
             }
         }
     }
 
     pub fn set_foreground(&mut self, color: FgColor) {
-        for i in self.dimensions.top..self.dimensions.height {
-            for j in self.dimensions.left..self.dimensions.width {
+        for i in self.dimensions.top..self.dimensions.top + self.dimensions.height {
+            for j in self.dimensions.left..self.dimensions.left + self.dimensions.width {
                 self.offscreen[i][j].set_foreground(color);
             }
         }
     }
 
     pub fn set_styles(&mut self, styles: Vec<Style>) {
-        for i in self.dimensions.top..self.dimensions.height {
-            for j in self.dimensions.left..self.dimensions.width {
+        for i in self.dimensions.top..self.dimensions.top + self.dimensions.height {
+            for j in self.dimensions.left..self.dimensions.left + self.dimensions.width {
                 self.offscreen[i][j].set_styles(&styles);
             }
         }
