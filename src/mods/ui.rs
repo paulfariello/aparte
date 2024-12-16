@@ -38,7 +38,7 @@ use termion::get_tty;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::color::{id_to_rgb, ColorTuple};
+use crate::color::ColorTuple;
 use crate::command::Command;
 use crate::config::Config;
 use crate::conversation::{Channel, Chat, Conversation};
@@ -382,16 +382,10 @@ impl fmt::Display for RosterItem {
 
 impl fmt::Display for conversation::Occupant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (r, g, b) = id_to_rgb(&self.nick);
+        //let (r, g, b) = id_to_rgb(&self.nick);
         let nick = self.nick.clone();
 
-        write!(
-            f,
-            "{}{}{}",
-            color::Fg(color::Rgb(r, g, b)),
-            terminus::clean_str(&nick),
-            color::Fg(color::Reset)
-        )
+        write!(f, "{}", terminus::clean_str(&nick))
     }
 }
 

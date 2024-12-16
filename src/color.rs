@@ -49,7 +49,7 @@ impl ColorTuple {
     }
 }
 
-pub fn id_to_rgb(identifier: &str) -> (u8, u8, u8) {
+pub fn id_to_rgb(identifier: &str) -> Color {
     // Follow xep 0392 for color generation
     let mut hasher = Sha1::new();
     hasher.update(identifier);
@@ -60,7 +60,7 @@ pub fn id_to_rgb(identifier: &str) -> (u8, u8, u8) {
     let hue = (hue_angle, 100.0, 75.0);
     let (r, g, b) = hsluv_to_rgb(hue);
     let (r, g, b) = (r * 255.0, g * 255.0, b * 255.0);
-    (r as u8, g as u8, b as u8)
+    Color::Rgb(r as u8, g as u8, b as u8)
 }
 
 struct Rainbow {
