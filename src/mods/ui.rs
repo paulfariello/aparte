@@ -62,11 +62,11 @@ struct TitleBar {
 }
 
 impl TitleBar {
-    fn new(color: &ColorTuple) -> Self {
+    fn new(color: ColorTuple) -> Self {
         Self {
             name: None,
             subjects: HashMap::new(),
-            color: color.clone(),
+            color,
             dimensions: None,
         }
     }
@@ -158,13 +158,13 @@ struct WinBar {
 }
 
 impl WinBar {
-    pub fn new(color: &ColorTuple) -> Self {
+    pub fn new(color: ColorTuple) -> Self {
         Self {
             connection: None,
             windows: Vec::new(),
             current_window: None,
             highlighted: HashMap::new(),
-            color: color.clone(),
+            color,
             dimensions: None,
         }
     }
@@ -518,7 +518,7 @@ impl UIMod {
                 }
             });
 
-        let title_bar = TitleBar::new(&config.theme.title_bar);
+        let title_bar = TitleBar::new(config.theme.title_bar.clone());
         let frame = FrameLayout::<UIEvent, String>::new().with_event(|frame, event| match event {
             UIEvent::Core(Event::ChangeWindow(name)) => {
                 frame.set_current(name.to_string());
@@ -553,7 +553,7 @@ impl UIMod {
                 }
             }
         });
-        let win_bar = WinBar::new(&config.theme.win_bar);
+        let win_bar = WinBar::new(config.theme.win_bar.clone());
         let input = Input::new().with_event(|input, event| {
             if let UIEvent::Core(Event::Key(event)) = event {
                 log::debug!("Input event: {:?}", event);
