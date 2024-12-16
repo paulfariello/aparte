@@ -101,17 +101,10 @@ impl View<UIEvent> for TitleBar {
             self.dimensions
         );
 
-        frame.set_background(self.color.bg);
-
         if let Some(name) = &self.name {
             let clean_name =
                 terminus::term_string_visible_truncate(name, frame.width().into(), Some("…"));
-            frame.write(
-                (&clean_name)
-                    .with_background(self.color.bg)
-                    .with_foreground(self.color.fg)
-                    .with_styles(&[Style::Bold]),
-            );
+            frame.write((&clean_name).with_styles(&[Style::Bold]));
 
             let remaining = frame.width()
                 - terminus::term_string_visible_len(&clean_name) as u16
@@ -125,16 +118,14 @@ impl View<UIEvent> for TitleBar {
                             remaining.into(),
                             Some("…"),
                         );
-                        frame.write(
-                            format!(" — {}", clean_subject)
-                                .with_background(self.color.bg)
-                                .with_foreground(self.color.fg)
-                                .with_styles(&[Style::Bold]),
-                        );
+                        frame.write(format!(" — {}", clean_subject).with_styles(&[Style::Bold]));
                     }
                 }
             }
         }
+
+        frame.set_background(self.color.bg);
+        frame.set_foreground(self.color.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -222,11 +213,7 @@ impl View<UIEvent> for WinBar {
             std::any::type_name::<Self>(),
             self.dimensions
         );
-
         let mut written = 0;
-
-        frame.set_background(self.color.bg);
-        frame.set_foreground(self.color.fg);
 
         if let Some(connection) = &self.connection {
             frame.write(format!(" {}", connection));
@@ -284,6 +271,9 @@ impl View<UIEvent> for WinBar {
         if !first {
             frame.write("]");
         }
+
+        frame.set_background(self.color.bg);
+        frame.set_foreground(self.color.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
