@@ -9,11 +9,12 @@ use std::fmt::{self};
 use std::hash::Hash;
 use std::rc::Rc;
 
+use crate::charxel::{CharxelDisplay, IntoCharxels};
 use crate::ScreenFrame;
 
 use super::{
-    term_string_visible_len, term_string_visible_truncate, Dimensions, EventHandler, LayoutParam,
-    LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, View,
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    RequestedDimension, RequestedDimensions, View,
 };
 
 type SortItemHandler<V> = Box<dyn Fn(&V, &V) -> cmp::Ordering>;
@@ -32,8 +33,8 @@ impl std::error::Error for NonExistentGroup {}
 
 pub struct ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
@@ -46,8 +47,8 @@ where
 
 impl<E, G, V> Default for ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     fn default() -> Self {
         Self::new()
@@ -56,8 +57,8 @@ where
 
 impl<E, G, V> ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     pub fn new() -> Self {
         Self {
@@ -168,8 +169,8 @@ where
 
 impl<E, G, V> View<E> for ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         let max_width = match self.layouts.width {
@@ -182,12 +183,11 @@ where
                         None => "",
                     };
 
-                    group
-                        .iter()
-                        .map(|group| term_string_visible_len(&format!("{group}")) as u16)
-                        .chain(items.iter().map(move |item| {
-                            term_string_visible_len(&format!("{indent}{item}")) as u16
-                        }))
+                    group.iter().map(|group| group.colored_fmt().len()).chain(
+                        items
+                            .iter()
+                            .map(move |item| item.colored_fmt().len() + indent.len() as u16),
+                    )
                 })
                 .max()
                 .unwrap_or(0),
@@ -254,18 +254,17 @@ where
 
         // Draw items
         let mut top = 0;
-        let usize_width = frame.dimensions.width as usize;
+        let max_width = frame.dimensions.width;
 
         for (group, items) in &self.items {
             if top >= frame.dimensions.height {
                 break;
             }
 
-            if group.is_some() {
-                let mut disp = format!("{}", group.as_ref().unwrap());
-                if term_string_visible_len(&disp) > usize_width {
-                    disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
-                }
+            if let Some(group) = group {
+                let mut disp = group.colored_fmt();
+                disp.truncate(max_width, "…");
+
                 frame.write_at((0, top), disp);
                 top += 1;
             }
@@ -281,12 +280,14 @@ where
                 }
 
                 let mut disp = match group {
-                    Some(_) => format!("  {item}"),
-                    None => format!("{item}"),
+                    Some(_) => {
+                        let mut indent = "  ".into_charxels();
+                        indent.append(&mut item.colored_fmt());
+                        indent
+                    }
+                    None => item.colored_fmt(),
                 };
-                if term_string_visible_len(&disp) > usize_width {
-                    disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
-                }
+                disp.truncate(max_width, "…");
                 frame.write_at((0, top), disp);
 
                 top += 1;
