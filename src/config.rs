@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use termion::color;
+use terminus::Color;
 
 use crate::account::ConnectionInfo;
 use crate::color::ColorTuple;
@@ -32,10 +32,22 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Theme {
-            title_bar: ColorTuple::new(color::Blue, color::Black),
-            win_bar: ColorTuple::new(color::Blue, color::Black),
-            roster: ColorTuple::new(color::Blue, color::Black),
-            occupants: ColorTuple::new(color::Blue, color::Black),
+            title_bar: ColorTuple::new(
+                Color::Named(terminus::NamedColor::Blue),
+                Color::Named(terminus::NamedColor::Black),
+            ),
+            win_bar: ColorTuple::new(
+                Color::Named(terminus::NamedColor::Blue),
+                Color::Named(terminus::NamedColor::Black),
+            ),
+            roster: ColorTuple::new(
+                Color::Named(terminus::NamedColor::Blue),
+                Color::Named(terminus::NamedColor::Black),
+            ),
+            occupants: ColorTuple::new(
+                Color::Named(terminus::NamedColor::Blue),
+                Color::Named(terminus::NamedColor::Black),
+            ),
         }
     }
 }

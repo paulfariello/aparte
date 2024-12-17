@@ -7,13 +7,14 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug, Display};
 use std::fs::OpenOptions;
 use std::future::Future;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
@@ -21,12 +22,17 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
+use terminus::charxel::IntoCharxels;
 use terminus::cursor::Cursor;
+use terminus::rendering::OffscreenRenderBuffer;
 use termion::event::Key;
+use termion::raw::IntoRawMode;
+use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
-use tokio::task;
+use tokio::time::Duration;
+use tokio::{task, time};
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -56,6 +62,9 @@ use crate::{
     parse_command_args, parse_lookup_arg,
 };
 use crate::{contact, conversation};
+
+// Rendering tick at ~60fps
+const UI_TICK_MS: u64 = 16u64;
 
 const WELCOME: &str = r#"
 ▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
@@ -159,7 +168,6 @@ pub enum Event {
     },
     Subject(Account, Jid, HashMap<String, String>),
     Omemo(mods::omemo::OmemoEvent),
-    UIRender(bool),
 }
 
 pub enum Mod {
@@ -1022,41 +1030,82 @@ impl Aparte {
     }
 
     pub fn run(mut self) {
-        let mut input_event_stream = {
-            let ui = self.get_mod::<mods::ui::UIMod>();
-            ui.event_stream()
-        };
-
         let rt = TokioRuntime::new().unwrap();
 
-        let tx_for_signal = self.event_tx.clone();
-        rt.spawn(async move {
-            let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
-            loop {
-                sigwinch.recv().await;
-                if let Err(err) = tx_for_signal.send(Event::WindowChange) {
-                    log::error!("Cannot send signal to internal channel: {}", err);
-                    break;
+        rt.spawn({
+            let tx = self.event_tx.clone();
+            async move {
+                let mut sigwinch = unix::signal(unix::SignalKind::window_change()).unwrap();
+                loop {
+                    sigwinch.recv().await;
+                    if let Err(err) = tx.send(Event::WindowChange) {
+                        log::error!("Cannot send signal to internal channel: {}", err);
+                        break;
+                    }
                 }
             }
         });
 
-        let tx_for_event = self.event_tx.clone();
-        rt.spawn(async move {
-            loop {
-                match input_event_stream.next().await {
-                    Some(event) => {
-                        if let Err(err) = tx_for_event.send(event) {
-                            log::error!("Cannot send event to internal channel: {}", err);
+        rt.spawn({
+            let tx = self.event_tx.clone();
+            let mut input_event_stream = {
+                let ui = self.get_mod::<mods::ui::UIMod>();
+                ui.event_stream()
+            };
+            async move {
+                loop {
+                    match input_event_stream.next().await {
+                        Some(event) => {
+                            if let Err(err) = tx.send(event) {
+                                log::error!("Cannot send event to internal channel: {}", err);
+                                break;
+                            }
+                        }
+                        None => {
+                            if let Err(err) = tx.send(Event::Quit) {
+                                log::error!("Cannot send Quit event to internal channel: {}", err);
+                            }
                             break;
                         }
                     }
-                    None => {
-                        if let Err(err) = tx_for_event.send(Event::Quit) {
-                            log::error!("Cannot send Quit event to internal channel: {}", err);
-                        }
-                        break;
+                }
+            }
+        });
+
+        rt.spawn({
+            let mut reference_screen: Option<OffscreenRenderBuffer> = None;
+            let render_buffer = {
+                let ui = self.get_mod::<mods::ui::UIMod>();
+                Arc::clone(&ui.render_buffer)
+            };
+            async move {
+                log::debug!("Start UI thread");
+                let mut screen = std::io::stdout()
+                    .into_raw_mode()
+                    .unwrap()
+                    .into_alternate_screen()
+                    .unwrap();
+                let _ = write!(&mut screen, "{}", termion::clear::All);
+                let mut interval = time::interval(Duration::from_millis(UI_TICK_MS));
+                let mut fps = 0;
+                let mut last_fps_log = Instant::now();
+                loop {
+                    {
+                        let render_buffer = std::sync::RwLock::read(&render_buffer).unwrap();
+
+                        render_buffer.render(
+                            &mut screen,
+                            reference_screen.replace(render_buffer.clone()).as_ref(),
+                        );
+                        fps += 1;
                     }
+                    let elapsed = last_fps_log.elapsed();
+                    if elapsed > Duration::new(1, 0) {
+                        log::trace!("Rendering: {:?} fps", fps * 1000 / elapsed.as_millis());
+                        last_fps_log = Instant::now();
+                        fps = 0;
+                    }
+                    interval.tick().await;
                 }
             }
         });
@@ -1612,8 +1661,8 @@ impl Aparte {
         self.event_tx.send(event).unwrap();
     }
 
-    pub fn log<T: ToString>(&mut self, message: T) {
-        let message = Message::log(message.to_string());
+    pub fn log<T: IntoCharxels>(&mut self, message: T) {
+        let message = Message::log(message.into_charxels());
         self.schedule(Event::Message(None, message));
     }
 

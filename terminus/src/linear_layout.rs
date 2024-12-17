@@ -1,16 +1,13 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::cell::{Cell, RefCell};
-use std::io::Write;
-use std::os::fd::AsFd;
+use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::{clear_screen, RequestedDimension};
+use crate::{RequestedDimension, ScreenFrame};
 
 use super::{
-    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimensions, Screen,
-    View,
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpecs, RequestedDimensions, View,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,32 +16,34 @@ pub enum Orientation {
     Vertical,
 }
 
-pub struct Child<E, W> {
-    pub view: Box<dyn View<E, W>>,
+pub struct Child<E> {
+    pub view: Box<dyn View<E>>,
     weight: u16,
+}
+
+// TODO make it priv, issue it with ui.rs that wants to access child but can't use
+// iter_children_mut
+pub struct LayoutChild<E> {
+    pub child: Child<E>,
+    pub dimensions: Option<Dimensions>,
 }
 
 /// Component with multiple ordered children sharing the same space.
 /// Each child is placed according to the orientation of the component.
-pub struct LinearLayout<E, W> {
+pub struct LinearLayout<E> {
     pub orientation: Orientation,
-    pub children: Vec<Child<E, W>>,
+    pub children: Vec<LayoutChild<E>>,
     pub event_handler: Option<EventHandler<Self, E>>,
-    pub dirty: Cell<bool>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
 }
 
-impl<E, W> LinearLayout<E, W>
-where
-    W: Write + AsFd,
-{
+impl<E> LinearLayout<E> {
     pub fn new(orientation: Orientation) -> Self {
         Self {
             orientation,
             children: Vec::new(),
             event_handler: None,
-            dirty: Cell::new(true),
             layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
@@ -55,13 +54,15 @@ where
 
     pub fn push<T>(&mut self, view: T, weight: u16)
     where
-        T: View<E, W> + 'static,
+        T: View<E> + 'static,
     {
-        self.children.push(Child {
-            view: Box::new(view),
-            weight,
+        self.children.push(LayoutChild {
+            child: Child {
+                view: Box::new(view),
+                weight,
+            },
+            dimensions: None,
         });
-        self.dirty.set(true);
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
@@ -77,12 +78,16 @@ where
         self
     }
 
-    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E, W>>> {
-        self.children.iter_mut().map(|child| &mut child.view)
+    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E>>> {
+        self.children
+            .iter_mut()
+            .map(|LayoutChild { child, .. }| &mut child.view)
     }
 
-    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E, W>>> {
-        self.children.iter().map(|child| &child.view)
+    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E>>> {
+        self.children
+            .iter()
+            .map(|LayoutChild { child, .. }| &child.view)
     }
 
     fn layout_vertical(&mut self, dimensions: &Dimensions) {
@@ -100,7 +105,7 @@ where
         let mut match_height_weight_total = 0;
 
         log::debug!("layout with vertical orientation");
-        for child in self.children.iter_mut() {
+        for LayoutChild { child, .. } in self.children.iter_mut() {
             let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
@@ -119,12 +124,22 @@ where
 
         // Compute remaining free sizes
         let free_height = dimensions.height - min_height;
+        log::debug!(
+            "free_height: {free_height} = {} - {min_height}",
+            dimensions.height
+        );
 
         // Layout children
         let mut child_top = dimensions.top;
         let child_left = dimensions.left;
 
-        for child in self.children.iter_mut() {
+        log::debug!("Start with child top: {child_top}");
+
+        for LayoutChild {
+            child,
+            dimensions: child_dimensions,
+        } in self.children.iter_mut()
+        {
             let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
@@ -135,19 +150,21 @@ where
                 RequestedDimension::Absolute(requested_height) => requested_height,
             };
 
-            let child_dimensions = Dimensions {
+            *child_dimensions = Some(Dimensions {
                 top: child_top,
                 left: child_left,
                 width,
                 height: child_height,
-            };
+            });
 
-            child.view.layout(&child_dimensions);
+            child.view.layout(child_dimensions.as_ref().unwrap());
 
-            child_top += child_dimensions.height;
+            child_top += child_height;
+            log::debug!("Next child top: {child_top} (added {child_height})");
         }
 
-        assert!(child_top <= dimensions.top + dimensions.height);
+        // Assert last child didn't overflow
+        assert!(child_top - 1 < dimensions.top + dimensions.height);
     }
 
     fn layout_horizontal(&mut self, dimensions: &Dimensions) {
@@ -157,7 +174,7 @@ where
         let mut match_width_weight_total = 0;
 
         log::debug!("layout with horizontal orientation");
-        for child in self.children.iter_mut() {
+        for LayoutChild { child, .. } in self.children.iter_mut() {
             let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
@@ -181,7 +198,11 @@ where
         let child_top = dimensions.top;
         let mut child_left = dimensions.left;
 
-        for child in self.children.iter_mut() {
+        for LayoutChild {
+            child,
+            dimensions: child_dimensions,
+        } in self.children.iter_mut()
+        {
             let measure_specs = MeasureSpecs::from(dimensions);
             let requested_dimensions = child.view.measure(&measure_specs);
 
@@ -192,26 +213,24 @@ where
                 RequestedDimension::Absolute(requested_height) => requested_height,
             };
 
-            let child_dimensions = Dimensions {
+            *child_dimensions = Some(Dimensions {
                 top: child_top,
                 left: child_left,
                 height,
                 width: child_width,
-            };
+            });
 
-            child.view.layout(&child_dimensions);
+            child.view.layout(child_dimensions.as_ref().unwrap());
 
-            child_left += child_dimensions.width;
+            child_left += child_width;
         }
 
-        assert!(child_left <= dimensions.left + dimensions.width);
+        // Assert last child didn't overflow
+        assert!(child_left - 1 < dimensions.left + dimensions.width);
     }
 }
 
-impl<E, W> View<E, W> for LinearLayout<E, W>
-where
-    W: Write + AsFd,
-{
+impl<E> View<E> for LinearLayout<E> {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         let children_requested_dimensions: Vec<RequestedDimensions> = self
             .iter_children()
@@ -250,39 +269,20 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.set(true);
-            self.dimensions.replace(dimensions.clone());
-        }
+        self.dimensions.replace(dimensions.clone());
         match self.orientation {
             Orientation::Horizontal => self.layout_horizontal(dimensions),
             Orientation::Vertical => self.layout_vertical(dimensions),
         }
     }
 
-    fn render(&self, screen: &mut Screen<W>) {
+    fn render(&self, frame: ScreenFrame) {
         log::debug!("rendering {}", std::any::type_name::<Self>());
-        let was_dirty = self.dirty.replace(false);
-        if was_dirty {
-            clear_screen(self.dimensions.as_ref().unwrap(), screen);
+        let ScreenFrame { offscreen, .. } = frame;
+        for LayoutChild { child, dimensions } in self.children.iter() {
+            let child_frame = ScreenFrame::new(offscreen, dimensions.as_ref().unwrap());
+            child.view.render(child_frame);
         }
-
-        for child in self.children.iter() {
-            if was_dirty || child.view.is_dirty() {
-                child.view.render(screen);
-            }
-        }
-    }
-
-    fn set_dirty(&mut self) {
-        self.dirty.set(true);
-        self.children
-            .iter_mut()
-            .for_each(|child| child.view.set_dirty());
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty.get() || self.children.iter().any(|child| child.view.is_dirty())
     }
 
     fn event(&mut self, event: &mut E) {
@@ -301,7 +301,6 @@ where
 #[cfg(test)]
 mod tests {
     use mockall::predicate::*;
-    use std::fs::File;
     use test_log::test;
 
     use super::*;
@@ -310,7 +309,7 @@ mod tests {
     #[test]
     fn test_vertical_layout_children_evenly() {
         // Given
-        let mut layout = LinearLayout::<(), File>::new(Orientation::Vertical);
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
 
         let mut first_view = MockView::new();
         first_view
@@ -331,8 +330,8 @@ mod tests {
         first_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 1,
+                top: 0,
+                left: 0,
                 width: 100,
                 height: 50,
             }))
@@ -341,8 +340,8 @@ mod tests {
         second_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 51,
-                left: 1,
+                top: 50,
+                left: 0,
                 width: 100,
                 height: 50,
             }))
@@ -354,8 +353,8 @@ mod tests {
         layout.push(first_view, 1);
         layout.push(second_view, 1);
         layout.layout(&Dimensions {
-            top: 1,
-            left: 1,
+            top: 0,
+            left: 0,
             width: 100,
             height: 100,
         });
@@ -364,7 +363,7 @@ mod tests {
     #[test]
     fn test_vertical_layout_free_space_respecting_weight() {
         // Given
-        let mut layout = LinearLayout::<(), File>::new(Orientation::Vertical);
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
 
         let mut first_view = MockView::new();
         first_view
@@ -392,8 +391,8 @@ mod tests {
         first_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 1,
+                top: 0,
+                left: 0,
                 width: 100,
                 height: 20,
             }))
@@ -402,8 +401,8 @@ mod tests {
         second_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 21,
-                left: 1,
+                top: 20,
+                left: 0,
                 width: 100,
                 height: 40,
             }))
@@ -412,8 +411,8 @@ mod tests {
         third_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 61,
-                left: 1,
+                top: 60,
+                left: 0,
                 width: 100,
                 height: 40,
             }))
@@ -426,8 +425,8 @@ mod tests {
         layout.push(second_view, 2);
         layout.push(third_view, 1);
         layout.layout(&Dimensions {
-            top: 1,
-            left: 1,
+            top: 0,
+            left: 0,
             width: 100,
             height: 100,
         });
@@ -436,7 +435,7 @@ mod tests {
     #[test]
     fn test_horizontal_layout_children_evenly() {
         // Given
-        let mut layout = LinearLayout::<(), File>::new(Orientation::Horizontal);
+        let mut layout = LinearLayout::<()>::new(Orientation::Horizontal);
 
         let mut first_view = MockView::new();
         first_view
@@ -457,8 +456,8 @@ mod tests {
         first_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 1,
+                top: 0,
+                left: 0,
                 height: 100,
                 width: 50,
             }))
@@ -467,8 +466,8 @@ mod tests {
         second_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 51,
+                top: 0,
+                left: 50,
                 height: 100,
                 width: 50,
             }))
@@ -480,8 +479,8 @@ mod tests {
         layout.push(first_view, 1);
         layout.push(second_view, 1);
         layout.layout(&Dimensions {
-            top: 1,
-            left: 1,
+            top: 0,
+            left: 0,
             width: 100,
             height: 100,
         });
@@ -490,7 +489,7 @@ mod tests {
     #[test]
     fn test_horizontal_layout_free_space_respecting_weight() {
         // Given
-        let mut layout = LinearLayout::<(), File>::new(Orientation::Horizontal);
+        let mut layout = LinearLayout::<()>::new(Orientation::Horizontal);
 
         let mut first_view = MockView::new();
         first_view
@@ -518,8 +517,8 @@ mod tests {
         first_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 1,
+                top: 0,
+                left: 0,
                 width: 20,
                 height: 200,
             }))
@@ -528,8 +527,8 @@ mod tests {
         second_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 21,
+                top: 0,
+                left: 20,
                 width: 40,
                 height: 200,
             }))
@@ -538,8 +537,8 @@ mod tests {
         third_view
             .expect_layout()
             .with(eq(Dimensions {
-                top: 1,
-                left: 61,
+                top: 0,
+                left: 60,
                 width: 40,
                 height: 200,
             }))
@@ -552,28 +551,10 @@ mod tests {
         layout.push(second_view, 2);
         layout.push(third_view, 1);
         layout.layout(&Dimensions {
-            top: 1,
-            left: 1,
+            top: 0,
+            left: 0,
             width: 100,
             height: 200,
         });
-    }
-
-    #[test]
-    fn test_set_dirty_to_children() {
-        // Given
-        let mut layout = LinearLayout::<(), File>::new(Orientation::Horizontal);
-
-        // Then
-        let mut first_view = MockView::new();
-        first_view.expect_set_dirty().times(1).return_const(());
-        let mut second_view = MockView::new();
-        second_view.expect_set_dirty().times(1).return_const(());
-
-        // When
-        layout.push(first_view, 1);
-        layout.push(second_view, 2);
-
-        layout.set_dirty();
     }
 }

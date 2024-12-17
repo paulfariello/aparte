@@ -1,54 +1,34 @@
+use core::fmt;
 use std::cell::RefCell;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::io::Write;
-use std::os::fd::AsFd;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::{cmp, iter::Sum};
 
 #[cfg(test)]
 use mockall::automock;
+use rendering::ScreenFrame;
+use termion::color::Color as _;
 use termion::raw::RawTerminal;
 use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
 
+pub mod charxel;
 pub mod cursor;
 pub mod frame_layout;
 pub mod input;
 pub mod linear_layout;
 pub mod list_view;
+pub mod rendering;
 pub mod scroll_win;
 
-pub type Screen<W> = BufferedScreen<AlternateScreen<RawTerminal<W>>>;
+pub type Screen<W> = AlternateScreen<RawTerminal<W>>;
 
 pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
-
-pub struct BufferedScreen<W: Write> {
-    inner: W,
-    buffer: Vec<u8>,
-}
-
-impl<W: Write> BufferedScreen<W> {
-    pub fn new(inner: W) -> Self {
-        Self {
-            inner,
-            buffer: Vec::with_capacity(100 * 500 * 10),
-        }
-    }
-}
-
-impl<W: Write> Write for BufferedScreen<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buffer.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.write_all(self.buffer.as_slice())?;
-        self.buffer.clear();
-        self.inner.flush()
-    }
-}
 
 pub fn term_string_visible_len(string: &str) -> usize {
     // Count each grapheme on a given struct but ignore invisible chars sequences like '\x1b[…'
@@ -130,6 +110,10 @@ fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
     }
 
     count
+}
+
+pub fn is_clean_str(string: &str) -> bool {
+    !string.chars().any(|c| c == '\x1b')
 }
 
 /// Remove all terminal specific chars sequences
@@ -214,22 +198,15 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
     output
 }
 
-pub fn clear_screen<W>(dimensions: &Dimensions, screen: &mut Screen<W>)
-where
-    W: AsFd + Write,
-{
-    log::debug!("Clear screen: {:?}", dimensions);
-    if dimensions.left == 1 {
-        for top in dimensions.top..dimensions.top + dimensions.height {
-            // Use fast erase if possible
-            goto!(screen, 1 + dimensions.width, top);
-            vprint!(screen, "{}", "\x1B[1K");
-        }
-    } else {
-        for top in dimensions.top..dimensions.top + dimensions.height {
-            goto!(screen, dimensions.left, top);
-            vprint!(screen, "{: <1$}", "", dimensions.width as usize);
-        }
+#[derive(Default, Copy, Clone, Debug, Eq, PartialEq)]
+pub struct CursorPos {
+    top: u16,
+    left: u16,
+}
+
+impl From<(u16, u16)> for CursorPos {
+    fn from((x, y): (u16, u16)) -> Self {
+        CursorPos { top: y, left: x }
     }
 }
 
@@ -372,6 +349,258 @@ impl From<&Dimensions> for MeasureSpecs {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum NamedColor {
+    Black,
+    Blue,
+    Cyan,
+    Green,
+    LightBlack,
+    LightBlue,
+    LightCyan,
+    LightGreen,
+    LightMagenta,
+    LightRed,
+    LightWhite,
+    LightYellow,
+    Magenta,
+    Red,
+    White,
+    Yellow,
+}
+
+impl NamedColor {
+    pub fn write_fg(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NamedColor::Black => termion::color::Black.write_fg(f),
+            NamedColor::Blue => termion::color::Blue.write_fg(f),
+            NamedColor::Cyan => termion::color::Cyan.write_fg(f),
+            NamedColor::Green => termion::color::Green.write_fg(f),
+            NamedColor::LightBlack => termion::color::LightBlack.write_fg(f),
+            NamedColor::LightBlue => termion::color::LightBlue.write_fg(f),
+            NamedColor::LightCyan => termion::color::LightCyan.write_fg(f),
+            NamedColor::LightGreen => termion::color::LightGreen.write_fg(f),
+            NamedColor::LightMagenta => termion::color::LightMagenta.write_fg(f),
+            NamedColor::LightRed => termion::color::LightRed.write_fg(f),
+            NamedColor::LightWhite => termion::color::LightWhite.write_fg(f),
+            NamedColor::LightYellow => termion::color::LightYellow.write_fg(f),
+            NamedColor::Magenta => termion::color::Magenta.write_fg(f),
+            NamedColor::Red => termion::color::Red.write_fg(f),
+            NamedColor::White => termion::color::White.write_fg(f),
+            NamedColor::Yellow => termion::color::Yellow.write_fg(f),
+        }
+    }
+
+    pub fn write_bg(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NamedColor::Black => termion::color::Black.write_bg(f),
+            NamedColor::Blue => termion::color::Blue.write_bg(f),
+            NamedColor::Cyan => termion::color::Cyan.write_bg(f),
+            NamedColor::Green => termion::color::Green.write_bg(f),
+            NamedColor::LightBlack => termion::color::LightBlack.write_bg(f),
+            NamedColor::LightBlue => termion::color::LightBlue.write_bg(f),
+            NamedColor::LightCyan => termion::color::LightCyan.write_bg(f),
+            NamedColor::LightGreen => termion::color::LightGreen.write_bg(f),
+            NamedColor::LightMagenta => termion::color::LightMagenta.write_bg(f),
+            NamedColor::LightRed => termion::color::LightRed.write_bg(f),
+            NamedColor::LightWhite => termion::color::LightWhite.write_bg(f),
+            NamedColor::LightYellow => termion::color::LightYellow.write_bg(f),
+            NamedColor::Magenta => termion::color::Magenta.write_bg(f),
+            NamedColor::Red => termion::color::Red.write_bg(f),
+            NamedColor::White => termion::color::White.write_bg(f),
+            NamedColor::Yellow => termion::color::Yellow.write_bg(f),
+        }
+    }
+}
+
+#[derive(Default, Copy, Clone, Debug, PartialEq)]
+pub enum Color {
+    Named(NamedColor),
+    Rgb(u8, u8, u8),
+    #[default]
+    Default,
+}
+
+fn parse_rgb_str(s: &str) -> Result<Color, String> {
+    enum State {
+        Initial,
+        NumberSign,
+        Red(u8),
+        Green(u8, Option<u8>),
+        Blue(u8, u8, Option<u8>),
+        Rgb(u8, u8, u8),
+    }
+
+    let mut state = State::Initial;
+
+    for i in s.chars() {
+        state =
+            match (state, i) {
+                (State::Initial, '#') => Ok(State::NumberSign),
+                (State::NumberSign, digit @ ('0'..='9' | 'a'..='f')) => {
+                    Ok(State::Red(digit.to_digit(16).unwrap() as u8 * 16))
+                }
+                (State::Red(nibble), digit @ ('0'..='9' | 'a'..='f')) => Ok(State::Green(
+                    nibble + digit.to_digit(16).unwrap() as u8,
+                    None,
+                )),
+                (State::Green(red, None), digit @ ('0'..='9' | 'a'..='f')) => Ok(State::Green(
+                    red,
+                    Some(digit.to_digit(16).unwrap() as u8 * 16),
+                )),
+                (State::Green(red, Some(nibble)), digit @ ('0'..='9' | 'a'..='f')) => Ok(
+                    State::Blue(red, nibble + digit.to_digit(16).unwrap() as u8, None),
+                ),
+                (State::Blue(red, green, None), digit @ ('0'..='9' | 'a'..='f')) => Ok(
+                    State::Blue(red, green, Some(digit.to_digit(16).unwrap() as u8 * 16)),
+                ),
+                (State::Blue(red, green, Some(nibble)), digit @ ('0'..='9' | 'a'..='f')) => Ok(
+                    State::Rgb(red, green, nibble + digit.to_digit(16).unwrap() as u8),
+                ),
+                _ => Err(format!("Invalid rgb string {}", s)),
+            }?;
+    }
+
+    match state {
+        State::Rgb(r, g, b) => Ok(Color::Rgb(r, g, b)),
+        _ => Err(format!("Invalid rgb string {}", s)),
+    }
+}
+
+impl FromStr for Color {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Black" | "black" => Ok(Color::Named(NamedColor::Black)),
+            "Blue" | "blue" => Ok(Color::Named(NamedColor::Blue)),
+            "Cyan" | "cyan" => Ok(Color::Named(NamedColor::Cyan)),
+            "Green" | "green" => Ok(Color::Named(NamedColor::Green)),
+            "LightBlack" | "lightblack" => Ok(Color::Named(NamedColor::LightBlack)),
+            "LightBlue" | "lightblue" => Ok(Color::Named(NamedColor::LightBlue)),
+            "LightCyan" | "lightcyan" => Ok(Color::Named(NamedColor::LightCyan)),
+            "LightGreen" | "lightgreen" => Ok(Color::Named(NamedColor::LightGreen)),
+            "LightMagenta" | "lightmagenta" => Ok(Color::Named(NamedColor::LightMagenta)),
+            "LightRed" | "lightred" => Ok(Color::Named(NamedColor::LightRed)),
+            "LightWhite" | "lightwhite" => Ok(Color::Named(NamedColor::LightWhite)),
+            "LightYellow" | "lightyellow" => Ok(Color::Named(NamedColor::LightYellow)),
+            "Magenta" | "magenta" => Ok(Color::Named(NamedColor::Magenta)),
+            "Red" | "red" => Ok(Color::Named(NamedColor::Red)),
+            "White" | "white" => Ok(Color::Named(NamedColor::White)),
+            "Yellow" | "yellow" => Ok(Color::Named(NamedColor::Yellow)),
+            _ if s.starts_with('#') => parse_rgb_str(s),
+            _ => Err(format!("Invalid color {}", s)),
+        }
+    }
+}
+
+impl ToString for Color {
+    fn to_string(&self) -> String {
+        todo!()
+    }
+}
+
+/// ConfigColor is just a Fg or Bg color that isn't strongly typed in the config
+pub trait ConfigColor
+where
+    Self: Sized,
+{
+    type Err;
+
+    fn to_string(&self) -> String;
+    fn from_str(string: &str) -> Result<Self, Self::Err>;
+}
+
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+pub struct FgColor(pub Color);
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
+pub struct BgColor(pub Color);
+
+impl ConfigColor for FgColor {
+    type Err = String;
+
+    fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Color::from_str(string)?))
+    }
+}
+
+impl ConfigColor for BgColor {
+    type Err = String;
+
+    fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Color::from_str(string)?))
+    }
+}
+
+impl fmt::Display for FgColor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Color::Named(color) => color.write_fg(f),
+            Color::Rgb(r, g, b) => termion::color::Rgb(r, g, b).write_fg(f),
+            Color::Default => termion::color::Reset.write_fg(f),
+        }
+    }
+}
+
+impl fmt::Display for BgColor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            Color::Named(color) => color.write_bg(f),
+            Color::Rgb(r, g, b) => termion::color::Rgb(r, g, b).write_bg(f),
+            Color::Default => termion::color::Reset.write_bg(f),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Style {
+    Bold,
+    Faint,
+    Italic,
+    Underline,
+    Blink,
+    Invert,
+    CrossedOut,
+    Framed,
+}
+
+impl Debug for Style {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Style::Bold => f.write_str("Bold"),
+            Style::Faint => f.write_str("Faint"),
+            Style::Italic => f.write_str("Italic"),
+            Style::Underline => f.write_str("Underline"),
+            Style::Blink => f.write_str("Blink"),
+            Style::Invert => f.write_str("Invert"),
+            Style::CrossedOut => f.write_str("CrossedOut"),
+            Style::Framed => f.write_str("Framed"),
+        }
+    }
+}
+
+impl Eq for Style {}
+
+impl PartialEq for Style {
+    fn eq(&self, other: &Self) -> bool {
+        std::mem::discriminant(self).eq(&std::mem::discriminant(other))
+    }
+}
+
+impl Hash for Style {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state)
+    }
+}
+
 /// Represent any component that can be displayed.
 ///
 /// Rendering is done in 3 steps:
@@ -384,10 +613,7 @@ impl From<&Dimensions> for MeasureSpecs {
 /// Layout apply the definitive dimension, setting the final x and y position.
 /// Render draw the component on the given screen.
 #[cfg_attr(test, automock)]
-pub trait View<E, W>
-where
-    W: Write + AsFd,
-{
+pub trait View<E> {
     /// Compute the wanted dimension given passed width and height
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions;
 
@@ -395,85 +621,18 @@ where
     ///
     /// dimension are the definitive dimension.
     ///
-    /// View has responsability of storing dimension for later rendering if needed.
+    /// View has responsibility of storing dimension for later rendering if needed.
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
-    /// A view must not decide wether rendering should be avoided inside this function.
-    /// Such decision is made with parent and with the help of is_dirty()
-    fn render(&self, screen: &mut Screen<W>);
-
-    /// Force dirty state on view
-    fn set_dirty(&mut self);
-
-    /// If this view requires to be rendered
-    // we could avoid this function if view could decide wether they can avoid rendering on their
-    // own:
-    //  - layout has changed
-    //  - content has changed
-    // but a parent could have changed without impacting layout (FrameLayout is such an example)
-    // then we must have a way to force rendering.
-    //
-    // Other option is to keep is_dirty to tell about layout change and/or content change
-    // and let render be an equivalent of force rendering.
-    //
-    // But then what happens with ScrollWin:
-    //  - 1 child is dirty (content only)
-    //
-    //  - is_dirty() is called on ScrollWin -> return true
-    //  - render() is called on ScrollWin -> render all children
-    //
-    // If 1 child is dirty with content change only, then the layout phase from parent will not set
-    // dirty any other children
-    fn is_dirty(&self) -> bool;
+    #[allow(clippy::needless_lifetimes)]
+    fn render<'a>(&self, frame: ScreenFrame<'a>);
 
     /// Handle an event
     fn event(&mut self, event: &mut E);
 }
 
-#[macro_export]
-macro_rules! vprint {
-    ($screen:expr, $fmt:expr) => {
-        {
-            while let Err(_) = write!($screen, $fmt) { };
-        }
-    };
-    ($screen:expr, $fmt:expr, $($arg:tt)*) => {
-        {
-            while let Err(_) = write!($screen, $fmt, $($arg)*) { };
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! goto {
-    ($screen:expr, $x:expr, $y:expr) => {
-        $crate::vprint!($screen, "{}", ::termion::cursor::Goto($x, $y));
-    };
-}
-
-#[macro_export]
-macro_rules! flush {
-    ($screen:expr) => {
-        while let Err(_) = $screen.flush() {}
-    };
-}
-
-#[macro_export]
-macro_rules! save_cursor {
-    ($screen:expr) => {
-        $crate::vprint!($screen, "{}", ::termion::cursor::Save);
-    };
-}
-
-#[macro_export]
-macro_rules! restore_cursor {
-    ($screen:expr) => {
-        $crate::vprint!($screen, "{}", ::termion::cursor::Restore);
-    };
-}
-
-impl<E, W> dyn View<E, W> where W: Write {}
+impl<E> dyn View<E> {}
 
 #[cfg(test)]
 mod tests {
@@ -550,5 +709,77 @@ mod tests {
 
         // Then
         assert_eq!(truncated, "test …");
+    }
+
+    #[test]
+    fn test_rgb_from_str() {
+        // Given
+        let input = "#0122a3";
+
+        // When
+        let rgb = parse_rgb_str(input);
+
+        // Then
+        assert_eq!(rgb, Ok(Color::Rgb(0x01, 0x22, 0xa3)));
+    }
+
+    #[test]
+    fn test_truncated_rgb_from_str() {
+        // Given
+        let input = "#1122";
+
+        // When
+        let rgb = parse_rgb_str(input);
+
+        // Then
+        assert_eq!(rgb, Err("Invalid rgb string #1122".to_string()));
+    }
+
+    #[test]
+    fn test_invalid_rgb_from_str() {
+        // Given
+        let input = "#1122zz";
+
+        // When
+        let rgb = parse_rgb_str(input);
+
+        // Then
+        assert_eq!(rgb, Err("Invalid rgb string #1122zz".to_string()));
+    }
+
+    #[test]
+    fn test_rgb_color_from_str() {
+        // Given
+        let input = "#0122a3";
+
+        // When
+        let rgb = Color::from_str(input);
+
+        // Then
+        assert_eq!(rgb, Ok(Color::Rgb(0x01, 0x22, 0xa3)));
+    }
+
+    #[test]
+    fn test_named_color_from_str() {
+        // Given
+        let input = "Cyan";
+
+        // When
+        let rgb = Color::from_str(input);
+
+        // Then
+        assert_eq!(rgb, Ok(Color::Named(NamedColor::Cyan)));
+    }
+
+    #[test]
+    fn test_invalid_color_from_str() {
+        // Given
+        let input = "teal";
+
+        // When
+        let rgb = Color::from_str(input);
+
+        // Then
+        assert_eq!(rgb, Err("Invalid color teal".to_string()));
     }
 }

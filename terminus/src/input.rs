@@ -2,16 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use crate::cursor::Cursor;
-use crate::{flush, goto, save_cursor, vprint};
+use crate::rendering::ScreenFrame;
+use crate::CursorPos;
 use std::cell::{Cell, RefCell};
-use std::io::Write;
-use std::os::fd::AsFd;
 use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
     next_word, term_string_visible_len, Dimensions, EventHandler, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, Screen, View,
+    RequestedDimensions, View,
 };
 
 pub struct Input<E> {
@@ -31,7 +30,6 @@ pub struct Input<E> {
     //     |-----------|
     pub view: Cursor,
     pub event_handler: Option<EventHandler<Self, E>>,
-    pub dirty: Cell<bool>,
     width: Cell<usize>,
     dimensions: Option<Dimensions>,
 }
@@ -53,7 +51,6 @@ impl<E> Input<E> {
             cursor: Cursor::new(0),
             view: Cursor::new(0),
             event_handler: None,
-            dirty: Cell::new(true),
             width: Cell::new(0),
             dimensions: None,
         }
@@ -71,10 +68,6 @@ impl<E> Input<E> {
         let byte_index = self.cursor.index(&self.buf);
         self.buf.insert(byte_index, c);
         self.cursor += 1;
-
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn backspace(&mut self) {
@@ -90,9 +83,6 @@ impl<E> Input<E> {
                 self.buf.remove(byte_index);
             }
         }
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn backward_delete_word(&mut self) {
@@ -104,25 +94,16 @@ impl<E> Input<E> {
             "",
         );
         self.cursor = word_start;
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn delete_from_cursor_to_start(&mut self) {
         self.buf.replace_range(0..self.cursor.index(&self.buf), "");
         self.cursor.set(0);
         self.view.set(0);
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn delete_from_cursor_to_end(&mut self) {
         self.buf.replace_range(self.cursor.index(&self.buf).., "");
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn delete(&mut self) {
@@ -134,17 +115,11 @@ impl<E> Input<E> {
                 self.buf.remove(byte_index);
             }
         }
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn home(&mut self) {
         self.cursor.set(0);
         self.view.set(0);
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn end(&mut self) {
@@ -154,9 +129,6 @@ impl<E> Input<E> {
         } else {
             self.view.set(0);
         }
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn clear(&mut self) {
@@ -165,15 +137,11 @@ impl<E> Input<E> {
         self.view.set(0);
         let _ = self.tmp_buf.take();
         self.password = false;
-        self.dirty.set(true);
     }
 
     pub fn left(&mut self) {
         if self.cursor > 0 {
             self.cursor -= 1;
-        }
-        if !self.password {
-            self.dirty.set(true);
         }
     }
 
@@ -181,32 +149,20 @@ impl<E> Input<E> {
         if self.cursor < term_string_visible_len(&self.buf) {
             self.cursor += 1;
         }
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn word_left(&mut self) {
         let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
         self.cursor -= next_word(iter);
-
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn word_right(&mut self) {
         let iter = self.buf[self.cursor.index(&self.buf)..].chars();
         self.cursor += next_word(iter);
-
-        if !self.password {
-            self.dirty.set(true);
-        }
     }
 
     pub fn password(&mut self) {
         self.password = true;
-        self.dirty.set(true);
     }
 
     pub fn validate(&mut self) -> (String, bool) {
@@ -232,7 +188,6 @@ impl<E> Input<E> {
         self.history_index -= 1;
         self.buf = self.history[self.history_index].clone();
         self.end();
-        self.dirty.set(true);
     }
 
     pub fn next(&mut self) {
@@ -247,14 +202,10 @@ impl<E> Input<E> {
             self.buf = self.history[self.history_index].clone();
         }
         self.end();
-        self.dirty.set(true);
     }
 }
 
-impl<E, W> View<E, W> for Input<E>
-where
-    W: Write + AsFd,
-{
+impl<E> View<E> for Input<E> {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             width: RequestedDimension::ExpandMax,
@@ -265,80 +216,54 @@ where
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
         if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.set(true);
             self.dimensions.replace(dimensions.clone());
         }
     }
 
-    fn render(&self, screen: &mut Screen<W>) {
-        if self.dirty.replace(false) {
-            log::debug!(
-                "rendering {} at {:?}",
-                std::any::type_name::<Self>(),
-                self.dimensions
-            );
-            let dimensions = self.dimensions.as_ref().unwrap();
+    fn render(&self, mut frame: ScreenFrame) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
 
-            self.width.set(dimensions.width as usize);
-            match self.password {
-                true => {
-                    goto!(screen, dimensions.left, dimensions.top);
-                    vprint!(screen, "password: ");
-                    flush!(screen);
-                }
-                false => {
-                    // Max displayable size is view width less 1 for cursor
-                    let max_size = (dimensions.width - 1) as usize;
+        self.width.set(frame.dimensions.width as usize);
+        match self.password {
+            true => {
+                frame.write("password: ");
+            }
+            false => {
+                // Max displayable size is view width less 1 for cursor
+                let max_size = (frame.dimensions.width - 1) as usize;
 
-                    // cursor must always be inside the view
-                    if self.cursor < self.view {
-                        if self.cursor < max_size {
-                            self.view.set(0);
-                        } else {
-                            self.view
-                                .update(&self.cursor - (dimensions.width as usize - 1));
-                        }
-                    } else if self.cursor > &self.view + (dimensions.width as usize - 1) {
-                        self.view
-                            .update(&self.cursor - (dimensions.width as usize - 1));
-                    }
-                    assert!(self.cursor >= self.view);
-                    assert!(self.cursor <= &self.view + (max_size + 1));
-
-                    let start_index = self.view.index(&self.buf);
-                    let end_index = (&self.view + max_size).index(&self.buf);
-                    let buf = &self.buf[start_index..end_index];
-                    let cursor = &self.cursor - &self.view;
-
-                    if dimensions.left == 1 {
-                        // Use fast erase if possible
-                        goto!(screen, dimensions.left + dimensions.width, dimensions.top);
-                        vprint!(screen, "{}", "\x1B[1K");
-                        goto!(screen, dimensions.left, dimensions.top);
-                        vprint!(screen, "{}", buf);
+                // cursor must always be inside the view
+                if self.cursor < self.view {
+                    if self.cursor < max_size {
+                        self.view.set(0);
                     } else {
-                        goto!(screen, dimensions.left, dimensions.top);
-                        let padding = dimensions.width - term_string_visible_len(buf) as u16;
-                        vprint!(screen, "{}{: <1$}", buf, padding as usize);
+                        self.view
+                            .update(&self.cursor - (frame.dimensions.width as usize - 1));
                     }
-
-                    goto!(
-                        screen,
-                        dimensions.left + cursor.get() as u16,
-                        dimensions.top
-                    );
-                    save_cursor!(screen);
+                } else if self.cursor > &self.view + (frame.dimensions.width as usize - 1) {
+                    self.view
+                        .update(&self.cursor - (frame.dimensions.width as usize - 1));
                 }
+                assert!(self.cursor >= self.view);
+                assert!(self.cursor <= &self.view + (max_size + 1));
+
+                let start_index = self.view.index(&self.buf);
+                let end_index = (&self.view + max_size).index(&self.buf);
+                let buf = &self.buf[start_index..end_index];
+                let cursor = &self.cursor - &self.view;
+
+                frame.write(buf);
+
+                frame.set_cursor(CursorPos {
+                    top: frame.dimensions.top,
+                    left: frame.dimensions.left + cursor.get() as u16,
+                });
             }
         }
-    }
-
-    fn set_dirty(&mut self) {
-        self.dirty.set(true);
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty.get()
     }
 
     fn event(&mut self, event: &mut E) {
