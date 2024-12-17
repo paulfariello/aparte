@@ -1087,16 +1087,23 @@ impl Aparte {
                     .unwrap();
                 let _ = write!(&mut screen, "{}", termion::clear::All);
                 let mut interval = time::interval(Duration::from_millis(UI_TICK_MS));
+                let mut fps = 0;
+                let mut last_fps_log = Instant::now();
                 loop {
                     {
-                        let start = Instant::now();
                         let render_buffer = std::sync::RwLock::read(&render_buffer).unwrap();
 
                         render_buffer.render(
                             &mut screen,
                             reference_screen.replace(render_buffer.clone()).as_ref(),
                         );
-                        log::trace!("Rendering: {:?}", start.elapsed())
+                        fps += 1;
+                    }
+                    let elapsed = last_fps_log.elapsed();
+                    if elapsed > Duration::new(1, 0) {
+                        log::trace!("Rendering: {:?} fps", fps * 1000 / elapsed.as_millis());
+                        last_fps_log = Instant::now();
+                        fps = 0;
                     }
                     interval.tick().await;
                 }
