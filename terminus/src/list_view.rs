@@ -2,18 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use linked_hash_map::{Entry, LinkedHashMap};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::cmp;
 use std::collections::HashSet;
 use std::fmt::{self};
 use std::hash::Hash;
-use std::io::Write;
-use std::os::fd::AsFd;
 use std::rc::Rc;
 
+use crate::charxel::{CharxelDisplay, IntoCharxels};
+use crate::ScreenFrame;
+
 use super::{
-    term_string_visible_len, term_string_visible_truncate, Dimensions, EventHandler, LayoutParam,
-    LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, Screen, View,
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    RequestedDimension, RequestedDimensions, View,
 };
 
 type SortItemHandler<V> = Box<dyn Fn(&V, &V) -> cmp::Ordering>;
@@ -30,35 +31,34 @@ impl fmt::Display for NonExistentGroup {
 
 impl std::error::Error for NonExistentGroup {}
 
-pub struct ListView<E, W, G, V>
+pub struct ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
     sort_item: Option<SortItemHandler<V>>,
     sort_group: Option<SortGroupHandler<G>>,
     event_handler: Option<EventHandler<Self, E>>,
-    dirty: Cell<bool>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
 }
 
-impl<E, W, G, V> Default for ListView<E, W, G, V>
+impl<E, G, V> Default for ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E, W, G, V> ListView<E, W, G, V>
+impl<E, G, V> ListView<E, G, V>
 where
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     pub fn new() -> Self {
         Self {
@@ -67,7 +67,6 @@ where
             sort_item: None,
             sort_group: None,
             event_handler: None,
-            dirty: Cell::new(true),
             layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
@@ -137,8 +136,6 @@ where
         if let Entry::Vacant(vacant) = self.items.entry(Some(group)) {
             vacant.insert(HashSet::new());
         }
-
-        self.dirty.set(true);
     }
 
     pub fn insert(&mut self, item: V, group: Option<G>) {
@@ -157,27 +154,23 @@ where
                 occupied.get_mut().replace(item);
             }
         }
-
-        self.dirty.set(true);
     }
 
     pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), NonExistentGroup> {
         match self.items.entry(group) {
             Entry::Vacant(_) => Err(NonExistentGroup),
             Entry::Occupied(mut occupied) => {
-                self.dirty
-                    .set(self.dirty.get() || occupied.get_mut().remove(&item));
+                occupied.get_mut().remove(&item);
                 Ok(())
             }
         }
     }
 }
 
-impl<E, W, G, V> View<E, W> for ListView<E, W, G, V>
+impl<E, G, V> View<E> for ListView<E, G, V>
 where
-    W: Write + AsFd,
-    G: fmt::Display + Hash + Eq,
-    V: fmt::Display + Hash + Eq,
+    G: CharxelDisplay + Hash + Eq,
+    V: CharxelDisplay + Hash + Eq,
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         let max_width = match self.layouts.width {
@@ -190,12 +183,11 @@ where
                         None => "",
                     };
 
-                    group
-                        .iter()
-                        .map(|group| term_string_visible_len(&format!("{group}")) as u16)
-                        .chain(items.iter().map(move |item| {
-                            term_string_visible_len(&format!("{indent}{item}")) as u16
-                        }))
+                    group.iter().map(|group| group.colored_fmt().len()).chain(
+                        items
+                            .iter()
+                            .map(move |item| item.colored_fmt().len() + indent.len() as u16),
+                    )
                 })
                 .max()
                 .unwrap_or(0),
@@ -249,69 +241,56 @@ where
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
         if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.set(true);
             self.dimensions.replace(dimensions.clone());
         }
     }
 
-    fn render(&self, screen: &mut Screen<W>) {
-        if self.dirty.replace(false) {
-            log::debug!(
-                "rendering {} at {:?}",
-                std::any::type_name::<Self>(),
-                self.dimensions
-            );
-            let dimensions = self.dimensions.as_ref().unwrap();
+    fn render(&self, mut frame: ScreenFrame) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
 
-            // Clean space
-            for top in dimensions.top..dimensions.top + dimensions.height {
-                super::goto!(screen, dimensions.left, top);
-                super::vprint!(screen, "{: <1$}", "", dimensions.width as usize);
+        // Draw items
+        let mut top = 0;
+        let max_width = frame.dimensions.width;
+
+        for (group, items) in &self.items {
+            if top >= frame.dimensions.height {
+                break;
             }
 
-            // Draw items
-            let mut top = dimensions.top;
-            let usize_width = dimensions.width as usize;
+            if let Some(group) = group {
+                let mut disp = group.colored_fmt();
+                disp.truncate(max_width, "…");
 
-            for (group, items) in &self.items {
-                if top > dimensions.top + dimensions.height {
+                frame.write_at((0, top), disp);
+                top += 1;
+            }
+
+            let mut items = items.iter().collect::<Vec<&V>>();
+            if let Some(sort) = &self.sort_item {
+                items.sort_by(|a, b| sort(*a, *b));
+            }
+
+            for item in items {
+                if top >= frame.dimensions.height {
                     break;
                 }
 
-                super::goto!(screen, dimensions.left, top);
-
-                if group.is_some() {
-                    let mut disp = format!("{}", group.as_ref().unwrap());
-                    if term_string_visible_len(&disp) > usize_width {
-                        disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
+                let mut disp = match group {
+                    Some(_) => {
+                        let mut indent = "  ".into_charxels();
+                        indent.append(&mut item.colored_fmt());
+                        indent
                     }
-                    super::vprint!(screen, "{}", disp);
-                    top += 1;
-                }
+                    None => item.colored_fmt(),
+                };
+                disp.truncate(max_width, "…");
+                frame.write_at((0, top), disp);
 
-                let mut items = items.iter().collect::<Vec<&V>>();
-                if let Some(sort) = &self.sort_item {
-                    items.sort_by(|a, b| sort(*a, *b));
-                }
-
-                for item in items {
-                    if top > dimensions.top + dimensions.height {
-                        break;
-                    }
-
-                    super::goto!(screen, dimensions.left, top);
-
-                    let mut disp = match group {
-                        Some(_) => format!("  {item}"),
-                        None => format!("{item}"),
-                    };
-                    if term_string_visible_len(&disp) > usize_width {
-                        disp = term_string_visible_truncate(&disp, usize_width, Some("…"));
-                    }
-                    super::vprint!(screen, "{}", disp);
-
-                    top += 1;
-                }
+                top += 1;
             }
         }
     }
@@ -322,13 +301,5 @@ where
             let handler = &mut *handler.borrow_mut();
             handler(self, event);
         }
-    }
-
-    fn set_dirty(&mut self) {
-        self.dirty.set(true);
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty.get()
     }
 }

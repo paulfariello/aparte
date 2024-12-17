@@ -1,57 +1,87 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::hash::Hash;
-use std::io::Write;
-use std::os::fd::AsFd;
 use std::rc::Rc;
 
+use crate::ScreenFrame;
+
+use super::Dimensions;
 use super::{
-    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
-    RequestedDimension, RequestedDimensions, Screen, View,
+    EventHandler, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, View,
 };
 
 const MISSING_DIMENSIONS: &str = "Missing dimensions";
 const INVALID_VIEW: &str = "Invalid view detected";
 
-/// Ordered vertical window giving ability to scroll
-pub struct ScrollWin<E, W, I>
+struct LayoutChild<I> {
+    child: I,
+    dimensions: Option<Dimensions>,
+}
+
+impl<I> Ord for LayoutChild<I>
 where
-    W: Write + AsFd,
-    I: View<E, W> + Hash + Eq + Ord,
+    I: Ord,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.child.cmp(&other.child)
+    }
+}
+
+impl<I> PartialOrd for LayoutChild<I>
+where
+    I: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.child.partial_cmp(&other.child)
+    }
+}
+
+impl<I> Eq for LayoutChild<I> where I: Eq {}
+
+impl<I> PartialEq for LayoutChild<I>
+where
+    I: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.child.eq(&other.child)
+    }
+}
+
+/// Ordered vertical window giving ability to scroll
+pub struct ScrollWin<E, I>
+where
+    I: View<E> + Hash + Eq + Ord,
 {
     /// Index in children of last visible child (bottom child)
     bottom_visible_child_index: usize,
     event_handler: Option<EventHandler<Self, E>>,
-    dirty: Cell<bool>,
-    children: BTreeSet<I>,
-    dimensions: Option<Dimensions>,
+    children: BTreeSet<LayoutChild<I>>,
     layouts: LayoutParams,
+    dimensions: Option<Dimensions>,
 }
 
-impl<E, W, I> Default for ScrollWin<E, W, I>
+impl<E, I> Default for ScrollWin<E, I>
 where
-    W: Write + AsFd,
-    I: View<E, W> + Hash + Eq + Ord,
+    I: View<E> + Hash + Eq + Ord,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E, W, I> ScrollWin<E, W, I>
+impl<E, I> ScrollWin<E, I>
 where
-    W: Write + AsFd,
-    I: View<E, W> + Hash + Eq + Ord,
+    I: View<E> + Hash + Eq + Ord,
 {
     pub fn new() -> Self {
         Self {
             children: BTreeSet::new(),
             bottom_visible_child_index: 0,
             event_handler: None,
-            dirty: Cell::new(true),
             layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
@@ -74,13 +104,20 @@ where
     }
 
     pub fn first(&self) -> Option<&I> {
-        self.children.iter().next()
+        self.children
+            .iter()
+            .next()
+            .map(|LayoutChild { child, .. }| child)
     }
 
     pub fn insert(&mut self, item: I) {
         // If view index is on last child, then keep it there
         let stick_to_bottom = self.bottom_visible_child_index + 1 == self.children.len();
-        if self.children.insert(item) && stick_to_bottom {
+        if self.children.insert(LayoutChild {
+            child: item,
+            dimensions: None,
+        }) && stick_to_bottom
+        {
             self.bottom_visible_child_index += 1;
         }
     }
@@ -94,10 +131,12 @@ where
         let total_children_height: u16 = self
             .children
             .iter()
-            .map(|child| match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height,
-                RequestedDimension::Absolute(child_height) => child_height,
-            })
+            .map(
+                |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(child_height) => child_height,
+                },
+            )
             .sum();
 
         if total_children_height < dimensions.height {
@@ -115,7 +154,7 @@ where
             self.children.range(..)
         };
 
-        for (i, child) in range.rev().enumerate() {
+        for (i, LayoutChild { child, .. }) in range.rev().enumerate() {
             let child_height = match child.measure(&measure_specs).height {
                 RequestedDimension::ExpandMax => dimensions.height,
                 RequestedDimension::Absolute(child_height) => child_height,
@@ -140,13 +179,15 @@ where
         let total_children_height: u16 = self
             .children
             .iter()
-            .map(|child| match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height,
-                RequestedDimension::Absolute(child_height) => {
-                    log::debug!("Child height: {}", child_height);
-                    child_height
-                }
-            })
+            .map(
+                |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(child_height) => {
+                        log::debug!("Child height: {}", child_height);
+                        child_height
+                    }
+                },
+            )
             .sum();
 
         if total_children_height < dimensions.height {
@@ -163,18 +204,20 @@ where
         } else {
             self.children.range(..)
         };
-        match range.enumerate().find_map(|(i, child)| {
-            let child_height = match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height,
-                RequestedDimension::Absolute(child_height) => child_height,
-            };
-            if child_height > remaining_height {
-                Some(i)
-            } else {
-                remaining_height -= child_height;
-                None
-            }
-        }) {
+        match range
+            .enumerate()
+            .find_map(|(i, LayoutChild { child, .. })| {
+                let child_height = match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(child_height) => child_height,
+                };
+                if child_height > remaining_height {
+                    Some(i)
+                } else {
+                    remaining_height -= child_height;
+                    None
+                }
+            }) {
             // Stopped before last children
             Some(i) => self.bottom_visible_child_index += i,
             // Reach bottom
@@ -185,7 +228,7 @@ where
         true
     }
 
-    fn bottom_visible_child(&self) -> Option<&I> {
+    fn bottom_visible_child(&self) -> Option<&LayoutChild<I>> {
         if self.children.is_empty() {
             None
         } else {
@@ -199,8 +242,13 @@ where
     }
 
     /// List visible children starting from bottom
-    pub fn visible_children(&self) -> impl Iterator<Item = &'_ I> {
-        let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
+    fn visible_children<'a, 'b>(
+        &'a self,
+        dimensions: &'b Dimensions,
+    ) -> impl Iterator<Item = &'a LayoutChild<I>>
+    where
+        'b: 'a,
+    {
         let measure_specs = MeasureSpecs::from(dimensions);
         let mut remaining_height = dimensions.height;
         let range = if let Some(bottom_visible_child) = self.bottom_visible_child() {
@@ -209,7 +257,7 @@ where
             self.children.range(..)
         };
 
-        range.rev().take_while(move |child| {
+        range.rev().take_while(move |LayoutChild { child, .. }| {
             if remaining_height > 0 {
                 let child_height = match child.measure(&measure_specs).height {
                     RequestedDimension::ExpandMax => dimensions.height,
@@ -223,27 +271,25 @@ where
         })
     }
 
-    fn layout_from_bottom(&mut self) {
-        let dimensions = self.dimensions.as_ref().unwrap();
-
+    fn layout_from_bottom(&mut self, dimensions: &Dimensions) {
         // Start layout at bottom of the view
         let mut child_top = dimensions.top + dimensions.height;
         let mut measure_specs: MeasureSpecs = dimensions.into();
 
-        let visible_children_count = self.visible_children().count();
+        let visible_children_count = self.visible_children(dimensions).count();
 
         // Empty the BTreeSet so we can mutate children
         let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
 
-        // Layout only visiable children
+        // Layout only visible children
         let last_visible_child_index = self.bottom_visible_child_index;
         // If we have only 1 visible children, first is 0 and last is also 0
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        for child in children[first_visible_child_index..=last_visible_child_index]
+        for layout_child in children[first_visible_child_index..=last_visible_child_index]
             .iter_mut()
             .rev()
         {
-            let requested_dimensions = child.measure(&measure_specs);
+            let requested_dimensions = layout_child.child.measure(&measure_specs);
             let mut child_dimensions = Dimensions::reconcile(
                 &measure_specs,
                 &requested_dimensions,
@@ -265,8 +311,12 @@ where
             measure_specs.height =
                 MeasureSpec::AtMost(measure_spec_height - child_dimensions.height);
 
+            layout_child.dimensions = Some(child_dimensions);
+
             // Finally layout child with correct dimensions
-            child.layout(&child_dimensions);
+            layout_child
+                .child
+                .layout(layout_child.dimensions.as_ref().unwrap());
         }
 
         // Insert back all children in the BTreeSet
@@ -275,23 +325,23 @@ where
         }
     }
 
-    fn layout_from_top(&mut self) {
-        let dimensions = self.dimensions.as_ref().unwrap();
-
+    fn layout_from_top(&mut self, dimensions: &Dimensions) {
         // Start layout at bottom of the view
         let mut child_top = dimensions.top;
         let measure_specs: MeasureSpecs = dimensions.into();
 
-        let visible_children_count = self.visible_children().count();
+        let visible_children_count = self.visible_children(dimensions).count();
 
         // Empty the BTreeSet so we can mutate children
         let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
 
-        // Layout only visiable children
+        // Layout only visible children
         let last_visible_child_index = self.bottom_visible_child_index;
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        for child in children[first_visible_child_index..=last_visible_child_index].iter_mut() {
-            let requested_dimensions = child.measure(&measure_specs);
+        for layout_child in
+            children[first_visible_child_index..=last_visible_child_index].iter_mut()
+        {
+            let requested_dimensions = layout_child.child.measure(&measure_specs);
             let mut child_dimensions = Dimensions::reconcile(
                 &measure_specs,
                 &requested_dimensions,
@@ -302,10 +352,14 @@ where
             // Force full width
             child_dimensions.width = dimensions.width;
 
-            // Finally layout child with correct dimensions
-            child.layout(&child_dimensions);
-
             child_top += child_dimensions.height;
+
+            layout_child.dimensions = Some(child_dimensions);
+
+            // Finally layout child with correct dimensions
+            layout_child
+                .child
+                .layout(layout_child.dimensions.as_ref().unwrap());
         }
 
         // Insert back all children in the BTreeSet
@@ -315,18 +369,17 @@ where
     }
 }
 
-impl<E, W, I> View<E, W> for ScrollWin<E, W, I>
+impl<E, I> View<E> for ScrollWin<E, I>
 where
-    W: Write + AsFd,
-    I: View<E, W> + Hash + Eq + Ord,
+    I: View<E> + Hash + Eq + Ord,
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // Should we measure only visible children?
-        // Mesure max width of each children
+        // Measure max width of each children
         let (widths, heights): (Vec<RequestedDimension>, Vec<RequestedDimension>) = self
             .children
             .iter()
-            .map(|child| {
+            .map(|LayoutChild { child, .. }| {
                 let child_measure_spec = measure_specs.clone();
                 let requested_dimensions = child.measure(&child_measure_spec);
                 (requested_dimensions.width, requested_dimensions.height)
@@ -359,11 +412,7 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-
-        if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.set(true);
-            self.dimensions.replace(dimensions.clone());
-        }
+        self.dimensions = Some(dimensions.clone());
 
         if self.children.is_empty() {
             // Don't bother
@@ -375,43 +424,35 @@ where
         let total_children_height: u16 = self
             .children
             .iter()
-            .map(|child| match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height,
-                RequestedDimension::Absolute(child_height) => child_height,
-            })
+            .map(
+                |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(child_height) => child_height,
+                },
+            )
             .sum();
 
         if total_children_height < dimensions.height {
-            self.layout_from_top();
+            self.layout_from_top(dimensions);
         } else {
-            self.layout_from_bottom();
+            self.layout_from_bottom(dimensions);
         }
     }
 
-    fn render(&self, screen: &mut Screen<W>) {
-        log::debug!(
-            "rendering {} at {:?}",
-            std::any::type_name::<Self>(),
-            self.dimensions
-        );
-
-        let was_dirty = self.dirty.replace(false);
-
-        if was_dirty {
-            super::clear_screen(self.dimensions.as_ref().unwrap(), screen);
-        }
+    fn render(&self, frame: ScreenFrame) {
+        log::debug!("rendering {}", std::any::type_name::<Self>(),);
 
         if self.children.is_empty() {
             // Don't bother
             return;
         }
 
-        for child in self.visible_children() {
-            // Render only if view has been set dirty (forced by parent) or if child required
-            // rendering
-            if was_dirty || child.is_dirty() {
-                child.render(screen);
-            }
+        let ScreenFrame { offscreen, .. } = frame;
+        for LayoutChild { child, dimensions } in
+            self.visible_children(self.dimensions.as_ref().expect(MISSING_DIMENSIONS))
+        {
+            let frame = ScreenFrame::new(offscreen, dimensions.as_ref().expect(MISSING_DIMENSIONS));
+            child.render(frame);
         }
     }
 
@@ -421,20 +462,6 @@ where
             let handler = &mut *handler.borrow_mut();
             handler(self, event);
         }
-    }
-
-    fn set_dirty(&mut self) {
-        self.dirty.set(true);
-        std::mem::take(&mut self.children)
-            .into_iter()
-            .for_each(|mut child| {
-                child.set_dirty();
-                self.children.insert(child);
-            });
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.visible_children().any(|child| child.is_dirty())
     }
 }
 
@@ -450,7 +477,6 @@ mod tests {
         pub ord: usize,
         pub height: u16,
         pub dimensions: Option<Dimensions>,
-        pub dirty: bool,
     }
 
     impl PartialOrd for MockView {
@@ -479,10 +505,7 @@ mod tests {
         }
     }
 
-    impl<E, W> View<E, W> for MockView
-    where
-        W: std::io::Write + std::os::fd::AsFd,
-    {
+    impl<E> View<E> for MockView {
         fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
             RequestedDimensions {
                 height: RequestedDimension::Absolute(self.height),
@@ -494,16 +517,8 @@ mod tests {
             self.dimensions.replace(dimensions.clone());
         }
 
-        fn render(&self, _screen: &mut Screen<W>) {
+        fn render(&self, _screen: &mut OffscreenRenderBuffer) {
             unreachable!()
-        }
-
-        fn set_dirty(&mut self) {
-            self.dirty = true;
-        }
-
-        fn is_dirty(&self) -> bool {
-            self.dirty
         }
 
         fn event(&mut self, _event: &mut E) {
@@ -514,7 +529,7 @@ mod tests {
     #[test]
     fn test_visible_children() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -536,23 +551,25 @@ mod tests {
         scroll_win.insert(second_view.clone());
         scroll_win.insert(third_view.clone());
 
-        // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+
+        // When
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&third_view, &second_view]);
     }
 
     #[test]
     fn test_visible_children_page_down() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -599,7 +616,7 @@ mod tests {
     #[test]
     fn test_visible_children_page_up() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -644,7 +661,7 @@ mod tests {
     #[test]
     fn test_visible_children_page_up_then_down_unaligned() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -711,7 +728,7 @@ mod tests {
     #[test]
     fn test_layout_children_at_top_if_they_dont_fill_it() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -741,7 +758,7 @@ mod tests {
     #[test]
     fn test_layout_children_respecting_order() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -787,7 +804,7 @@ mod tests {
     #[test]
     fn test_layout_without_children() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         // Then
         scroll_win.layout(&Dimensions {
@@ -801,7 +818,7 @@ mod tests {
     #[test]
     fn test_layout_partial_child() {
         // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
 
         let first_view = MockView {
             ord: 0,
@@ -853,107 +870,5 @@ mod tests {
             visible_children[2].dimensions.as_ref().map(|d| d.height),
             Some(10)
         );
-    }
-
-    #[test]
-    fn test_set_dirty_to_children() {
-        // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
-
-        let first_view = MockView {
-            ord: 0,
-            height: 10,
-            ..Default::default()
-        };
-        let second_view = MockView {
-            ord: 1,
-            height: 10,
-            ..Default::default()
-        };
-        scroll_win.insert(first_view);
-        scroll_win.insert(second_view);
-
-        scroll_win.layout(&Dimensions {
-            width: 100,
-            height: 30,
-            top: 1,
-            left: 1,
-        });
-
-        // When
-        scroll_win.set_dirty();
-
-        // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
-        assert!(visible_children[0].dirty);
-        assert!(visible_children[1].dirty);
-    }
-
-    #[test]
-    fn test_is_dirty_if_at_least_one_visible_child_is_dirty() {
-        // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
-
-        let first_view = MockView {
-            ord: 0,
-            height: 10,
-            dirty: true,
-            ..Default::default()
-        };
-        let second_view = MockView {
-            ord: 1,
-            height: 10,
-            dirty: false,
-            ..Default::default()
-        };
-        scroll_win.insert(first_view);
-        scroll_win.insert(second_view);
-
-        scroll_win.layout(&Dimensions {
-            width: 100,
-            height: 30,
-            top: 1,
-            left: 1,
-        });
-
-        // When
-        let dirty = scroll_win.is_dirty();
-
-        // Then
-        assert!(dirty);
-    }
-
-    #[test]
-    fn test_is_not_dirty_if_no_visible_child_is_dirty() {
-        // Given
-        let mut scroll_win = ScrollWin::<(), File, MockView>::new();
-
-        let first_view = MockView {
-            ord: 0,
-            height: 10,
-            dirty: true,
-            ..Default::default()
-        };
-        let second_view = MockView {
-            ord: 1,
-            height: 10,
-            dirty: false,
-            ..Default::default()
-        };
-        scroll_win.insert(first_view);
-        scroll_win.insert(second_view);
-
-        scroll_win.layout(&Dimensions {
-            width: 100,
-            height: 10,
-            top: 1,
-            left: 1,
-        });
-
-        // When
-        let dirty = scroll_win.is_dirty();
-
-        // Then
-        assert!(!dirty);
     }
 }

@@ -12,8 +12,9 @@ exclude = [
 ]
 
 [features]
+default = []
 strict = []
-image = ["dep:image", "dep:sixel-image", "dep:reqwest"]
+image = ["dep:image", "dep:sixel-image", "dep:reqwest", "terminus/image"]
 
 [dependencies]
 aes-gcm = "0.10.3"

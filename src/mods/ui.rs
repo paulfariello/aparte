@@ -5,20 +5,21 @@ use backtrace::Backtrace;
 use chrono::Local as LocalTz;
 use futures::task::{AtomicWaker, Context, Poll};
 use futures::Stream;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-use std::io::{Read, Stdout, Write};
-use std::os::fd::AsFd;
 use std::panic;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, RwLock};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
+use terminus::linear_layout::LayoutChild;
+use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
 use terminus::{
     self,
     cursor::Cursor,
@@ -27,14 +28,12 @@ use terminus::{
     linear_layout::{LinearLayout, Orientation},
     list_view::ListView,
     scroll_win::ScrollWin,
-    BufferedScreen, Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
-    RequestedDimension, RequestedDimensions, Screen, View,
+    Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, View,
 };
-use termion::color;
+use terminus::{Color, FgColor, NamedColor, Style};
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
-use termion::raw::IntoRawMode;
-use termion::screen::IntoAlternateScreen;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
@@ -47,31 +46,26 @@ use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::{contact, conversation};
 
-// Debounce rendering at 350ms pace (based on Doherty Threshold)
-const UI_DEBOUNCE_NS: u32 = 35_000_000u32;
-
 enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
-    AddWindow(String, Option<Box<dyn View<UIEvent, Stdout>>>),
+    AddWindow(String, Option<Box<dyn View<UIEvent>>>),
 }
 
 struct TitleBar {
     name: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
-    dirty: Cell<bool>,
     pub color: ColorTuple,
     dimensions: Option<Dimensions>,
 }
 
 impl TitleBar {
-    fn new(color: &ColorTuple) -> Self {
+    fn new(color: ColorTuple) -> Self {
         Self {
             name: None,
             subjects: HashMap::new(),
-            dirty: Cell::new(true),
-            color: color.clone(),
+            color,
             dimensions: None,
         }
     }
@@ -79,21 +73,14 @@ impl TitleBar {
     fn set_name(&mut self, name: &str) {
         self.name = Some(name.to_string());
         self.subjects.entry(name.to_string()).or_default();
-        self.dirty.set(true);
     }
 
     fn add_subjects(&mut self, jid: String, subjects: HashMap<String, String>) {
-        if Some(&jid) == self.name.as_ref() {
-            self.dirty.set(true);
-        }
         self.subjects.insert(jid, subjects);
     }
 }
 
-impl<W> View<UIEvent, W> for TitleBar
-where
-    W: Write + AsFd,
-{
+impl View<UIEvent> for TitleBar {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -103,76 +90,41 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.set(true);
-            self.dimensions.replace(dimensions.clone());
-        }
+        self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, screen: &mut Screen<W>) {
-        if self.dirty.replace(false) {
-            log::debug!(
-                "rendering {} at {:?}",
-                std::any::type_name::<Self>(),
-                self.dimensions
-            );
-            let dimensions = self.dimensions.as_ref().unwrap();
+    fn render(&self, mut frame: ScreenFrame) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
 
-            terminus::goto!(screen, dimensions.left, dimensions.top);
-            terminus::vprint!(
-                screen,
-                "{}{}{}",
-                self.color.bg,
-                self.color.fg,
-                termion::style::Bold,
-            );
+        if let Some(name) = &self.name {
+            let clean_name =
+                terminus::term_string_visible_truncate(name, frame.width().into(), Some("…"));
+            frame.write((&clean_name).with_styles(&[Style::Bold]));
 
-            terminus::vprint!(screen, "{}", " ".repeat(dimensions.width.into()));
-
-            terminus::goto!(screen, dimensions.left, dimensions.top);
-
-            if let Some(name) = &self.name {
-                let clean_name = terminus::term_string_visible_truncate(
-                    name,
-                    dimensions.width.into(),
-                    Some("…"),
-                );
-                terminus::vprint!(screen, "{}", clean_name);
-
-                let remaining = dimensions.width
-                    - terminus::term_string_visible_len(&clean_name) as u16
-                    - " – ".len() as u16;
-                if remaining > 0 {
-                    let subjects = self.subjects.get(name).unwrap();
-                    if !subjects.is_empty() {
-                        if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
-                            let clean_subject = terminus::term_string_visible_truncate(
-                                subject,
-                                remaining.into(),
-                                Some("…"),
-                            );
-                            terminus::vprint!(screen, " — {}", clean_subject);
-                        }
+            let remaining = frame.width()
+                - terminus::term_string_visible_len(&clean_name) as u16
+                - " – ".len() as u16;
+            if remaining > 0 {
+                let subjects = self.subjects.get(name).unwrap();
+                if !subjects.is_empty() {
+                    if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
+                        let clean_subject = terminus::term_string_visible_truncate(
+                            subject,
+                            remaining.into(),
+                            Some("…"),
+                        );
+                        frame.write(format!(" — {}", clean_subject).with_styles(&[Style::Bold]));
                     }
                 }
             }
-
-            terminus::vprint!(
-                screen,
-                "{}{}{}",
-                color::Bg(color::Reset),
-                color::Fg(color::Reset),
-                termion::style::NoBold
-            );
         }
-    }
 
-    fn set_dirty(&mut self) {
-        self.dirty.set(true);
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty.get()
+        frame.set_background(self.color.bg);
+        frame.set_foreground(self.color.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -200,38 +152,34 @@ struct WinBar {
     windows: Vec<String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
-    dirty: Cell<bool>,
     pub color: ColorTuple,
     dimensions: Option<Dimensions>,
 }
 
 impl WinBar {
-    pub fn new(color: &ColorTuple) -> Self {
+    pub fn new(color: ColorTuple) -> Self {
         Self {
             connection: None,
             windows: Vec::new(),
             current_window: None,
             highlighted: HashMap::new(),
-            dirty: Cell::new(true),
-            color: color.clone(),
+            color,
             dimensions: None,
         }
     }
 
     pub fn add_window(&mut self, window: String) {
         self.windows.push(window);
-        self.dirty.set(true);
     }
 
     pub fn del_window(&mut self, window: &str) {
         self.windows.retain(|win| win != window);
         self.highlighted.remove(window);
-        self.dirty.set(true);
     }
 
     pub fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
-        self.dirty.set(self.highlighted.remove(window).is_some());
+        self.highlighted.remove(window);
     }
 
     pub fn highlight_window(&mut self, window: &str, important: bool) {
@@ -241,15 +189,11 @@ impl WinBar {
             if important {
                 state.1 += 1;
             }
-            self.dirty.set(true);
         }
     }
 }
 
-impl<W> View<UIEvent, W> for WinBar
-where
-    W: Write + AsFd,
-{
+impl View<UIEvent> for WinBar {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -259,110 +203,76 @@ where
 
     fn layout(&mut self, dimensions: &Dimensions) {
         log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
-        if self.dimensions.as_ref() != Some(dimensions) {
-            self.dirty.set(true);
-            self.dimensions.replace(dimensions.clone());
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+        let mut written = 0;
+
+        if let Some(connection) = &self.connection {
+            frame.write(format!(" {}", connection));
+            written += 1 + connection.len();
         }
-    }
 
-    fn render(&self, screen: &mut Screen<W>) {
-        if self.dirty.replace(false) {
-            log::debug!(
-                "rendering {} at {:?}",
-                std::any::type_name::<Self>(),
-                self.dimensions
-            );
-            let dimensions = self.dimensions.as_ref().unwrap();
+        let mut first = true;
+        let mut remaining = self.highlighted.len();
 
-            let mut written = 0;
+        let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
+        sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
 
-            terminus::goto!(screen, dimensions.left, dimensions.top);
-            terminus::vprint!(screen, "{}{}", self.color.bg, self.color.fg,);
+        for (window, state) in sorted {
+            // Keep space for at least ", +X]"
+            let remaining_len = if remaining > 1 {
+                format!("{remaining}").len() + 4
+            } else {
+                0
+            };
 
-            for _ in 0..dimensions.width {
-                terminus::vprint!(screen, " ");
-            }
-
-            terminus::goto!(screen, dimensions.left, dimensions.top);
-            if let Some(connection) = &self.connection {
-                terminus::vprint!(screen, " {}", connection);
-                written += 1 + connection.len();
-            }
-
-            let mut first = true;
-            let mut remaining = self.highlighted.len();
-
-            let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
-            sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
-
-            for (window, state) in sorted {
-                // Keep space for at least ", +X]"
-                let remaining_len = if remaining > 1 {
-                    format!("{remaining}").len() + 4
-                } else {
-                    0
-                };
-
-                if window.len() + written + remaining_len > dimensions.width as usize {
-                    if !first {
-                        terminus::vprint!(screen, ", +{}", remaining);
-                    }
-                    break;
+            if window.len() + written + remaining_len > frame.width() as usize {
+                if !first {
+                    frame.write(format!(", +{}", remaining));
                 }
-
-                if first {
-                    terminus::vprint!(screen, " [");
-                    written += 3; // Also count the closing bracket
-                    first = false;
-                } else {
-                    terminus::vprint!(screen, ", ");
-                    written += 2;
-                }
-
-                if state.1 > 0 {
-                    terminus::vprint!(
-                        screen,
-                        "{}{}{} ({}{}{}, {})",
-                        termion::style::Bold,
-                        window,
-                        termion::style::NoBold,
-                        termion::style::Bold,
-                        state.1,
-                        termion::style::NoBold,
-                        state.0,
-                    );
-                    written += window.len();
-                    written += 5; // " (" + ", " + ")"
-                    written += state.0.to_string().len();
-                    written += state.1.to_string().len();
-                } else {
-                    terminus::vprint!(screen, "{} ({})", window, state.0);
-                    written += window.len();
-                    written += 3; // " (" + ")"
-                    written += state.0.to_string().len();
-                }
-                remaining -= 1;
+                break;
             }
 
-            if !first {
-                terminus::vprint!(screen, "]");
+            if first {
+                frame.write(" [");
+                written += 3; // Also count the closing bracket
+                first = false;
+            } else {
+                frame.write(", ");
+                written += 2;
             }
 
-            terminus::vprint!(
-                screen,
-                "{}{}",
-                color::Bg(color::Reset),
-                color::Fg(color::Reset)
-            );
+            if state.1 > 0 {
+                frame.write(window.with_style(Style::Bold));
+                frame.write(" (");
+                frame.write(format!("{}", state.1).with_style(Style::Bold));
+                frame.write(format!(", {})", state.0));
+                written += window.len();
+                written += 5; // " (" + ", " + ")"
+                written += state.0.to_string().len();
+                written += state.1.to_string().len();
+            } else {
+                frame.write(format!("{} ({})", window, state.0));
+                written += window.len();
+                written += 3; // " (" + ")"
+                written += state.0.to_string().len();
+            }
+            remaining -= 1;
         }
-    }
 
-    fn set_dirty(&mut self) {
-        self.dirty.set(true);
-    }
+        if !first {
+            frame.write("]");
+        }
 
-    fn is_dirty(&self) -> bool {
-        self.dirty.get()
+        frame.set_background(self.color.bg);
+        frame.set_foreground(self.color.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -378,7 +288,6 @@ where
             }
             UIEvent::Core(Event::Connected(account, _)) => {
                 self.connection = Some(terminus::clean_str(&account.to_string()));
-                self.dirty.set(true);
             }
             UIEvent::Core(Event::Notification {
                 conversation,
@@ -391,17 +300,11 @@ where
     }
 }
 
-impl fmt::Display for contact::Group {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}{}{}{}{}",
-            color::Bg(color::Reset),
-            color::Fg(color::Yellow),
-            terminus::clean_str(&self.0),
-            color::Bg(color::Reset),
-            color::Fg(color::Reset)
-        )
+impl CharxelDisplay for contact::Group {
+    fn colored_fmt(&self) -> Charxels {
+        self.0
+            .clone()
+            .with_foreground(FgColor(Color::Named(NamedColor::Yellow)))
     }
 }
 
@@ -435,18 +338,18 @@ impl PartialEq for RosterItem {
 
 impl Eq for RosterItem {}
 
-impl fmt::Display for RosterItem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CharxelDisplay for RosterItem {
+    fn colored_fmt(&self) -> Charxels {
         match &self {
             Self::Contact(contact) => {
-                match contact.presence {
+                let fg = match contact.presence {
                     contact::Presence::Available | contact::Presence::Chat => {
-                        write!(f, "{}", color::Fg(color::Green))?
+                        FgColor(Color::Named(NamedColor::Green))
                     }
                     contact::Presence::Away
                     | contact::Presence::Dnd
                     | contact::Presence::Xa
-                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::Reset))?,
+                    | contact::Presence::Unavailable => FgColor(Color::Default),
                 };
 
                 let disp = match &contact.name {
@@ -458,69 +361,35 @@ impl fmt::Display for RosterItem {
                     None => terminus::clean_str(&contact.jid.to_string()),
                 };
 
-                write!(f, "{}{}", disp, color::Fg(color::Reset))
+                disp.with_foreground(fg)
             }
 
-            Self::Bookmark(bookmark) => {
-                let disp = match &bookmark.name {
-                    Some(name) => terminus::clean_str(name),
-                    None => terminus::clean_str(&bookmark.jid.to_string()),
-                };
-
-                write!(f, "{}{}", disp, color::Fg(color::Reset))
-            }
-            Self::Window(window) => {
-                let disp = terminus::clean_str(window);
-
-                write!(f, "{disp}")
-            }
+            Self::Bookmark(bookmark) => match &bookmark.name {
+                Some(name) => name.into_charxels(),
+                None => bookmark.jid.to_string().into_charxels(),
+            },
+            Self::Window(window) => window.into_charxels(),
         }
     }
 }
 
-impl fmt::Display for conversation::Occupant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (r, g, b) = id_to_rgb(&self.nick);
-        let nick = self.nick.clone();
-
-        write!(
-            f,
-            "{}{}{}",
-            color::Fg(color::Rgb(r, g, b)),
-            terminus::clean_str(&nick),
-            color::Fg(color::Reset)
-        )
+impl CharxelDisplay for conversation::Occupant {
+    fn colored_fmt(&self) -> Charxels {
+        self.nick
+            .clone()
+            .with_foreground(terminus::FgColor(id_to_rgb(&self.nick)))
     }
 }
 
-impl fmt::Display for conversation::Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CharxelDisplay for conversation::Role {
+    fn colored_fmt(&self) -> Charxels {
         match self {
-            conversation::Role::Moderator => write!(
-                f,
-                "{}Moderators{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
-            conversation::Role::Participant => write!(
-                f,
-                "{}Participants{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
-            conversation::Role::Visitor => write!(
-                f,
-                "{}Visitors{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
-            conversation::Role::None => write!(
-                f,
-                "{}Others{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
+            conversation::Role::Moderator => "Moderators",
+            conversation::Role::Participant => "Participants",
+            conversation::Role::Visitor => "Visitors",
+            conversation::Role::None => "Others",
         }
+        .with_foreground(FgColor(Color::Named(NamedColor::Yellow)))
     }
 }
 
@@ -591,14 +460,12 @@ impl Drop for PanicHandler {
 }
 
 pub struct UIMod {
-    screen: Screen<Stdout>,
+    pub render_buffer: Arc<RwLock<OffscreenRenderBuffer>>,
     windows: Vec<String>,
     current_window: Option<String>,
     unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
-    root: LinearLayout<UIEvent, Stdout>,
-    last_render: Instant,
-    debounced: u32,
+    root: LinearLayout<UIEvent>,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
     _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
@@ -607,61 +474,53 @@ pub struct UIMod {
 
 impl UIMod {
     pub fn new(config: &Config) -> Self {
-        let stdout = std::io::stdout()
-            .into_raw_mode()
-            .unwrap()
-            .into_alternate_screen()
-            .unwrap();
-        let screen = BufferedScreen::new(stdout);
+        let screen = Arc::new(RwLock::new(OffscreenRenderBuffer::default()));
 
         let panic_handler = PanicHandler::new();
 
-        let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Vertical).with_event(
-            |layout, event| {
+        let mut layout =
+            LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(|layout, event| {
                 for child in layout.iter_children_mut() {
                     child.event(event);
                 }
-            },
-        );
-
-        let title_bar = TitleBar::new(&config.theme.title_bar);
-        let frame =
-            FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| match event {
-                UIEvent::Core(Event::ChangeWindow(name)) => {
-                    frame.set_current(name.to_string());
-                }
-                UIEvent::AddWindow(name, view) => {
-                    let view = view.take().unwrap();
-                    frame.insert_boxed(name.to_string(), view);
-
-                    // propagate AddWindow with name only to each subview
-                    // required at least for console view
-                    for child in frame.iter_children_mut() {
-                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
-                    }
-                }
-                UIEvent::Core(Event::Close(window)) => {
-                    frame.remove(window);
-
-                    // propagate Close with name only to each subview
-                    // required at least for console view
-                    for child in frame.iter_children_mut() {
-                        child.event(&mut UIEvent::Core(Event::Close(window.clone())));
-                    }
-                }
-                UIEvent::Core(Event::Key(Key::PageUp))
-                | UIEvent::Core(Event::Key(Key::PageDown)) => {
-                    if let Some(current) = frame.get_current_mut() {
-                        current.event(event);
-                    }
-                }
-                _ => {
-                    for child in frame.iter_children_mut() {
-                        child.event(event);
-                    }
-                }
             });
-        let win_bar = WinBar::new(&config.theme.win_bar);
+
+        let title_bar = TitleBar::new(config.theme.title_bar.clone());
+        let frame = FrameLayout::<UIEvent, String>::new().with_event(|frame, event| match event {
+            UIEvent::Core(Event::ChangeWindow(name)) => {
+                frame.set_current(name.to_string());
+            }
+            UIEvent::AddWindow(name, view) => {
+                let view = view.take().unwrap();
+                frame.insert_boxed(name.to_string(), view);
+
+                // propagate AddWindow with name only to each subview
+                // required at least for console view
+                for child in frame.iter_children_mut() {
+                    child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                }
+            }
+            UIEvent::Core(Event::Close(window)) => {
+                frame.remove(window);
+
+                // propagate Close with name only to each subview
+                // required at least for console view
+                for child in frame.iter_children_mut() {
+                    child.event(&mut UIEvent::Core(Event::Close(window.clone())));
+                }
+            }
+            UIEvent::Core(Event::Key(Key::PageUp)) | UIEvent::Core(Event::Key(Key::PageDown)) => {
+                if let Some(current) = frame.get_current_mut() {
+                    current.event(event);
+                }
+            }
+            _ => {
+                for child in frame.iter_children_mut() {
+                    child.event(event);
+                }
+            }
+        });
+        let win_bar = WinBar::new(config.theme.win_bar.clone());
         let input = Input::new().with_event(|input, event| {
             if let UIEvent::Core(Event::Key(event)) = event {
                 log::debug!("Input event: {:?}", event);
@@ -697,7 +556,6 @@ impl UIMod {
                 UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
                     input.buf = raw_buf.clone();
                     input.cursor = cursor.clone();
-                    input.dirty.set(true);
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 _ => {}
@@ -710,9 +568,12 @@ impl UIMod {
         layout.push(input, 0);
 
         let (width, height) = termion::terminal_size().unwrap();
+        RwLock::write(&screen)
+            .unwrap()
+            .set_size((width, height).into());
 
         Self {
-            screen,
+            render_buffer: screen,
             root: layout,
             windows: Vec::new(),
             unread_windows: HashMap::new(),
@@ -721,8 +582,6 @@ impl UIMod {
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
-            last_render: Instant::now(),
-            debounced: 0,
             dimensions: Dimensions {
                 top: 1,
                 left: 1,
@@ -742,13 +601,12 @@ impl UIMod {
         }
     }
 
-    fn add_conversation(&mut self, aparte: &mut Aparte, conversation: Conversation) {
+    fn add_conversation(&mut self, conversation: Conversation) {
         let scheduler = self.get_scheduler();
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event({
-                    let mut aparte = aparte.proxy();
+                let chatwin = ScrollWin::<UIEvent, MessageView>::new().with_event({
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -756,19 +614,17 @@ impl UIMod {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == chat_for_event.contact {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            view.insert(MessageView::new(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == chat_for_event.contact {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            view.insert(MessageView::new(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                 }
@@ -797,16 +653,16 @@ impl UIMod {
                     .insert(chat.contact.to_string(), conversation.clone());
             }
             Conversation::Channel(channel) => {
-                let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal)
-                    .with_event(|layout, event| {
+                let mut layout = LinearLayout::<UIEvent>::new(Orientation::Horizontal).with_event(
+                    |layout, event| {
                         for child in layout.iter_children_mut() {
                             child.event(event);
                         }
-                    });
+                    },
+                );
 
                 let channel_for_event = channel.clone();
-                let chanwin = ScrollWin::<UIEvent, Stdout, MessageView>::new().with_event({
-                    let mut aparte = aparte.proxy();
+                let chanwin = ScrollWin::<UIEvent, MessageView>::new().with_event({
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -814,19 +670,17 @@ impl UIMod {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == channel_for_event.jid {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            view.insert(MessageView::new(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == channel_for_event.jid {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            view.insert(MessageView::new(Message::Xmpp(
+                                                message.clone(),
+                                            )));
                                         }
                                     }
                                 }
@@ -852,27 +706,26 @@ impl UIMod {
                 layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
-                let roster =
-                    ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
-                        .with_layout(LayoutParams {
-                            width: LayoutParam::WrapContent,
-                            height: LayoutParam::MatchParent,
-                        })
-                        .with_none_group()
-                        .with_unique_item()
-                        .with_sort_item()
-                        .with_event(move |view, event| {
-                            if let UIEvent::Core(Event::Occupant {
-                                conversation,
-                                occupant,
-                                ..
-                            }) = event
-                            {
-                                if roster_jid == *conversation {
-                                    view.insert(occupant.clone(), Some(occupant.role));
-                                }
+                let roster = ListView::<UIEvent, conversation::Role, conversation::Occupant>::new()
+                    .with_layout(LayoutParams {
+                        width: LayoutParam::WrapContent,
+                        height: LayoutParam::MatchParent,
+                    })
+                    .with_none_group()
+                    .with_unique_item()
+                    .with_sort_item()
+                    .with_event(move |view, event| {
+                        if let UIEvent::Core(Event::Occupant {
+                            conversation,
+                            occupant,
+                            ..
+                        }) = event
+                        {
+                            if roster_jid == *conversation {
+                                view.insert(occupant.clone(), Some(occupant.role));
                             }
-                        });
+                        }
+                    });
                 layout.push(roster, 3);
 
                 self.add_window(channel.get_name(), Box::new(layout));
@@ -882,7 +735,7 @@ impl UIMod {
         }
     }
 
-    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent, Stdout>>) {
+    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent>>) {
         self.windows.push(name.clone());
         self.root.event(&mut UIEvent::AddWindow(name, Some(window)));
     }
@@ -927,41 +780,26 @@ impl UIMod {
 }
 
 impl ModTrait for UIMod {
-    fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        terminus::vprint!(&mut self.screen, "{}", termion::clear::All);
-
+    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
         let (width, height) = termion::terminal_size().unwrap();
-        let measure_specs = terminus::MeasureSpecs {
-            width: terminus::MeasureSpec::AtMost(width),
-            height: terminus::MeasureSpec::AtMost(height),
-        };
-        let requested_dimensions = self.root.measure(&measure_specs);
-        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
-        self.root.layout(&self.dimensions);
-        self.root.render(&mut self.screen);
-        terminus::restore_cursor!(&mut self.screen);
+        log::debug!("Init UI on screen ({width}×{height})");
 
-        let mut console = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal).with_event(
-            |layout, event| {
-                for child in layout.children.iter_mut() {
+        let mut console =
+            LinearLayout::<UIEvent>::new(Orientation::Horizontal).with_event(|layout, event| {
+                for LayoutChild { child, .. } in layout.children.iter_mut() {
                     child.view.event(event);
                 }
-            },
-        );
+            });
         console.push(
-            ScrollWin::<UIEvent, Stdout, MessageView>::new()
+            ScrollWin::<UIEvent, MessageView>::new()
                 .with_layout(LayoutParams {
                     width: LayoutParam::MatchParent,
                     height: LayoutParam::MatchParent,
                 })
                 .with_event({
-                    let mut aparte = aparte.proxy();
                     move |view, event| match event {
                         UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                            view.insert(MessageView::new(
-                                &mut aparte,
-                                Message::Log(message.clone()),
-                            ));
+                            view.insert(MessageView::new(Message::Log(message.clone())));
                         }
                         UIEvent::Core(Event::Key(Key::PageUp)) => {
                             view.page_up();
@@ -974,7 +812,7 @@ impl ModTrait for UIMod {
                 }),
             7,
         );
-        let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
+        let roster = ListView::<UIEvent, contact::Group, RosterItem>::new()
             .with_layout(LayoutParams {
                 width: LayoutParam::WrapContent,
                 height: LayoutParam::MatchParent,
@@ -1029,12 +867,26 @@ impl ModTrait for UIMod {
         self.add_window("console".to_string(), Box::new(console));
         self.change_window("console");
 
+        // Measure, layout and render
+        let measure_specs = terminus::MeasureSpecs {
+            width: terminus::MeasureSpec::AtMost(width),
+            height: terminus::MeasureSpec::AtMost(height),
+        };
+        let requested_dimensions = self.root.measure(&measure_specs);
+        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
+        self.root.layout(&self.dimensions);
+
+        {
+            let mut render_buffer = self.render_buffer.write().unwrap();
+            render_buffer.clear();
+            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+            self.root.render(frame);
+        }
+
         Ok(())
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
-        let mut force_render = false;
-
         match event {
             Event::ReadPassword(command) => {
                 self.password_command = Some(command.clone());
@@ -1085,7 +937,7 @@ impl ModTrait for UIMod {
                                 },
                             };
 
-                            self.add_conversation(aparte, conversation);
+                            self.add_conversation(conversation);
                         }
 
                         if message.direction == Direction::Incoming {
@@ -1118,13 +970,10 @@ impl ModTrait for UIMod {
                 // Should we store account association?
                 let win_name = contact.to_string();
                 if !self.windows.contains(&win_name) {
-                    self.add_conversation(
-                        aparte,
-                        Conversation::Chat(Chat {
-                            account: account.clone(),
-                            contact: contact.clone(),
-                        }),
-                    );
+                    self.add_conversation(Conversation::Chat(Chat {
+                        account: account.clone(),
+                        contact: contact.clone(),
+                    }));
                 }
                 self.change_window(&win_name);
             }
@@ -1136,16 +985,13 @@ impl ModTrait for UIMod {
                 let bare: BareJid = channel.to_bare();
                 let win_name = bare.to_string();
                 if !self.windows.contains(&win_name) {
-                    self.add_conversation(
-                        aparte,
-                        Conversation::Channel(Channel {
-                            account: account.clone(),
-                            jid: channel.to_bare(),
-                            nick: channel.resource().to_string(),
-                            name: None, // TODO use name from bookmark
-                            occupants: HashMap::new(),
-                        }),
-                    );
+                    self.add_conversation(Conversation::Channel(Channel {
+                        account: account.clone(),
+                        jid: channel.to_bare(),
+                        nick: channel.resource().to_string(),
+                        name: None, // TODO use name from bookmark
+                        occupants: HashMap::new(),
+                    }));
                 }
                 if *user_request {
                     self.change_window(&win_name);
@@ -1166,10 +1012,13 @@ impl ModTrait for UIMod {
                 };
                 let requested_dimensions = self.root.measure(&measure_specs);
                 self.dimensions =
-                    Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
+                    Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
                 self.root.layout(&self.dimensions);
-                self.root.render(&mut self.screen);
-                terminus::restore_cursor!(&mut self.screen);
+                let mut render_buffer = self.render_buffer.write().unwrap();
+                render_buffer.set_size((width, height).into());
+                render_buffer.clear();
+                let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+                self.root.render(frame);
             }
             Event::Close(window) => {
                 if window != "console" {
@@ -1326,53 +1175,30 @@ impl ModTrait for UIMod {
                 important,
             } => {
                 if *important && aparte.config.bell {
-                    terminus::vprint!(self.screen, "\x07");
+                    self.render_buffer.read().unwrap().bell();
                 }
                 self.root.event(&mut UIEvent::Core(Event::Notification {
                     conversation: conversation.clone(),
                     important: *important,
                 }));
             }
-            Event::UIRender(force) => {
-                log::debug!("Force render");
-                force_render |= force;
-            }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
 
-        // Debounce rendering
-        if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
-            // Update rendering
-            log::debug!("Render (saved {} rendering)", self.debounced);
-            self.last_render = Instant::now();
-            self.debounced = 0;
+        let (width, height) = termion::terminal_size().unwrap();
+        let measure_specs = MeasureSpecs {
+            width: MeasureSpec::AtMost(width),
+            height: MeasureSpec::AtMost(height),
+        };
+        let requested_dimensions = self.root.measure(&measure_specs);
+        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
+        self.root.layout(&self.dimensions);
 
-            let (width, height) = termion::terminal_size().unwrap();
-            let measure_specs = MeasureSpecs {
-                width: MeasureSpec::AtMost(width),
-                height: MeasureSpec::AtMost(height),
-            };
-            let requested_dimensions = self.root.measure(&measure_specs);
-            self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 1, 1);
-            self.root.layout(&self.dimensions);
-            self.root.render(&mut self.screen);
-            terminus::restore_cursor!(&mut self.screen);
-            terminus::flush!(self.screen);
-        } else {
-            log::debug!("Debounce rendering");
-            if self.debounced == 0 {
-                // Ensure we will render this debounced event right in time
-                Aparte::spawn({
-                    let mut aparte = aparte.proxy();
-                    async move {
-                        thread::sleep(Duration::new(0, UI_DEBOUNCE_NS));
-                        aparte.schedule(Event::UIRender(true))
-                    }
-                })
-            }
-            self.debounced += 1;
-        }
+        let mut render_buffer = self.render_buffer.write().unwrap();
+        render_buffer.clear();
+        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+        self.root.render(frame);
 
         // Handle queued outgoing event
         for event in self.outgoing_event_queue.borrow_mut().drain(..) {
