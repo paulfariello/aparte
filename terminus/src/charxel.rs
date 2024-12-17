@@ -112,6 +112,15 @@ impl Charxels {
     pub fn append(&mut self, other: &mut Self) {
         self.0.append(&mut other.0)
     }
+
+    pub fn truncate(&mut self, len: u16, end: impl IntoCharxels) {
+        let mut end = end.into_charxels();
+        assert!(len > end.len());
+        if self.len() > len {
+            self.0.truncate(len as usize - end.len() as usize);
+            self.append(&mut end);
+        }
+    }
 }
 
 pub struct WordBounds<'a, C>
@@ -161,6 +170,10 @@ impl IntoIterator for Charxels {
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
+}
+
+pub trait CharxelDisplay {
+    fn colored_fmt(&self) -> Charxels;
 }
 
 pub trait IntoCharxels: Sized {

@@ -17,10 +17,9 @@ use std::rc::Rc;
 use std::sync::{mpsc, RwLock};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use terminus::charxel::IntoCharxels as _;
+use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
-use terminus::Style;
 use terminus::{
     self,
     cursor::Cursor,
@@ -32,13 +31,13 @@ use terminus::{
     Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, View,
 };
-use termion::color;
+use terminus::{Color, FgColor, NamedColor, Style};
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
 use uuid::Uuid;
 use xmpp_parsers::{BareJid, Jid};
 
-use crate::color::ColorTuple;
+use crate::color::{id_to_rgb, ColorTuple};
 use crate::command::Command;
 use crate::config::Config;
 use crate::conversation::{Channel, Chat, Conversation};
@@ -301,9 +300,11 @@ impl View<UIEvent> for WinBar {
     }
 }
 
-impl fmt::Display for contact::Group {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+impl CharxelDisplay for contact::Group {
+    fn colored_fmt(&self) -> Charxels {
+        self.0
+            .clone()
+            .with_foreground(FgColor(Color::Named(NamedColor::Yellow)))
     }
 }
 
@@ -337,18 +338,18 @@ impl PartialEq for RosterItem {
 
 impl Eq for RosterItem {}
 
-impl fmt::Display for RosterItem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CharxelDisplay for RosterItem {
+    fn colored_fmt(&self) -> Charxels {
         match &self {
             Self::Contact(contact) => {
-                match contact.presence {
+                let fg = match contact.presence {
                     contact::Presence::Available | contact::Presence::Chat => {
-                        write!(f, "{}", color::Fg(color::Green))?
+                        FgColor(Color::Named(NamedColor::Green))
                     }
                     contact::Presence::Away
                     | contact::Presence::Dnd
                     | contact::Presence::Xa
-                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::Reset))?,
+                    | contact::Presence::Unavailable => FgColor(Color::Default),
                 };
 
                 let disp = match &contact.name {
@@ -360,63 +361,35 @@ impl fmt::Display for RosterItem {
                     None => terminus::clean_str(&contact.jid.to_string()),
                 };
 
-                write!(f, "{}{}", disp, color::Fg(color::Reset))
+                disp.with_foreground(fg)
             }
 
-            Self::Bookmark(bookmark) => {
-                let disp = match &bookmark.name {
-                    Some(name) => terminus::clean_str(name),
-                    None => terminus::clean_str(&bookmark.jid.to_string()),
-                };
-
-                write!(f, "{}{}", disp, color::Fg(color::Reset))
-            }
-            Self::Window(window) => {
-                let disp = terminus::clean_str(window);
-
-                write!(f, "{disp}")
-            }
+            Self::Bookmark(bookmark) => match &bookmark.name {
+                Some(name) => name.into_charxels(),
+                None => bookmark.jid.to_string().into_charxels(),
+            },
+            Self::Window(window) => window.into_charxels(),
         }
     }
 }
 
-impl fmt::Display for conversation::Occupant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        //let (r, g, b) = id_to_rgb(&self.nick);
-        let nick = self.nick.clone();
-
-        write!(f, "{}", terminus::clean_str(&nick))
+impl CharxelDisplay for conversation::Occupant {
+    fn colored_fmt(&self) -> Charxels {
+        self.nick
+            .clone()
+            .with_foreground(terminus::FgColor(id_to_rgb(&self.nick)))
     }
 }
 
-impl fmt::Display for conversation::Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CharxelDisplay for conversation::Role {
+    fn colored_fmt(&self) -> Charxels {
         match self {
-            conversation::Role::Moderator => write!(
-                f,
-                "{}Moderators{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
-            conversation::Role::Participant => write!(
-                f,
-                "{}Participants{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
-            conversation::Role::Visitor => write!(
-                f,
-                "{}Visitors{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
-            conversation::Role::None => write!(
-                f,
-                "{}Others{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Reset)
-            ),
+            conversation::Role::Moderator => "Moderators",
+            conversation::Role::Participant => "Participants",
+            conversation::Role::Visitor => "Visitors",
+            conversation::Role::None => "Others",
         }
+        .with_foreground(FgColor(Color::Named(NamedColor::Yellow)))
     }
 }
 
