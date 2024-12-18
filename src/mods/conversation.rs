@@ -92,7 +92,7 @@ impl ModTrait for ConversationMod {
                 // Create a conversation for incomming chat messages
                 if message.type_ == message::XmppMessageType::Chat
                     && message.direction == message::Direction::Incoming
-                    && self.conversations.get(&index).is_none()
+                    && !self.conversations.contains_key(&index)
                 {
                     let conversation = conversation::Conversation::Chat(conversation::Chat {
                         account: account.clone(),

@@ -1266,6 +1266,7 @@ impl<'a, T> IterWrapper<'a, T> {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T> Iterator for IterWrapper<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
