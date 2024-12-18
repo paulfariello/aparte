@@ -30,6 +30,7 @@ impl From<&OmemoOwnDevice> for OmemoContactDevice {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Queryable, Debug)]
 pub struct OmemoIdentity {
     pub identity_pk: i32,
@@ -39,6 +40,7 @@ pub struct OmemoIdentity {
     pub identity: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Queryable, Debug)]
 pub struct OmemoSession {
     pub identity_pk: i32,
@@ -48,6 +50,7 @@ pub struct OmemoSession {
     pub session: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Queryable, Debug)]
 pub struct OmemoPreKey {
     pub pre_key_pk: i32,
@@ -56,6 +59,7 @@ pub struct OmemoPreKey {
     pub pre_key: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Queryable, Debug)]
 pub struct OmemoSignedPreKey {
     pub signed_pre_key_pk: i32,
@@ -64,6 +68,7 @@ pub struct OmemoSignedPreKey {
     pub signed_pre_key: Vec<u8>,
 }
 
+#[allow(dead_code)]
 #[derive(Queryable, Debug)]
 pub struct OmemoSenderKey {
     pub sender_key_pk: i32,

@@ -118,7 +118,7 @@ impl ModTrait for CorrectionMod {
         }
 
         if let Some(id) = message.id.as_ref() {
-            if self.waiting_corrections.get(id).is_some() {
+            if self.waiting_corrections.contains_key(id) {
                 return 1f64;
             }
         }
@@ -135,7 +135,7 @@ impl ModTrait for CorrectionMod {
         archive: bool,
     ) {
         if let Some(id) = message.id.as_ref() {
-            if self.waiting_corrections.get(id).is_some() {
+            if self.waiting_corrections.contains_key(id) {
                 self.handle_original_message(aparte, account, message, delay, archive);
             }
         }

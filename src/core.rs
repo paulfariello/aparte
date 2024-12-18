@@ -385,7 +385,6 @@ impl Display for Mod {
 
 pub struct Connection {
     pub sink: mpsc::UnboundedSender<Element>,
-    pub account: FullJid,
 }
 
 command_def!(connect,
@@ -846,6 +845,7 @@ impl Aparte {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&config_path)
             .with_context(|| format!("Cannot read config file {:?}", config_path))?;
 
@@ -1001,10 +1001,7 @@ impl Aparte {
     }
 
     pub fn add_connection(&mut self, account: Account, sink: mpsc::UnboundedSender<Element>) {
-        let connection = Connection {
-            account: account.clone(),
-            sink,
-        };
+        let connection = Connection { sink };
 
         self.connections.insert(account.clone(), connection);
         self.current_connection = Some(account);
