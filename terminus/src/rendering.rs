@@ -175,8 +175,8 @@ impl OffscreenRenderBuffer {
         for diff in diffs {
             for (i, charxel) in diff.charxels.into_iter().enumerate() {
                 let width = self.size.width as usize;
-                self[diff.pos.top + ((i / width) as u16)][diff.pos.left + ((i % width) as u16)] =
-                    charxel;
+                let left = diff.pos.left as usize + i;
+                self[diff.pos.top + ((left / width) as u16)][(left % width) as u16] = charxel;
             }
         }
     }
