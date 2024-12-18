@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::sync::{mpsc, RwLock};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
@@ -45,6 +46,9 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::{contact, conversation};
+
+// Debounce rendering at 350ms pace (based on Doherty Threshold)
+const UI_DEBOUNCE_NS: u32 = 35_000_000u32;
 
 enum UIEvent {
     Core(Event),
@@ -466,6 +470,8 @@ pub struct UIMod {
     unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
     root: LinearLayout<UIEvent>,
+    last_render: Instant,
+    debounced: u32,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
     _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
@@ -582,6 +588,8 @@ impl UIMod {
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
+            last_render: Instant::now(),
+            debounced: 0,
             dimensions: Dimensions {
                 top: 1,
                 left: 1,
@@ -1186,19 +1194,40 @@ impl ModTrait for UIMod {
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
 
-        let (width, height) = termion::terminal_size().unwrap();
-        let measure_specs = MeasureSpecs {
-            width: MeasureSpec::AtMost(width),
-            height: MeasureSpec::AtMost(height),
-        };
-        let requested_dimensions = self.root.measure(&measure_specs);
-        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
-        self.root.layout(&self.dimensions);
+        // Debounce rendering
+        if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
+            let (width, height) = termion::terminal_size().unwrap();
+            let measure_specs = MeasureSpecs {
+                width: MeasureSpec::AtMost(width),
+                height: MeasureSpec::AtMost(height),
+            };
+            let requested_dimensions = self.root.measure(&measure_specs);
+            self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
+            self.root.layout(&self.dimensions);
 
-        let mut render_buffer = self.render_buffer.write().unwrap();
-        render_buffer.clear();
-        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
-        self.root.render(frame);
+            // Update rendering
+            log::debug!("Render (saved {} rendering)", self.debounced);
+            self.last_render = Instant::now();
+            self.debounced = 0;
+
+            let mut render_buffer = self.render_buffer.write().unwrap();
+            render_buffer.clear();
+            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+            self.root.render(frame);
+        } else {
+            log::debug!("Debounce rendering");
+            if self.debounced == 0 {
+                // Ensure we will render this debounced event right in time
+                Aparte::spawn({
+                    let mut aparte = aparte.proxy();
+                    async move {
+                        thread::sleep(Duration::new(0, UI_DEBOUNCE_NS));
+                        aparte.schedule(Event::UIRender(true))
+                    }
+                })
+            }
+            self.debounced += 1;
+        }
 
         // Handle queued outgoing event
         for event in self.outgoing_event_queue.borrow_mut().drain(..) {
