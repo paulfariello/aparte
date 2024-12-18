@@ -47,7 +47,11 @@ impl CorrectionMod {
                 }
                 Some(Event::Message(Some(account.clone()), original.clone()))
             } else {
-                log::info!("Missing original message: {}", replace.id);
+                log::info!(
+                    "Missing original message: {} (correction from {:?})",
+                    replace.id,
+                    message.from
+                );
                 let waiting_corrections = self.waiting_corrections.entry(replace.id).or_default();
                 waiting_corrections.push(message.clone());
                 None
