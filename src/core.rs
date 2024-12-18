@@ -1070,11 +1070,12 @@ impl Aparte {
         });
 
         rt.spawn({
-            let mut reference_screen: Option<OffscreenRenderBuffer> = None;
             let render_buffer = {
                 let ui = self.get_mod::<mods::ui::UIMod>();
                 Arc::clone(&ui.render_buffer)
             };
+            let mut reference_screen = OffscreenRenderBuffer::default();
+
             async move {
                 log::debug!("Start UI thread");
                 let mut screen = std::io::stdout()
@@ -1090,10 +1091,8 @@ impl Aparte {
                     {
                         let render_buffer = std::sync::RwLock::read(&render_buffer).unwrap();
 
-                        render_buffer.render(
-                            &mut screen,
-                            reference_screen.replace(render_buffer.clone()).as_ref(),
-                        );
+                        render_buffer.render(&mut screen, &mut reference_screen);
+
                         fps += 1;
                     }
                     let elapsed = last_fps_log.elapsed();

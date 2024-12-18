@@ -46,6 +46,16 @@ impl Clone for OffscreenRenderBuffer {
             do_bell: AtomicBool::new(self.do_bell.load(std::sync::atomic::Ordering::Relaxed)),
         }
     }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.lines.clone_from(&source.lines);
+        self.size = source.size;
+        self.cursor = source.cursor;
+        self.do_bell.swap(
+            source.do_bell.load(std::sync::atomic::Ordering::Relaxed),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
 }
 
 impl Index<u16> for OffscreenRenderBuffer {
@@ -161,6 +171,16 @@ impl OffscreenRenderBuffer {
         }
     }
 
+    fn apply_diff(&mut self, diffs: Vec<ContinuousDiff>) {
+        for diff in diffs {
+            for (i, charxel) in diff.charxels.into_iter().enumerate() {
+                let width = self.size.width as usize;
+                self[diff.pos.top + ((i / width) as u16)][diff.pos.left + ((i % width) as u16)] =
+                    charxel;
+            }
+        }
+    }
+
     fn render_chunk<W>(screen: &mut W, chunk: &Vec<Charxel>)
     where
         W: std::io::Write,
@@ -208,27 +228,25 @@ impl OffscreenRenderBuffer {
         );
     }
 
-    pub fn render<W>(&self, screen: &mut W, reference_screen: Option<&Self>)
+    pub fn render<W>(&self, screen: &mut W, reference_screen: &mut Self)
     where
         W: std::io::Write,
     {
-        if let Some(reference_screen) = reference_screen {
-            let mut cursor_moved = false;
-            if self.size != reference_screen.size {
-                self.full_render(screen);
-                cursor_moved = true;
-            } else if self.lines != reference_screen.lines {
-                let diff = self.compute_diff(&reference_screen.lines);
-                self.render_diff(screen, &diff);
-                cursor_moved = true;
-            }
-
-            if cursor_moved || self.cursor != reference_screen.cursor {
-                self.render_cursor(screen);
-            }
-        } else {
+        let mut cursor_moved = false;
+        if self.size != reference_screen.size {
             self.full_render(screen);
+            reference_screen.clone_from(self);
+            cursor_moved = true;
+        } else if self.lines != reference_screen.lines {
+            let diff = self.compute_diff(&reference_screen.lines);
+            self.render_diff(screen, &diff);
+            reference_screen.apply_diff(diff);
+            cursor_moved = true;
+        }
+
+        if cursor_moved || self.cursor != reference_screen.cursor {
             self.render_cursor(screen);
+            reference_screen.cursor = self.cursor;
         }
 
         if self
