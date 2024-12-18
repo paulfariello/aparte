@@ -216,11 +216,12 @@ impl View<UIEvent> for WinBar {
             std::any::type_name::<Self>(),
             self.dimensions
         );
-        let mut written = 0;
-
+        let mut frame_space = frame.width();
         if let Some(connection) = &self.connection {
-            frame.write(format!(" {}", connection));
-            written += 1 + connection.len();
+            let connection = format!(" {}", connection).into_charxels();
+            frame.write(&connection);
+            frame_space -= connection.len();
+            log::debug!("connection len: {} ({})", connection.len(), frame_space);
         }
 
         let mut first = true;
@@ -229,49 +230,51 @@ impl View<UIEvent> for WinBar {
         let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
         sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
 
-        for (window, state) in sorted {
-            // Keep space for at least ", +X]"
-            let remaining_len = if remaining > 1 {
-                format!("{remaining}").len() + 4
-            } else {
-                0
-            };
+        if !sorted.is_empty() {
+            frame.write(" [");
+            frame_space -= 3; // Subtract space and enclosing []
+            log::debug!("start hl: {}", frame_space);
 
-            if window.len() + written + remaining_len > frame.width() as usize {
+            for (window, state) in sorted {
+                // Ensure at all time that we can close hl and add remaining info
+                let remaining_charxels = if remaining > 0 {
+                    format!("+{}", remaining).into_charxels()
+                } else {
+                    Charxels::default()
+                };
+
                 if !first {
-                    frame.write(format!(", +{}", remaining));
+                    frame.write(", ");
+                    frame_space -= 2;
+                    log::debug!("separate hl: {}", frame_space);
                 }
-                break;
-            }
 
-            if first {
-                frame.write(" [");
-                written += 3; // Also count the closing bracket
+                let highlighted = if state.1 > 0 {
+                    let mut highlighted = window.with_style(Style::Bold);
+                    highlighted.append(&mut " (".into_charxels());
+                    highlighted.append(&mut format!("{}", state.1).with_style(Style::Bold));
+                    highlighted.append(&mut format!(", {})", state.0).into_charxels());
+                    highlighted
+                } else {
+                    format!("{} ({})", window, state.0).into_charxels()
+                };
+
+                // Don't write current hl if we can't put remaining info afterward
+                if highlighted.len() + remaining_charxels.len() >= frame_space {
+                    // We are sure that previous hl has let us enough space for remaining info
+                    frame.write(&remaining_charxels);
+                    log::debug!("remaining: {} ({})", remaining_charxels.len(), frame_space);
+                    break;
+                } else {
+                    frame.write(&highlighted);
+                    frame_space -= highlighted.len();
+                    log::debug!("hl: {} ({})", highlighted.len(), frame_space);
+                }
+
                 first = false;
-            } else {
-                frame.write(", ");
-                written += 2;
+                remaining -= 1;
             }
 
-            if state.1 > 0 {
-                frame.write(window.with_style(Style::Bold));
-                frame.write(" (");
-                frame.write(format!("{}", state.1).with_style(Style::Bold));
-                frame.write(format!(", {})", state.0));
-                written += window.len();
-                written += 5; // " (" + ", " + ")"
-                written += state.0.to_string().len();
-                written += state.1.to_string().len();
-            } else {
-                frame.write(format!("{} ({})", window, state.0));
-                written += window.len();
-                written += 3; // " (" + ")"
-                written += state.0.to_string().len();
-            }
-            remaining -= 1;
-        }
-
-        if !first {
             frame.write("]");
         }
 
