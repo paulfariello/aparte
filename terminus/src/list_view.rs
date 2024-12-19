@@ -282,7 +282,7 @@ where
                 let mut disp = match group {
                     Some(_) => {
                         let mut indent = "  ".into_charxels();
-                        indent.append(&mut item.colored_fmt());
+                        indent.append(item.colored_fmt());
                         indent
                     }
                     None => item.colored_fmt(),

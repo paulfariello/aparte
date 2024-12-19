@@ -251,9 +251,9 @@ impl View<UIEvent> for WinBar {
 
                 let highlighted = if state.1 > 0 {
                     let mut highlighted = window.with_style(Style::Bold);
-                    highlighted.append(&mut " (".into_charxels());
-                    highlighted.append(&mut format!("{}", state.1).with_style(Style::Bold));
-                    highlighted.append(&mut format!(", {})", state.0).into_charxels());
+                    highlighted.append(" (");
+                    highlighted.append(format!("{}", state.1).with_style(Style::Bold));
+                    highlighted.append(format!(", {})", state.0));
                     highlighted
                 } else {
                     format!("{} ({})", window, state.0).into_charxels()

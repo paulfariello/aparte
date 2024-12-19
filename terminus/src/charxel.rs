@@ -109,17 +109,24 @@ impl Charxels {
         self.0.push(charxel)
     }
 
-    pub fn append(&mut self, other: &mut Self) {
-        self.0.append(&mut other.0)
+    pub fn append(&mut self, other: impl IntoCharxels) {
+        self.0.append(&mut other.into_charxels().0)
     }
 
     pub fn truncate(&mut self, len: u16, end: impl IntoCharxels) {
-        let mut end = end.into_charxels();
+        let end = end.into_charxels();
         assert!(len > end.len());
         if self.len() > len {
             self.0.truncate(len as usize - end.len() as usize);
-            self.append(&mut end);
+            self.append(end);
+            assert!(self.len() <= len);
         }
+    }
+}
+
+impl FromIterator<Charxel> for Charxels {
+    fn from_iter<T: IntoIterator<Item = Charxel>>(iter: T) -> Self {
+        Self(iter.into_iter().collect::<_>())
     }
 }
 
