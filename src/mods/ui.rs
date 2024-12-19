@@ -909,6 +909,7 @@ impl ModTrait for UIMod {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         let mut force_render = false;
+        let before = Instant::now();
 
         match event {
             Event::ReadPassword(command) => {
@@ -1219,6 +1220,8 @@ impl ModTrait for UIMod {
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
+        log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
+        let before = Instant::now();
 
         // Debounce rendering
         if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
@@ -1254,6 +1257,8 @@ impl ModTrait for UIMod {
             }
             self.debounced += 1;
         }
+
+        log::trace!("Mod::UI handled rendering in {:.2?}", before.elapsed());
 
         // Handle queued outgoing event
         for event in self.outgoing_event_queue.borrow_mut().drain(..) {

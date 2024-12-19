@@ -1290,7 +1290,9 @@ impl Aparte {
         {
             let mods = self.mods.clone();
             for (_, r#mod) in mods.iter() {
+                let before = Instant::now();
                 r#mod.try_write().unwrap().on_event(self, &event);
+                log::trace!("{:?} handled event in {:.2?}", r#mod, before.elapsed());
             }
         }
 
