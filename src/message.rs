@@ -652,10 +652,11 @@ impl MessageView {
     fn format_log(message: &LogMessage, max_width: Option<u16>) -> Vec<Charxels> {
         let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
         let mut lines = Vec::new();
+        let prefixed_line = format!("{} - ", timestamp.format("%T")).into_charxels();
         for line in message.body.lines() {
-            let mut prefixed_line = format!("{} - ", timestamp.format("%T")).into_charxels();
-            prefixed_line.append(line.clone());
-            lines.append(&mut Self::format_text(prefixed_line, max_width))
+            let mut formatted_line = prefixed_line.clone();
+            formatted_line.append(line.clone());
+            lines.append(&mut Self::format_text(formatted_line, max_width))
         }
         lines
     }
