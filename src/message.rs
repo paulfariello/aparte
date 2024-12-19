@@ -902,7 +902,7 @@ mod tests {
         }
     }
 
-    fn log_mesasge_view(log: &str) -> (impl View<(), MockWriter>, DateTime<Local>) {
+    fn log_message_view(log: &str) -> (impl View<(), MockWriter>, DateTime<Local>) {
         let epoch: DateTime<Utc> = DateTime::from(UNIX_EPOCH);
         (
             MessageView {
@@ -970,7 +970,7 @@ mod tests {
     #[test]
     fn test_render_single_line() {
         // Given
-        let (mut message_view, timestamp) = log_mesasge_view("a log");
+        let (mut message_view, timestamp) = log_message_view("a log");
         let (stdout, mut screen) = mock_screen();
 
         // When
@@ -997,7 +997,7 @@ mod tests {
         // a log that should render in more than width
         // 00:00:00 - a very very long long message log
         // is 44 char long but we allow only 2 lines of 40.
-        let (mut message_view, timestamp) = log_mesasge_view("a very very long long message log");
+        let (mut message_view, timestamp) = log_message_view("a very very long long message log");
         let (stdout, mut screen) = mock_screen();
 
         // When
@@ -1037,7 +1037,7 @@ mod tests {
         // a log that should render in more than width
         // 00:00:00 - a very very long long message log
         // is 44 char long but we allow only 1 line of 40.
-        let (mut message_view, _timestamp) = log_mesasge_view("a very very long long message log");
+        let (mut message_view, _timestamp) = log_message_view("a very very long long message log");
         let (stdout, mut screen) = mock_screen();
 
         // When
