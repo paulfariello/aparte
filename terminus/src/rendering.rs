@@ -8,7 +8,7 @@ use crate::{
     BgColor, CursorPos, Dimensions, FgColor, Style,
 };
 
-#[derive(Default, Copy, Clone, Eq, PartialEq)]
+#[derive(Default, Copy, Clone, Eq, PartialEq, Debug)]
 pub struct ScreenSize {
     width: u16,
     height: u16,
@@ -29,7 +29,7 @@ impl From<(u16, u16)> for ScreenSize {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct OffscreenRenderBuffer {
     lines: Vec<OffscreenLine>,
     size: ScreenSize,
@@ -72,7 +72,7 @@ impl IndexMut<u16> for OffscreenRenderBuffer {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct OffscreenLine {
     charxels: Vec<Charxel>,
 }
