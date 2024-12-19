@@ -1035,20 +1035,7 @@ impl ModTrait for UIMod {
                 }
             }
             Event::WindowChange => {
-                let (width, height) = termion::terminal_size().unwrap();
-                let measure_specs = MeasureSpecs {
-                    width: MeasureSpec::AtMost(width),
-                    height: MeasureSpec::AtMost(height),
-                };
-                let requested_dimensions = self.root.measure(&measure_specs);
-                self.dimensions =
-                    Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
-                self.root.layout(&self.dimensions);
-                let mut render_buffer = self.render_buffer.write().unwrap();
-                render_buffer.set_size((width, height).into());
-                render_buffer.clear();
-                let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
-                self.root.render(frame);
+                force_render = true;
             }
             Event::Close(window) => {
                 if window != "console" {
@@ -1240,6 +1227,7 @@ impl ModTrait for UIMod {
             self.debounced = 0;
 
             let mut render_buffer = self.render_buffer.write().unwrap();
+            render_buffer.set_size((width, height).into());
             render_buffer.clear();
             let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
             self.root.render(frame);
