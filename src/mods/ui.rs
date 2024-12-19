@@ -105,26 +105,20 @@ impl View<UIEvent> for TitleBar {
         );
 
         if let Some(name) = &self.name {
-            let clean_name =
-                terminus::term_string_visible_truncate(name, frame.width().into(), Some("…"));
-            frame.write((&clean_name).with_styles(&[Style::Bold]));
+            let mut title = name.into_charxels().with_styles(&[Style::Bold]);
 
-            let remaining = frame.width()
-                - terminus::term_string_visible_len(&clean_name) as u16
-                - " – ".len() as u16;
-            if remaining > 0 {
-                let subjects = self.subjects.get(name).unwrap();
-                if !subjects.is_empty() {
-                    if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
-                        let clean_subject = terminus::term_string_visible_truncate(
-                            subject,
-                            remaining.into(),
-                            Some("…"),
-                        );
-                        frame.write(format!(" — {}", clean_subject).with_styles(&[Style::Bold]));
+            let subjects = self.subjects.get(name).unwrap();
+            if !subjects.is_empty() {
+                if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
+                    if let Some(subject) = subject.lines().next() {
+                        title.append(" – ");
+                        title.append(subject);
                     }
                 }
             }
+
+            title.truncate(frame.width(), "…");
+            frame.write(title);
         }
 
         frame.set_background(self.color.bg);
