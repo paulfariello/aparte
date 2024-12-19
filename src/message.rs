@@ -19,7 +19,7 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
 #[cfg(feature = "image")]
 use sixel_image::SixelImage;
-use terminus::charxel::{Charxel, Charxels, IntoCharxels};
+use terminus::charxel::{Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
 use terminus::{
     self, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, View,
@@ -654,7 +654,7 @@ impl MessageView {
         let mut lines = Vec::new();
         for line in message.body.lines() {
             let mut prefixed_line = format!("{} - ", timestamp.format("%T")).into_charxels();
-            prefixed_line.append(&mut line.clone());
+            prefixed_line.append(line.clone());
             lines.append(&mut Self::format_text(prefixed_line, max_width))
         }
         lines
@@ -682,12 +682,12 @@ impl MessageView {
 
         let mut header = format!("{} - {}", timestamp.format("%T"), attributes).into_charxels();
 
-        let mut author = match me {
+        let author = match me {
             true => format!("* {} ", author).with_foreground(foreground),
             false => format!("{}: ", author).with_foreground(foreground),
         };
 
-        header.append(&mut author);
+        header.append(author);
 
         header
     }
@@ -702,11 +702,10 @@ impl MessageView {
         let mut iter = body.strip_prefix("/me").unwrap_or(body).lines();
 
         if let Some(line) = iter.next() {
-            header.append(&mut terminus::clean_str(line).into_charxels());
+            header.append(terminus::clean_str(line));
         }
         for line in iter {
-            header
-                .append(&mut format!("\n{}{}", padding, terminus::clean_str(line)).into_charxels());
+            header.append(format!("\n{}{}", padding, terminus::clean_str(line)));
         }
 
         Self::format_text(header, max_width)
@@ -737,13 +736,7 @@ impl MessageView {
                     line_len = 0;
                 }
 
-                chunk.append(
-                    &mut word
-                        .into_iter()
-                        .cloned()
-                        .collect::<Vec<Charxel>>()
-                        .into_charxels(),
-                );
+                chunk.append(word.into_iter().cloned().collect::<Charxels>());
                 line_len += grapheme_count;
             }
 
