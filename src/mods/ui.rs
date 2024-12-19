@@ -1064,6 +1064,7 @@ impl ModTrait for UIMod {
                 }
             }
             Event::Key(key) => {
+                force_render = true;
                 match key {
                     Key::Char('\t') => {
                         let result = Rc::new(RefCell::new(None));
