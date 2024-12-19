@@ -1,4 +1,4 @@
-use std::{collections::HashSet, slice::SplitInclusive};
+use std::{collections::HashSet, slice::Split};
 
 use itertools::Itertools;
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -71,10 +71,7 @@ pub struct Charxels(Vec<Charxel>);
 
 impl Charxels {
     pub fn lines(&self) -> Lines<'_, impl FnMut(&Charxel) -> bool> {
-        Lines(
-            self.0
-                .split_inclusive(|charxel: &Charxel| charxel.grapheme.0 == "\n"),
-        )
+        Lines(self.0.split(|charxel: &Charxel| charxel.grapheme.0 == "\n"))
     }
 
     #[allow(clippy::inherent_to_string)]
@@ -154,7 +151,7 @@ where
     }
 }
 
-pub struct Lines<'a, P>(SplitInclusive<'a, Charxel, P>)
+pub struct Lines<'a, P>(Split<'a, Charxel, P>)
 where
     P: FnMut(&Charxel) -> bool;
 
