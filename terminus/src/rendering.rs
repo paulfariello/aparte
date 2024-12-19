@@ -209,6 +209,7 @@ impl OffscreenRenderBuffer {
         log::trace!("Full render");
         let _ = write!(screen, "{}", termion::cursor::Hide,);
         let _ = write!(screen, "{}", termion::cursor::Goto(1, 1));
+        let _ = write!(screen, "{}", termion::clear::All);
 
         for line in self.lines.iter() {
             Self::render_chunk(screen, &line.charxels);
