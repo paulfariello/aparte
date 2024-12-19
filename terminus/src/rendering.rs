@@ -160,7 +160,7 @@ impl OffscreenRenderBuffer {
     where
         W: std::io::Write,
     {
-        log::trace!("Diff render: {:?}", diffs);
+        log::trace!("Diff render");
         for diff in diffs {
             let _ = write!(
                 screen,
