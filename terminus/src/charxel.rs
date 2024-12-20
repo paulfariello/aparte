@@ -65,6 +65,10 @@ impl Charxel {
     pub fn set_grapheme(&mut self, grapheme: String) {
         self.grapheme = Grapheme(grapheme);
     }
+
+    pub fn display_width(&self) -> u16 {
+        unicode_display_width::width(&self.grapheme.0) as u16
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -96,10 +100,7 @@ impl Charxels {
     }
 
     pub fn display_width(&self) -> u16 {
-        self.0
-            .iter()
-            .map(|g| unicode_display_width::width(&g.grapheme.0))
-            .sum::<u64>() as u16
+        self.0.iter().map(|c| c.display_width()).sum()
     }
 
     pub fn is_empty(&self) -> bool {

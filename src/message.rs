@@ -726,11 +726,9 @@ impl MessageView {
             let mut line_len = 0;
             let mut chunk = Charxels::default();
             for word in line.split_word_bounds() {
-                let grapheme_count = word.len();
+                let display_width = word.iter().map(|c| c.display_width()).sum::<u16>();
 
-                if max_width.map_or(false, |max_width| {
-                    line_len + grapheme_count > max_width as usize
-                }) {
+                if max_width.map_or(false, |max_width| line_len + display_width > max_width) {
                     // Wrap line
                     buffers.push(chunk);
                     chunk = Charxels::default();
@@ -738,7 +736,7 @@ impl MessageView {
                 }
 
                 chunk.append(word.into_iter().cloned().collect::<Charxels>());
-                line_len += grapheme_count;
+                line_len += display_width;
             }
 
             buffers.push(chunk);
