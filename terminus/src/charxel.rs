@@ -1,6 +1,7 @@
 use std::{collections::HashSet, slice::Split};
 
 use itertools::Itertools;
+use unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 #[cfg(feature = "image")]
@@ -94,8 +95,11 @@ impl Charxels {
         }
     }
 
-    pub fn len(&self) -> u16 {
-        self.0.len() as u16
+    pub fn display_width(&self) -> u16 {
+        self.0
+            .iter()
+            .map(|g| unicode_display_width::width(&g.grapheme.0))
+            .sum::<u64>() as u16
     }
 
     pub fn is_empty(&self) -> bool {
@@ -112,11 +116,11 @@ impl Charxels {
 
     pub fn truncate(&mut self, len: u16, end: impl IntoCharxels) {
         let end = end.into_charxels();
-        assert!(len > end.len());
-        if self.len() > len {
-            self.0.truncate(len as usize - end.len() as usize);
+        assert!(len > end.display_width());
+        if self.display_width() > len {
+            self.0.truncate(len as usize - end.display_width() as usize);
             self.append(end);
-            assert!(self.len() <= len);
+            assert!(self.display_width() <= len);
         }
     }
 }

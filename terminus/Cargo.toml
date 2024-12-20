@@ -16,6 +16,7 @@ unicode-segmentation = "^1.6"
 anyhow = "^1.0"
 itertools = "^0.13"
 sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1", optional = true }
+unicode-display-width = "0.3.0"
 
 [dev-dependencies]
 mockall = "^0.9"

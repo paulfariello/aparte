@@ -696,7 +696,7 @@ impl MessageView {
     fn format_xmpp_text(message: &VersionedXmppMessage, max_width: Option<u16>) -> Vec<Charxels> {
         let mut header = Self::format_header(message);
 
-        let padding_len = header.len();
+        let padding_len = header.display_width();
         let padding = " ".repeat(padding_len.into());
 
         let body = message.get_last_body();
@@ -778,7 +778,7 @@ impl MessageView {
             MeasureSpec::Unspecified => RequestedDimensions {
                 height: RequestedDimension::Absolute(1),
                 width: RequestedDimension::Absolute(
-                    self.format(None).first().map_or(0, |l| l.len()),
+                    self.format(None).first().map_or(0, |l| l.display_width()),
                 ),
             },
             MeasureSpec::AtMost(at_most_width) => {
@@ -786,7 +786,11 @@ impl MessageView {
                 RequestedDimensions {
                     height: RequestedDimension::Absolute(formatted.len() as u16),
                     width: RequestedDimension::Absolute(cmp::min(
-                        formatted.iter().map(|line| line.len()).max().unwrap_or(0),
+                        formatted
+                            .iter()
+                            .map(|line| line.display_width())
+                            .max()
+                            .unwrap_or(0),
                         at_most_width,
                     )),
                 }

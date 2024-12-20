@@ -183,11 +183,12 @@ where
                         None => "",
                     };
 
-                    group.iter().map(|group| group.colored_fmt().len()).chain(
-                        items
-                            .iter()
-                            .map(move |item| item.colored_fmt().len() + indent.len() as u16),
-                    )
+                    group
+                        .iter()
+                        .map(|group| group.colored_fmt().display_width())
+                        .chain(items.iter().map(move |item| {
+                            item.colored_fmt().display_width() + indent.len() as u16
+                        }))
                 })
                 .max()
                 .unwrap_or(0),
