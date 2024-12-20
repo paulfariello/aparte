@@ -51,6 +51,7 @@ textwrap = "^0.12"
 tokio = { version = "^1.10", features = ["full"] }
 tokio-xmpp = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git", rev = "ccd46047" } # Correspond to https://gitlab.com/xmpp-rs/xmpp-rs/-/merge_requests/309
 toml = "^0.5"
+unicode-display-width = "0.3.0"
 unicode-segmentation = "^1.6"
 uuid = { version = "^1.7", features = ["v4"]  }
 xmpp-parsers = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git", rev = "ccd46047" }

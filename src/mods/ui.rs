@@ -214,8 +214,12 @@ impl View<UIEvent> for WinBar {
         if let Some(connection) = &self.connection {
             let connection = format!(" {}", connection).into_charxels();
             frame.write(&connection);
-            frame_space -= connection.len();
-            log::debug!("connection len: {} ({})", connection.len(), frame_space);
+            frame_space -= connection.display_width();
+            log::debug!(
+                "connection len: {} ({})",
+                connection.display_width(),
+                frame_space
+            );
         }
 
         let mut first = true;
@@ -254,15 +258,19 @@ impl View<UIEvent> for WinBar {
                 };
 
                 // Don't write current hl if we can't put remaining info afterward
-                if highlighted.len() + remaining_charxels.len() >= frame_space {
+                if highlighted.display_width() + remaining_charxels.display_width() >= frame_space {
                     // We are sure that previous hl has let us enough space for remaining info
                     frame.write(&remaining_charxels);
-                    log::debug!("remaining: {} ({})", remaining_charxels.len(), frame_space);
+                    log::debug!(
+                        "remaining: {} ({})",
+                        remaining_charxels.display_width(),
+                        frame_space
+                    );
                     break;
                 } else {
                     frame.write(&highlighted);
-                    frame_space -= highlighted.len();
-                    log::debug!("hl: {} ({})", highlighted.len(), frame_space);
+                    frame_space -= highlighted.display_width();
+                    log::debug!("hl: {} ({})", highlighted.display_width(), frame_space);
                 }
 
                 first = false;
