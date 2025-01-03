@@ -129,12 +129,20 @@ impl OffscreenRenderBuffer {
         let mut diffs: Vec<ContinuousDiff> = vec![];
         let mut current_diff: Option<ContinuousDiff> = None;
 
+        let mut skip = 0;
+
         for (i, (ref_charxel, charxel)) in reference_lines
             .iter()
             .flat_map(|line| line.charxels.iter())
             .zip(self.lines.iter().flat_map(|line| line.charxels.iter()))
             .enumerate()
         {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+
+            skip = charxel.display_width() - 1;
             if charxel == ref_charxel {
                 if let Some(diff) = current_diff.take() {
                     diffs.push(diff);
