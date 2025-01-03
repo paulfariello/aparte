@@ -196,7 +196,13 @@ impl OffscreenRenderBuffer {
         // TODO try to be smart and avoid setting and resetting style and color
         let mut current_bg = None;
         let mut current_fg = None;
+        let mut skip = 0;
         for charxel in chunk {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            skip = charxel.display_width() - 1;
             if Some(charxel.background) != current_bg {
                 let _ = write!(screen, "{}", charxel.background);
                 current_bg = Some(charxel.background);
