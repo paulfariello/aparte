@@ -1287,6 +1287,8 @@ impl Aparte {
         } else {
             log::debug!("Event: {:?}", event);
         }
+        let before = Instant::now();
+
         {
             let mods = self.mods.clone();
             for (_, r#mod) in mods.iter() {
@@ -1408,6 +1410,7 @@ impl Aparte {
             _ => {}
         }
 
+        log::trace!("Fully handled event in {:.2?}", before.elapsed());
         Ok(())
     }
 
