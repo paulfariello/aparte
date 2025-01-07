@@ -1054,6 +1054,7 @@ impl Aparte {
                 loop {
                     match input_event_stream.next().await {
                         Some(event) => {
+                            log::trace!("Got input event {:?} at {:?}", event, Instant::now());
                             if let Err(err) = tx.send(event) {
                                 log::error!("Cannot send event to internal channel: {}", err);
                                 break;
@@ -1310,7 +1311,11 @@ impl Aparte {
 
     pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
         if self.read_password.load(Relaxed) && matches!(event, Event::Key(..)) {
-            log::debug!("Event: {:?}", Event::Key(Key::Char('*')));
+            log::debug!(
+                "Event: {:?} at {:?}",
+                Event::Key(Key::Char('*')),
+                Instant::now()
+            );
         } else {
             log::debug!("Event: {:?}", event);
         }
