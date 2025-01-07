@@ -230,7 +230,12 @@ impl<E> View<E> for Input<E> {
         self.width.set(frame.dimensions.width as usize);
         match self.password {
             true => {
-                frame.write("password: ");
+                let prompt = "password: ";
+                frame.write(prompt);
+                frame.set_cursor(CursorPos {
+                    top: frame.dimensions.top,
+                    left: frame.dimensions.left + prompt.len() as u16,
+                });
             }
             false => {
                 // Max displayable size is view width less 1 for cursor
