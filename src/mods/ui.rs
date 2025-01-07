@@ -1214,6 +1214,10 @@ impl ModTrait for UIMod {
 
         // Debounce rendering
         if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
+            log::debug!("Render (saved {} rendering)", self.debounced);
+            self.last_render = Instant::now();
+            self.debounced = 0;
+
             let (width, height) = termion::terminal_size().unwrap();
             let measure_specs = MeasureSpecs {
                 width: MeasureSpec::AtMost(width),
@@ -1222,11 +1226,6 @@ impl ModTrait for UIMod {
             let requested_dimensions = self.root.measure(&measure_specs);
             self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
             self.root.layout(&self.dimensions);
-
-            // Update rendering
-            log::debug!("Render (saved {} rendering)", self.debounced);
-            self.last_render = Instant::now();
-            self.debounced = 0;
 
             let mut render_buffer = self.render_buffer.write().unwrap();
             render_buffer.set_size((width, height).into());
