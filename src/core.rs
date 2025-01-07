@@ -1123,22 +1123,32 @@ impl Aparte {
                         }
                         _ => {
                             // Ensure all key events are handled first
-                            let (keys, filtered_events): (Vec<_>, Vec<_>) = events.drain(..).partition(|event| matches!(event, Event::Key(_)));
+                            let (keys, mut filtered_events): (Vec<_>, Vec<_>) = events.drain(..).partition(|event| matches!(event, Event::Key(_)));
                             if !keys.is_empty() {
                                 for event in keys {
                                     if self.handle_event(event).is_err() {
                                         break 'main;
                                     }
                                 }
-                                events = filtered_events;
+                                // TODO handle other events if we didn't received any event in
+                                // between
+                                if event_rx.is_empty() {
+                                    // TODO handle other events
+                                    for event in filtered_events.drain(..) {
+                                        if self.handle_event(event).is_err() {
+                                            break 'main;
+                                        }
+                                    }
+                                }
                             } else {
                                 // TODO ensure we don't loop here for too long
-                                for event in filtered_events {
+                                for event in filtered_events.drain(..) {
                                     if self.handle_event(event).is_err() {
                                         break 'main;
                                     }
                                 }
                             }
+                            events = filtered_events;
                         },
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
