@@ -1113,16 +1113,33 @@ impl Aparte {
             let mut event_rx = self.event_rx.take().unwrap();
             let mut send_rx = self.send_rx.take().unwrap();
 
-            loop {
+            let mut events = Vec::new();
+            'main: loop {
                 tokio::select! {
-                    event = event_rx.recv() => match event {
-                        Some(event) => if self.handle_event(event).is_err() {
-                            break;
-                        },
-                        None => {
+                    count = event_rx.recv_many(&mut events, 1000) => match count {
+                        0 => {
                             log::debug!("Broken event channel");
                             break;
                         }
+                        _ => {
+                            // Ensure all key events are handled first
+                            let (keys, filtered_events): (Vec<_>, Vec<_>) = events.drain(..).partition(|event| matches!(event, Event::Key(_)));
+                            if !keys.is_empty() {
+                                for event in keys {
+                                    if self.handle_event(event).is_err() {
+                                        break 'main;
+                                    }
+                                }
+                                events = filtered_events;
+                            } else {
+                                // TODO ensure we don't loop here for too long
+                                for event in filtered_events {
+                                    if self.handle_event(event).is_err() {
+                                        break 'main;
+                                    }
+                                }
+                            }
+                        },
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
                         Some((account, stanza)) => self.send_stanza(account, stanza),
