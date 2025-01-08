@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug, Display};
 use std::fs::OpenOptions;
@@ -1114,48 +1114,54 @@ impl Aparte {
             let mut event_rx = self.event_rx.take().unwrap();
             let mut send_rx = self.send_rx.take().unwrap();
 
-            let mut events = Vec::new();
+            let mut last_events = VecDeque::new();
             'main: loop {
+                let mut events_buf = Vec::new();
                 tokio::select! {
-                    count = event_rx.recv_many(&mut events, 1000) => match count {
+                    count = event_rx.recv_many(&mut events_buf, 1000) => match count {
                         0 => {
-                            log::debug!("Broken event channel");
-                            break;
+                            log::error!("Broken event channel");
+                            break
                         }
-                        _ => {
+                        events_count => {
                             // Ensure all key events are handled first
-                            let (keys, mut filtered_events): (Vec<_>, Vec<_>) = events.drain(..).partition(|event| matches!(event, Event::Key(_)));
-                            if !keys.is_empty() {
-                                for event in keys {
-                                    if self.handle_event(event).is_err() {
-                                        break 'main;
-                                    }
+                            let (priority_events, filtered_events): (VecDeque<_>, VecDeque<_>) = events_buf.drain(..).partition(|event| matches!(event,
+                                                                                                 Event::Key(_)
+                                                                                                 | Event::Completed(_, _)
+                                                                                                 | Event::ChangeWindow(_)
+                                                                                                 | Event::Quit
+                                                                                                 | Event::UIRender(_)));
+
+                            log::trace!("Event loop got {} new events ({} priority); have {} last events", events_count, priority_events.len(), last_events.len());
+
+                            last_events.extend(filtered_events);
+                            // Handle priority events first
+                            for event in priority_events {
+                                if self.handle_event(event).is_err() {
+                                    break 'main
                                 }
-                                // TODO handle other events if we didn't received any event in
-                                // between
-                                if event_rx.is_empty() {
-                                    // TODO handle other events
-                                    for event in filtered_events.drain(..) {
-                                        if self.handle_event(event).is_err() {
-                                            break 'main;
-                                        }
-                                    }
+                            }
+                            let mut start = Instant::now();
+                            while let Some(event) = last_events.pop_front() {
+                                if self.handle_event(event).is_err() {
+                                    break 'main;
                                 }
-                            } else {
-                                // TODO ensure we don't loop here for too long
-                                for event in filtered_events.drain(..) {
-                                    if self.handle_event(event).is_err() {
-                                        break 'main;
+                                // Ensure we don't loop here for too long to get UI responsive
+                                if start.elapsed() > Duration::from_millis(UI_TICK_MS) {
+                                    log::trace!("Event loop, take a breath {} pending events", event_rx.len());
+                                    start = Instant::now();
+                                    if !event_rx.is_empty() {
+                                        break
                                     }
                                 }
                             }
-                            events = filtered_events;
+                            log::trace!("Event loop, delayed handling of {} events", last_events.len());
                         },
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
                         Some((account, stanza)) => self.send_stanza(account, stanza),
                         None => {
-                            log::debug!("Broken send channel");
+                            log::error!("Broken send channel");
                             break;
                         }
                     }
@@ -1311,13 +1317,9 @@ impl Aparte {
 
     pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
         if self.read_password.load(Relaxed) && matches!(event, Event::Key(..)) {
-            log::debug!(
-                "Event: {:?} at {:?}",
-                Event::Key(Key::Char('*')),
-                Instant::now()
-            );
+            log::trace!("Handle event: {:?}", Event::Key(Key::Char('*')),);
         } else {
-            log::debug!("Event: {:?}", event);
+            log::trace!("Handle event: {:?}", event);
         }
         let before = Instant::now();
 
@@ -1692,6 +1694,7 @@ impl Aparte {
     }
 
     pub fn schedule(&mut self, event: Event) {
+        log::trace!("Schedule event {:?}", event);
         self.event_tx.send(event).unwrap();
     }
 
