@@ -279,10 +279,7 @@ macro_rules! parse_lookup_arg(
     ($aparte:ident, $command:ident, $({})?) => (None);
     ($aparte:ident, $command:ident, $({ lookup: |$lookup_aparte:ident, $lookup_command:ident| $lookup:block $(, $($tail:tt)*)? })?) => (
         $({
-            let $lookup_aparte: &mut Aparte = $aparte;
-            let $lookup_command: &mut Command = &mut $command;
-
-            $lookup
+            (|$lookup_aparte: &mut Aparte, $lookup_command: &mut Command| $lookup)($aparte, &mut $command)
         })?
     );
     ($aparte:ident, $command:ident, $({ completion: |$completion_aparte:ident, $completion_command:ident| $lookup:block $(, $($tail:tt)*)? })?) => (
