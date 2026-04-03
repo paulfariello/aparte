@@ -6,6 +6,7 @@ use crate::rendering::ScreenFrame;
 use crate::CursorPos;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
@@ -259,13 +260,17 @@ impl<E> View<E> for Input<E> {
                 let start_index = self.view.index(&self.buf);
                 let end_index = (&self.view + max_size).index(&self.buf);
                 let buf = &self.buf[start_index..end_index];
-                let cursor = &self.cursor - &self.view;
 
                 frame.write(buf);
 
+                let cursor_byte_index = self.cursor.index(&self.buf);
+                let cursor_col: u16 = self.buf[start_index..cursor_byte_index]
+                    .graphemes(true)
+                    .map(|g| unicode_display_width::width(g) as u16)
+                    .sum();
                 frame.set_cursor(CursorPos {
                     top: frame.dimensions.top,
-                    left: frame.dimensions.left + cursor.get() as u16,
+                    left: frame.dimensions.left + cursor_col,
                 });
             }
         }

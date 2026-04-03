@@ -142,7 +142,7 @@ impl OffscreenRenderBuffer {
                 continue;
             }
 
-            skip = charxel.display_width() - 1;
+            skip = charxel.display_width().saturating_sub(1);
             if charxel == ref_charxel {
                 if let Some(diff) = current_diff.take() {
                     diffs.push(diff);
@@ -181,10 +181,12 @@ impl OffscreenRenderBuffer {
 
     fn apply_diff(&mut self, diffs: Vec<ContinuousDiff>) {
         for diff in diffs {
-            for (i, charxel) in diff.charxels.into_iter().enumerate() {
-                let width = self.size.width as usize;
-                let left = diff.pos.left as usize + i;
-                self[diff.pos.top + ((left / width) as u16)][(left % width) as u16] = charxel;
+            let width = self.size.width as usize;
+            let mut col_offset = 0usize;
+            for charxel in diff.charxels.into_iter() {
+                let left = diff.pos.left as usize + col_offset;
+                self[diff.pos.top + ((left / width) as u16)][(left % width) as u16] = charxel.clone();
+                col_offset += charxel.display_width() as usize;
             }
         }
     }
@@ -196,13 +198,35 @@ impl OffscreenRenderBuffer {
         // TODO try to be smart and avoid setting and resetting style and color
         let mut current_bg = None;
         let mut current_fg = None;
-        let mut skip = 0;
         for charxel in chunk {
+            if Some(charxel.background) != current_bg {
+                let _ = write!(screen, "{}", charxel.background);
+                current_bg = Some(charxel.background);
+            }
+            if Some(charxel.foreground) != current_fg {
+                let _ = write!(screen, "{}", charxel.foreground);
+                current_fg = Some(charxel.foreground);
+            }
+            // TODO style
+            let _ = write!(screen, "{}", charxel.grapheme);
+        }
+    }
+
+    fn render_line<W>(screen: &mut W, line: &[Charxel])
+    where
+        W: std::io::Write,
+    {
+        // Like render_chunk but skips continuation placeholder cells that were written
+        // by ScreenFrame::write() for wide (multi-column) characters.
+        let mut current_bg = None;
+        let mut current_fg = None;
+        let mut skip = 0u16;
+        for charxel in line {
             if skip > 0 {
                 skip -= 1;
                 continue;
             }
-            skip = charxel.display_width() - 1;
+            skip = charxel.display_width().saturating_sub(1);
             if Some(charxel.background) != current_bg {
                 let _ = write!(screen, "{}", charxel.background);
                 current_bg = Some(charxel.background);
@@ -226,7 +250,7 @@ impl OffscreenRenderBuffer {
         let _ = write!(screen, "{}", termion::clear::All);
 
         for line in self.lines.iter() {
-            Self::render_chunk(screen, &line.charxels);
+            Self::render_line(screen, &line.charxels);
         }
     }
 
@@ -316,10 +340,19 @@ impl<'a> ScreenFrame<'a> {
 
     pub fn write(&mut self, charxels: impl IntoCharxels) {
         for charxel in charxels.into_charxels() {
+            let w = charxel.display_width();
             self.offscreen[self.dimensions.top + self.cursor.top]
                 [self.dimensions.left + self.cursor.left] = charxel;
-
-            self.cursor.left += 1;
+            // Write blank placeholders for the continuation cells of wide characters so
+            // that full_render's skip logic and compute_diff's skip logic stay consistent.
+            for k in 1..w {
+                let col = self.dimensions.left + self.cursor.left + k;
+                if col < self.dimensions.left + self.dimensions.width {
+                    self.offscreen[self.dimensions.top + self.cursor.top][col] =
+                        Charxel::default();
+                }
+            }
+            self.cursor.left += w;
         }
     }
 
