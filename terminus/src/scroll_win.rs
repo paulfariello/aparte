@@ -17,9 +17,17 @@ use super::{
 const MISSING_DIMENSIONS: &str = "Missing dimensions";
 const INVALID_VIEW: &str = "Invalid view detected";
 
+#[derive(Debug)]
 struct LayoutChild<I> {
     child: I,
     dimensions: Option<Dimensions>,
+}
+
+#[cfg(test)]
+impl<I: PartialEq> PartialEq<I> for LayoutChild<I> {
+    fn eq(&self, other: &I) -> bool {
+        self.child.eq(other)
+    }
 }
 
 impl<I> Ord for LayoutChild<I>
@@ -467,7 +475,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
     use test_log::test;
 
     use super::*;
@@ -517,7 +524,7 @@ mod tests {
             self.dimensions.replace(dimensions.clone());
         }
 
-        fn render(&self, _screen: &mut OffscreenRenderBuffer) {
+        fn render<'a>(&self, _frame: ScreenFrame<'a>) {
             unreachable!()
         }
 
@@ -597,19 +604,20 @@ mod tests {
         scroll_win.insert(third_view.clone());
         scroll_win.insert(fourth_view.clone());
 
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
         scroll_win.page_up();
 
         // When
         scroll_win.page_down();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&fourth_view, &third_view]);
     }
 
@@ -643,18 +651,19 @@ mod tests {
         scroll_win.insert(second_view.clone());
         scroll_win.insert(third_view.clone());
         scroll_win.insert(fourth_view.clone());
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // When
         scroll_win.page_up();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&second_view, &first_view]);
     }
 
@@ -694,18 +703,19 @@ mod tests {
         scroll_win.insert(third_view.clone());
         scroll_win.insert(fourth_view.clone());
 
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // When
         scroll_win.page_up();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&second_view, &first_view]);
 
         // When
@@ -713,14 +723,14 @@ mod tests {
         scroll_win.page_down();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&fourth_view, &third_view]);
 
         // When
         scroll_win.page_down();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&fifth_view, &fourth_view]);
     }
 
@@ -739,15 +749,16 @@ mod tests {
         scroll_win.insert(first_view.clone());
 
         // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&first_view]);
         assert_eq!(
             visible_children[0].dimensions.as_ref().map(|d| d.top),
@@ -781,15 +792,16 @@ mod tests {
         scroll_win.insert(third_view.clone());
 
         // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&third_view, &second_view]);
         assert_eq!(
             visible_children[0].dimensions.as_ref().map(|d| d.top),
@@ -841,15 +853,16 @@ mod tests {
         scroll_win.insert(third_view.clone());
 
         // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 30,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(
             visible_children,
             vec![&third_view, &second_view, &first_view]
