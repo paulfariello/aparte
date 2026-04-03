@@ -9,7 +9,7 @@ use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    next_word, term_string_visible_len, Dimensions, EventHandler, MeasureSpecs, RequestedDimension,
+    next_word, Dimensions, EventHandler, MeasureSpecs, RequestedDimension,
     RequestedDimensions, View,
 };
 
@@ -146,7 +146,7 @@ impl<E> Input<E> {
     }
 
     pub fn right(&mut self) {
-        if self.cursor < term_string_visible_len(&self.buf) {
+        if self.cursor < self.buf.graphemes(true).count() {
             self.cursor += 1;
         }
     }
