@@ -1178,6 +1178,9 @@ impl Aparte {
                         }
                     }
                 };
+
+                // Render UI once per event batch (if state changed).
+                self.get_mod_mut::<mods::ui::UIMod>().render_if_dirty();
             }
         });
     }

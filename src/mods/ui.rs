@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::{mpsc, RwLock};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
@@ -47,8 +47,6 @@ use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::{contact, conversation};
 
-// Debounce rendering at 350ms pace (based on Doherty Threshold)
-const UI_DEBOUNCE_NS: u32 = 35_000_000u32;
 
 enum UIEvent {
     Core(Event),
@@ -475,8 +473,7 @@ pub struct UIMod {
     unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
     root: LinearLayout<UIEvent>,
-    last_render: Instant,
-    debounced: u32,
+    dirty: bool,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
     _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
@@ -593,8 +590,7 @@ impl UIMod {
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
-            last_render: Instant::now(),
-            debounced: 0,
+            dirty: true,
             dimensions: Dimensions {
                 top: 1,
                 left: 1,
@@ -796,6 +792,32 @@ impl UIMod {
     pub fn current_window(&self) -> Option<&String> {
         self.current_window.as_ref()
     }
+
+    /// Render the UI if the dirty flag is set. Intended to be called once per
+    /// event batch from the main loop.
+    pub fn render_if_dirty(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+
+        let before = Instant::now();
+        let (width, height) = termion::terminal_size().unwrap();
+        let measure_specs = MeasureSpecs {
+            width: MeasureSpec::AtMost(width),
+            height: MeasureSpec::AtMost(height),
+        };
+        let requested_dimensions = self.root.measure(&measure_specs);
+        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
+        self.root.layout(&self.dimensions);
+
+        let mut render_buffer = self.render_buffer.write().unwrap();
+        render_buffer.set_size((width, height).into());
+        render_buffer.clear();
+        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+        self.root.render(frame);
+        log::trace!("Mod::UI rendered in {:.2?}", before.elapsed());
+    }
 }
 
 impl ModTrait for UIMod {
@@ -910,7 +932,6 @@ impl ModTrait for UIMod {
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
-        let mut force_render = false;
         let before = Instant::now();
 
         match event {
@@ -1036,9 +1057,7 @@ impl ModTrait for UIMod {
                     crate::info!(aparte, "Unknown window {window}");
                 }
             }
-            Event::WindowChange => {
-                force_render = true;
-            }
+            Event::WindowChange => {}
             Event::Close(window) => {
                 if window != "console" {
                     self.windows.retain(|win| win != window);
@@ -1054,7 +1073,6 @@ impl ModTrait for UIMod {
                 }
             }
             Event::Key(key) => {
-                force_render = true;
                 match key {
                     Key::Char('\t') => {
                         let result = Rc::new(RefCell::new(None));
@@ -1202,52 +1220,17 @@ impl ModTrait for UIMod {
                     important: *important,
                 }));
             }
-            Event::UIRender(force) => {
+            Event::UIRender(_) => {
                 log::debug!("Force render");
-                force_render |= force;
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
         log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
-        let before = Instant::now();
 
-        // Debounce rendering
-        if force_render || self.last_render.elapsed() > Duration::new(0, UI_DEBOUNCE_NS) {
-            log::debug!("Render (saved {} rendering)", self.debounced);
-            self.last_render = Instant::now();
-            self.debounced = 0;
-
-            let (width, height) = termion::terminal_size().unwrap();
-            let measure_specs = MeasureSpecs {
-                width: MeasureSpec::AtMost(width),
-                height: MeasureSpec::AtMost(height),
-            };
-            let requested_dimensions = self.root.measure(&measure_specs);
-            self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
-            self.root.layout(&self.dimensions);
-
-            let mut render_buffer = self.render_buffer.write().unwrap();
-            render_buffer.set_size((width, height).into());
-            render_buffer.clear();
-            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
-            self.root.render(frame);
-        } else {
-            log::debug!("Debounce rendering");
-            if self.debounced == 0 {
-                // Ensure we will render this debounced event right in time
-                Aparte::spawn({
-                    let mut aparte = aparte.proxy();
-                    async move {
-                        tokio::time::sleep(Duration::from_nanos(UI_DEBOUNCE_NS as u64)).await;
-                        aparte.schedule(Event::UIRender(true))
-                    }
-                })
-            }
-            self.debounced += 1;
-        }
-
-        log::trace!("Mod::UI handled rendering in {:.2?}", before.elapsed());
+        // Mark UI as needing a render; actual render happens once per event batch
+        // in the main loop via render_if_dirty().
+        self.dirty = true;
 
         // Handle queued outgoing event
         for event in self.outgoing_event_queue.borrow_mut().drain(..) {
