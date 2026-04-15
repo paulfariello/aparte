@@ -136,18 +136,18 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u16 = self
+        let total_children_height: u32 = self
             .children
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
-                    RequestedDimension::Absolute(child_height) => child_height,
+                    RequestedDimension::ExpandMax => dimensions.height as u32,
+                    RequestedDimension::Absolute(child_height) => child_height as u32,
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height {
+        if total_children_height < dimensions.height as u32 {
             // All children fits in the current dimensions
             // don't bother to page up
             return true;
@@ -184,21 +184,21 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u16 = self
+        let total_children_height: u32 = self
             .children
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::ExpandMax => dimensions.height as u32,
                     RequestedDimension::Absolute(child_height) => {
                         log::debug!("Child height: {}", child_height);
-                        child_height
+                        child_height as u32
                     }
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height {
+        if total_children_height < dimensions.height as u32 {
             // All children fits in the current dimensions
             // don't bother to page down
             return true;
@@ -429,18 +429,18 @@ where
 
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u16 = self
+        let total_children_height: u32 = self
             .children
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
-                    RequestedDimension::Absolute(child_height) => child_height,
+                    RequestedDimension::ExpandMax => dimensions.height as u32,
+                    RequestedDimension::Absolute(child_height) => child_height as u32,
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height {
+        if total_children_height < dimensions.height as u32 {
             self.layout_from_top(dimensions);
         } else {
             self.layout_from_bottom(dimensions);
