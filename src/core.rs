@@ -1137,9 +1137,14 @@ impl Aparte {
 
                             last_events.extend(filtered_events);
                             // Handle priority events first
+                            let mut priority_start = Instant::now();
                             for event in priority_events {
                                 if self.handle_event(event).is_err() {
                                     break 'main
+                                }
+                                if priority_start.elapsed() > Duration::from_millis(UI_TICK_MS) {
+                                    priority_start = Instant::now();
+                                    tokio::task::yield_now().await;
                                 }
                             }
                             let mut start = Instant::now();
