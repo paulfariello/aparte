@@ -345,6 +345,11 @@ impl<'a> ScreenFrame<'a> {
 
     pub fn write(&mut self, charxels: impl IntoCharxels) {
         for charxel in charxels.into_charxels() {
+            if self.cursor.top >= self.dimensions.height
+                || self.cursor.left >= self.dimensions.width
+            {
+                break;
+            }
             let w = charxel.display_width();
             self.offscreen[self.dimensions.top + self.cursor.top]
                 [self.dimensions.left + self.cursor.left] = charxel;
