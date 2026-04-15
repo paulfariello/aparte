@@ -219,19 +219,32 @@ impl OffscreenRenderBuffer {
 
     fn render_line<W>(screen: &mut W, line: &[Charxel])
     where
-        W: std::io::Write,
+        W: std::io::Write + termion::cursor::DetectCursorPos,
     {
         // Like render_chunk but skips continuation placeholder cells that were written
         // by ScreenFrame::write() for wide (multi-column) characters.
         let mut current_bg = None;
         let mut current_fg = None;
         let mut skip = 0u16;
+
+        // In debug builds, record the starting cursor position and track expected
+        // column advances so we can verify wide-character width computation matches
+        // what the terminal actually rendered.
+        #[cfg(debug_assertions)]
+        let start_pos = {
+            let _ = screen.flush();
+            screen.cursor_pos().ok()
+        };
+        #[cfg(debug_assertions)]
+        let mut expected_advance: u16 = 0;
+
         for charxel in line {
             if skip > 0 {
                 skip -= 1;
                 continue;
             }
-            skip = charxel.display_width().saturating_sub(1);
+            let w = charxel.display_width();
+            skip = w.saturating_sub(1);
             if Some(charxel.background) != current_bg {
                 let _ = write!(screen, "{}", charxel.background);
                 current_bg = Some(charxel.background);
@@ -242,12 +255,33 @@ impl OffscreenRenderBuffer {
             }
             // TODO style
             let _ = write!(screen, "{}", charxel.grapheme);
+            #[cfg(debug_assertions)]
+            {
+                expected_advance += w;
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if let Some((start_col, start_row)) = start_pos {
+                let _ = screen.flush();
+                if let Ok((end_col, end_row)) = screen.cursor_pos() {
+                    if end_row == start_row {
+                        let actual_advance = end_col.saturating_sub(start_col);
+                        assert_eq!(
+                            actual_advance, expected_advance,
+                            "render_line widechar mismatch (row {}, start_col {}, end_col {})",
+                            start_row, start_col, end_col
+                        );
+                    }
+                }
+            }
         }
     }
 
     fn full_render<W>(&self, screen: &mut W)
     where
-        W: std::io::Write,
+        W: std::io::Write + termion::cursor::DetectCursorPos,
     {
         log::trace!("Full render");
         let _ = write!(screen, "{}", termion::cursor::Hide,);
@@ -274,7 +308,7 @@ impl OffscreenRenderBuffer {
 
     pub fn render<W>(&self, screen: &mut W, reference_screen: &mut Self)
     where
-        W: std::io::Write,
+        W: std::io::Write + termion::cursor::DetectCursorPos,
     {
         let mut cursor_moved = false;
         if self.size != reference_screen.size {
