@@ -180,12 +180,17 @@ impl OffscreenRenderBuffer {
     }
 
     fn apply_diff(&mut self, diffs: Vec<ContinuousDiff>) {
+        let width = self.size.width as usize;
+        let height = self.size.height as usize;
         for diff in diffs {
-            let width = self.size.width as usize;
             let mut col_offset = 0usize;
             for charxel in diff.charxels.into_iter() {
                 let left = diff.pos.left as usize + col_offset;
-                self[diff.pos.top + ((left / width) as u16)][(left % width) as u16] = charxel.clone();
+                let row = diff.pos.top as usize + left / width;
+                let col = left % width;
+                if row < height && col < width {
+                    self[row as u16][col as u16] = charxel.clone();
+                }
                 col_offset += charxel.display_width() as usize;
             }
         }
