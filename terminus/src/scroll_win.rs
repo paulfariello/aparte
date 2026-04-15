@@ -162,20 +162,25 @@ where
             self.children.range(..)
         };
 
+        let initial_index = self.bottom_visible_child_index;
         for (i, LayoutChild { child, .. }) in range.rev().enumerate() {
             let child_height = match child.measure(&measure_specs).height {
                 RequestedDimension::ExpandMax => dimensions.height,
                 RequestedDimension::Absolute(child_height) => child_height,
             };
             if child_height > remaining_height {
-                self.bottom_visible_child_index -= i;
+                // If i==0, the current child is taller than the screen: move at least 1
+                let step = if i == 0 { 1 } else { i };
+                self.bottom_visible_child_index =
+                    self.bottom_visible_child_index.saturating_sub(step);
                 break;
             }
             remaining_height -= child_height;
         }
 
         log::debug!("View at: {}", self.bottom_visible_child_index);
-        true
+        // Return true only if we've reached the top
+        self.bottom_visible_child_index == 0 || self.bottom_visible_child_index == initial_index
     }
 
     /// PageDown the window, return true if bottom is reached
