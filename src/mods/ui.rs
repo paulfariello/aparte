@@ -1239,7 +1239,7 @@ impl ModTrait for UIMod {
                 Aparte::spawn({
                     let mut aparte = aparte.proxy();
                     async move {
-                        thread::sleep(Duration::new(0, UI_DEBOUNCE_NS));
+                        tokio::time::sleep(Duration::from_nanos(UI_DEBOUNCE_NS as u64)).await;
                         aparte.schedule(Event::UIRender(true))
                     }
                 })
