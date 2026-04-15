@@ -117,7 +117,7 @@ impl Charxels {
 
     pub fn truncate(&mut self, len: u16, end: impl IntoCharxels) {
         let end = end.into_charxels();
-        assert!(len > end.display_width());
+        assert!(len >= end.display_width());
         if self.display_width() > len {
             let target = len - end.display_width();
             let mut acc = 0u16;
