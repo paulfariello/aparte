@@ -517,11 +517,16 @@ impl UIMod {
                     child.event(&mut UIEvent::Core(Event::Close(window.clone())));
                 }
             }
-            UIEvent::Core(Event::Key(Key::PageUp)) | UIEvent::Core(Event::Key(Key::PageDown)) => {
+            // Interaction events → current window only
+            UIEvent::Core(Event::Key(_))
+            | UIEvent::Core(Event::Completed(_, _))
+            | UIEvent::Core(Event::ResetCompletion)
+            | UIEvent::Core(Event::ReadPassword(_)) => {
                 if let Some(current) = frame.get_current_mut() {
                     current.event(event);
                 }
             }
+            // Global events (Message, Notification, Subject, etc.) → all windows
             _ => {
                 for child in frame.iter_children_mut() {
                     child.event(event);
