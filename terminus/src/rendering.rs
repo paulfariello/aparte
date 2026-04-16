@@ -227,15 +227,18 @@ impl OffscreenRenderBuffer {
         let mut current_fg = None;
         let mut skip = 0u16;
 
-        // In debug builds, record the starting cursor position and track expected
-        // column advances so we can verify wide-character width computation matches
-        // what the terminal actually rendered.
-        #[cfg(debug_assertions)]
+        // Optional widechar cursor-advance verification. Only enabled with
+        // the `widechar-cursor-check` feature because the cursor_pos() call
+        // (DSR CSI 6 n) is unreliable when another thread is also reading
+        // from /dev/tty and adds a ~100 ms termion timeout per render line
+        // when the response is stolen — which slowed first-frame rendering
+        // by ~2 s per full render in aparte's main loop.
+        #[cfg(feature = "widechar-cursor-check")]
         let start_pos = {
             let _ = screen.flush();
             screen.cursor_pos().ok()
         };
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "widechar-cursor-check")]
         let mut expected_advance: u16 = 0;
 
         for charxel in line {
@@ -255,13 +258,13 @@ impl OffscreenRenderBuffer {
             }
             // TODO style
             let _ = write!(screen, "{}", charxel.grapheme);
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "widechar-cursor-check")]
             {
                 expected_advance += w;
             }
         }
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "widechar-cursor-check")]
         {
             if let Some((start_col, start_row)) = start_pos {
                 let _ = screen.flush();
@@ -385,6 +388,11 @@ impl<'a> ScreenFrame<'a> {
                 break;
             }
             let w = charxel.display_width();
+            // Refuse to place a wide char that wouldn't fit in the remaining
+            // columns — emitting it would overflow the screen edge.
+            if w > 1 && self.cursor.left + w > self.dimensions.width {
+                break;
+            }
             self.offscreen[self.dimensions.top + self.cursor.top]
                 [self.dimensions.left + self.cursor.left] = charxel;
             // Write blank placeholders for the continuation cells of wide characters so
@@ -392,8 +400,7 @@ impl<'a> ScreenFrame<'a> {
             for k in 1..w {
                 let col = self.dimensions.left + self.cursor.left + k;
                 if col < self.dimensions.left + self.dimensions.width {
-                    self.offscreen[self.dimensions.top + self.cursor.top][col] =
-                        Charxel::default();
+                    self.offscreen[self.dimensions.top + self.cursor.top][col] = Charxel::default();
                 }
             }
             self.cursor.left += w;
