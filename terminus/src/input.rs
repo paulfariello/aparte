@@ -10,8 +10,8 @@ use unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    next_word, Dimensions, EventHandler, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, View,
+    next_word, Dimensions, EventHandler, MeasureSpecs, RequestedDimension, RequestedDimensions,
+    View,
 };
 
 pub struct Input<E> {
