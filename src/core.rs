@@ -1118,6 +1118,7 @@ impl Aparte {
             'main: loop {
                 let mut events_buf = Vec::new();
                 tokio::select! {
+                    biased;
                     count = event_rx.recv_many(&mut events_buf, 1000) => match count {
                         0 => {
                             log::error!("Broken event channel");
@@ -1136,9 +1137,14 @@ impl Aparte {
 
                             last_events.extend(filtered_events);
                             // Handle priority events first
+                            let mut priority_start = Instant::now();
                             for event in priority_events {
                                 if self.handle_event(event).is_err() {
                                     break 'main
+                                }
+                                if priority_start.elapsed() > Duration::from_millis(UI_TICK_MS) {
+                                    priority_start = Instant::now();
+                                    tokio::task::yield_now().await;
                                 }
                             }
                             let mut start = Instant::now();
@@ -1159,13 +1165,22 @@ impl Aparte {
                         },
                     },
                     account_and_stanza = send_rx.recv() => match account_and_stanza {
-                        Some((account, stanza)) => self.send_stanza(account, stanza),
+                        Some((account, stanza)) => {
+                            self.send_stanza(account, stanza);
+                            // Drain remaining ready stanzas in batch
+                            while let Ok((account, stanza)) = send_rx.try_recv() {
+                                self.send_stanza(account, stanza);
+                            }
+                        }
                         None => {
                             log::error!("Broken send channel");
                             break;
                         }
                     }
                 };
+
+                // Render UI once per event batch (if state changed).
+                self.get_mod_mut::<mods::ui::UIMod>().render_if_dirty();
             }
         });
     }

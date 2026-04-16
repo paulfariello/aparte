@@ -123,7 +123,7 @@ impl<E> LinearLayout<E> {
         }
 
         // Compute remaining free sizes
-        let free_height = dimensions.height - min_height;
+        let free_height = dimensions.height.saturating_sub(min_height);
         log::debug!(
             "free_height: {free_height} = {} - {min_height}",
             dimensions.height
@@ -164,7 +164,7 @@ impl<E> LinearLayout<E> {
         }
 
         // Assert last child didn't overflow
-        assert!(child_top - 1 < dimensions.top + dimensions.height);
+        assert!(child_top <= dimensions.top + dimensions.height);
     }
 
     fn layout_horizontal(&mut self, dimensions: &Dimensions) {
@@ -192,7 +192,7 @@ impl<E> LinearLayout<E> {
         }
 
         // Compute remaining free sizes
-        let free_width = dimensions.width - min_width;
+        let free_width = dimensions.width.saturating_sub(min_width);
 
         // Layout children
         let child_top = dimensions.top;
@@ -226,7 +226,7 @@ impl<E> LinearLayout<E> {
         }
 
         // Assert last child didn't overflow
-        assert!(child_left - 1 < dimensions.left + dimensions.width);
+        assert!(child_left <= dimensions.left + dimensions.width);
     }
 }
 

@@ -30,42 +30,6 @@ pub type Screen<W> = AlternateScreen<RawTerminal<W>>;
 
 pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 
-pub fn term_string_visible_len(string: &str) -> usize {
-    // Count each grapheme on a given struct but ignore invisible chars sequences like '\x1b[…'
-    let mut len = 0;
-    let mut iter = string.graphemes(true);
-
-    while let Some(grapheme) = iter.next() {
-        match grapheme {
-            "\x1b" => {
-                if let Some(grapheme) = iter.next() {
-                    if grapheme == "[" {
-                        for grapheme in iter.by_ref() {
-                            let chars = grapheme.chars().collect::<Vec<_>>();
-                            if chars.len() == 1 {
-                                match chars[0] {
-                                    '\x30'..='\x3f' => {}     // parameter bytes
-                                    '\x20'..='\x2f' => {}     // intermediate bytes
-                                    '\x40'..='\x7e' => break, // final byte
-                                    _ => break,
-                                }
-                            } else {
-                                len += 1;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {
-                len += 1;
-            }
-        }
-    }
-
-    len
-}
-
 fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
     // XXX utf char boundary?
     enum WordParserState {
@@ -638,43 +602,6 @@ impl<E> dyn View<E> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_term_string_visible_len_is_correct() {
-        assert_eq!(
-            term_string_visible_len(&format!(
-                "{}ab{}",
-                termion::color::Bg(termion::color::Red),
-                termion::cursor::Goto(1, 123)
-            )),
-            2
-        );
-        assert_eq!(
-            term_string_visible_len(&format!(
-                "{}ab{}",
-                termion::cursor::Goto(1, 123),
-                termion::color::Bg(termion::color::Red)
-            )),
-            2
-        );
-        assert_eq!(
-            term_string_visible_len(&format!(
-                "{}🍻{}",
-                termion::cursor::Goto(1, 123),
-                termion::color::Bg(termion::color::Red)
-            )),
-            1
-        );
-        assert_eq!(
-            term_string_visible_len(&format!(
-                "{}12:34:56 - {}me:{}",
-                termion::color::Fg(termion::color::White),
-                termion::color::Fg(termion::color::Yellow),
-                termion::color::Fg(termion::color::White)
-            )),
-            14
-        )
-    }
 
     #[test]
     fn test_term_string_clean() {

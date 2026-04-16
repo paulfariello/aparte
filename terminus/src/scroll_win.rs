@@ -17,9 +17,17 @@ use super::{
 const MISSING_DIMENSIONS: &str = "Missing dimensions";
 const INVALID_VIEW: &str = "Invalid view detected";
 
+#[derive(Debug)]
 struct LayoutChild<I> {
     child: I,
     dimensions: Option<Dimensions>,
+}
+
+#[cfg(test)]
+impl<I: PartialEq> PartialEq<I> for LayoutChild<I> {
+    fn eq(&self, other: &I) -> bool {
+        self.child.eq(other)
+    }
 }
 
 impl<I> Ord for LayoutChild<I>
@@ -128,18 +136,18 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u16 = self
+        let total_children_height: u32 = self
             .children
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
-                    RequestedDimension::Absolute(child_height) => child_height,
+                    RequestedDimension::ExpandMax => dimensions.height as u32,
+                    RequestedDimension::Absolute(child_height) => child_height as u32,
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height {
+        if total_children_height < dimensions.height as u32 {
             // All children fits in the current dimensions
             // don't bother to page up
             return true;
@@ -154,20 +162,25 @@ where
             self.children.range(..)
         };
 
+        let initial_index = self.bottom_visible_child_index;
         for (i, LayoutChild { child, .. }) in range.rev().enumerate() {
             let child_height = match child.measure(&measure_specs).height {
                 RequestedDimension::ExpandMax => dimensions.height,
                 RequestedDimension::Absolute(child_height) => child_height,
             };
             if child_height > remaining_height {
-                self.bottom_visible_child_index -= i;
+                // If i==0, the current child is taller than the screen: move at least 1
+                let step = if i == 0 { 1 } else { i };
+                self.bottom_visible_child_index =
+                    self.bottom_visible_child_index.saturating_sub(step);
                 break;
             }
             remaining_height -= child_height;
         }
 
         log::debug!("View at: {}", self.bottom_visible_child_index);
-        true
+        // Return true only if we've reached the top
+        self.bottom_visible_child_index == 0 || self.bottom_visible_child_index == initial_index
     }
 
     /// PageDown the window, return true if bottom is reached
@@ -176,21 +189,21 @@ where
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u16 = self
+        let total_children_height: u32 = self
             .children
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::ExpandMax => dimensions.height as u32,
                     RequestedDimension::Absolute(child_height) => {
                         log::debug!("Child height: {}", child_height);
-                        child_height
+                        child_height as u32
                     }
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height {
+        if total_children_height < dimensions.height as u32 {
             // All children fits in the current dimensions
             // don't bother to page down
             return true;
@@ -421,18 +434,18 @@ where
 
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u16 = self
+        let total_children_height: u32 = self
             .children
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height,
-                    RequestedDimension::Absolute(child_height) => child_height,
+                    RequestedDimension::ExpandMax => dimensions.height as u32,
+                    RequestedDimension::Absolute(child_height) => child_height as u32,
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height {
+        if total_children_height < dimensions.height as u32 {
             self.layout_from_top(dimensions);
         } else {
             self.layout_from_bottom(dimensions);
@@ -467,7 +480,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
     use test_log::test;
 
     use super::*;
@@ -517,7 +529,7 @@ mod tests {
             self.dimensions.replace(dimensions.clone());
         }
 
-        fn render(&self, _screen: &mut OffscreenRenderBuffer) {
+        fn render<'a>(&self, _frame: ScreenFrame<'a>) {
             unreachable!()
         }
 
@@ -597,19 +609,20 @@ mod tests {
         scroll_win.insert(third_view.clone());
         scroll_win.insert(fourth_view.clone());
 
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
         scroll_win.page_up();
 
         // When
         scroll_win.page_down();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&fourth_view, &third_view]);
     }
 
@@ -643,18 +656,19 @@ mod tests {
         scroll_win.insert(second_view.clone());
         scroll_win.insert(third_view.clone());
         scroll_win.insert(fourth_view.clone());
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // When
         scroll_win.page_up();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&second_view, &first_view]);
     }
 
@@ -694,18 +708,19 @@ mod tests {
         scroll_win.insert(third_view.clone());
         scroll_win.insert(fourth_view.clone());
 
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // When
         scroll_win.page_up();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&second_view, &first_view]);
 
         // When
@@ -713,14 +728,14 @@ mod tests {
         scroll_win.page_down();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&fourth_view, &third_view]);
 
         // When
         scroll_win.page_down();
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&fifth_view, &fourth_view]);
     }
 
@@ -739,15 +754,16 @@ mod tests {
         scroll_win.insert(first_view.clone());
 
         // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&first_view]);
         assert_eq!(
             visible_children[0].dimensions.as_ref().map(|d| d.top),
@@ -781,15 +797,16 @@ mod tests {
         scroll_win.insert(third_view.clone());
 
         // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 20,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(visible_children, vec![&third_view, &second_view]);
         assert_eq!(
             visible_children[0].dimensions.as_ref().map(|d| d.top),
@@ -841,15 +858,16 @@ mod tests {
         scroll_win.insert(third_view.clone());
 
         // When
-        scroll_win.layout(&Dimensions {
+        let dimensions = Dimensions {
             width: 100,
             height: 30,
             top: 1,
             left: 1,
-        });
+        };
+        scroll_win.layout(&dimensions);
 
         // Then
-        let visible_children = scroll_win.visible_children().collect::<Vec<_>>();
+        let visible_children = scroll_win.visible_children(&dimensions).collect::<Vec<_>>();
         assert_eq!(
             visible_children,
             vec![&third_view, &second_view, &first_view]

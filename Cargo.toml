@@ -59,6 +59,9 @@ xmpp-parsers = { git = "https://gitlab.com/xmpp-rs/xmpp-rs.git", rev = "ccd46047
 [dev-dependencies]
 mockall = "^0.9"
 test-log = "*"
+portable-pty = "0.8"
+vt100 = "0.15"
+tempfile = "3"
 
 [profile.release]
 debug = true

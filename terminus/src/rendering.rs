@@ -142,7 +142,7 @@ impl OffscreenRenderBuffer {
                 continue;
             }
 
-            skip = charxel.display_width() - 1;
+            skip = charxel.display_width().saturating_sub(1);
             if charxel == ref_charxel {
                 if let Some(diff) = current_diff.take() {
                     diffs.push(diff);
@@ -180,11 +180,18 @@ impl OffscreenRenderBuffer {
     }
 
     fn apply_diff(&mut self, diffs: Vec<ContinuousDiff>) {
+        let width = self.size.width as usize;
+        let height = self.size.height as usize;
         for diff in diffs {
-            for (i, charxel) in diff.charxels.into_iter().enumerate() {
-                let width = self.size.width as usize;
-                let left = diff.pos.left as usize + i;
-                self[diff.pos.top + ((left / width) as u16)][(left % width) as u16] = charxel;
+            let mut col_offset = 0usize;
+            for charxel in diff.charxels.into_iter() {
+                let left = diff.pos.left as usize + col_offset;
+                let row = diff.pos.top as usize + left / width;
+                let col = left % width;
+                if row < height && col < width {
+                    self[row as u16][col as u16] = charxel.clone();
+                }
+                col_offset += charxel.display_width() as usize;
             }
         }
     }
@@ -196,13 +203,7 @@ impl OffscreenRenderBuffer {
         // TODO try to be smart and avoid setting and resetting style and color
         let mut current_bg = None;
         let mut current_fg = None;
-        let mut skip = 0;
         for charxel in chunk {
-            if skip > 0 {
-                skip -= 1;
-                continue;
-            }
-            skip = charxel.display_width() - 1;
             if Some(charxel.background) != current_bg {
                 let _ = write!(screen, "{}", charxel.background);
                 current_bg = Some(charxel.background);
@@ -216,9 +217,74 @@ impl OffscreenRenderBuffer {
         }
     }
 
+    fn render_line<W>(screen: &mut W, line: &[Charxel])
+    where
+        W: std::io::Write + termion::cursor::DetectCursorPos,
+    {
+        // Like render_chunk but skips continuation placeholder cells that were written
+        // by ScreenFrame::write() for wide (multi-column) characters.
+        let mut current_bg = None;
+        let mut current_fg = None;
+        let mut skip = 0u16;
+
+        // Optional widechar cursor-advance verification. Only enabled with
+        // the `widechar-cursor-check` feature because the cursor_pos() call
+        // (DSR CSI 6 n) is unreliable when another thread is also reading
+        // from /dev/tty and adds a ~100 ms termion timeout per render line
+        // when the response is stolen — which slowed first-frame rendering
+        // by ~2 s per full render in aparte's main loop.
+        #[cfg(feature = "widechar-cursor-check")]
+        let start_pos = {
+            let _ = screen.flush();
+            screen.cursor_pos().ok()
+        };
+        #[cfg(feature = "widechar-cursor-check")]
+        let mut expected_advance: u16 = 0;
+
+        for charxel in line {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            let w = charxel.display_width();
+            skip = w.saturating_sub(1);
+            if Some(charxel.background) != current_bg {
+                let _ = write!(screen, "{}", charxel.background);
+                current_bg = Some(charxel.background);
+            }
+            if Some(charxel.foreground) != current_fg {
+                let _ = write!(screen, "{}", charxel.foreground);
+                current_fg = Some(charxel.foreground);
+            }
+            // TODO style
+            let _ = write!(screen, "{}", charxel.grapheme);
+            #[cfg(feature = "widechar-cursor-check")]
+            {
+                expected_advance += w;
+            }
+        }
+
+        #[cfg(feature = "widechar-cursor-check")]
+        {
+            if let Some((start_col, start_row)) = start_pos {
+                let _ = screen.flush();
+                if let Ok((end_col, end_row)) = screen.cursor_pos() {
+                    if end_row == start_row {
+                        let actual_advance = end_col.saturating_sub(start_col);
+                        assert_eq!(
+                            actual_advance, expected_advance,
+                            "render_line widechar mismatch (row {}, start_col {}, end_col {})",
+                            start_row, start_col, end_col
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn full_render<W>(&self, screen: &mut W)
     where
-        W: std::io::Write,
+        W: std::io::Write + termion::cursor::DetectCursorPos,
     {
         log::trace!("Full render");
         let _ = write!(screen, "{}", termion::cursor::Hide,);
@@ -226,7 +292,7 @@ impl OffscreenRenderBuffer {
         let _ = write!(screen, "{}", termion::clear::All);
 
         for line in self.lines.iter() {
-            Self::render_chunk(screen, &line.charxels);
+            Self::render_line(screen, &line.charxels);
         }
     }
 
@@ -245,7 +311,7 @@ impl OffscreenRenderBuffer {
 
     pub fn render<W>(&self, screen: &mut W, reference_screen: &mut Self)
     where
-        W: std::io::Write,
+        W: std::io::Write + termion::cursor::DetectCursorPos,
     {
         let mut cursor_moved = false;
         if self.size != reference_screen.size {
@@ -316,10 +382,28 @@ impl<'a> ScreenFrame<'a> {
 
     pub fn write(&mut self, charxels: impl IntoCharxels) {
         for charxel in charxels.into_charxels() {
+            if self.cursor.top >= self.dimensions.height
+                || self.cursor.left >= self.dimensions.width
+            {
+                break;
+            }
+            let w = charxel.display_width();
+            // Refuse to place a wide char that wouldn't fit in the remaining
+            // columns — emitting it would overflow the screen edge.
+            if w > 1 && self.cursor.left + w > self.dimensions.width {
+                break;
+            }
             self.offscreen[self.dimensions.top + self.cursor.top]
                 [self.dimensions.left + self.cursor.left] = charxel;
-
-            self.cursor.left += 1;
+            // Write blank placeholders for the continuation cells of wide characters so
+            // that full_render's skip logic and compute_diff's skip logic stay consistent.
+            for k in 1..w {
+                let col = self.dimensions.left + self.cursor.left + k;
+                if col < self.dimensions.left + self.dimensions.width {
+                    self.offscreen[self.dimensions.top + self.cursor.top][col] = Charxel::default();
+                }
+            }
+            self.cursor.left += w;
         }
     }
 
