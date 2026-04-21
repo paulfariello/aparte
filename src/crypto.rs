@@ -14,7 +14,7 @@ pub trait CryptoEngineTrait {
         aparte: &Aparte,
         account: &Account,
         message: &Message,
-    ) -> Result<xmpp_parsers::Element>;
+    ) -> Result<xmpp_parsers::minidom::Element>;
 
     fn decrypt(
         &mut self,

@@ -6,14 +6,14 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use uuid::Uuid;
-use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
+use xmpp_parsers::data_forms::{DataForm, DataFormType, Field};
 use xmpp_parsers::delay::Delay;
-use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::jid::{BareJid, Jid};
 use xmpp_parsers::mam;
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::ns;
 use xmpp_parsers::rsm::SetQuery;
-use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
@@ -40,37 +40,14 @@ impl Query {
         let mut fields = Vec::new();
 
         if let Some(end) = self.from {
-            let datetime = end.to_rfc3339();
-            fields.push(Field {
-                var: "end".to_string(),
-                type_: FieldType::default(),
-                label: None,
-                required: false,
-                options: vec![],
-                values: vec![datetime],
-                media: vec![],
-            });
+            fields.push(Field::text_single("end", &end.to_rfc3339()));
         }
 
         if let Some(with) = &self.with {
-            fields.push(Field {
-                var: "with".to_string(),
-                type_: FieldType::default(),
-                label: None,
-                required: false,
-                options: vec![],
-                values: vec![with.to_string()],
-                media: vec![],
-            });
+            fields.push(Field::text_single("with", &with.to_string()));
         }
 
-        let form = DataForm {
-            type_: DataFormType::Submit,
-            form_type: Some(String::from(ns::MAM)),
-            title: None,
-            instructions: None,
-            fields,
-        };
+        let form = DataForm::new(DataFormType::Submit, ns::MAM, fields);
 
         let set = SetQuery {
             max: Some(self.count),
@@ -109,7 +86,7 @@ impl MamMod {
     fn query(&mut self, aparte: &mut Aparte, account: &Account, query: Query) {
         let (queryid, iq) = query.start();
         self.queries.insert(queryid.clone(), query);
-        self.iq2id.insert(iq.id.clone(), queryid);
+        self.iq2id.insert(iq.id().to_string(), queryid);
         aparte.send(account, iq);
     }
 
@@ -117,22 +94,18 @@ impl MamMod {
         if let Some(id) = &result.queryid {
             if let Some(query) = self.queries.get_mut(&id.0) {
                 query.count -= 1;
-                if let (Some(delay), Some(message)) =
-                    (result.forwarded.delay, result.forwarded.stanza)
-                {
-                    aparte.schedule(Event::RawMessage {
-                        account: account.clone(),
-                        message,
-                        delay: Some(delay),
-                        archive: true,
-                    });
-                }
+                aparte.schedule(Event::RawMessage {
+                    account: account.clone(),
+                    message: result.forwarded.message,
+                    delay: result.forwarded.delay,
+                    archive: true,
+                });
             }
         }
     }
 
     fn handle_fin(&mut self, aparte: &mut Aparte, account: &Account, query: Query, fin: mam::Fin) {
-        if fin.complete == mam::Complete::False {
+        if !fin.complete {
             if let Some(start) = fin.set.first {
                 log::info!(
                     "Continuing MAM retrieval for {} with {:?} from {:?}",
@@ -140,9 +113,9 @@ impl MamMod {
                     query.with.clone().map(|jid| jid.to_string()),
                     query.from
                 );
-                let (queryid, iq) = query.cont(start);
+                let (queryid, iq) = query.cont(start.item);
                 self.queries.insert(queryid.clone(), query);
-                self.iq2id.insert(iq.id.clone(), queryid);
+                self.iq2id.insert(iq.id().to_string(), queryid);
                 aparte.send(account, iq);
             }
         }
@@ -229,10 +202,14 @@ impl ModTrait for MamMod {
                 self.query(aparte, account, query);
             }
             Event::Iq(account, iq) => {
-                if let Some(id) = self.iq2id.remove(&iq.id) {
+                if let Some(id) = self.iq2id.remove(iq.id()) {
                     if let Some(query) = self.queries.remove(&id) {
-                        if let IqType::Result(Some(payload)) = &iq.payload {
-                            if let Ok(fin) = mam::Fin::try_from(payload.clone()) {
+                        if let Iq::Result {
+                            payload: Some(payload),
+                            ..
+                        } = iq.clone()
+                        {
+                            if let Ok(fin) = mam::Fin::try_from(payload) {
                                 self.handle_fin(aparte, account, query, fin);
                             } else {
                                 log::warn!("Incorrect IQ response for MAM query");

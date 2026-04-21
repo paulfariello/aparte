@@ -21,13 +21,13 @@ use rand::{random, seq::SliceRandom, thread_rng};
 use uuid::Uuid;
 
 //use xmpp_parsers::ns;
-use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::jid::{BareJid, Jid};
 use xmpp_parsers::legacy_omemo;
-use xmpp_parsers::message::Message as XmppParsersMessage;
+use xmpp_parsers::message::{Id as XmppParsersMessageId, Lang, Message as XmppParsersMessage};
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub;
 use xmpp_parsers::pubsub::{ItemId, PubSub};
-use xmpp_parsers::{BareJid, Jid};
 //use xmpp_parsers::omemo;
 
 use crate::account::Account;
@@ -297,7 +297,7 @@ impl CryptoEngineTrait for OmemoEngine {
         aparte: &Aparte,
         account: &Account,
         message: &Message,
-    ) -> Result<xmpp_parsers::Element> {
+    ) -> Result<xmpp_parsers::minidom::Element> {
         let Message::Xmpp(message) = message else {
             unreachable!()
         };
@@ -350,12 +350,12 @@ impl CryptoEngineTrait for OmemoEngine {
                 .and_then(|encrypted| match encrypted {
                     Ok(CiphertextMessage::SignalMessage(msg)) => Some(legacy_omemo::Key {
                         rid: device.id.try_into().unwrap(),
-                        prekey: legacy_omemo::IsPreKey::False,
+                        prekey: false,
                         data: msg.serialized().to_vec(),
                     }),
                     Ok(CiphertextMessage::PreKeySignalMessage(msg)) => Some(legacy_omemo::Key {
                         rid: device.id.try_into().unwrap(),
-                        prekey: legacy_omemo::IsPreKey::True,
+                        prekey: true,
                         data: msg.serialized().to_vec(),
                     }),
                     Ok(_) => {
@@ -371,11 +371,11 @@ impl CryptoEngineTrait for OmemoEngine {
 
         let mut xmpp_message =
             xmpp_parsers::message::Message::new(Some(Jid::from(message.to.clone())));
-        xmpp_message.id = Some(message.id.clone());
+        xmpp_message.id = Some(XmppParsersMessageId(message.id.clone()));
         xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
         xmpp_message.bodies.insert(
-            String::new(),
-            xmpp_parsers::message::Body(String::from("I sent you an OMEMO encrypted message but your client doesn’t seem to support that.")),
+            Lang::default(),
+            String::from("I sent you an OMEMO encrypted message but your client doesn’t seem to support that."),
         );
         xmpp_message.payloads.push(
             legacy_omemo::Encrypted {
@@ -435,18 +435,17 @@ impl CryptoEngineTrait for OmemoEngine {
 
         log::debug!("Found encrypted DEK for current device ({})", own_device.id);
 
-        let ciphertext_message = match key.prekey {
-            legacy_omemo::IsPreKey::True => {
-                log::debug!("Prekey message");
-                libsignal_protocol::CiphertextMessage::PreKeySignalMessage(
-                    libsignal_protocol::PreKeySignalMessage::try_from(key.data.as_slice())
-                        .context("Invalid prekey signal message")?,
-                )
-            }
-            legacy_omemo::IsPreKey::False => libsignal_protocol::CiphertextMessage::SignalMessage(
+        let ciphertext_message = if key.prekey {
+            log::debug!("Prekey message");
+            libsignal_protocol::CiphertextMessage::PreKeySignalMessage(
+                libsignal_protocol::PreKeySignalMessage::try_from(key.data.as_slice())
+                    .context("Invalid prekey signal message")?,
+            )
+        } else {
+            libsignal_protocol::CiphertextMessage::SignalMessage(
                 libsignal_protocol::SignalMessage::try_from(key.data.as_slice())
                     .context("Invalid signal message")?,
-            ),
+            )
         };
 
         let remote_address = ProtocolAddress::new(
@@ -497,9 +496,7 @@ impl CryptoEngineTrait for OmemoEngine {
                 .map_err(|_| anyhow!("Message decryption failed"))?;
             let message = String::from_utf8(cleartext)
                 .context("Message decryption resulted in invalid utf-8")?;
-            decrypted_message
-                .bodies
-                .insert(String::new(), xmpp_parsers::message::Body(message));
+            decrypted_message.bodies.insert(Lang::default(), message);
         }
 
         Ok(decrypted_message)
@@ -816,21 +813,20 @@ impl OmemoMod {
                 Self::subscribe_to_device_list_iq(jid, &account.to_bare()),
             )
             .await?;
-        match response.payload {
-            IqType::Result(None) => Err(anyhow!("Empty iq response")),
-            IqType::Error(err) => {
-                let text = match i18n::get_best(&err.texts, vec![]) {
+        match response {
+            Iq::Result { payload: None, .. } => Err(anyhow!("Empty iq response")),
+            Iq::Error { error, .. } => {
+                let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
-                    None => format!("{:?}", err.defined_condition),
+                    None => format!("{:?}", error.defined_condition),
                 };
-                Err(anyhow!("Iq error {}: {text}", err.type_))
+                Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub) {
-                Ok(PubSub::Subscription(subscription)) => match subscription.subscription {
-                    Some(pubsub::Subscription::Subscribed) => Ok(()),
-                    Some(status) => Err(anyhow!("Invalid subscription result: {:?}", status)),
-                    None => Err(anyhow!("Empty subscription result")),
-                },
+            Iq::Result {
+                payload: Some(pubsub),
+                ..
+            } => match PubSub::try_from(pubsub) {
+                Ok(PubSub::Subscription(_)) => Ok(()),
                 Err(err) => Err(err.into()),
                 Ok(el) => Err(anyhow!("Invalid pubsub response: {:?}", el)),
             },
@@ -844,16 +840,19 @@ impl OmemoMod {
         jid: &BareJid,
     ) -> Result<legacy_omemo::DeviceList> {
         let response = aparte.iq(account, Self::get_devices_iq(jid)).await?;
-        match response.payload {
-            IqType::Result(None) => Err(anyhow!("Empty iq response")),
-            IqType::Error(err) => {
-                let text = match i18n::get_best(&err.texts, vec![]) {
+        match response {
+            Iq::Result { payload: None, .. } => Err(anyhow!("Empty iq response")),
+            Iq::Error { error, .. } => {
+                let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
-                    None => format!("{:?}", err.defined_condition),
+                    None => format!("{:?}", error.defined_condition),
                 };
-                Err(anyhow!("Iq error {}: {text}", err.type_))
+                Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
+            Iq::Result {
+                payload: Some(pubsub),
+                ..
+            } => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
                     match items.items.iter().find(|item| item.id == current) {
@@ -889,16 +888,19 @@ impl OmemoMod {
         let response = aparte
             .iq(account, Self::get_devices_iq(&account.to_bare()))
             .await?;
-        match response.payload {
-            IqType::Result(None) => Err(anyhow!("Empty iq response")),
-            IqType::Error(err) => {
-                let text = match i18n::get_best(&err.texts, vec![]) {
+        match response {
+            Iq::Result { payload: None, .. } => Err(anyhow!("Empty iq response")),
+            Iq::Error { error, .. } => {
+                let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
-                    None => format!("{:?}", err.defined_condition),
+                    None => format!("{:?}", error.defined_condition),
                 };
-                Err(anyhow!("Iq error {}: {text}", err.type_))
+                Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
+            Iq::Result {
+                payload: Some(pubsub),
+                ..
+            } => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
                     match items.items.iter().find(|item| item.id == current) {
@@ -1043,22 +1045,25 @@ impl OmemoMod {
         let response = aparte
             .iq(account, Self::get_bundle_iq(contact, device_id))
             .await?;
-        match response.payload {
-            IqType::Result(None) => Ok(None),
-            IqType::Error(err)
-                if err.defined_condition
+        match response {
+            Iq::Result { payload: None, .. } => Ok(None),
+            Iq::Error { error, .. }
+                if error.defined_condition
                     == xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
             {
                 Ok(None)
             }
-            IqType::Error(err) => {
-                let text = match i18n::get_best(&err.texts, vec![]) {
+            Iq::Error { error, .. } => {
+                let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
-                    None => format!("{:?}", err.defined_condition),
+                    None => format!("{:?}", error.defined_condition),
                 };
-                Err(anyhow!("Iq error {}: {text}", err.type_))
+                Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            IqType::Result(Some(pubsub)) => match PubSub::try_from(pubsub)? {
+            Iq::Result {
+                payload: Some(pubsub),
+                ..
+            } => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
                     match items.items.iter().find(|item| item.id == current) {
@@ -1100,11 +1105,11 @@ impl OmemoMod {
         let id = Uuid::new_v4();
 
         let id = id.hyphenated().to_string();
-        let item = pubsub::pubsub::Item(pubsub::Item {
+        let item = pubsub::pubsub::Item {
             id: Some(pubsub::ItemId("current".to_string())),
             publisher: Some(jid.clone().into()),
             payload: Some(devices.into()),
-        });
+        };
         let pubsub = pubsub::PubSub::Publish {
             publish: pubsub::pubsub::Publish {
                 node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
@@ -1174,11 +1179,11 @@ impl OmemoMod {
                     .collect(),
             }),
         };
-        let item = pubsub::pubsub::Item(pubsub::Item {
+        let item = pubsub::pubsub::Item {
             id: Some(pubsub::ItemId("current".to_string())),
             publisher: Some(jid.clone().into()),
             payload: Some(bundle.into()),
-        });
+        };
         let pubsub = pubsub::PubSub::Publish {
             publish: pubsub::pubsub::Publish {
                 node: pubsub::NodeName::from_str(&format!(

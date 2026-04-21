@@ -51,7 +51,7 @@ pub fn xmpp_err_to_string<'a>(
                         xmpp_parsers::stanza_error::DefinedCondition::FeatureNotImplemented =>
                             "feature-not-implemented",
                         xmpp_parsers::stanza_error::DefinedCondition::Forbidden => "forbidden",
-                        xmpp_parsers::stanza_error::DefinedCondition::Gone => "gone",
+                        xmpp_parsers::stanza_error::DefinedCondition::Gone { .. } => "gone",
                         xmpp_parsers::stanza_error::DefinedCondition::InternalServerError =>
                             "internal-server-error",
                         xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
@@ -67,7 +67,7 @@ pub fn xmpp_err_to_string<'a>(
                             "policy-violation",
                         xmpp_parsers::stanza_error::DefinedCondition::RecipientUnavailable =>
                             "recipient-unavailable",
-                        xmpp_parsers::stanza_error::DefinedCondition::Redirect => "redirect",
+                        xmpp_parsers::stanza_error::DefinedCondition::Redirect { .. } => "redirect",
                         xmpp_parsers::stanza_error::DefinedCondition::RegistrationRequired =>
                             "registration-required",
                         xmpp_parsers::stanza_error::DefinedCondition::RemoteServerNotFound =>

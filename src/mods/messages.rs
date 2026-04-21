@@ -44,12 +44,12 @@ impl MessagesMod {
         _delay: &Option<Delay>,
     ) {
         for payload in message.payloads.iter().cloned() {
-            if let Ok(pubsub_event) = xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload) {
+            if let Ok(pubsub_event) = xmpp_parsers::pubsub::event::Event::try_from(payload) {
                 // TODO move to pubsub mod
                 aparte.schedule(Event::PubSub {
                     account: account.clone(),
                     from: message.from.clone(),
-                    event: pubsub_event,
+                    event: pubsub_event.payload,
                 });
             }
         }
@@ -132,7 +132,7 @@ impl ModTrait for MessagesMod {
                             message
                                 .subjects
                                 .iter()
-                                .map(|(lang, subject)| (lang.clone(), subject.0.clone()))
+                                .map(|(lang, subject)| (lang.0.clone(), subject.clone()))
                                 .collect(),
                         ));
                     }

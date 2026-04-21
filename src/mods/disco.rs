@@ -11,8 +11,9 @@ use uuid::Uuid;
 
 use xmpp_parsers::disco;
 use xmpp_parsers::disco::Feature;
-use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::{ns, Jid};
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::jid::Jid;
+use xmpp_parsers::ns;
 
 use crate::account::Account;
 use crate::core::{Aparte, AparteAsync, Event, ModTrait};
@@ -64,8 +65,10 @@ impl DiscoMod {
             )
             .await?;
 
-        match resp.payload {
-            IqType::Result(Some(el)) => {
+        match resp {
+            Iq::Result {
+                payload: Some(el), ..
+            } => {
                 if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
                     aparte.schedule(Event::Disco(
                         account.clone(),
@@ -77,9 +80,9 @@ impl DiscoMod {
                     Err(anyhow!("Cannot get server disco info: invalid response"))
                 }
             }
-            IqType::Error(err) => Err(anyhow!(
+            Iq::Error { error, .. } => Err(anyhow!(
                 "Cannot get server disco info: {}",
-                i18n::xmpp_err_to_string(&err, vec![]).1
+                i18n::xmpp_err_to_string(&error, vec![]).1
             )),
             _ => Err(anyhow!("Cannot get server disco info: invalid response")),
         }
@@ -132,9 +135,9 @@ impl ModTrait for DiscoMod {
                 }
             }
             Event::Iq(account, iq) => {
-                if let IqType::Get(el) = iq.payload.clone() {
+                if let Iq::Get { payload: el, .. } = iq.clone() {
                     if let Ok(_disco) = disco::DiscoInfoQuery::try_from(el) {
-                        let id = iq.id.clone();
+                        let id = iq.id().to_string();
                         let disco = self.get_disco();
                         let iq = Iq::from_result(id, Some(disco));
                         aparte.send(account, iq);

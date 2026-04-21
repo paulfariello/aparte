@@ -25,7 +25,7 @@ pub struct IqFuture {
 impl IqFuture {
     pub fn new(mut aparte: AparteAsync, account: &Account, iq: Iq) -> Self {
         // TODO generate uuid in here
-        let uuid = Uuid::from_str(&iq.id).unwrap();
+        let uuid = Uuid::from_str(iq.id()).unwrap();
         aparte.send(account, iq.into());
         aparte
             .pending_iq

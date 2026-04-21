@@ -10,8 +10,8 @@ use xmpp_parsers::delay::Delay;
 use xmpp_parsers::forwarding::Forwarded;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::message::Message as XmppParsersMessage;
+use xmpp_parsers::minidom::Element;
 use xmpp_parsers::ns;
-use xmpp_parsers::Element;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
@@ -34,14 +34,12 @@ impl CarbonsMod {
         forwarded: Forwarded,
         archive: bool,
     ) {
-        if let Some(message) = forwarded.stanza {
-            aparte.schedule(Event::RawMessage {
-                account: account.clone(),
-                message,
-                delay: forwarded.delay,
-                archive,
-            });
-        }
+        aparte.schedule(Event::RawMessage {
+            account: account.clone(),
+            message: forwarded.message,
+            delay: forwarded.delay,
+            archive,
+        });
     }
 }
 

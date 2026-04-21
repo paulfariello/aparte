@@ -7,9 +7,9 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use anyhow::Result;
+use xmpp_parsers::jid::{BareJid, Jid};
 use xmpp_parsers::ns;
-use xmpp_parsers::pubsub::PubSubEvent;
-use xmpp_parsers::{BareJid, Jid};
+use xmpp_parsers::pubsub::event as pubsub_event;
 
 use crate::account::Account;
 use crate::command::{Command, CommandParser};
@@ -127,19 +127,20 @@ enum Backend {
 
 mod bookmarks_v1 {
     use std::convert::TryFrom;
+    use std::str::FromStr;
 
     use anyhow::{anyhow, Result};
     use uuid::Uuid;
     use xmpp_parsers::{
         bookmarks,
         data_forms::{DataForm, DataFormType, Field, FieldType},
-        iq::{Iq, IqType},
+        iq::Iq,
+        jid::{Jid, ResourcePart},
         ns,
         pubsub::{
-            pubsub::{self, Items, Publish, PublishOptions},
-            Item, ItemId, NodeName, PubSub,
+            pubsub::{Item, Items, Publish, PublishOptions, Subscribe},
+            ItemId, NodeName, PubSub,
         },
-        Jid,
     };
 
     use crate::{
@@ -153,22 +154,22 @@ mod bookmarks_v1 {
         aparte: &mut AparteAsync,
         account: &Account,
     ) -> Result<Vec<Bookmark>> {
-        match aparte.iq(account, get_bookmarks_iq()).await?.payload {
-            IqType::Result(Some(el)) => {
+        match aparte.iq(account, get_bookmarks_iq()).await? {
+            Iq::Result {
+                payload: Some(el), ..
+            } => {
                 if let PubSub::Items(items) = PubSub::try_from(el)? {
                     match &items.node.0 as &str {
-                        ns::BOOKMARKS | ns::BOOKMARKS2 => Ok(handle(
-                            items.items.iter().cloned().map(|item| item.0).collect(),
-                        )),
+                        ns::BOOKMARKS | ns::BOOKMARKS2 => Ok(handle(items.items)),
                         _ => Err(anyhow!("Can't get bookmarks: invalid result")),
                     }
                 } else {
                     Err(anyhow!("Can't get bookmarks: invalid result"))
                 }
             }
-            IqType::Error(err) => Err(anyhow!(
+            Iq::Error { error, .. } => Err(anyhow!(
                 "Can't get bookmarks: {}",
-                i18n::xmpp_err_to_string(&err, vec![]).1
+                i18n::xmpp_err_to_string(&error, vec![]).1
             )),
             _ => Err(anyhow!("Can't get bookmarks: invalid result")),
         }
@@ -191,11 +192,11 @@ mod bookmarks_v1 {
         account: &Account,
         bookmarks: &[contact::Bookmark],
     ) -> Result<()> {
-        match aparte.iq(account, update_iq(bookmarks)).await?.payload {
-            IqType::Result(_) => Ok(()),
-            IqType::Error(err) => Err(anyhow!(
+        match aparte.iq(account, update_iq(bookmarks)).await? {
+            Iq::Result { .. } => Ok(()),
+            Iq::Error { error, .. } => Err(anyhow!(
                 "Can't update bookmarks: {}",
-                i18n::xmpp_err_to_string(&err, vec![]).1
+                i18n::xmpp_err_to_string(&error, vec![]).1
             )),
             _ => Err(anyhow!("Can't update bookmarks: invalid result")),
         }
@@ -206,13 +207,13 @@ mod bookmarks_v1 {
         let confs = bookmarks
             .iter()
             .map(|bookmark| bookmarks::Conference {
-                autojoin: match bookmark.autojoin {
-                    true => bookmarks::Autojoin::True,
-                    false => bookmarks::Autojoin::False,
-                },
+                autojoin: bookmark.autojoin,
                 jid: bookmark.jid.clone(),
                 name: Some(bookmark.name.clone().unwrap_or(bookmark.jid.to_string())),
-                nick: bookmark.nick.clone(),
+                nick: bookmark
+                    .nick
+                    .as_ref()
+                    .and_then(|n| ResourcePart::from_str(n).ok()),
                 password: None,
             })
             .collect();
@@ -227,37 +228,18 @@ mod bookmarks_v1 {
         };
         let publish = Publish {
             node: NodeName(String::from(ns::BOOKMARKS)),
-            items: vec![pubsub::Item(item)],
+            items: vec![item],
         };
         let options = PublishOptions {
-            form: Some(DataForm {
-                type_: DataFormType::Submit,
-                form_type: Some(String::from(
-                    "http://jabber.org/protocol/pubsub#publish-options",
-                )),
-                title: None,
-                instructions: None,
-                fields: vec![
-                    Field {
-                        var: String::from("pubsub#persist_items"),
-                        type_: FieldType::Boolean,
-                        label: None,
-                        required: false,
-                        media: vec![],
-                        options: vec![],
-                        values: vec![String::from("true")],
-                    },
-                    Field {
-                        var: String::from("pubsub#access_model"),
-                        type_: FieldType::TextSingle,
-                        label: None,
-                        required: false,
-                        media: vec![],
-                        options: vec![],
-                        values: vec![String::from("whitelist")],
-                    },
+            form: Some(DataForm::new(
+                DataFormType::Submit,
+                "http://jabber.org/protocol/pubsub#publish-options",
+                vec![
+                    Field::new("pubsub#persist_items", FieldType::Boolean).with_value("true"),
+                    Field::new("pubsub#access_model", FieldType::TextSingle)
+                        .with_value("whitelist"),
                 ],
-            }),
+            )),
         };
         let pubsub = PubSub::Publish {
             publish,
@@ -275,9 +257,9 @@ mod bookmarks_v1 {
                         let bookmark = contact::Bookmark {
                             jid: conf.jid.clone(),
                             name: conf.name.clone(),
-                            nick: conf.nick.clone(),
+                            nick: conf.nick.as_ref().map(|n| n.to_string()),
                             password: conf.password.clone(),
-                            autojoin: conf.autojoin == bookmarks::Autojoin::True,
+                            autojoin: conf.autojoin,
                             extensions: None,
                         };
 
@@ -295,7 +277,7 @@ mod bookmarks_v1 {
     fn subscribe_iq(account: &Account) -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
         let pubsub = PubSub::Subscribe {
-            subscribe: Some(pubsub::Subscribe {
+            subscribe: Some(Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS))),
                 jid: Jid::from(account.clone()),
             }),
@@ -305,7 +287,7 @@ mod bookmarks_v1 {
     }
 
     pub async fn init(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
-        aparte.iq(account, subscribe_iq(account));
+        aparte.iq(account, subscribe_iq(account)).await?;
 
         Ok(())
     }
@@ -319,14 +301,14 @@ mod bookmarks_v2 {
     use xmpp_parsers::{
         bookmarks2,
         data_forms::{DataForm, DataFormType, Field, FieldType},
-        iq::{Iq, IqType},
+        iq::Iq,
+        jid::{BareJid, Jid, ResourcePart},
         ns,
         pubsub::{
             owner,
-            pubsub::{self, Items, Publish, PublishOptions, Retract},
-            Item, ItemId, NodeName, PubSub, PubSubOwner,
+            pubsub::{Create, Item, Items, Publish, PublishOptions, Retract, Subscribe},
+            ItemId, NodeName, PubSub,
         },
-        BareJid, Jid,
     };
 
     use crate::{
@@ -340,22 +322,22 @@ mod bookmarks_v2 {
         aparte: &mut AparteAsync,
         account: &Account,
     ) -> Result<Vec<Bookmark>> {
-        match aparte.iq(account, get_bookmarks_iq()).await?.payload {
-            IqType::Result(Some(el)) => {
+        match aparte.iq(account, get_bookmarks_iq()).await? {
+            Iq::Result {
+                payload: Some(el), ..
+            } => {
                 if let PubSub::Items(items) = PubSub::try_from(el)? {
                     match &items.node.0 as &str {
-                        ns::BOOKMARKS | ns::BOOKMARKS2 => Ok(handle(
-                            items.items.iter().cloned().map(|item| item.0).collect(),
-                        )),
+                        ns::BOOKMARKS | ns::BOOKMARKS2 => Ok(handle(items.items)),
                         _ => Err(anyhow!("Can't get bookmarks: invalid result")),
                     }
                 } else {
                     Err(anyhow!("Can't get bookmarks: invalid result"))
                 }
             }
-            IqType::Error(err) => Err(anyhow!(
+            Iq::Error { error, .. } => Err(anyhow!(
                 "Can't get bookmarks: {}",
-                i18n::xmpp_err_to_string(&err, vec![]).1
+                i18n::xmpp_err_to_string(&error, vec![]).1
             )),
             _ => Err(anyhow!("Can't get bookmarks: invalid result")),
         }
@@ -374,57 +356,22 @@ mod bookmarks_v2 {
     }
 
     fn config_node_form() -> DataForm {
-        DataForm {
-            type_: DataFormType::Submit,
-            form_type: Some(String::from(
-                "http://jabber.org/protocol/pubsub#node_config",
-            )),
-            title: None,
-            instructions: None,
-            fields: vec![
-                Field {
-                    var: String::from("pubsub#persist_items"),
-                    type_: FieldType::Boolean,
-                    label: None,
-                    required: false,
-                    media: vec![],
-                    options: vec![],
-                    values: vec![String::from("true")],
-                },
-                Field {
-                    var: String::from("pubsub#send_last_published_item"),
-                    type_: FieldType::TextSingle,
-                    label: None,
-                    required: false,
-                    media: vec![],
-                    options: vec![],
-                    values: vec![String::from("never")],
-                },
-                Field {
-                    var: String::from("pubsub#access_model"),
-                    type_: FieldType::TextSingle,
-                    label: None,
-                    required: false,
-                    media: vec![],
-                    options: vec![],
-                    values: vec![String::from("whitelist")],
-                },
-                Field {
-                    var: String::from("pubsub#max_items"),
-                    type_: FieldType::TextSingle,
-                    label: None,
-                    required: false,
-                    media: vec![],
-                    options: vec![],
-                    values: vec![String::from("10")],
-                },
+        DataForm::new(
+            DataFormType::Submit,
+            "http://jabber.org/protocol/pubsub#node_config",
+            vec![
+                Field::new("pubsub#persist_items", FieldType::Boolean).with_value("true"),
+                Field::new("pubsub#send_last_published_item", FieldType::TextSingle)
+                    .with_value("never"),
+                Field::new("pubsub#access_model", FieldType::TextSingle).with_value("whitelist"),
+                Field::new("pubsub#max_items", FieldType::TextSingle).with_value("10"),
             ],
-        }
+        )
     }
 
     fn create_node_iq() -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
-        let create = pubsub::Create {
+        let create = Create {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
         };
         let pubsub = PubSub::Create {
@@ -436,11 +383,11 @@ mod bookmarks_v2 {
 
     fn config_node_iq() -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
-        let config = owner::Configure {
+        let payload = owner::Payload::Configure {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
             form: Some(config_node_form()),
         };
-        let pubsub = PubSubOwner::Configure(config);
+        let pubsub = owner::Owner { payload };
         Iq::from_set(id, pubsub)
     }
 
@@ -449,11 +396,11 @@ mod bookmarks_v2 {
         account: &Account,
         bookmark: &contact::Bookmark,
     ) -> Result<()> {
-        match aparte.iq(account, add_iq(bookmark)).await?.payload {
-            IqType::Result(_) => Ok(()),
-            IqType::Error(err) => Err(anyhow!(
+        match aparte.iq(account, add_iq(bookmark)).await? {
+            Iq::Result { .. } => Ok(()),
+            Iq::Error { error, .. } => Err(anyhow!(
                 "Can't add bookmarks: {}",
-                i18n::xmpp_err_to_string(&err, vec![]).1
+                i18n::xmpp_err_to_string(&error, vec![]).1
             )),
             _ => Err(anyhow!("Can't add bookmarks: invalid result")),
         }
@@ -465,14 +412,14 @@ mod bookmarks_v2 {
             id: Some(ItemId(bookmark.jid.to_string())),
             payload: Some(
                 bookmarks2::Conference {
-                    autojoin: match bookmark.autojoin {
-                        true => bookmarks2::Autojoin::True,
-                        false => bookmarks2::Autojoin::False,
-                    },
+                    autojoin: bookmark.autojoin,
                     name: bookmark.name.clone(),
-                    nick: bookmark.nick.clone(),
+                    nick: bookmark
+                        .nick
+                        .as_ref()
+                        .and_then(|n| ResourcePart::from_str(n).ok()),
                     password: None,
-                    extensions: Vec::new(),
+                    extensions: None,
                 }
                 .into(),
             ),
@@ -480,37 +427,18 @@ mod bookmarks_v2 {
         };
         let publish = Publish {
             node: NodeName(String::from(ns::BOOKMARKS2)),
-            items: vec![pubsub::Item(item)],
+            items: vec![item],
         };
         let options = PublishOptions {
-            form: Some(DataForm {
-                type_: DataFormType::Submit,
-                form_type: Some(String::from(
-                    "http://jabber.org/protocol/pubsub#publish-options",
-                )),
-                title: None,
-                instructions: None,
-                fields: vec![
-                    Field {
-                        var: String::from("pubsub#persist_items"),
-                        type_: FieldType::Boolean,
-                        label: None,
-                        required: false,
-                        media: vec![],
-                        options: vec![],
-                        values: vec![String::from("true")],
-                    },
-                    Field {
-                        var: String::from("pubsub#access_model"),
-                        type_: FieldType::TextSingle,
-                        label: None,
-                        required: false,
-                        media: vec![],
-                        options: vec![],
-                        values: vec![String::from("whitelist")],
-                    },
+            form: Some(DataForm::new(
+                DataFormType::Submit,
+                "http://jabber.org/protocol/pubsub#publish-options",
+                vec![
+                    Field::new("pubsub#persist_items", FieldType::Boolean).with_value("true"),
+                    Field::new("pubsub#access_model", FieldType::TextSingle)
+                        .with_value("whitelist"),
                 ],
-            }),
+            )),
         };
         let pubsub = PubSub::Publish {
             publish,
@@ -524,11 +452,11 @@ mod bookmarks_v2 {
         account: &Account,
         bookmark: BareJid,
     ) -> Result<()> {
-        match aparte.iq(account, delete_iq(bookmark)).await?.payload {
-            IqType::Result(_) => Ok(()),
-            IqType::Error(err) => Err(anyhow!(
+        match aparte.iq(account, delete_iq(bookmark)).await? {
+            Iq::Result { .. } => Ok(()),
+            Iq::Error { error, .. } => Err(anyhow!(
                 "Can't delete bookmarks: {}",
-                i18n::xmpp_err_to_string(&err, vec![]).1
+                i18n::xmpp_err_to_string(&error, vec![]).1
             )),
             _ => Err(anyhow!("Can't delete bookmarks: invalid result")),
         }
@@ -543,8 +471,8 @@ mod bookmarks_v2 {
         };
         let retract = Retract {
             node: NodeName(String::from(ns::BOOKMARKS2)),
-            items: vec![pubsub::Item(item)],
-            notify: pubsub::Notify::False,
+            items: vec![item],
+            notify: false,
         };
         let pubsub = PubSub::Retract(retract);
         Iq::from_set(id, pubsub)
@@ -560,9 +488,41 @@ mod bookmarks_v2 {
                             let bookmark = contact::Bookmark {
                                 jid: bare_jid.clone(),
                                 name: conf.name.clone(),
-                                nick: conf.nick.clone(),
+                                nick: conf.nick.as_ref().map(|n| n.to_string()),
                                 password: conf.password.clone(),
-                                autojoin: conf.autojoin == bookmarks2::Autojoin::True,
+                                autojoin: conf.autojoin,
+                                extensions: None,
+                            };
+
+                            bookmarks.push(bookmark);
+                        }
+                    } else {
+                        log::warn!("Empty bookmark element {}", id.0);
+                    }
+                } else {
+                    log::warn!("Invalid bookmark jid {}", id.0);
+                }
+            } else {
+                log::warn!("Missing bookmark id");
+            }
+        }
+
+        bookmarks
+    }
+
+    pub fn handle_event(items: Vec<xmpp_parsers::pubsub::event::Item>) -> Vec<contact::Bookmark> {
+        let mut bookmarks = vec![];
+        for item in items {
+            if let Some(id) = item.id.clone() {
+                if let Ok(bare_jid) = BareJid::from_str(&id.0) {
+                    if let Some(el) = item.payload.clone() {
+                        if let Ok(conf) = bookmarks2::Conference::try_from(el) {
+                            let bookmark = contact::Bookmark {
+                                jid: bare_jid.clone(),
+                                name: conf.name.clone(),
+                                nick: conf.nick.as_ref().map(|n| n.to_string()),
+                                password: conf.password.clone(),
+                                autojoin: conf.autojoin,
                                 extensions: None,
                             };
 
@@ -585,7 +545,7 @@ mod bookmarks_v2 {
     fn subscribe_iq(account: &Account) -> Iq {
         let id = Uuid::new_v4().hyphenated().to_string();
         let pubsub = PubSub::Subscribe {
-            subscribe: Some(pubsub::Subscribe {
+            subscribe: Some(Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS2))),
                 jid: Jid::from(account.clone()),
             }),
@@ -600,6 +560,40 @@ mod bookmarks_v2 {
         aparte.iq(account, subscribe_iq(account)).await?;
 
         Ok(())
+    }
+}
+
+mod bookmarks_v1_event {
+    use std::convert::TryFrom;
+
+    use xmpp_parsers::bookmarks;
+
+    use crate::contact;
+
+    pub fn handle(items: Vec<xmpp_parsers::pubsub::event::Item>) -> Vec<contact::Bookmark> {
+        let mut bookmarks = vec![];
+        for item in items {
+            if let Some(el) = item.payload.clone() {
+                if let Ok(storage) = bookmarks::Storage::try_from(el) {
+                    for conf in storage.conferences {
+                        let bookmark = contact::Bookmark {
+                            jid: conf.jid.clone(),
+                            name: conf.name.clone(),
+                            nick: conf.nick.as_ref().map(|n| n.to_string()),
+                            password: conf.password.clone(),
+                            autojoin: conf.autojoin,
+                            extensions: None,
+                        };
+
+                        bookmarks.push(bookmark);
+                    }
+                }
+            } else {
+                log::warn!("Missing storage element");
+            }
+        }
+
+        bookmarks
     }
 }
 
@@ -865,14 +859,15 @@ impl ModTrait for BookmarksMod {
             Event::PubSub {
                 account,
                 from: _,
-                event: PubSubEvent::PublishedItems { node, items },
+                event:
+                    pubsub_event::Payload::Items {
+                        node, published, ..
+                    },
             } => match &node.0 as &str {
                 ns::BOOKMARKS | ns::BOOKMARKS2 => {
-                    let items = items.iter().cloned().map(|item| item.0).collect();
-
                     let bookmarks = match self.backend {
-                        Backend::BookmarksV1 => bookmarks_v1::handle(items),
-                        Backend::BookmarksV2 => bookmarks_v2::handle(items),
+                        Backend::BookmarksV1 => bookmarks_v1_event::handle(published.clone()),
+                        Backend::BookmarksV2 => bookmarks_v2::handle_event(published.clone()),
                     };
 
                     if let Err(err) = self.handle_bookmarks(aparte, account, &bookmarks) {

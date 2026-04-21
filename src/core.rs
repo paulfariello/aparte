@@ -18,7 +18,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
-use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
@@ -38,14 +37,16 @@ use uuid::Uuid;
 use xmpp_parsers::caps::{self, Caps};
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::hashes as xmpp_hashes;
-use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::jid::{BareJid, FullJid, Jid};
 use xmpp_parsers::legacy_omemo;
 use xmpp_parsers::message::Message as XmppParsersMessage;
+use xmpp_parsers::minidom::Element;
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::presence::{Presence, Show as PresenceShow, Type as PresenceType};
-use xmpp_parsers::pubsub::event::PubSubEvent;
+use xmpp_parsers::pubsub::event as pubsub_event;
 use xmpp_parsers::stanza_error::StanzaError;
-use xmpp_parsers::{iq, presence, BareJid, Element, FullJid, Jid};
+use xmpp_parsers::{iq, presence};
 
 use crate::account::{Account, ConnectionInfo, Password};
 use crate::async_iq::{IqFuture, PendingIqState};
@@ -124,7 +125,7 @@ pub enum Event {
     PubSub {
         account: Account,
         from: Option<Jid>,
-        event: PubSubEvent,
+        event: pubsub_event::Payload,
     },
     Presence(Account, presence::Presence),
     ReadPassword(Command),
@@ -698,7 +699,7 @@ mod me {
     use std::collections::HashMap;
     use std::str::FromStr;
     use uuid::Uuid;
-    use xmpp_parsers::{BareJid, Jid};
+    use xmpp_parsers::jid::{BareJid, Jid};
 
     use crate::account::Account;
     use crate::command::*;
@@ -1239,90 +1240,118 @@ impl Aparte {
         };
 
         self.log(format!("Connecting as {account}"));
-        let config = tokio_xmpp::AsyncConfig {
-            jid: Jid::from(account.clone()),
-            password: password.expose_secret().clone(),
-            server: match (&connection_info.server, &connection_info.port) {
-                (Some(server), Some(port)) => tokio_xmpp::starttls::ServerConfig::Manual {
-                    host: server.clone(),
-                    port: *port,
-                },
-                (Some(server), None) => tokio_xmpp::starttls::ServerConfig::Manual {
-                    host: server.clone(),
-                    port: 5222,
-                },
-                (None, Some(port)) => tokio_xmpp::starttls::ServerConfig::Manual {
-                    host: account.domain().to_string(),
-                    port: *port,
-                },
-                (None, None) => tokio_xmpp::starttls::ServerConfig::UseSrv,
-            },
+        let dns_config = match (&connection_info.server, &connection_info.port) {
+            (Some(server), Some(port)) => tokio_xmpp::connect::DnsConfig::no_srv(server, *port),
+            (Some(server), None) => tokio_xmpp::connect::DnsConfig::no_srv(server, 5222),
+            (None, Some(port)) => {
+                tokio_xmpp::connect::DnsConfig::no_srv(account.domain().as_str(), *port)
+            }
+            (None, None) => {
+                tokio_xmpp::connect::DnsConfig::srv_default_client(account.domain().as_str())
+            }
         };
-        log::debug!("Connect with config: {config:?}");
-        let mut client = tokio_xmpp::AsyncClient::new_with_config(config);
-
-        client.set_reconnect(true);
+        log::debug!("Connect with dns_config: {dns_config:?}");
+        let mut client = tokio_xmpp::Client::new_starttls(
+            Jid::from(account.clone()),
+            password.expose_secret().clone(),
+            dns_config,
+            tokio_xmpp::xmlstream::Timeouts::default(),
+        );
 
         let (connection_channel, mut rx) = mpsc::unbounded_channel();
 
         self.add_connection(account.clone(), connection_channel);
 
-        let (mut writer, mut reader) = client.split();
-        // XXX could use self.rt.spawn if client was impl Send
-        task::spawn_local(async move {
-            while let Some(element) = rx.recv().await {
-                if let Err(err) = writer.send(tokio_xmpp::Packet::Stanza(element)).await {
-                    log::error!("cannot send Stanza to internal channel: {}", err);
-                    break;
-                }
-            }
-        });
-
         let event_tx = self.event_tx.clone();
 
         let reconnect = true;
+        // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
-            while let Some(event) = reader.next().await {
-                log::debug!("XMPP Event: {:?}", event);
-                match event {
-                    tokio_xmpp::Event::Disconnected(tokio_xmpp::Error::Auth(e)) => {
-                        if let Err(err) =
-                            event_tx.send(Event::AuthError(account.clone(), format!("{e}")))
-                        {
-                            log::error!("Cannot send event to internal channel: {}", err);
+            loop {
+                tokio::select! {
+                    maybe_element = rx.recv() => {
+                        let Some(element) = maybe_element else { break };
+                        let stanza = match element.name() {
+                            "iq" => match xmpp_parsers::iq::Iq::try_from(element) {
+                                Ok(iq) => tokio_xmpp::Stanza::Iq(iq),
+                                Err(err) => {
+                                    log::error!("Cannot parse outgoing iq: {}", err);
+                                    continue;
+                                }
+                            },
+                            "message" => match XmppParsersMessage::try_from(element) {
+                                Ok(message) => tokio_xmpp::Stanza::Message(message),
+                                Err(err) => {
+                                    log::error!("Cannot parse outgoing message: {}", err);
+                                    continue;
+                                }
+                            },
+                            "presence" => match Presence::try_from(element) {
+                                Ok(presence) => tokio_xmpp::Stanza::Presence(presence),
+                                Err(err) => {
+                                    log::error!("Cannot parse outgoing presence: {}", err);
+                                    continue;
+                                }
+                            },
+                            other => {
+                                log::error!("Cannot send unknown stanza '{}'", other);
+                                continue;
+                            }
                         };
-                        break;
-                    }
-                    tokio_xmpp::Event::Disconnected(e) => {
-                        if let Err(err) =
-                            event_tx.send(Event::Disconnected(account.clone(), format!("{e}")))
-                        {
-                            log::error!("Cannot send event to internal channel: {}", err);
-                        };
-                        if !reconnect {
+                        if let Err(err) = client.send_stanza(stanza).await {
+                            log::error!("cannot send Stanza to internal channel: {}", err);
                             break;
                         }
                     }
-                    tokio_xmpp::Event::Online {
-                        bound_jid: jid,
-                        resumed: true,
-                    } => {
-                        log::debug!("Reconnected to {}", jid);
-                    }
-                    tokio_xmpp::Event::Online {
-                        bound_jid: jid,
-                        resumed: false,
-                    } => {
-                        if let Err(err) = event_tx.send(Event::Connected(account.clone(), jid)) {
-                            log::error!("Cannot send event to internal channel: {}", err);
-                            break;
-                        }
-                    }
-                    tokio_xmpp::Event::Stanza(stanza) => {
-                        log::debug!("RECV: {}", String::from(&stanza));
-                        if let Err(err) = event_tx.send(Event::Stanza(account.clone(), stanza)) {
-                            log::error!("Cannot send stanza to internal channel: {}", err);
-                            break;
+                    maybe_event = client.next() => {
+                        let Some(event) = maybe_event else { break };
+                        log::debug!("XMPP Event: {:?}", event);
+                        match event {
+                            tokio_xmpp::Event::Disconnected(tokio_xmpp::Error::Auth(e)) => {
+                                if let Err(err) =
+                                    event_tx.send(Event::AuthError(account.clone(), format!("{e}")))
+                                {
+                                    log::error!("Cannot send event to internal channel: {}", err);
+                                };
+                                break;
+                            }
+                            tokio_xmpp::Event::Disconnected(e) => {
+                                if let Err(err) =
+                                    event_tx.send(Event::Disconnected(account.clone(), format!("{e}")))
+                                {
+                                    log::error!("Cannot send event to internal channel: {}", err);
+                                };
+                                if !reconnect {
+                                    break;
+                                }
+                            }
+                            tokio_xmpp::Event::Online {
+                                bound_jid: jid,
+                                resumed: true,
+                            } => {
+                                log::debug!("Reconnected to {}", jid);
+                            }
+                            tokio_xmpp::Event::Online {
+                                bound_jid: jid,
+                                resumed: false,
+                            } => {
+                                if let Err(err) = event_tx.send(Event::Connected(account.clone(), jid)) {
+                                    log::error!("Cannot send event to internal channel: {}", err);
+                                    break;
+                                }
+                            }
+                            tokio_xmpp::Event::Stanza(stanza) => {
+                                let element: Element = match stanza {
+                                    tokio_xmpp::Stanza::Iq(iq) => Element::from(iq),
+                                    tokio_xmpp::Stanza::Message(message) => Element::from(message),
+                                    tokio_xmpp::Stanza::Presence(presence) => Element::from(presence),
+                                };
+                                log::debug!("RECV: {}", String::from(&element));
+                                if let Err(err) = event_tx.send(Event::Stanza(account.clone(), element)) {
+                                    log::error!("Cannot send stanza to internal channel: {}", err);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -1571,7 +1600,7 @@ impl Aparte {
 
     fn handle_iq(&mut self, account: Account, iq: Iq) {
         // Try to match to pending Iq
-        if let Ok(uuid) = Uuid::from_str(&iq.id) {
+        if let Ok(uuid) = Uuid::from_str(iq.id()) {
             let state = self.pending_iq.lock().unwrap().remove(&uuid);
             if let Some(state) = state {
                 match state {
@@ -1607,18 +1636,18 @@ impl Aparte {
         }
 
         // Unknown iq
-        match iq.payload {
-            IqType::Error(payload) => {
-                if let Some(text) = payload.texts.get("en") {
+        match iq {
+            Iq::Error { error, .. } => {
+                if let Some(text) = error.texts.get("en") {
                     let message = Message::log(text.clone());
                     self.schedule(Event::Message(Some(account.clone()), message));
                 }
             }
-            IqType::Result(payload) => {
+            Iq::Result { payload, .. } => {
                 log::info!("Received unexpected Iq result {:?}", payload);
             }
-            _ => {
-                self.schedule(Event::Iq(account, iq));
+            other => {
+                self.schedule(Event::Iq(account, other));
             }
         }
     }

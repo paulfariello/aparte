@@ -4,7 +4,7 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use xmpp_parsers::BareJid;
+use xmpp_parsers::jid::BareJid;
 
 use crate::account::Account;
 

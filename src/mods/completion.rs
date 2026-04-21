@@ -8,7 +8,7 @@ use std::str::FromStr;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use terminus::cursor::Cursor;
-use xmpp_parsers::BareJid;
+use xmpp_parsers::jid::BareJid;
 
 use crate::account::Account;
 use crate::command::Command;

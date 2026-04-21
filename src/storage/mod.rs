@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
-use xmpp_parsers::BareJid;
+use xmpp_parsers::jid::BareJid;
 
 use crate::account::Account;
 

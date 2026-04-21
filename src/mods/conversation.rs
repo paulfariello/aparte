@@ -7,7 +7,8 @@ use std::fmt;
 
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use xmpp_parsers::{muc, BareJid, Jid};
+use xmpp_parsers::jid::{BareJid, Jid};
+use xmpp_parsers::muc;
 
 use crate::account::Account;
 use crate::conversation;

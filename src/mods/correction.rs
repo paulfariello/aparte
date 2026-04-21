@@ -32,7 +32,7 @@ impl CorrectionMod {
     ) {
         let event = {
             let mut messages = aparte.get_mod_mut::<messages::MessagesMod>();
-            if let Some(original) = messages.get_mut(&Some(account.clone()), &replace.id) {
+            if let Some(original) = messages.get_mut(&Some(account.clone()), &replace.id.0) {
                 match original {
                     Message::Xmpp(original) => {
                         original.add_version_from_xmpp(message);
@@ -42,17 +42,17 @@ impl CorrectionMod {
                     }
                     Message::Log(_) => log::error!(
                         "Can't replace a log message (conflicting id? {})",
-                        replace.id
+                        replace.id.0
                     ),
                 }
                 Some(Event::Message(Some(account.clone()), original.clone()))
             } else {
                 log::info!(
                     "Missing original message: {} (correction from {:?})",
-                    replace.id,
+                    replace.id.0,
                     message.from
                 );
-                let waiting_corrections = self.waiting_corrections.entry(replace.id).or_default();
+                let waiting_corrections = self.waiting_corrections.entry(replace.id.0).or_default();
                 waiting_corrections.push(message.clone());
                 None
             }
@@ -73,7 +73,7 @@ impl CorrectionMod {
     ) {
         log::info!(
             "Got missing original message: {}, scheduling original and corrections",
-            message.id.as_ref().unwrap()
+            message.id.as_ref().unwrap().0
         );
         let original = Event::RawMessage {
             account: account.clone(),
@@ -85,7 +85,7 @@ impl CorrectionMod {
         aparte.schedule(original);
         for correction in self
             .waiting_corrections
-            .remove(message.id.as_ref().unwrap()) // id is not None (guaranteed by caller)
+            .remove(&message.id.as_ref().unwrap().0) // id is not None (guaranteed by caller)
             .unwrap_or_default()
             .into_iter()
         {
@@ -122,7 +122,7 @@ impl ModTrait for CorrectionMod {
         }
 
         if let Some(id) = message.id.as_ref() {
-            if self.waiting_corrections.contains_key(id) {
+            if self.waiting_corrections.contains_key(&id.0) {
                 return 1f64;
             }
         }
@@ -139,7 +139,7 @@ impl ModTrait for CorrectionMod {
         archive: bool,
     ) {
         if let Some(id) = message.id.as_ref() {
-            if self.waiting_corrections.contains_key(id) {
+            if self.waiting_corrections.contains_key(&id.0) {
                 self.handle_original_message(aparte, account, message, delay, archive);
             }
         }

@@ -26,9 +26,12 @@ use terminus::{
 };
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
-use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppParsersMessageType};
+use xmpp_parsers::jid::{BareJid, Jid};
+use xmpp_parsers::message::{
+    Id as XmppParsersMessageId, Lang as XmppParsersLang, Message as XmppParsersMessage,
+    MessageType as XmppParsersMessageType,
+};
 use xmpp_parsers::oob::Oob;
-use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
@@ -110,12 +113,13 @@ impl VersionedXmppMessage {
     pub fn add_version_from_xmpp(&mut self, message: &XmppParsersMessage) {
         let id = message
             .id
-            .clone()
+            .as_ref()
+            .map(|id| id.0.clone())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let bodies: HashMap<String, String> = message
             .bodies
             .iter()
-            .map(|(lang, body)| (lang.clone(), body.0.clone()))
+            .map(|(lang, body)| (lang.0.clone(), body.clone()))
             .collect();
 
         let oobs: Vec<Oob> = message
@@ -179,13 +183,14 @@ impl Message {
     ) -> Result<Self, ()> {
         let id = message
             .id
-            .clone()
+            .as_ref()
+            .map(|id| id.0.clone())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         if let Some(from) = message.from.clone() {
             let bodies: HashMap<String, String> = message
                 .bodies
                 .iter()
-                .map(|(lang, body)| (lang.clone(), body.0.clone()))
+                .map(|(lang, body)| (lang.0.clone(), body.clone()))
                 .collect();
             let oobs: Vec<_> = message
                 .payloads
@@ -495,7 +500,7 @@ impl PartialOrd for Message {
     }
 }
 
-impl TryFrom<Message> for xmpp_parsers::Element {
+impl TryFrom<Message> for xmpp_parsers::minidom::Element {
     type Error = ();
 
     fn try_from(message: Message) -> Result<Self, Self::Error> {
@@ -507,13 +512,11 @@ impl TryFrom<Message> for xmpp_parsers::Element {
                         let mut xmpp_message = xmpp_parsers::message::Message::new(Some(
                             Jid::from(message.to.clone()),
                         ));
-                        xmpp_message.id = Some(message.id.clone());
+                        xmpp_message.id = Some(XmppParsersMessageId(message.id.clone()));
                         xmpp_message.type_ = xmpp_parsers::message::MessageType::Chat;
                         xmpp_message.bodies = message
                             .get_last_bodies()
-                            .map(|(lang, body)| {
-                                (lang.clone(), xmpp_parsers::message::Body(body.clone()))
-                            })
+                            .map(|(lang, body)| (XmppParsersLang(lang.clone()), body.clone()))
                             .collect();
                         Ok(xmpp_message.into())
                     }
@@ -521,13 +524,11 @@ impl TryFrom<Message> for xmpp_parsers::Element {
                         let mut xmpp_message = xmpp_parsers::message::Message::new(Some(
                             Jid::from(message.to.clone()),
                         ));
-                        xmpp_message.id = Some(message.id.clone());
+                        xmpp_message.id = Some(XmppParsersMessageId(message.id.clone()));
                         xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
                         xmpp_message.bodies = message
                             .get_last_bodies()
-                            .map(|(lang, body)| {
-                                (lang.clone(), xmpp_parsers::message::Body(body.clone()))
-                            })
+                            .map(|(lang, body)| (XmppParsersLang(lang.clone()), body.clone()))
                             .collect();
                         Ok(xmpp_message.into())
                     }

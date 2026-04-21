@@ -36,7 +36,7 @@ use terminus::{Color, FgColor, NamedColor, Style};
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
 use uuid::Uuid;
-use xmpp_parsers::{BareJid, Jid};
+use xmpp_parsers::jid::{BareJid, Jid};
 
 use crate::color::{id_to_rgb, ColorTuple};
 use crate::command::Command;
