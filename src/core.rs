@@ -31,7 +31,7 @@ use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 use tokio::time::Duration;
-use tokio::{task, time};
+use tokio::time;
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -1109,8 +1109,7 @@ impl Aparte {
             }
         });
 
-        let local_set = tokio::task::LocalSet::new();
-        local_set.block_on(&rt, async move {
+        rt.block_on(async move {
             self.schedule(Event::Start);
             let mut event_rx = self.event_rx.take().unwrap();
             let mut send_rx = self.send_rx.take().unwrap();
@@ -1264,8 +1263,7 @@ impl Aparte {
 
         let event_tx = self.event_tx.clone();
 
-        // XXX could use self.rt.spawn if client was impl Send
-        task::spawn_local(async move {
+        tokio::spawn(async move {
             loop {
                 tokio::select! {
                     maybe_element = rx.recv() => {
