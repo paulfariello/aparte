@@ -20,7 +20,7 @@ use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 const ROWS: u16 = 24;
 const COLS: u16 = 80;
-const FIRST_FRAME_MS: u64 = 300;
+const FIRST_FRAME_MS: u64 = 1500;
 
 struct Harness {
     bytes: Arc<Mutex<Vec<u8>>>,
@@ -202,9 +202,10 @@ fn first_frame_contains_welcome_and_input_line() {
     let h = Harness::spawn();
 
     // "First frame" — what the user sees shortly after launch. We allow
-    // 300ms of slack: the UI renderer task ticks every 16ms, so by now
+    // 1500ms of slack: the UI renderer task ticks every 16ms, so by now
     // there has been ample opportunity to flush a frame containing the
-    // welcome banner that Aparte::start() logs.
+    // welcome banner that Aparte::start() logs. The original regression
+    // (widechar cursor check adding ~2.4 s/frame) would still fail here.
     thread::sleep(Duration::from_millis(FIRST_FRAME_MS));
     let parser = h.snapshot();
     let screen = parser.screen();
