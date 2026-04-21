@@ -1264,7 +1264,6 @@ impl Aparte {
 
         let event_tx = self.event_tx.clone();
 
-        let reconnect = true;
         // XXX could use self.rt.spawn if client was impl Send
         task::spawn_local(async move {
             loop {
@@ -1321,9 +1320,6 @@ impl Aparte {
                                 {
                                     log::error!("Cannot send event to internal channel: {}", err);
                                 };
-                                if !reconnect {
-                                    break;
-                                }
                             }
                             tokio_xmpp::Event::Online {
                                 bound_jid: jid,
