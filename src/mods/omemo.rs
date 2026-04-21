@@ -18,7 +18,6 @@ use libsignal_protocol::{
     process_prekey_bundle, CiphertextMessage, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
 };
 use rand::{random, seq::SliceRandom, thread_rng};
-use uuid::Uuid;
 
 //use xmpp_parsers::ns;
 use xmpp_parsers::iq::Iq;
@@ -1088,9 +1087,6 @@ impl OmemoMod {
     // Iq building
     //
     fn get_devices_iq(contact: &BareJid) -> Iq {
-        let id = Uuid::new_v4();
-
-        let id = id.hyphenated().to_string();
         let items = pubsub::pubsub::Items {
             max_items: None,
             node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
@@ -1098,13 +1094,10 @@ impl OmemoMod {
             items: vec![],
         };
         let pubsub = pubsub::PubSub::Items(items);
-        Iq::from_get(id, pubsub).with_to(Jid::from(contact.clone()))
+        Iq::from_get("", pubsub).with_to(Jid::from(contact.clone()))
     }
 
     fn set_devices_iq(jid: &BareJid, devices: legacy_omemo::DeviceList) -> Iq {
-        let id = Uuid::new_v4();
-
-        let id = id.hyphenated().to_string();
         let item = pubsub::pubsub::Item {
             id: Some(pubsub::ItemId("current".to_string())),
             publisher: Some(jid.clone().into()),
@@ -1117,11 +1110,10 @@ impl OmemoMod {
             },
             publish_options: None,
         };
-        Iq::from_set(id, pubsub).with_to(Jid::from(jid.clone()))
+        Iq::from_set("", pubsub).with_to(Jid::from(jid.clone()))
     }
 
     fn subscribe_to_device_list_iq(contact: &BareJid, subscriber: &BareJid) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let pubsub = pubsub::PubSub::Subscribe {
             subscribe: Some(pubsub::pubsub::Subscribe {
                 node: Some(pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap()),
@@ -1129,13 +1121,10 @@ impl OmemoMod {
             }),
             options: None,
         };
-        Iq::from_set(id, pubsub).with_to(Jid::from(contact.clone()))
+        Iq::from_set("", pubsub).with_to(Jid::from(contact.clone()))
     }
 
     fn get_bundle_iq(contact: &BareJid, device_id: u32) -> Iq {
-        let id = Uuid::new_v4();
-
-        let id = id.hyphenated().to_string();
         let items = pubsub::pubsub::Items {
             max_items: None,
             node: pubsub::NodeName(format!("{}:{device_id}", ns::LEGACY_OMEMO_BUNDLES)),
@@ -1143,7 +1132,7 @@ impl OmemoMod {
             items: vec![],
         };
         let pubsub = pubsub::PubSub::Items(items);
-        Iq::from_get(id, pubsub).with_to(Jid::from(contact.clone()))
+        Iq::from_get("", pubsub).with_to(Jid::from(contact.clone()))
     }
 
     fn publish_bundle_iq(
@@ -1155,9 +1144,6 @@ impl OmemoMod {
         signed_pre_key_signature: Vec<u8>,
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Iq {
-        let id = Uuid::new_v4();
-
-        let id = id.hyphenated().to_string();
         let bundle = legacy_omemo::Bundle {
             signed_pre_key_public: Some(legacy_omemo::SignedPreKeyPublic {
                 signed_pre_key_id: Some(signed_pre_key_id),
@@ -1196,7 +1182,7 @@ impl OmemoMod {
             },
             publish_options: None,
         };
-        Iq::from_set(id, pubsub).with_to(Jid::from(jid.clone()))
+        Iq::from_set("", pubsub).with_to(Jid::from(jid.clone()))
     }
 }
 

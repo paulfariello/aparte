@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::task::{Context, Poll, Waker};
 
 use anyhow::Result;
@@ -24,8 +23,8 @@ pub struct IqFuture {
 
 impl IqFuture {
     pub fn new(mut aparte: AparteAsync, account: &Account, iq: Iq) -> Self {
-        // TODO generate uuid in here
-        let uuid = Uuid::from_str(iq.id()).unwrap();
+        let uuid = Uuid::new_v4();
+        let iq = iq.with_id(uuid.hyphenated().to_string());
         aparte.send(account, iq.into());
         aparte
             .pending_iq

@@ -6,7 +6,6 @@ use std::convert::TryFrom;
 use std::fmt;
 
 use anyhow::Result;
-use uuid::Uuid;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::jid::BareJid;
 use xmpp_parsers::{ns, presence, roster};
@@ -72,9 +71,8 @@ impl ContactMod {
     }
 
     fn get_roster_iq() -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         Iq::from_get(
-            id,
+            "",
             roster::Roster {
                 ver: None,
                 items: Vec::new(),

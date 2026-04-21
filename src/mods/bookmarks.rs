@@ -130,7 +130,6 @@ mod bookmarks_v1 {
     use std::str::FromStr;
 
     use anyhow::{anyhow, Result};
-    use uuid::Uuid;
     use xmpp_parsers::{
         bookmarks,
         data_forms::{DataForm, DataFormType, Field, FieldType},
@@ -176,7 +175,6 @@ mod bookmarks_v1 {
     }
 
     fn get_bookmarks_iq() -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let items = Items {
             max_items: None,
             node: NodeName(String::from(ns::BOOKMARKS)),
@@ -184,7 +182,7 @@ mod bookmarks_v1 {
             items: vec![],
         };
         let pubsub = PubSub::Items(items);
-        Iq::from_get(id, pubsub)
+        Iq::from_get("", pubsub)
     }
 
     pub async fn update(
@@ -203,7 +201,6 @@ mod bookmarks_v1 {
     }
 
     fn update_iq(bookmarks: &[contact::Bookmark]) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let confs = bookmarks
             .iter()
             .map(|bookmark| bookmarks::Conference {
@@ -245,7 +242,7 @@ mod bookmarks_v1 {
             publish,
             publish_options: Some(options),
         };
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     pub fn handle(items: Vec<Item>) -> Vec<contact::Bookmark> {
@@ -275,7 +272,6 @@ mod bookmarks_v1 {
     }
 
     fn subscribe_iq(account: &Account) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let pubsub = PubSub::Subscribe {
             subscribe: Some(Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS))),
@@ -283,7 +279,7 @@ mod bookmarks_v1 {
             }),
             options: None,
         };
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     pub async fn init(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
@@ -297,7 +293,6 @@ mod bookmarks_v2 {
     use std::{convert::TryFrom, str::FromStr};
 
     use anyhow::{anyhow, Result};
-    use uuid::Uuid;
     use xmpp_parsers::{
         bookmarks2,
         data_forms::{DataForm, DataFormType, Field, FieldType},
@@ -344,7 +339,6 @@ mod bookmarks_v2 {
     }
 
     fn get_bookmarks_iq() -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let items = Items {
             max_items: None,
             node: NodeName(String::from(ns::BOOKMARKS2)),
@@ -352,7 +346,7 @@ mod bookmarks_v2 {
             items: vec![],
         };
         let pubsub = PubSub::Items(items);
-        Iq::from_get(id, pubsub)
+        Iq::from_get("", pubsub)
     }
 
     fn config_node_form() -> DataForm {
@@ -370,7 +364,6 @@ mod bookmarks_v2 {
     }
 
     fn create_node_iq() -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let create = Create {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
         };
@@ -378,17 +371,16 @@ mod bookmarks_v2 {
             create,
             configure: None,
         };
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     fn config_node_iq() -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let payload = owner::Payload::Configure {
             node: Some(NodeName(String::from(ns::BOOKMARKS2))),
             form: Some(config_node_form()),
         };
         let pubsub = owner::Owner { payload };
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     pub async fn add(
@@ -407,7 +399,6 @@ mod bookmarks_v2 {
     }
 
     fn add_iq(bookmark: &contact::Bookmark) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let item = Item {
             id: Some(ItemId(bookmark.jid.to_string())),
             payload: Some(
@@ -444,7 +435,7 @@ mod bookmarks_v2 {
             publish,
             publish_options: Some(options),
         };
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     pub async fn delete(
@@ -463,7 +454,6 @@ mod bookmarks_v2 {
     }
 
     fn delete_iq(conference: BareJid) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let item = Item {
             id: Some(ItemId(conference.to_string())),
             payload: None,
@@ -475,7 +465,7 @@ mod bookmarks_v2 {
             notify: false,
         };
         let pubsub = PubSub::Retract(retract);
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     pub fn handle(items: Vec<Item>) -> Vec<contact::Bookmark> {
@@ -543,7 +533,6 @@ mod bookmarks_v2 {
     }
 
     fn subscribe_iq(account: &Account) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let pubsub = PubSub::Subscribe {
             subscribe: Some(Subscribe {
                 node: Some(NodeName(String::from(ns::BOOKMARKS2))),
@@ -551,7 +540,7 @@ mod bookmarks_v2 {
             }),
             options: None,
         };
-        Iq::from_set(id, pubsub)
+        Iq::from_set("", pubsub)
     }
 
     pub async fn init(aparte: &mut AparteAsync, account: &Account) -> Result<()> {

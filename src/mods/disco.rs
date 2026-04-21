@@ -7,7 +7,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
-use uuid::Uuid;
 
 use xmpp_parsers::disco;
 use xmpp_parsers::disco::Feature;
@@ -89,9 +88,8 @@ impl DiscoMod {
     }
 
     fn disco_info_query_iq(jid: &Jid, node: Option<String>) -> Iq {
-        let id = Uuid::new_v4().hyphenated().to_string();
         let query = disco::DiscoInfoQuery { node };
-        Iq::from_get(id, query).with_to(jid.clone())
+        Iq::from_get("", query).with_to(jid.clone())
     }
 
     pub fn get_disco(&self) -> disco::DiscoInfoResult {
