@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+fhs="./shell.nix"
+
+function run {
+  nix-shell --pure --argstr run "$*" "${fhs}"
+}
+
+if [[ $# -eq 0 ]]; then
+  run bash
+else
+  run "$@"
+fi
