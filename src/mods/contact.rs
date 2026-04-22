@@ -6,6 +6,7 @@ use std::convert::TryFrom;
 use std::fmt;
 
 use anyhow::Result;
+use tokio_xmpp::IqResponse;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::jid::BareJid;
 use xmpp_parsers::{ns, presence, roster};
@@ -50,13 +51,7 @@ pub struct ContactMod {
 
 impl ContactMod {
     async fn get_roster(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
-        let response = aparte.iq(account, Self::get_roster_iq()).await?;
-
-        if let Iq::Result {
-            payload: Some(payload),
-            ..
-        } = response.clone()
-        {
+        if let Ok(IqResponse::Result(Some(payload))) = aparte.iq(account, Self::get_roster_iq()).await {
             if payload.is("query", ns::ROSTER) {
                 if let Ok(roster) = roster::Roster::try_from(payload) {
                     log::info!("Got roster");

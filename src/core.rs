@@ -48,8 +48,10 @@ use xmpp_parsers::pubsub::event as pubsub_event;
 use xmpp_parsers::stanza_error::StanzaError;
 use xmpp_parsers::{iq, presence};
 
+use tokio_xmpp::{IqFailure, IqResponse, IqResponseToken};
+
 use crate::account::{Account, ConnectionInfo, Password};
-use crate::async_iq::{IqFuture, PendingIqState};
+use crate::async_iq::IqEnvelope;
 use crate::color;
 use crate::command::{Command, CommandParser};
 use crate::config::Config;
@@ -387,6 +389,7 @@ impl Display for Mod {
 
 pub struct Connection {
     pub sink: mpsc::UnboundedSender<Element>,
+    pub iq_sink: mpsc::UnboundedSender<IqEnvelope>,
 }
 
 command_def!(connect,
@@ -832,7 +835,8 @@ pub struct Aparte {
     event_rx: Option<mpsc::UnboundedReceiver<Event>>,
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
     send_rx: Option<mpsc::UnboundedReceiver<(Account, Element)>>,
-    pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
+    iq_tx: mpsc::UnboundedSender<(Account, IqEnvelope)>,
+    iq_rx: Option<mpsc::UnboundedReceiver<(Account, IqEnvelope)>>,
     crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
     read_password: AtomicBool,
     /// Aparté main configuration
@@ -869,6 +873,7 @@ impl Aparte {
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (send_tx, send_rx) = mpsc::unbounded_channel();
+        let (iq_tx, iq_rx) = mpsc::unbounded_channel();
 
         let mut aparte = Self {
             command_parsers: Rc::new(HashMap::new()),
@@ -880,8 +885,9 @@ impl Aparte {
             event_rx: Some(event_rx),
             send_tx,
             send_rx: Some(send_rx),
+            iq_tx,
+            iq_rx: Some(iq_rx),
             config: config.clone(),
-            pending_iq: Arc::new(Mutex::new(HashMap::new())),
             crypto_engines: Arc::new(Mutex::new(HashMap::new())),
             read_password: AtomicBool::new(false),
         };
@@ -1002,9 +1008,7 @@ impl Aparte {
         }
     }
 
-    pub fn add_connection(&mut self, account: Account, sink: mpsc::UnboundedSender<Element>) {
-        let connection = Connection { sink };
-
+    pub fn add_connection(&mut self, account: Account, connection: Connection) {
         self.connections.insert(account.clone(), connection);
         self.current_connection = Some(account);
     }
@@ -1113,6 +1117,7 @@ impl Aparte {
             self.schedule(Event::Start);
             let mut event_rx = self.event_rx.take().unwrap();
             let mut send_rx = self.send_rx.take().unwrap();
+            let mut iq_rx = self.iq_rx.take().unwrap();
 
             let mut last_events = VecDeque::new();
             'main: loop {
@@ -1175,6 +1180,16 @@ impl Aparte {
                         None => {
                             log::error!("Broken send channel");
                             break;
+                        }
+                    },
+                    Some((account, envelope)) = iq_rx.recv() => {
+                        match self.connections.get(&account) {
+                            Some(conn) => {
+                                if let Err(e) = conn.iq_sink.send(envelope) {
+                                    log::warn!("Cannot route IQ to connection: {e}");
+                                }
+                            }
+                            None => log::warn!("No connection for IQ from {account}"),
                         }
                     }
                 };
@@ -1258,14 +1273,22 @@ impl Aparte {
         );
 
         let (connection_channel, mut rx) = mpsc::unbounded_channel();
+        let (iq_channel, mut iq_rx) = mpsc::unbounded_channel::<IqEnvelope>();
 
-        self.add_connection(account.clone(), connection_channel);
+        self.add_connection(account.clone(), Connection {
+            sink: connection_channel,
+            iq_sink: iq_channel,
+        });
 
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    Some(envelope) = iq_rx.recv() => {
+                        let token = client.send_iq(envelope.to, envelope.request).await;
+                        let _ = envelope.token_tx.send(token);
+                    }
                     maybe_element = rx.recv() => {
                         let Some(element) = maybe_element else { break };
                         let stanza = match element.name() {
@@ -1488,14 +1511,9 @@ impl Aparte {
 
     fn handle_stanza(&mut self, account: Account, stanza: Element) {
         match stanza.name() {
-            "iq" => match Iq::try_from(stanza.clone()) {
+            "iq" => match Iq::try_from(stanza) {
                 Ok(iq) => self.handle_iq(account, iq),
-                Err(err) => {
-                    log::error!("{}", err);
-                    if let Some(id) = stanza.attr("id") {
-                        self.errored_iq(id, err.into());
-                    }
-                }
+                Err(err) => log::error!("Cannot parse IQ stanza: {}", err),
             },
             "presence" => match Presence::try_from(stanza) {
                 Ok(presence) => self.schedule(Event::Presence(account, presence)),
@@ -1593,32 +1611,6 @@ impl Aparte {
     }
 
     fn handle_iq(&mut self, account: Account, iq: Iq) {
-        // Try to match to pending Iq
-        if let Ok(uuid) = Uuid::from_str(iq.id()) {
-            let mut map = self.pending_iq.lock().unwrap();
-            if let Some(state) = map.remove(&uuid) {
-                match state {
-                    PendingIqState::Waiting(waker) => {
-                        map.insert(uuid, PendingIqState::Finished(iq));
-                        drop(map);
-                        if let Some(waker) = waker {
-                            waker.wake();
-                        }
-                    }
-                    PendingIqState::Errored(_err) => {
-                        log::info!("Received multiple response for Iq: {}", uuid);
-                        map.insert(uuid, PendingIqState::Finished(iq));
-                    }
-                    PendingIqState::Finished(iq) => {
-                        log::info!("Received multiple response for Iq: {}", uuid);
-                        map.insert(uuid, PendingIqState::Finished(iq));
-                    }
-                }
-                return;
-            }
-        }
-
-        // Unknown iq
         match iq {
             Iq::Error { error, .. } => {
                 if let Some(text) = error.texts.get("en") {
@@ -1635,38 +1627,13 @@ impl Aparte {
         }
     }
 
-    fn errored_iq(&mut self, id: &str, err: anyhow::Error) {
-        if let Ok(uuid) = Uuid::from_str(id) {
-            let mut map = self.pending_iq.lock().unwrap();
-            if let Some(state) = map.remove(&uuid) {
-                match state {
-                    PendingIqState::Waiting(waker) => {
-                        map.insert(uuid, PendingIqState::Errored(err));
-                        drop(map);
-                        if let Some(waker) = waker {
-                            waker.wake();
-                        }
-                    }
-                    PendingIqState::Errored(err) => {
-                        log::warn!("Received multiple response for Iq: {}", uuid);
-                        map.insert(uuid, PendingIqState::Errored(err));
-                    }
-                    PendingIqState::Finished(iq) => {
-                        log::warn!("Received multiple response for Iq: {}", uuid);
-                        map.insert(uuid, PendingIqState::Finished(iq));
-                    }
-                }
-            }
-        }
-    }
-
     // TODO maybe use From<>
     pub fn proxy(&self) -> AparteAsync {
         AparteAsync {
             current_connection: self.current_connection.clone(),
             event_tx: self.event_tx.clone(),
             send_tx: self.send_tx.clone(),
-            pending_iq: self.pending_iq.clone(),
+            iq_tx: self.iq_tx.clone(),
             config: self.config.clone(),
             storage: self.storage.clone(),
             crypto_engines: self.crypto_engines.clone(),
@@ -1758,7 +1725,7 @@ pub struct AparteAsync {
     event_tx: mpsc::UnboundedSender<Event>,
     send_tx: mpsc::UnboundedSender<(Account, Element)>,
     crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
-    pub(crate) pending_iq: Arc<Mutex<HashMap<Uuid, PendingIqState>>>,
+    iq_tx: mpsc::UnboundedSender<(Account, IqEnvelope)>,
     pub config: Config,
     pub storage: Storage,
 }
@@ -1768,8 +1735,18 @@ impl AparteAsync {
         self.send_tx.send((account.clone(), stanza)).unwrap();
     }
 
-    pub fn iq(&mut self, account: &Account, iq: Iq) -> IqFuture {
-        IqFuture::new(self.clone(), account, iq)
+    pub async fn iq(&mut self, account: &Account, iq: Iq) -> Result<IqResponse, IqFailure> {
+        use tokio_xmpp::IqRequest;
+        let (to, request) = match iq {
+            Iq::Get { to, payload, .. } => (to, IqRequest::Get(payload)),
+            Iq::Set { to, payload, .. } => (to, IqRequest::Set(payload)),
+            _ => panic!("iq() called with non-request Iq variant"),
+        };
+        let (token_tx, token_rx) = tokio::sync::oneshot::channel::<IqResponseToken>();
+        let envelope = IqEnvelope { to, request, token_tx };
+        self.iq_tx.send((account.clone(), envelope)).unwrap();
+        let token = token_rx.await.expect("connection task dropped before returning IqResponseToken");
+        token.await
     }
 
     pub fn schedule(&mut self, event: Event) {

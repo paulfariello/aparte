@@ -12,6 +12,7 @@ use aes_gcm::{
     Aes128Gcm,
 };
 use anyhow::{anyhow, Context, Result};
+use tokio_xmpp::IqResponse;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use libsignal_protocol::{
@@ -806,30 +807,27 @@ impl OmemoMod {
         account: &Account,
         jid: &BareJid,
     ) -> Result<()> {
-        let response = aparte
+        match aparte
             .iq(
                 account,
                 Self::subscribe_to_device_list_iq(jid, &account.to_bare()),
             )
-            .await?;
-        match response {
-            Iq::Result { payload: None, .. } => Err(anyhow!("Empty iq response")),
-            Iq::Error { error, .. } => {
+            .await
+        {
+            Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
+            Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            Iq::Result {
-                payload: Some(pubsub),
-                ..
-            } => match PubSub::try_from(pubsub) {
+            Ok(IqResponse::Result(Some(pubsub))) => match PubSub::try_from(pubsub) {
                 Ok(PubSub::Subscription(_)) => Ok(()),
                 Err(err) => Err(err.into()),
                 Ok(el) => Err(anyhow!("Invalid pubsub response: {:?}", el)),
             },
-            iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
+            Err(e) => Err(anyhow!("IQ failed: {e}")),
         }
     }
 
@@ -838,20 +836,16 @@ impl OmemoMod {
         account: &Account,
         jid: &BareJid,
     ) -> Result<legacy_omemo::DeviceList> {
-        let response = aparte.iq(account, Self::get_devices_iq(jid)).await?;
-        match response {
-            Iq::Result { payload: None, .. } => Err(anyhow!("Empty iq response")),
-            Iq::Error { error, .. } => {
+        match aparte.iq(account, Self::get_devices_iq(jid)).await {
+            Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
+            Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            Iq::Result {
-                payload: Some(pubsub),
-                ..
-            } => match PubSub::try_from(pubsub)? {
+            Ok(IqResponse::Result(Some(pubsub))) => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
                     match items.items.iter().find(|item| item.id == current) {
@@ -868,7 +862,7 @@ impl OmemoMod {
                 }
                 _ => Err(anyhow!("Invalid pubsub response")),
             },
-            iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
+            Err(e) => Err(anyhow!("IQ failed: {e}")),
         }
     }
 
@@ -884,22 +878,19 @@ impl OmemoMod {
         device_id: u32,
     ) -> Result<()> {
         log::info!("Ensure device {device_id} is registered");
-        let response = aparte
+        match aparte
             .iq(account, Self::get_devices_iq(&account.to_bare()))
-            .await?;
-        match response {
-            Iq::Result { payload: None, .. } => Err(anyhow!("Empty iq response")),
-            Iq::Error { error, .. } => {
+            .await
+        {
+            Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
+            Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            Iq::Result {
-                payload: Some(pubsub),
-                ..
-            } => match PubSub::try_from(pubsub)? {
+            Ok(IqResponse::Result(Some(pubsub))) => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
                     match items.items.iter().find(|item| item.id == current) {
@@ -930,7 +921,7 @@ impl OmemoMod {
                 }
                 _ => Err(anyhow!("Invalid pubsub response")),
             },
-            iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
+            Err(e) => Err(anyhow!("IQ failed: {e}")),
         }
     }
 
@@ -986,7 +977,7 @@ impl OmemoMod {
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Result<()> {
         log::info!("Publish device {device_id}'s bundle");
-        let _response = aparte
+        let _ = aparte
             .iq(
                 account,
                 Self::publish_bundle_iq(
@@ -999,7 +990,7 @@ impl OmemoMod {
                     pre_keys,
                 ),
             )
-            .await?;
+            .await;
 
         Ok(())
     }
@@ -1022,8 +1013,7 @@ impl OmemoMod {
 
         let response = aparte
             .iq(account, Self::set_devices_iq(&account.to_bare(), list))
-            .await
-            .context("Cannot register OMEMO device")?;
+            .await;
         log::debug!("{:?}", response);
         // match response.payload {
         //     IqType::Result(None) => todo!(),
@@ -1041,28 +1031,25 @@ impl OmemoMod {
         contact: &BareJid,
         device_id: u32,
     ) -> Result<Option<legacy_omemo::Bundle>> {
-        let response = aparte
+        match aparte
             .iq(account, Self::get_bundle_iq(contact, device_id))
-            .await?;
-        match response {
-            Iq::Result { payload: None, .. } => Ok(None),
-            Iq::Error { error, .. }
+            .await
+        {
+            Ok(IqResponse::Result(None)) => Ok(None),
+            Ok(IqResponse::Error(error))
                 if error.defined_condition
                     == xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
             {
                 Ok(None)
             }
-            Iq::Error { error, .. } => {
+            Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, vec![]) {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
             }
-            Iq::Result {
-                payload: Some(pubsub),
-                ..
-            } => match PubSub::try_from(pubsub)? {
+            Ok(IqResponse::Result(Some(pubsub))) => match PubSub::try_from(pubsub)? {
                 PubSub::Items(items) => {
                     let current = Some(ItemId("current".to_string()));
                     match items.items.iter().find(|item| item.id == current) {
@@ -1079,7 +1066,7 @@ impl OmemoMod {
                 }
                 _ => Err(anyhow!("Invalid pubsub response")),
             },
-            iq => Err(anyhow!("Invalid IQ response: {:?}", iq)),
+            Err(e) => Err(anyhow!("IQ failed: {e}")),
         }
     }
 

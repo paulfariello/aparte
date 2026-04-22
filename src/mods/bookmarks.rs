@@ -142,6 +142,8 @@ mod bookmarks_v1 {
         },
     };
 
+    use tokio_xmpp::IqResponse;
+
     use crate::{
         account::Account,
         contact::{self, Bookmark},
@@ -153,10 +155,8 @@ mod bookmarks_v1 {
         aparte: &mut AparteAsync,
         account: &Account,
     ) -> Result<Vec<Bookmark>> {
-        match aparte.iq(account, get_bookmarks_iq()).await? {
-            Iq::Result {
-                payload: Some(el), ..
-            } => {
+        match aparte.iq(account, get_bookmarks_iq()).await {
+            Ok(IqResponse::Result(Some(el))) => {
                 if let PubSub::Items(items) = PubSub::try_from(el)? {
                     match &items.node.0 as &str {
                         ns::BOOKMARKS | ns::BOOKMARKS2 => Ok(handle(items.items)),
@@ -166,11 +166,13 @@ mod bookmarks_v1 {
                     Err(anyhow!("Can't get bookmarks: invalid result"))
                 }
             }
-            Iq::Error { error, .. } => Err(anyhow!(
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't get bookmarks: {}",
                 i18n::xmpp_err_to_string(&error, vec![]).1
             )),
-            _ => Err(anyhow!("Can't get bookmarks: invalid result")),
+            Ok(IqResponse::Result(None)) | Err(_) => {
+                Err(anyhow!("Can't get bookmarks: invalid result"))
+            }
         }
     }
 
@@ -190,13 +192,13 @@ mod bookmarks_v1 {
         account: &Account,
         bookmarks: &[contact::Bookmark],
     ) -> Result<()> {
-        match aparte.iq(account, update_iq(bookmarks)).await? {
-            Iq::Result { .. } => Ok(()),
-            Iq::Error { error, .. } => Err(anyhow!(
+        match aparte.iq(account, update_iq(bookmarks)).await {
+            Ok(IqResponse::Result(_)) => Ok(()),
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't update bookmarks: {}",
                 i18n::xmpp_err_to_string(&error, vec![]).1
             )),
-            _ => Err(anyhow!("Can't update bookmarks: invalid result")),
+            Err(_) => Err(anyhow!("Can't update bookmarks: invalid result")),
         }
     }
 
@@ -283,7 +285,7 @@ mod bookmarks_v1 {
     }
 
     pub async fn init(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
-        aparte.iq(account, subscribe_iq(account)).await?;
+        let _ = aparte.iq(account, subscribe_iq(account)).await;
 
         Ok(())
     }
@@ -306,6 +308,8 @@ mod bookmarks_v2 {
         },
     };
 
+    use tokio_xmpp::IqResponse;
+
     use crate::{
         account::Account,
         contact::{self, Bookmark},
@@ -317,10 +321,8 @@ mod bookmarks_v2 {
         aparte: &mut AparteAsync,
         account: &Account,
     ) -> Result<Vec<Bookmark>> {
-        match aparte.iq(account, get_bookmarks_iq()).await? {
-            Iq::Result {
-                payload: Some(el), ..
-            } => {
+        match aparte.iq(account, get_bookmarks_iq()).await {
+            Ok(IqResponse::Result(Some(el))) => {
                 if let PubSub::Items(items) = PubSub::try_from(el)? {
                     match &items.node.0 as &str {
                         ns::BOOKMARKS | ns::BOOKMARKS2 => Ok(handle(items.items)),
@@ -330,11 +332,13 @@ mod bookmarks_v2 {
                     Err(anyhow!("Can't get bookmarks: invalid result"))
                 }
             }
-            Iq::Error { error, .. } => Err(anyhow!(
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't get bookmarks: {}",
                 i18n::xmpp_err_to_string(&error, vec![]).1
             )),
-            _ => Err(anyhow!("Can't get bookmarks: invalid result")),
+            Ok(IqResponse::Result(None)) | Err(_) => {
+                Err(anyhow!("Can't get bookmarks: invalid result"))
+            }
         }
     }
 
@@ -388,13 +392,13 @@ mod bookmarks_v2 {
         account: &Account,
         bookmark: &contact::Bookmark,
     ) -> Result<()> {
-        match aparte.iq(account, add_iq(bookmark)).await? {
-            Iq::Result { .. } => Ok(()),
-            Iq::Error { error, .. } => Err(anyhow!(
+        match aparte.iq(account, add_iq(bookmark)).await {
+            Ok(IqResponse::Result(_)) => Ok(()),
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't add bookmarks: {}",
                 i18n::xmpp_err_to_string(&error, vec![]).1
             )),
-            _ => Err(anyhow!("Can't add bookmarks: invalid result")),
+            Err(_) => Err(anyhow!("Can't add bookmarks: invalid result")),
         }
     }
 
@@ -443,13 +447,13 @@ mod bookmarks_v2 {
         account: &Account,
         bookmark: BareJid,
     ) -> Result<()> {
-        match aparte.iq(account, delete_iq(bookmark)).await? {
-            Iq::Result { .. } => Ok(()),
-            Iq::Error { error, .. } => Err(anyhow!(
+        match aparte.iq(account, delete_iq(bookmark)).await {
+            Ok(IqResponse::Result(_)) => Ok(()),
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't delete bookmarks: {}",
                 i18n::xmpp_err_to_string(&error, vec![]).1
             )),
-            _ => Err(anyhow!("Can't delete bookmarks: invalid result")),
+            Err(_) => Err(anyhow!("Can't delete bookmarks: invalid result")),
         }
     }
 
@@ -544,9 +548,9 @@ mod bookmarks_v2 {
     }
 
     pub async fn init(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
-        aparte.iq(account, create_node_iq()).await?;
-        aparte.iq(account, config_node_iq()).await?;
-        aparte.iq(account, subscribe_iq(account)).await?;
+        let _ = aparte.iq(account, create_node_iq()).await;
+        let _ = aparte.iq(account, config_node_iq()).await;
+        let _ = aparte.iq(account, subscribe_iq(account)).await;
 
         Ok(())
     }

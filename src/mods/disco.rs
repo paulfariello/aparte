@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
 
+use tokio_xmpp::IqResponse;
 use xmpp_parsers::disco;
 use xmpp_parsers::disco::Feature;
 use xmpp_parsers::iq::Iq;
@@ -57,17 +58,14 @@ impl DiscoMod {
         account: &Account,
         jid: &Jid,
     ) -> Result<()> {
-        let resp = aparte
+        match aparte
             .iq(
                 account,
                 Self::disco_info_query_iq(&Jid::from_str(jid.domain().as_ref()).unwrap(), None),
             )
-            .await?;
-
-        match resp {
-            Iq::Result {
-                payload: Some(el), ..
-            } => {
+            .await
+        {
+            Ok(IqResponse::Result(Some(el))) => {
                 if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
                     aparte.schedule(Event::Disco(
                         account.clone(),
@@ -79,11 +77,13 @@ impl DiscoMod {
                     Err(anyhow!("Cannot get server disco info: invalid response"))
                 }
             }
-            Iq::Error { error, .. } => Err(anyhow!(
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Cannot get server disco info: {}",
                 i18n::xmpp_err_to_string(&error, vec![]).1
             )),
-            _ => Err(anyhow!("Cannot get server disco info: invalid response")),
+            Ok(IqResponse::Result(None)) | Err(_) => {
+                Err(anyhow!("Cannot get server disco info: invalid response"))
+            }
         }
     }
 
