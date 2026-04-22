@@ -1,4 +1,4 @@
-{ pkgs ? import <nixpkgs> {}, run ? "bash" }:
+{ pkgs ? import <nixpkgs> {}, run ? "bash", extraPkgs ? (_: []) }:
   (pkgs.buildFHSEnv {
     name = "aparte-env";
     targetPkgs = pkgs: (with pkgs; [
@@ -12,7 +12,7 @@
       openssl
       sqlite
       cacert
-    ]);
+    ]) ++ (extraPkgs pkgs);
     runScript = "${run}";
     profile = ''
       export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
