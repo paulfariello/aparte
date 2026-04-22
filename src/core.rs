@@ -1595,34 +1595,23 @@ impl Aparte {
     fn handle_iq(&mut self, account: Account, iq: Iq) {
         // Try to match to pending Iq
         if let Ok(uuid) = Uuid::from_str(iq.id()) {
-            let state = self.pending_iq.lock().unwrap().remove(&uuid);
-            if let Some(state) = state {
+            let mut map = self.pending_iq.lock().unwrap();
+            if let Some(state) = map.remove(&uuid) {
                 match state {
                     PendingIqState::Waiting(waker) => {
-                        // XXX dead lock
-                        self.pending_iq
-                            .lock()
-                            .unwrap()
-                            .insert(uuid, PendingIqState::Finished(iq));
+                        map.insert(uuid, PendingIqState::Finished(iq));
+                        drop(map);
                         if let Some(waker) = waker {
                             waker.wake();
                         }
                     }
                     PendingIqState::Errored(_err) => {
                         log::info!("Received multiple response for Iq: {}", uuid);
-                        // Insert valid iq instead
-                        self.pending_iq
-                            .lock()
-                            .unwrap()
-                            .insert(uuid, PendingIqState::Finished(iq));
+                        map.insert(uuid, PendingIqState::Finished(iq));
                     }
                     PendingIqState::Finished(iq) => {
                         log::info!("Received multiple response for Iq: {}", uuid);
-                        // Reinsert original result
-                        self.pending_iq
-                            .lock()
-                            .unwrap()
-                            .insert(uuid, PendingIqState::Finished(iq));
+                        map.insert(uuid, PendingIqState::Finished(iq));
                     }
                 }
                 return;
@@ -1648,34 +1637,23 @@ impl Aparte {
 
     fn errored_iq(&mut self, id: &str, err: anyhow::Error) {
         if let Ok(uuid) = Uuid::from_str(id) {
-            let state = self.pending_iq.lock().unwrap().remove(&uuid);
-            if let Some(state) = state {
+            let mut map = self.pending_iq.lock().unwrap();
+            if let Some(state) = map.remove(&uuid) {
                 match state {
                     PendingIqState::Waiting(waker) => {
-                        // XXX dead lock
-                        self.pending_iq
-                            .lock()
-                            .unwrap()
-                            .insert(uuid, PendingIqState::Errored(err));
+                        map.insert(uuid, PendingIqState::Errored(err));
+                        drop(map);
                         if let Some(waker) = waker {
                             waker.wake();
                         }
                     }
                     PendingIqState::Errored(err) => {
                         log::warn!("Received multiple response for Iq: {}", uuid);
-                        // Reinsert original result
-                        self.pending_iq
-                            .lock()
-                            .unwrap()
-                            .insert(uuid, PendingIqState::Errored(err));
+                        map.insert(uuid, PendingIqState::Errored(err));
                     }
                     PendingIqState::Finished(iq) => {
                         log::warn!("Received multiple response for Iq: {}", uuid);
-                        // Reinsert original result
-                        self.pending_iq
-                            .lock()
-                            .unwrap()
-                            .insert(uuid, PendingIqState::Finished(iq));
+                        map.insert(uuid, PendingIqState::Finished(iq));
                     }
                 }
             }
