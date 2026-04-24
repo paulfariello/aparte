@@ -14,11 +14,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
-use xmpp_parsers::jid::Jid;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+use xmpp_parsers::jid::Jid;
 
 use tokio_xmpp::xmlstream::{accept_stream, StreamHeader, Timeouts, XmppStreamElement};
 use xmpp_parsers::{
@@ -26,9 +26,11 @@ use xmpp_parsers::{
     carbons::Received,
     forwarding::Forwarded,
     iq::Iq,
+    jid::BareJid,
     message::{Id, Message, MessageType},
     minidom::Element,
     ns,
+    roster::{Ask, Item as RosterItem, Roster, Subscription},
     sasl::{Nonza as SaslNonza, Success},
     stream_features::{SaslMechanisms, StreamFeatures},
 };
@@ -65,7 +67,12 @@ impl Harness {
 
         let pty = NativePtySystem::default();
         let pair = pty
-            .openpty(PtySize { rows: ROWS, cols: COLS, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows: ROWS,
+                cols: COLS,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .expect("openpty");
 
         let exe = env!("CARGO_BIN_EXE_aparte");
@@ -122,7 +129,12 @@ impl Harness {
             });
         }
 
-        Harness { bytes, child, writer, _tmp: tmp }
+        Harness {
+            bytes,
+            child,
+            writer,
+            _tmp: tmp,
+        }
     }
 
     fn snapshot(&self) -> vt100::Parser {
@@ -238,6 +250,7 @@ async fn run_mock_server(
     listener: TcpListener,
     bound_jid: String,
     mut inject_rx: mpsc::UnboundedReceiver<XmppStreamElement>,
+    roster_contacts: Vec<String>,
 ) {
     let (socket, _addr) = listener.accept().await.expect("mock: accept");
     let io = tokio::io::BufReader::new(socket);
@@ -276,7 +289,10 @@ async fn run_mock_server(
     }
 
     let success = XmppStreamElement::Sasl(SaslNonza::Success(Success { data: vec![] }));
-    let accepted = stream.accept_reset(&success).await.expect("mock: accept_reset");
+    let accepted = stream
+        .accept_reset(&success)
+        .await
+        .expect("mock: accept_reset");
 
     // ── Phase 2: second stream, offer resource binding (no SM) ───────────────
     let pending = accepted
@@ -309,7 +325,9 @@ async fn run_mock_server(
 
     let bind_result = Iq::from_result(bind_req_id, Some(bind_response(&bound_jid)));
     stream
-        .send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(bind_result)))
+        .send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(
+            bind_result,
+        )))
         .await
         .expect("mock: send bind result");
 
@@ -326,6 +344,16 @@ async fn run_mock_server(
 
             msg = stream.next() => {
                 match msg {
+                    Some(Ok(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq)))) => {
+                        if let Iq::Get { ref id, ref payload, .. } = iq {
+                            if payload.is("query", ns::ROSTER) {
+                                let refs: Vec<&str> =
+                                    roster_contacts.iter().map(|s| s.as_str()).collect();
+                                let resp = roster_result_iq(id, &refs);
+                                let _ = stream.send(&resp).await;
+                            }
+                        }
+                    }
                     Some(Ok(_)) => {}
                     None | Some(Err(_)) => break,
                 }
@@ -334,12 +362,24 @@ async fn run_mock_server(
     }
 }
 
-fn start_mock_server(rt: &Runtime, bound_jid: &str) -> (MockServer, u16) {
-    let listener = rt
-        .block_on(async { TcpListener::bind("127.0.0.1:0").await.expect("bind mock port") });
+fn start_mock_server(
+    rt: &Runtime,
+    bound_jid: &str,
+    roster_contacts: &[&str],
+) -> (MockServer, u16) {
+    let listener = rt.block_on(async {
+        TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock port")
+    });
     let port = listener.local_addr().unwrap().port();
     let (inject_tx, inject_rx) = mpsc::unbounded_channel::<XmppStreamElement>();
-    rt.spawn(run_mock_server(listener, bound_jid.to_string(), inject_rx));
+    rt.spawn(run_mock_server(
+        listener,
+        bound_jid.to_string(),
+        inject_rx,
+        roster_contacts.iter().map(|s| s.to_string()).collect(),
+    ));
     (MockServer { inject_tx }, port)
 }
 
@@ -353,6 +393,22 @@ fn chat_message(from: &str, to: &str, id: &str, body: &str) -> XmppStreamElement
     msg.id = Some(Id(id.to_string()));
     msg.bodies.insert(Default::default(), body.to_string());
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+fn roster_result_iq(req_id: &str, contacts: &[&str]) -> XmppStreamElement {
+    let items = contacts
+        .iter()
+        .map(|jid| RosterItem {
+            jid: BareJid::new(*jid).expect("valid JID"),
+            name: None,
+            subscription: Subscription::Both,
+            ask: Ask::None,
+            groups: vec![],
+        })
+        .collect();
+    let roster = Roster { ver: None, items };
+    let iq = Iq::from_result(req_id.to_string(), Some(roster));
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
 }
 
 fn carbon_received(
@@ -369,7 +425,10 @@ fn carbon_received(
     inner.bodies.insert(Default::default(), body.to_string());
 
     let received = Received {
-        forwarded: Forwarded { delay: None, message: inner },
+        forwarded: Forwarded {
+            delay: None,
+            message: inner,
+        },
     };
 
     let mut outer = Message::new_with_type(MessageType::Normal, Some(Jid::new(outer_to).unwrap()));
@@ -395,7 +454,10 @@ fn carbon_type_construction() {
     );
     match stanza {
         XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg)) => {
-            assert!(!msg.payloads.is_empty(), "payloads should contain <received>");
+            assert!(
+                !msg.payloads.is_empty(),
+                "payloads should contain <received>"
+            );
             assert_eq!(msg.from, Some(Jid::new("user@localhost").unwrap()));
         }
         _ => panic!("expected a Message stanza"),
@@ -407,7 +469,7 @@ fn carbon_type_construction() {
 fn connection_shows_jid_in_console() {
     let rt = Runtime::new().unwrap();
     let bound_jid = "user@localhost/aparte_test";
-    let (_mock, port) = start_mock_server(&rt, bound_jid);
+    let (_mock, port) = start_mock_server(&rt, bound_jid, &[]);
 
     let config = format!(
         "[accounts.test]\n\
@@ -437,7 +499,7 @@ fn connection_shows_jid_in_console() {
 fn incoming_chat_message_appears_in_ui() {
     let rt = Runtime::new().unwrap();
     let bound_jid = "user@localhost/aparte_test";
-    let (mock, port) = start_mock_server(&rt, bound_jid);
+    let (mock, port) = start_mock_server(&rt, bound_jid, &[]);
 
     let config = format!(
         "[accounts.test]\n\
@@ -484,7 +546,7 @@ fn incoming_chat_message_appears_in_ui() {
 fn incoming_carbon_appears_in_ui() {
     let rt = Runtime::new().unwrap();
     let bound_jid = "user@localhost/aparte_test";
-    let (mock, port) = start_mock_server(&rt, bound_jid);
+    let (mock, port) = start_mock_server(&rt, bound_jid, &[]);
 
     let config = format!(
         "[accounts.test]\n\
@@ -524,6 +586,44 @@ fn incoming_carbon_appears_in_ui() {
     assert!(
         found,
         "expected 'Carbon message!' in screen within 5 s\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// After a successful connection the server's roster response populates the
+/// contact list shown in the console window's right-hand panel.
+#[test]
+fn roster_contacts_displayed_in_ui() {
+    let rt = Runtime::new().unwrap();
+    let bound_jid = "user@localhost/aparte_test";
+    let (_mock, port) = start_mock_server(&rt, bound_jid, &["contact@localhost"]);
+
+    let config = format!(
+        "[accounts.test]\n\
+         jid = \"user@localhost\"\n\
+         server = \"127.0.0.1\"\n\
+         port = {port}\n\
+         autoconnect = true\n\
+         password = \"test\"\n"
+    );
+
+    let h = Harness::spawn(&config, &[("APARTE_INSECURE_XMPP", "1")]);
+
+    assert!(
+        wait_for_screen(&h, "Connected as", Duration::from_secs(15)),
+        "aparte did not connect within 15 s",
+    );
+
+    // The roster panel is the right-hand side of the always-visible console
+    // window; no /win switch is needed.
+    let found = wait_for_screen(&h, "contact@localhost", Duration::from_secs(5));
+    let parser = h.snapshot();
+    h.shutdown();
+    rt.shutdown_background();
+
+    assert!(
+        found,
+        "expected 'contact@localhost' in roster panel within 5 s\n{}",
         describe(parser.screen()),
     );
 }
