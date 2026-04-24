@@ -1265,6 +1265,23 @@ impl Aparte {
             }
         };
         log::debug!("Connect with dns_config: {dns_config:?}");
+        #[cfg(feature = "insecure-xmpp")]
+        let mut client = if std::env::var("APARTE_INSECURE_XMPP").as_deref() == Ok("1") {
+            tokio_xmpp::Client::new_plaintext(
+                Jid::from(account.clone()),
+                password.expose_secret().clone(),
+                dns_config,
+                tokio_xmpp::xmlstream::Timeouts::default(),
+            )
+        } else {
+            tokio_xmpp::Client::new_starttls(
+                Jid::from(account.clone()),
+                password.expose_secret().clone(),
+                dns_config,
+                tokio_xmpp::xmlstream::Timeouts::default(),
+            )
+        };
+        #[cfg(not(feature = "insecure-xmpp"))]
         let mut client = tokio_xmpp::Client::new_starttls(
             Jid::from(account.clone()),
             password.expose_secret().clone(),

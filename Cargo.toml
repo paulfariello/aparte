@@ -15,6 +15,7 @@ exclude = [
 default = []
 strict = []
 image = ["dep:image", "dep:sixel-image", "dep:reqwest", "terminus/image"]
+insecure-xmpp = ["tokio-xmpp/insecure-tcp"]
 
 [dependencies]
 aes-gcm = "0.10.3"
@@ -49,12 +50,16 @@ terminus = { path = "terminus" }
 termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
 textwrap = "^0.12"
 tokio = { version = "^1.10", features = ["full"] }
-tokio-xmpp = "5.0"
+tokio-xmpp = { version = "5.0", features = ["starttls", "direct-tls"] }
 toml = "^0.5"
 unicode-display-width = "0.3.0"
 unicode-segmentation = "^1.6"
 uuid = { version = "^1.7", features = ["v4"]  }
 xmpp-parsers = "0.22"
+
+[[test]]
+name = "xmpp_integration"
+required-features = ["insecure-xmpp"]
 
 [dev-dependencies]
 mockall = "^0.9"
@@ -62,6 +67,7 @@ test-log = "*"
 portable-pty = "0.8"
 vt100 = "0.15"
 tempfile = "3"
+tokio = { version = "^1.10", features = ["full"] }
 
 [profile.release]
 debug = true
