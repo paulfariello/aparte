@@ -30,8 +30,8 @@ use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
-use tokio::time::Duration;
 use tokio::time;
+use tokio::time::Duration;
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -1292,10 +1292,13 @@ impl Aparte {
         let (connection_channel, mut rx) = mpsc::unbounded_channel();
         let (iq_channel, mut iq_rx) = mpsc::unbounded_channel::<IqEnvelope>();
 
-        self.add_connection(account.clone(), Connection {
-            sink: connection_channel,
-            iq_sink: iq_channel,
-        });
+        self.add_connection(
+            account.clone(),
+            Connection {
+                sink: connection_channel,
+                iq_sink: iq_channel,
+            },
+        );
 
         let event_tx = self.event_tx.clone();
 
@@ -1760,9 +1763,15 @@ impl AparteAsync {
             _ => panic!("iq() called with non-request Iq variant"),
         };
         let (token_tx, token_rx) = tokio::sync::oneshot::channel::<IqResponseToken>();
-        let envelope = IqEnvelope { to, request, token_tx };
+        let envelope = IqEnvelope {
+            to,
+            request,
+            token_tx,
+        };
         self.iq_tx.send((account.clone(), envelope)).unwrap();
-        let token = token_rx.await.expect("connection task dropped before returning IqResponseToken");
+        let token = token_rx
+            .await
+            .expect("connection task dropped before returning IqResponseToken");
         token.await
     }
 

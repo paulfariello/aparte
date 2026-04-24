@@ -12,13 +12,13 @@ use aes_gcm::{
     Aes128Gcm,
 };
 use anyhow::{anyhow, Context, Result};
-use tokio_xmpp::IqResponse;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use libsignal_protocol::{
     process_prekey_bundle, CiphertextMessage, IdentityKey, PreKeyBundle, ProtocolAddress, PublicKey,
 };
 use rand::{random, seq::SliceRandom, thread_rng};
+use tokio_xmpp::IqResponse;
 
 //use xmpp_parsers::ns;
 use xmpp_parsers::iq::Iq;
