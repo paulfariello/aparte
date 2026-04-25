@@ -15,9 +15,13 @@ use std::time::Duration;
 use rstest::rstest;
 use tokio_xmpp::xmlstream::XmppStreamElement;
 use xmpp_parsers::jid::Jid;
+use xmpp_parsers::presence::Show;
 
 use common::describe;
-use common::xmpp_fixture::{carbon_received, chat_message, xmpp, xmpp_with_contact, XmppFixture};
+use common::xmpp_fixture::{
+    carbon_received, carbon_sent, chat_message, contact_offline_presence, contact_presence,
+    corrected_chat_message, xmpp, xmpp_with_contact, XmppFixture,
+};
 
 /// Verify that carbon stanzas can be built and round-trip through xmpp-parsers.
 #[test]
@@ -105,6 +109,173 @@ fn roster_contacts_displayed_in_ui(xmpp_with_contact: XmppFixture) {
     assert!(
         found,
         "expected 'contact@localhost' in roster panel within 5s\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// /msg <contact> opens a chat window visible in the win-bar.
+#[rstest]
+fn msg_command_opens_chat_window(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    let found = xmpp_with_contact.wait_for("contact@localhost", Duration::from_secs(5));
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        found,
+        "/msg did not open a chat window\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Typing a message in a chat window sends it and displays it locally.
+#[rstest]
+fn outgoing_chat_message_appears_in_ui(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp_with_contact.send_command("Hello outgoing!");
+    let found = xmpp_with_contact.wait_for("Hello outgoing!", Duration::from_secs(5));
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        found,
+        "outgoing message not in UI\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// /win switches to a different window.
+#[rstest]
+fn win_command_switches_window(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp_with_contact.send_command("/win console");
+    let found = xmpp_with_contact.wait_for("Connected as", Duration::from_secs(5));
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        found,
+        "/win console did not switch to console window\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Contact coming online keeps the contact visible in the roster panel.
+#[rstest]
+fn contact_presence_available(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.inject(contact_presence(
+        "contact@localhost/mobile",
+        "user@localhost",
+        None,
+        None,
+    ));
+    let found = xmpp_with_contact.wait_for("contact@localhost", Duration::from_secs(5));
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        found,
+        "contact disappeared from UI after available presence\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Contact going away keeps the contact visible in the roster panel.
+#[rstest]
+fn contact_presence_away(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.inject(contact_presence(
+        "contact@localhost/mobile",
+        "user@localhost",
+        Some(Show::Away),
+        Some("Out for lunch"),
+    ));
+    let found = xmpp_with_contact.wait_for("contact@localhost", Duration::from_secs(5));
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        found,
+        "contact disappeared from UI after away presence\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Contact going offline keeps the contact visible in the roster panel.
+#[rstest]
+fn contact_presence_offline(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.inject(contact_presence(
+        "contact@localhost/mobile",
+        "user@localhost",
+        None,
+        None,
+    ));
+    thread::sleep(Duration::from_millis(200));
+    xmpp_with_contact.inject(contact_offline_presence(
+        "contact@localhost/mobile",
+        "user@localhost",
+    ));
+    let found = xmpp_with_contact.wait_for("contact@localhost", Duration::from_secs(5));
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        found,
+        "contact disappeared from UI after offline presence\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Receiving a corrected message is processed without crashing the app.
+/// The correction is applied to the in-memory model; the chat window remains
+/// visible (the UI re-render of an updated message is a known limitation of
+/// the BTreeSet-based ScrollWin).
+#[rstest]
+fn incoming_message_correction_is_processed(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp.inject(chat_message(
+        "contact@localhost",
+        "user@localhost/aparte_test",
+        "orig1",
+        "Original text",
+    ));
+    xmpp.switch_window("contact@localhost");
+    assert!(
+        xmpp.wait_for("Original text", Duration::from_secs(5)),
+        "original message not visible",
+    );
+    // Inject the correction — must not crash
+    xmpp.inject(corrected_chat_message(
+        "contact@localhost",
+        "user@localhost/aparte_test",
+        "corr1",
+        "orig1",
+        "Corrected text",
+    ));
+    thread::sleep(Duration::from_millis(500));
+    // The app should still be running with the chat window open
+    let found = xmpp.wait_for("contact@localhost", Duration::from_secs(3));
+    let parser = xmpp.snapshot();
+    assert!(
+        found,
+        "chat window disappeared after processing correction\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// A carbon copy of a message sent from another device appears in the chat window.
+#[rstest]
+fn outgoing_carbon_sent_appears_in_ui(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp.inject(carbon_sent(
+        "user@localhost",
+        "user@localhost/aparte_test",
+        "user@localhost/other-device",
+        "contact@localhost",
+        "cs1",
+        "Sent from other device",
+    ));
+    xmpp.switch_window("contact@localhost");
+    let found = xmpp.wait_for("Sent from other device", Duration::from_secs(5));
+    let parser = xmpp.snapshot();
+    assert!(
+        found,
+        "carbon-sent message not in UI\n{}",
         describe(parser.screen()),
     );
 }

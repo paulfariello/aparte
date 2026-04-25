@@ -12,14 +12,20 @@ use xmpp_parsers::jid::Jid;
 use tokio_xmpp::xmlstream::{accept_stream, StreamHeader, Timeouts, XmppStreamElement};
 use xmpp_parsers::{
     bind::{BindFeature, BindResponse},
-    carbons::Received,
+    bookmarks::{Conference, Storage},
+    carbons::{Received, Sent},
     forwarding::Forwarded,
     iq::Iq,
     jid::BareJid,
+    mam,
     message::{Id, Message, MessageType},
     minidom::Element,
+    muc::user::{Affiliation, Item as MucItem, MucUser, Role},
     ns,
+    presence::{Presence, Show, Type as PresenceType},
+    pubsub::{event as pubsub_event, NodeName},
     roster::{Ask, Item as RosterItem, Roster, Subscription},
+    rsm::{First, SetResult},
     sasl::{Nonza as SaslNonza, Success},
     stream_features::{SaslMechanisms, StreamFeatures},
 };
@@ -59,6 +65,8 @@ async fn run_mock_server(
     bound_jid: String,
     mut inject_rx: mpsc::UnboundedReceiver<XmppStreamElement>,
     roster_contacts: Vec<String>,
+    respond_to_disco: bool,
+    mam_archive: Vec<(String, String, String, String)>,
 ) {
     // Real XMPP servers echo roster results with from=user_bare_jid, matching
     // the `to` field in the client's request. IqResponseTracker stores by
@@ -158,13 +166,56 @@ async fn run_mock_server(
             msg = stream.next() => {
                 match msg {
                     Some(Ok(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq)))) => {
-                        if let Iq::Get { ref id, ref payload, .. } = iq {
-                            if payload.is("query", ns::ROSTER) {
-                                let refs: Vec<&str> =
-                                    roster_contacts.iter().map(|s| s.as_str()).collect();
-                                let resp = roster_result_iq(id, &user_bare_jid, &refs);
-                                let _ = stream.send(&resp).await;
+                        match &iq {
+                            Iq::Get { id, payload, .. } => {
+                                if payload.is("query", ns::ROSTER) {
+                                    let refs: Vec<&str> =
+                                        roster_contacts.iter().map(|s| s.as_str()).collect();
+                                    let resp = roster_result_iq(id, &user_bare_jid, &refs);
+                                    let _ = stream.send(&resp).await;
+                                } else if payload.is("query", ns::DISCO_INFO) && respond_to_disco {
+                                    let resp = Iq::Result {
+                                        from: None,
+                                        to: None,
+                                        id: id.to_string(),
+                                        payload: None,
+                                    };
+                                    let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(resp))).await;
+                                } else {
+                                    // Silently ignore unrecognised IQ-gets
+                                }
                             }
+                            Iq::Set { id, payload, .. } => {
+                                if payload.is("query", ns::MAM) && !mam_archive.is_empty() {
+                                    // Extract queryid from the MAM query
+                                    if let Ok(query) = mam::Query::try_from(payload.clone()) {
+                                        let queryid = query.queryid.clone();
+                                        for (msg_from, msg_to, msg_id, body) in &mam_archive {
+                                            let result = mam_result_message(
+                                                queryid.as_ref().map(|q| q.0.as_str()).unwrap_or(""),
+                                                msg_id,
+                                                msg_from,
+                                                msg_to,
+                                                msg_id,
+                                                body,
+                                            );
+                                            let _ = stream.send(&result).await;
+                                        }
+                                    }
+                                    let fin = mam_fin_iq(id, true);
+                                    let _ = stream.send(&fin).await;
+                                } else {
+                                    // Ack all other IQ-sets so the client doesn't stall
+                                    let ack = Iq::Result {
+                                        from: None,
+                                        to: None,
+                                        id: id.to_string(),
+                                        payload: None,
+                                    };
+                                    let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     Some(Ok(_)) => {}
@@ -179,6 +230,8 @@ fn start_mock_server(
     rt: &Runtime,
     bound_jid: &str,
     roster_contacts: &[&str],
+    respond_to_disco: bool,
+    mam_archive: Vec<(String, String, String, String)>,
 ) -> (MockServer, u16) {
     let listener = rt.block_on(async {
         TcpListener::bind("127.0.0.1:0")
@@ -192,6 +245,8 @@ fn start_mock_server(
         bound_jid.to_string(),
         inject_rx,
         roster_contacts.iter().map(|s| s.to_string()).collect(),
+        respond_to_disco,
+        mam_archive,
     ));
     (MockServer { inject_tx }, port)
 }
@@ -258,6 +313,187 @@ pub fn carbon_received(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
 }
 
+pub fn carbon_sent(
+    outer_from: &str,
+    outer_to: &str,
+    inner_from: &str,
+    inner_to: &str,
+    id: &str,
+    body: &str,
+) -> XmppStreamElement {
+    let mut inner = Message::chat(Some(Jid::new(inner_to).unwrap()));
+    inner.from = Some(Jid::new(inner_from).unwrap());
+    inner.id = Some(Id(id.to_string()));
+    inner.bodies.insert(Default::default(), body.to_string());
+
+    let sent = Sent {
+        forwarded: Forwarded {
+            delay: None,
+            message: inner,
+        },
+    };
+
+    let mut outer = Message::new_with_type(MessageType::Normal, Some(Jid::new(outer_to).unwrap()));
+    outer.from = Some(Jid::new(outer_from).unwrap());
+    outer.payloads.push(sent.into());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
+}
+
+pub fn contact_presence(
+    from: &str,
+    to: &str,
+    show: Option<Show>,
+    status: Option<&str>,
+) -> XmppStreamElement {
+    let mut presence = Presence::new(PresenceType::None);
+    presence.from = Some(Jid::new(from).unwrap());
+    presence.to = Some(Jid::new(to).unwrap());
+    presence.show = show;
+    if let Some(s) = status {
+        presence.statuses.insert(Default::default(), s.to_string());
+    }
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Presence(presence))
+}
+
+pub fn contact_offline_presence(from: &str, to: &str) -> XmppStreamElement {
+    let mut presence = Presence::new(PresenceType::Unavailable);
+    presence.from = Some(Jid::new(from).unwrap());
+    presence.to = Some(Jid::new(to).unwrap());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Presence(presence))
+}
+
+pub fn muc_join_presence(from: &str, to: &str, affiliation: Affiliation, role: Role) -> XmppStreamElement {
+    let muc_user = MucUser {
+        status: vec![],
+        items: vec![MucItem::new(affiliation, role)],
+        invite: None,
+        decline: None,
+    };
+    let mut presence = Presence::new(PresenceType::None);
+    presence.from = Some(Jid::new(from).unwrap());
+    presence.to = Some(Jid::new(to).unwrap());
+    presence.add_payload(muc_user);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Presence(presence))
+}
+
+pub fn groupchat_message(from: &str, to: &str, id: &str, body: &str) -> XmppStreamElement {
+    let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    msg.bodies.insert(Default::default(), body.to_string());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+pub fn room_subject_message(from: &str, to: &str, id: &str, subject: &str) -> XmppStreamElement {
+    let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    msg.subjects.insert(Default::default(), subject.to_string());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+pub fn corrected_chat_message(
+    from: &str,
+    to: &str,
+    new_id: &str,
+    original_id: &str,
+    body: &str,
+) -> XmppStreamElement {
+    use xmpp_parsers::message_correct::Replace;
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(new_id.to_string()));
+    msg.bodies.insert(Default::default(), body.to_string());
+    msg.payloads
+        .push(Replace { id: Id(original_id.to_string()) }.into());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+pub fn bookmarks_v1_push_event(
+    from: &str,
+    to: &str,
+    rooms: &[(&str, &str, bool)],
+) -> XmppStreamElement {
+    let conferences: Vec<_> = rooms
+        .iter()
+        .map(|(jid, name, autojoin)| Conference {
+            autojoin: *autojoin,
+            jid: BareJid::new(*jid).unwrap(),
+            name: Some(name.to_string()),
+            nick: None,
+            password: None,
+        })
+        .collect();
+    let storage = Storage { conferences, urls: vec![] };
+    let storage_elem: Element = storage.into();
+
+    let item = pubsub_event::Item {
+        id: None,
+        publisher: None,
+        payload: Some(storage_elem),
+    };
+    let event = pubsub_event::Event {
+        payload: pubsub_event::Payload::Items {
+            node: NodeName(ns::BOOKMARKS.to_string()),
+            published: vec![item],
+            retracted: vec![],
+        },
+    };
+    let event_elem: Element = event.into();
+
+    let mut msg = Message::new_with_type(MessageType::Headline, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(event_elem);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+fn mam_result_message(
+    queryid: &str,
+    archive_id: &str,
+    from: &str,
+    to: &str,
+    msg_id: &str,
+    body: &str,
+) -> XmppStreamElement {
+    let mut inner = Message::chat(Some(Jid::new(to).unwrap()));
+    inner.from = Some(Jid::new(from).unwrap());
+    inner.id = Some(Id(msg_id.to_string()));
+    inner.bodies.insert(Default::default(), body.to_string());
+
+    let result = mam::Result_ {
+        id: archive_id.to_string(),
+        queryid: if queryid.is_empty() {
+            None
+        } else {
+            Some(mam::QueryId(queryid.to_string()))
+        },
+        forwarded: Forwarded {
+            delay: None,
+            message: inner,
+        },
+    };
+
+    let mut outer = Message::new_with_type(MessageType::Normal, Some(Jid::new(to).unwrap()));
+    outer.payloads.push(result.into());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
+}
+
+fn mam_fin_iq(req_id: &str, complete: bool) -> XmppStreamElement {
+    let fin = mam::Fin {
+        complete,
+        set: SetResult {
+            first: Some(First {
+                index: Some(0),
+                item: "a1".to_string(),
+            }),
+            last: Some("a1".to_string()),
+            count: None,
+        },
+    };
+    let iq = Iq::from_result(req_id.to_string(), Some(fin));
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+}
+
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
@@ -270,8 +506,31 @@ pub struct XmppFixture {
 
 impl XmppFixture {
     pub fn new(roster: &[&str]) -> Self {
+        Self::new_impl(roster, false, vec![])
+    }
+
+    pub fn new_with_disco(roster: &[&str]) -> Self {
+        Self::new_impl(roster, true, vec![])
+    }
+
+    pub fn new_with_mam(
+        roster: &[&str],
+        archive: &[(&str, &str, &str, &str)],
+    ) -> Self {
+        let mam_archive = archive
+            .iter()
+            .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
+            .collect();
+        Self::new_impl(roster, true, mam_archive)
+    }
+
+    fn new_impl(
+        roster: &[&str],
+        respond_to_disco: bool,
+        mam_archive: Vec<(String, String, String, String)>,
+    ) -> Self {
         let rt = Runtime::new().unwrap();
-        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster);
+        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster, respond_to_disco, mam_archive);
         let config = format!(
             "[accounts.test]\n\
              jid = \"user@localhost\"\n\
@@ -290,6 +549,10 @@ impl XmppFixture {
 
     pub fn inject(&self, stanza: XmppStreamElement) {
         self.mock.inject(stanza);
+    }
+
+    pub fn send_command(&self, cmd: &str) {
+        self.harness.as_ref().unwrap().send_command(cmd);
     }
 
     pub fn wait_for(&self, needle: &str, timeout: Duration) -> bool {
@@ -325,4 +588,14 @@ pub fn xmpp() -> XmppFixture {
 #[fixture]
 pub fn xmpp_with_contact() -> XmppFixture {
     XmppFixture::new(&["contact@localhost"])
+}
+
+#[fixture]
+pub fn xmpp_with_disco() -> XmppFixture {
+    XmppFixture::new_with_disco(&[])
+}
+
+#[fixture]
+pub fn xmpp_with_contact_and_disco() -> XmppFixture {
+    XmppFixture::new_with_disco(&["contact@localhost"])
 }

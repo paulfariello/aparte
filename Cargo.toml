@@ -61,6 +61,18 @@ xmpp-parsers = "0.22"
 name = "xmpp_integration"
 required-features = ["insecure-xmpp"]
 
+[[test]]
+name = "muc"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "mam"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "bookmarks"
+required-features = ["insecure-xmpp"]
+
 [dev-dependencies]
 mockall = "^0.9"
 rstest = "0.22"
