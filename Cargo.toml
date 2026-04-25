@@ -63,6 +63,7 @@ required-features = ["insecure-xmpp"]
 
 [dev-dependencies]
 mockall = "^0.9"
+rstest = "0.22"
 test-log = "*"
 portable-pty = "0.8"
 vt100 = "0.15"

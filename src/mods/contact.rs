@@ -51,17 +51,25 @@ pub struct ContactMod {
 
 impl ContactMod {
     async fn get_roster(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
-        if let Ok(IqResponse::Result(Some(payload))) =
-            aparte.iq(account, Self::get_roster_iq()).await
-        {
-            if payload.is("query", ns::ROSTER) {
-                if let Ok(roster) = roster::Roster::try_from(payload) {
-                    log::info!("Got roster");
-                    for item in roster.items {
-                        aparte.schedule(Event::Contact(account.clone(), item.into()));
+        match aparte.iq(account, Self::get_roster_iq()).await {
+            Ok(IqResponse::Result(Some(payload))) => {
+                if !payload.is("query", ns::ROSTER) {
+                    log::warn!("Roster IQ result has unexpected payload: {:?}", payload);
+                    return Ok(());
+                }
+                match roster::Roster::try_from(payload) {
+                    Ok(roster) => {
+                        log::info!("Got roster with {} contacts", roster.items.len());
+                        for item in roster.items {
+                            aparte.schedule(Event::Contact(account.clone(), item.into()));
+                        }
                     }
+                    Err(err) => log::warn!("Failed to parse roster: {}", err),
                 }
             }
+            Ok(IqResponse::Result(None)) => log::warn!("Roster IQ returned empty result"),
+            Ok(IqResponse::Error(err)) => log::warn!("Roster IQ returned error: {:?}", err),
+            Err(err) => log::warn!("Roster IQ request failed: {}", err),
         }
 
         Ok(())

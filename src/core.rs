@@ -1762,6 +1762,12 @@ impl AparteAsync {
             Iq::Set { to, payload, .. } => (to, IqRequest::Set(payload)),
             _ => panic!("iq() called with non-request Iq variant"),
         };
+        // IqResponseTracker matches responses by (from, id) but stores by (to, id).
+        // Without an explicit `to`, the stored key is (None, id). The server replies
+        // with from=bare_jid, giving lookup key (Some(bare_jid), id) — no match.
+        // RFC 6121: self-addressed IQs (roster, etc.) should use the user's bare JID
+        // as `to`; the server echoes that back as `from`, so both sides use the same key.
+        let to = to.or_else(|| Some(Jid::from(account.to_bare())));
         let (token_tx, token_rx) = tokio::sync::oneshot::channel::<IqResponseToken>();
         let envelope = IqEnvelope {
             to,
