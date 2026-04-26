@@ -258,6 +258,38 @@ fn incoming_message_correction_is_processed(xmpp: XmppFixture) {
     );
 }
 
+/// Non-regression: wide-char (emoji) right-half cell must not persist as a ghost
+/// after switching windows. The bug: apply_diff only updated reference_screen[P]
+/// for a w=2 emoji at position P, leaving reference_screen[P+1] stale. When
+/// switching back to console, compute_diff saw reference[P+1] == buffer[P+1]
+/// (coincidental match) and skipped the cell, leaving the emoji right-half on
+/// screen and corrupting text at that column.
+#[rstest]
+fn wide_char_right_half_cleared_on_window_switch(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    // Emoji lands at col 30 (11-char timestamp + 19-char "contact@localhost: "
+    // prefix), placing the right-half at col 31 — the same column as 'c' in
+    // "localhost" from the console's "Connected as user@localhost/aparte_test".
+    // With the bug, col 31 stays as the emoji right-half continuation after
+    // switching back, breaking "localhost" → "loalhost" in the vt100 view.
+    xmpp.inject(chat_message(
+        "contact@localhost",
+        "user@localhost/aparte_test",
+        "wc1",
+        "🤣 regression check",
+    ));
+    xmpp.switch_window("contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp.switch_window("console");
+    let found = xmpp.wait_for("localhost", Duration::from_secs(5));
+    let parser = xmpp.snapshot();
+    assert!(
+        found,
+        "emoji right-half cell persisted after window switch, corrupting console\n{}",
+        describe(parser.screen()),
+    );
+}
+
 /// A carbon copy of a message sent from another device appears in the chat window.
 #[rstest]
 fn outgoing_carbon_sent_appears_in_ui(xmpp: XmppFixture) {

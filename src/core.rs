@@ -842,10 +842,12 @@ pub struct Aparte {
     /// Aparté main configuration
     pub config: Config,
     pub storage: Storage,
+    record_path: Option<PathBuf>,
+    pending_annotations: Arc<Mutex<Vec<String>>>,
 }
 
 impl Aparte {
-    pub fn new(config_path: PathBuf, storage_path: PathBuf) -> Result<Self> {
+    pub fn new(config_path: PathBuf, storage_path: PathBuf, record_path: Option<PathBuf>) -> Result<Self> {
         log::debug!("Loading aparté with {:?}", config_path);
         let mut config_file = OpenOptions::new()
             .read(true)
@@ -890,6 +892,8 @@ impl Aparte {
             config: config.clone(),
             crypto_engines: Arc::new(Mutex::new(HashMap::new())),
             read_password: AtomicBool::new(false),
+            record_path,
+            pending_annotations: Arc::new(Mutex::new(Vec::new())),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::default()));
@@ -1082,23 +1086,55 @@ impl Aparte {
                 Arc::clone(&ui.render_buffer)
             };
             let mut reference_screen = OffscreenRenderBuffer::default();
+            let record_path = self.record_path.take();
+            let pending_annotations = Arc::clone(&self.pending_annotations);
 
             async move {
+                use crate::tee_writer::Screen;
+
                 log::debug!("Start UI thread");
-                let mut screen = std::io::stdout()
+                let base = std::io::stdout()
                     .into_raw_mode()
                     .unwrap()
                     .into_alternate_screen()
                     .unwrap();
+
+                let mut screen: Screen = match record_path {
+                    Some(ref path) => {
+                        let rec = std::fs::OpenOptions::new()
+                            .write(true).create(true).truncate(true)
+                            .open(path)
+                            .expect("Cannot open recording file");
+                        let mut events_path = path.clone();
+                        events_path.set_extension("events");
+                        let ev = std::fs::OpenOptions::new()
+                            .write(true).create(true).truncate(true)
+                            .open(events_path)
+                            .expect("Cannot open events file");
+                        Screen::Recording(crate::tee_writer::TeeWriter::new(base, rec, ev))
+                    }
+                    None => Screen::Plain(base),
+                };
+
                 let _ = write!(&mut screen, "{}", termion::clear::All);
                 let mut interval = time::interval(Duration::from_millis(UI_TICK_MS));
                 let mut fps = 0;
                 let mut last_fps_log = Instant::now();
+                let mut frame_count: u64 = 0;
                 loop {
                     {
+                        if let Ok(mut annotations) = pending_annotations.lock() {
+                            for tag in annotations.drain(..) {
+                                screen.annotate(&tag);
+                            }
+                        }
+
                         let render_buffer = std::sync::RwLock::read(&render_buffer).unwrap();
 
                         render_buffer.render(&mut screen, &mut reference_screen);
+
+                        frame_count += 1;
+                        screen.dump_buffer(&reference_screen.dump_text(), frame_count);
 
                         fps += 1;
                     }
@@ -1144,6 +1180,11 @@ impl Aparte {
                             // Handle priority events first
                             let mut priority_start = Instant::now();
                             for event in priority_events {
+                                if let Event::ChangeWindow(ref name) = event {
+                                    if let Ok(mut q) = self.pending_annotations.lock() {
+                                        q.push(format!("WINDOW_CHANGE:{}", name));
+                                    }
+                                }
                                 if self.handle_event(event).is_err() {
                                     break 'main
                                 }

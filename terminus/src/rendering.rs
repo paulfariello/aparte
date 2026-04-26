@@ -125,6 +125,18 @@ impl OffscreenRenderBuffer {
         self.cursor = pos;
     }
 
+    pub fn dump_text(&self) -> String {
+        let mut out = String::new();
+        for (row, line) in self.lines.iter().enumerate() {
+            out.push_str(&format!("ROW {:03}:", row));
+            for charxel in &line.charxels {
+                out.push_str(&format!(" [{} w={}]", charxel.grapheme, charxel.display_width()));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     fn compute_diff(&self, reference_lines: &[OffscreenLine]) -> Vec<ContinuousDiff> {
         let mut diffs: Vec<ContinuousDiff> = vec![];
         let mut current_diff: Option<ContinuousDiff> = None;
@@ -186,12 +198,25 @@ impl OffscreenRenderBuffer {
             let mut col_offset = 0usize;
             for charxel in diff.charxels.into_iter() {
                 let left = diff.pos.left as usize + col_offset;
+                let w = charxel.display_width() as usize;
                 let row = diff.pos.top as usize + left / width;
                 let col = left % width;
                 if row < height && col < width {
                     self[row as u16][col as u16] = charxel.clone();
                 }
-                col_offset += charxel.display_width() as usize;
+                // For wide chars, mark right-half cells with the same charxel so
+                // that when this char is later replaced by a narrower one, the
+                // right-half cell is known to differ from any normal buffer content
+                // and gets explicitly rewritten (clearing the terminal's right half).
+                for extra in 1..w {
+                    let right_left = left + extra;
+                    let right_row = diff.pos.top as usize + right_left / width;
+                    let right_col = right_left % width;
+                    if right_row < height && right_col < width {
+                        self[right_row as u16][right_col as u16] = charxel.clone();
+                    }
+                }
+                col_offset += w;
             }
         }
     }

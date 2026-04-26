@@ -14,6 +14,7 @@ mod contact;
 mod conversation;
 mod core;
 mod message;
+mod tee_writer;
 #[macro_use]
 mod command;
 mod color;
@@ -36,6 +37,9 @@ struct Args {
     /// Path to the shared dir
     #[arg(short, long)]
     shared: Option<std::path::PathBuf>,
+    /// Record terminal output to this file for rendering debug (creates <file>.events sidecar)
+    #[arg(long)]
+    record: Option<std::path::PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -81,7 +85,7 @@ fn main() -> Result<()> {
 
     log::info!("Starting aparté");
 
-    let mut aparte = Aparte::new(config, storage)?;
+    let mut aparte = Aparte::new(config, storage, args.record)?;
 
     aparte.init().unwrap();
 
