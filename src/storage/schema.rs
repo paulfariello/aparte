@@ -67,9 +67,17 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    omemo_muc_room (account, room) {
+        account -> Text,
+        room -> Text,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     omemo_contact_device,
     omemo_identity,
+    omemo_muc_room,
     omemo_own_device,
     omemo_pre_key,
     omemo_sender_key,

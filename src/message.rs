@@ -441,7 +441,7 @@ impl Message {
             Message::Xmpp(message) => match message.direction {
                 Direction::Outgoing => match message.type_ {
                     XmppMessageType::Chat => Some(message.to.clone()),
-                    XmppMessageType::Channel => None, // TODO fetch all participants?
+                    XmppMessageType::Channel => Some(message.to.clone()),
                 },
                 Direction::Incoming => None,
             },

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod omemo;
 pub mod xmpp_fixture;
 
 use std::io::{Read, Write};

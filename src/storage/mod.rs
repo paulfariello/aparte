@@ -123,6 +123,44 @@ impl Storage {
             .collect())
     }
 
+    pub fn add_omemo_muc_room(&self, account: &Account, room: &BareJid) -> Result<()> {
+        use schema::omemo_muc_room;
+        let mut conn = self.pool.get()?;
+        diesel::insert_into(omemo_muc_room::table)
+            .values((
+                omemo_muc_room::account.eq(account.to_string()),
+                omemo_muc_room::room.eq(room.to_string()),
+            ))
+            .on_conflict((omemo_muc_room::account, omemo_muc_room::room))
+            .do_nothing()
+            .execute(&mut conn)?;
+        Ok(())
+    }
+
+    pub fn remove_omemo_muc_room(&self, account: &Account, room: &BareJid) -> Result<()> {
+        use schema::omemo_muc_room;
+        let mut conn = self.pool.get()?;
+        diesel::delete(
+            omemo_muc_room::table
+                .filter(omemo_muc_room::account.eq(account.to_string()))
+                .filter(omemo_muc_room::room.eq(room.to_string())),
+        )
+        .execute(&mut conn)?;
+        Ok(())
+    }
+
+    pub fn get_omemo_muc_rooms(&self, account: &Account) -> Result<Vec<BareJid>> {
+        use schema::omemo_muc_room;
+        let mut conn = self.pool.get()?;
+        Ok(omemo_muc_room::table
+            .filter(omemo_muc_room::account.eq(account.to_string()))
+            .select(omemo_muc_room::room)
+            .get_results::<String>(&mut conn)?
+            .iter()
+            .filter_map(|room| BareJid::from_str(room).ok())
+            .collect())
+    }
+
     pub fn get_omemo_contact_devices(
         &self,
         account: &Account,

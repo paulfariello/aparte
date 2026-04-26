@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::thread;
 use std::time::Duration;
@@ -17,13 +18,14 @@ use xmpp_parsers::{
     forwarding::Forwarded,
     iq::Iq,
     jid::BareJid,
+    legacy_omemo,
     mam,
     message::{Id, Message, MessageType},
     minidom::Element,
     muc::user::{Affiliation, Item as MucItem, MucUser, Role},
     ns,
     presence::{Presence, Show, Type as PresenceType},
-    pubsub::{event as pubsub_event, NodeName},
+    pubsub::{self, event as pubsub_event, ItemId, NodeName, PubSub},
     roster::{Ask, Item as RosterItem, Roster, Subscription},
     rsm::{First, SetResult},
     sasl::{Nonza as SaslNonza, Success},
@@ -34,6 +36,61 @@ use super::Harness;
 use super::wait_for_screen;
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
+
+// ---------------------------------------------------------------------------
+// OMEMO mock support
+// ---------------------------------------------------------------------------
+
+/// Config passed to the mock server enabling OMEMO-aware responses.
+pub struct OmemoMockConfig {
+    /// Fake devices per contact: bare JID string → Vec<(device_id, Bundle)>
+    pub contact_devices: HashMap<String, Vec<(u32, legacy_omemo::Bundle)>>,
+    /// Receives (device_id, Bundle) when aparte publishes its own bundle
+    pub bundle_tx: mpsc::UnboundedSender<(u32, legacy_omemo::Bundle)>,
+    /// Receives Message stanzas sent by aparte (for checking encryption)
+    pub stanza_tx: mpsc::UnboundedSender<Message>,
+}
+
+/// Receive-side handles returned to the test when using OMEMO fixtures.
+pub struct OmemoCapture {
+    pub bundle_rx: mpsc::UnboundedReceiver<(u32, legacy_omemo::Bundle)>,
+    pub stanza_rx: mpsc::UnboundedReceiver<Message>,
+}
+
+impl OmemoCapture {
+    pub fn recv_bundle(&mut self, timeout: Duration) -> (u32, legacy_omemo::Bundle) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Ok(b) = self.bundle_rx.try_recv() {
+                return b;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for own bundle publish"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    pub fn recv_message_matching(
+        &mut self,
+        predicate: impl Fn(&Message) -> bool,
+        timeout: Duration,
+    ) -> Option<Message> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            while let Ok(msg) = self.stanza_rx.try_recv() {
+                if predicate(&msg) {
+                    return Some(msg);
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Mock XMPP server
@@ -67,6 +124,7 @@ async fn run_mock_server(
     roster_contacts: Vec<String>,
     respond_to_disco: bool,
     mam_archive: Vec<(String, String, String, String)>,
+    omemo_cfg: Option<OmemoMockConfig>,
 ) {
     // Real XMPP servers echo roster results with from=user_bare_jid, matching
     // the `to` field in the client's request. IqResponseTracker stores by
@@ -165,9 +223,15 @@ async fn run_mock_server(
 
             msg = stream.next() => {
                 match msg {
+                    Some(Ok(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(xmpp_msg)))) => {
+                        // Capture outgoing Message stanzas for OMEMO tests
+                        if let Some(cfg) = &omemo_cfg {
+                            let _ = cfg.stanza_tx.send(xmpp_msg);
+                        }
+                    }
                     Some(Ok(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq)))) => {
                         match &iq {
-                            Iq::Get { id, payload, .. } => {
+                            Iq::Get { id, payload, to, .. } => {
                                 if payload.is("query", ns::ROSTER) {
                                     let refs: Vec<&str> =
                                         roster_contacts.iter().map(|s| s.as_str()).collect();
@@ -181,11 +245,27 @@ async fn run_mock_server(
                                         payload: None,
                                     };
                                     let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(resp))).await;
-                                } else {
-                                    // Silently ignore unrecognised IQ-gets
+                                } else if payload.is("pubsub", ns::PUBSUB) {
+                                    if let Ok(PubSub::Items(items)) = PubSub::try_from(payload.clone()) {
+                                        let node = items.node.0.as_str();
+                                        let target = to.as_ref().map(|j| j.to_string()).unwrap_or_default();
+                                        if node == ns::LEGACY_OMEMO_DEVICELIST {
+                                            let resp = omemo_devicelist_iq(id, &items.node, &target, &omemo_cfg);
+                                            let _ = stream.send(&resp).await;
+                                        } else if node.starts_with(ns::LEGACY_OMEMO_BUNDLES) {
+                                            let device_id: u32 = node.rsplit(':').next()
+                                                .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                            let resp = omemo_bundle_iq(id, &items.node, &target, device_id, &omemo_cfg);
+                                            let _ = stream.send(&resp).await;
+                                        }
+                                        // else: ignore other pubsub Gets
+                                    }
                                 }
+                                // else: silently ignore other unrecognised IQ-gets
                             }
-                            Iq::Set { id, payload, .. } => {
+                            Iq::Set { id, payload, to, .. } => {
+                                // IqResponseTracker matches by (from, id); echo request's `to` as `from`.
+                                let from = to.clone();
                                 if payload.is("query", ns::MAM) && !mam_archive.is_empty() {
                                     // Extract queryid from the MAM query
                                     if let Ok(query) = mam::Query::try_from(payload.clone()) {
@@ -204,10 +284,44 @@ async fn run_mock_server(
                                     }
                                     let fin = mam_fin_iq(id, true);
                                     let _ = stream.send(&fin).await;
+                                } else if payload.is("pubsub", ns::PUBSUB) {
+                                    if let Ok(pubsub) = PubSub::try_from(payload.clone()) {
+                                        match pubsub {
+                                            PubSub::Subscribe { subscribe: Some(sub), .. } => {
+                                                let resp = omemo_subscription_iq(id, &sub, from.as_ref());
+                                                let _ = stream.send(&resp).await;
+                                            }
+                                            PubSub::Publish { ref publish, .. }
+                                                if publish.node.0.starts_with(ns::LEGACY_OMEMO_BUNDLES) =>
+                                            {
+                                                if let Some(cfg) = &omemo_cfg {
+                                                    if let Some(item) = publish.items.first() {
+                                                        if let Some(ref pl) = item.payload {
+                                                            if let Ok(bundle) = legacy_omemo::Bundle::try_from(pl.clone()) {
+                                                                let device_id: u32 = publish.node.0.rsplit(':').next()
+                                                                    .and_then(|s| s.parse().ok()).unwrap_or(0);
+                                                                let _ = cfg.bundle_tx.send((device_id, bundle));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
+                                                let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
+                                            }
+                                            _ => {
+                                                // Ack all other pubsub Sets
+                                                let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
+                                                let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
+                                            }
+                                        }
+                                    } else {
+                                        let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
+                                        let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
+                                    }
                                 } else {
                                     // Ack all other IQ-sets so the client doesn't stall
                                     let ack = Iq::Result {
-                                        from: None,
+                                        from,
                                         to: None,
                                         id: id.to_string(),
                                         payload: None,
@@ -232,6 +346,7 @@ fn start_mock_server(
     roster_contacts: &[&str],
     respond_to_disco: bool,
     mam_archive: Vec<(String, String, String, String)>,
+    omemo_cfg: Option<OmemoMockConfig>,
 ) -> (MockServer, u16) {
     let listener = rt.block_on(async {
         TcpListener::bind("127.0.0.1:0")
@@ -247,8 +362,120 @@ fn start_mock_server(
         roster_contacts.iter().map(|s| s.to_string()).collect(),
         respond_to_disco,
         mam_archive,
+        omemo_cfg,
     ));
     (MockServer { inject_tx }, port)
+}
+
+// ---------------------------------------------------------------------------
+// OMEMO IQ response builders
+// ---------------------------------------------------------------------------
+
+fn omemo_devicelist_iq(
+    req_id: &str,
+    node: &NodeName,
+    target_jid: &str,
+    omemo_cfg: &Option<OmemoMockConfig>,
+) -> XmppStreamElement {
+    let devices: Vec<legacy_omemo::Device> = omemo_cfg
+        .as_ref()
+        .and_then(|c| c.contact_devices.get(target_jid))
+        .map(|devs| devs.iter().map(|(id, _)| legacy_omemo::Device { id: *id }).collect())
+        .unwrap_or_default();
+    let device_list = legacy_omemo::DeviceList { devices };
+    let item = pubsub::pubsub::Item {
+        id: Some(ItemId("current".into())),
+        publisher: None,
+        payload: Some(device_list.into()),
+    };
+    let pubsub_resp = PubSub::Items(pubsub::pubsub::Items {
+        node: node.clone(),
+        max_items: None,
+        subid: None,
+        items: vec![item],
+    });
+    // IqResponseTracker matches by (from, id); from must equal original request's to.
+    let from = Jid::new(target_jid).ok();
+    let iq = Iq::Result {
+        from,
+        to: None,
+        id: req_id.to_string(),
+        payload: Some(pubsub_resp.into()),
+    };
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+}
+
+fn omemo_bundle_iq(
+    req_id: &str,
+    node: &NodeName,
+    target_jid: &str,
+    device_id: u32,
+    omemo_cfg: &Option<OmemoMockConfig>,
+) -> XmppStreamElement {
+    let bundle = omemo_cfg
+        .as_ref()
+        .and_then(|c| c.contact_devices.get(target_jid))
+        .and_then(|devs| devs.iter().find(|(id, _)| *id == device_id))
+        .map(|(_, b)| b.clone());
+    // IqResponseTracker matches by (from, id); from must equal original request's to.
+    let from = Jid::new(target_jid).ok();
+    match bundle {
+        Some(b) => {
+            let item = pubsub::pubsub::Item {
+                id: Some(ItemId("current".into())),
+                publisher: None,
+                payload: Some(b.into()),
+            };
+            let pubsub_resp = PubSub::Items(pubsub::pubsub::Items {
+                node: node.clone(),
+                max_items: None,
+                subid: None,
+                items: vec![item],
+            });
+            let iq = Iq::Result {
+                from,
+                to: None,
+                id: req_id.to_string(),
+                payload: Some(pubsub_resp.into()),
+            };
+            XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+        }
+        None => {
+            // Result(None) → OmemoEngine::get_bundle returns Ok(None) → triggers publish
+            let iq = Iq::Result {
+                from,
+                to: None,
+                id: req_id.to_string(),
+                payload: None,
+            };
+            XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+        }
+    }
+}
+
+fn omemo_subscription_iq(
+    req_id: &str,
+    sub: &pubsub::pubsub::Subscribe,
+    to_jid: Option<&Jid>,
+) -> XmppStreamElement {
+    // Build raw XML string because SubscriptionElem has private fields in xmpp-parsers 0.22
+    let node_str = sub.node.as_ref().map(|n| n.0.as_str()).unwrap_or("");
+    let jid_str = sub.jid.to_string();
+    let xml = format!(
+        "<pubsub xmlns='{}'><subscription jid='{}' node='{}' subscription='subscribed'/></pubsub>",
+        ns::PUBSUB,
+        jid_str,
+        node_str,
+    );
+    let pubsub_xml: Element = xml.parse().expect("valid subscription xml");
+    // IqResponseTracker matches by (from, id); from must equal original request's to.
+    let iq = Iq::Result {
+        from: to_jid.cloned(),
+        to: None,
+        id: req_id.to_string(),
+        payload: Some(pubsub_xml),
+    };
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +593,28 @@ pub fn muc_join_presence(from: &str, to: &str, affiliation: Affiliation, role: R
     let muc_user = MucUser {
         status: vec![],
         items: vec![MucItem::new(affiliation, role)],
+        invite: None,
+        decline: None,
+    };
+    let mut presence = Presence::new(PresenceType::None);
+    presence.from = Some(Jid::new(from).unwrap());
+    presence.to = Some(Jid::new(to).unwrap());
+    presence.add_payload(muc_user);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Presence(presence))
+}
+
+pub fn muc_join_presence_with_jid(
+    from: &str,
+    to: &str,
+    affiliation: Affiliation,
+    role: Role,
+    real_jid: &str,
+) -> XmppStreamElement {
+    let mut item = MucItem::new(affiliation, role);
+    item.jid = Jid::new(real_jid).unwrap().try_into_full().ok();
+    let muc_user = MucUser {
+        status: vec![],
+        items: vec![item],
         invite: None,
         decline: None,
     };
@@ -506,11 +755,11 @@ pub struct XmppFixture {
 
 impl XmppFixture {
     pub fn new(roster: &[&str]) -> Self {
-        Self::new_impl(roster, false, vec![])
+        Self::new_impl(roster, false, vec![], None).0
     }
 
     pub fn new_with_disco(roster: &[&str]) -> Self {
-        Self::new_impl(roster, true, vec![])
+        Self::new_impl(roster, true, vec![], None).0
     }
 
     pub fn new_with_mam(
@@ -521,16 +770,46 @@ impl XmppFixture {
             .iter()
             .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
             .collect();
-        Self::new_impl(roster, true, mam_archive)
+        Self::new_impl(roster, true, mam_archive, None).0
+    }
+
+    /// Create fixture with OMEMO-aware mock server (empty contact devices).
+    pub fn new_with_omemo(roster: &[&str]) -> (Self, OmemoCapture) {
+        let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
+        let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
+        let cfg = OmemoMockConfig {
+            contact_devices: HashMap::new(),
+            bundle_tx,
+            stanza_tx,
+        };
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg));
+        (fixture, OmemoCapture { bundle_rx, stanza_rx })
+    }
+
+    /// Create fixture with OMEMO support and one fake contact device+bundle.
+    pub fn new_with_omemo_contact(
+        contact_jid: &str,
+        device_id: u32,
+        bundle: legacy_omemo::Bundle,
+    ) -> (Self, OmemoCapture) {
+        let mut contact_devices = HashMap::new();
+        contact_devices.insert(contact_jid.to_string(), vec![(device_id, bundle)]);
+        let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
+        let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
+        let cfg = OmemoMockConfig { contact_devices, bundle_tx, stanza_tx };
+        let roster = [contact_jid];
+        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg));
+        (fixture, OmemoCapture { bundle_rx, stanza_rx })
     }
 
     fn new_impl(
         roster: &[&str],
         respond_to_disco: bool,
         mam_archive: Vec<(String, String, String, String)>,
-    ) -> Self {
+        omemo_cfg: Option<OmemoMockConfig>,
+    ) -> (Self, ()) {
         let rt = Runtime::new().unwrap();
-        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster, respond_to_disco, mam_archive);
+        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster, respond_to_disco, mam_archive, omemo_cfg);
         let config = format!(
             "[accounts.test]\n\
              jid = \"user@localhost\"\n\
@@ -544,7 +823,7 @@ impl XmppFixture {
             wait_for_screen(&harness, "Connected as", Duration::from_secs(15)),
             "aparte did not connect within 15s",
         );
-        Self { rt: Some(rt), mock, harness: Some(harness) }
+        (Self { rt: Some(rt), mock, harness: Some(harness) }, ())
     }
 
     pub fn inject(&self, stanza: XmppStreamElement) {

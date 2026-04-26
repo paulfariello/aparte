@@ -78,3 +78,10 @@ pub struct OmemoSenderKey {
     pub distribution_id: Vec<u8>,
     pub sender_key: Vec<u8>,
 }
+
+#[allow(dead_code)]
+#[derive(Queryable, Debug)]
+pub struct OmemoMucRoom {
+    pub account: String,
+    pub room: String,
+}

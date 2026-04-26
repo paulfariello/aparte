@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
@@ -32,11 +33,13 @@ use xmpp_parsers::pubsub::{ItemId, PubSub};
 
 use crate::account::Account;
 use crate::command::{Command, CommandParser};
+use crate::conversation::Conversation;
 use crate::core::{Aparte, AparteAsync, Event, ModTrait};
+use crate::crypto::CryptoEngineTrait;
 use crate::i18n;
 //use crate::mods::disco::DiscoMod;
-use crate::crypto::CryptoEngineTrait;
 use crate::message::Message;
+use crate::mods::conversation::ConversationMod;
 use crate::mods::ui::UIMod;
 use crate::storage::{OmemoOwnDevice, SignalStorage};
 
@@ -233,57 +236,328 @@ impl OmemoEngine {
     }
 
     fn sync_bundle(&self, aparte: &Aparte) -> Result<()> {
-        log::info!("Syncing {}'s own bundle", self.account);
-        let device = aparte
-            .storage
-            .get_omemo_own_device(&self.account)?
-            .context("OMEMO isn't configured")?;
+        sync_bundle_for(aparte, &self.account)
+    }
+}
 
-        let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
-        let identity = device.identity.context("Missing own identity")?;
-        let identity_key_pair =
-            IdentityKeyPair::try_from(identity.as_ref()).context("Corrupted own identity")?;
+fn sync_bundle_for(aparte: &Aparte, account: &Account) -> Result<()> {
+    log::info!("Syncing {account}'s own bundle");
+    let device = aparte
+        .storage
+        .get_omemo_own_device(account)?
+        .context("OMEMO isn't configured")?;
 
-        let signed_pre_key_id = 0;
-        let signed_pre_key = aparte.storage.get_omemo_signed_pre_key(
-            &self.account,
-            libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
-        )?;
-        let signed_pre_key_public = signed_pre_key.public_key()?;
-        let signed_pre_key_signature = signed_pre_key.signature()?;
-        let pre_keys = aparte
-            .storage
-            .get_all_omemo_pre_key(&self.account)?
-            .into_iter()
-            .map(|pre_key| match (pre_key.id(), pre_key.public_key()) {
-                (Ok(id), Ok(public_key)) => Ok((u32::from(id), public_key)),
-                (Err(e), _) => Err(e),
-                (_, Err(e)) => Err(e),
-            })
-            .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
+    let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
+    let identity = device.identity.context("Missing own identity")?;
+    let identity_key_pair =
+        IdentityKeyPair::try_from(identity.as_ref()).context("Corrupted own identity")?;
 
-        Aparte::spawn({
-            let mut aparte = aparte.proxy();
-            let account = self.account.clone();
-            async move {
-                if let Err(err) = OmemoMod::publish_bundle(
-                    &mut aparte,
-                    &account,
-                    device_id,
-                    identity_key_pair,
-                    signed_pre_key_id,
-                    signed_pre_key_public,
-                    signed_pre_key_signature,
-                    pre_keys,
-                )
-                .await
-                {
-                    crate::error!(aparte, err, "Cannot sync OMEMO bundle");
-                }
+    let signed_pre_key_id = 0;
+    let signed_pre_key = aparte.storage.get_omemo_signed_pre_key(
+        account,
+        libsignal_protocol::SignedPreKeyId::from(signed_pre_key_id),
+    )?;
+    let signed_pre_key_public = signed_pre_key.public_key()?;
+    let signed_pre_key_signature = signed_pre_key.signature()?;
+    let pre_keys = aparte
+        .storage
+        .get_all_omemo_pre_key(account)?
+        .into_iter()
+        .map(|pre_key| match (pre_key.id(), pre_key.public_key()) {
+            (Ok(id), Ok(public_key)) => Ok((u32::from(id), public_key)),
+            (Err(e), _) => Err(e),
+            (_, Err(e)) => Err(e),
+        })
+        .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
+
+    Aparte::spawn({
+        let mut aparte = aparte.proxy();
+        let account = account.clone();
+        async move {
+            if let Err(err) = OmemoMod::publish_bundle(
+                &mut aparte,
+                &account,
+                device_id,
+                identity_key_pair,
+                signed_pre_key_id,
+                signed_pre_key_public,
+                signed_pre_key_signature,
+                pre_keys,
+            )
+            .await
+            {
+                crate::error!(aparte, err, "Cannot sync OMEMO bundle");
             }
-        });
+        }
+    });
 
-        Ok(())
+    Ok(())
+}
+
+struct MucOmemoEngine {
+    room: BareJid,
+    signal_storage: SignalStorage,
+    nick_to_jid: NickToJid,
+}
+
+impl MucOmemoEngine {
+    fn new(
+        _account: &Account,
+        signal_storage: SignalStorage,
+        room: &BareJid,
+        nick_to_jid: NickToJid,
+    ) -> Self {
+        Self {
+            room: room.clone(),
+            signal_storage,
+            nick_to_jid,
+        }
+    }
+}
+
+impl CryptoEngineTrait for MucOmemoEngine {
+    fn ns(&self) -> &'static str {
+        ns::LEGACY_OMEMO
+    }
+
+    fn encrypt(
+        &mut self,
+        aparte: &Aparte,
+        account: &Account,
+        message: &Message,
+    ) -> Result<xmpp_parsers::minidom::Element> {
+        let Message::Xmpp(message) = message else {
+            unreachable!()
+        };
+
+        let own_device = aparte
+            .storage
+            .get_omemo_own_device(account)?
+            .ok_or(anyhow!("Missing own device"))?;
+
+        let own_devices = aparte
+            .storage
+            .get_omemo_contact_devices(account, &account.to_bare())?;
+
+        let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
+        let dek = Aes128Gcm::generate_key(OsRng);
+        let cipher = Aes128Gcm::new(&dek);
+        let body = message.get_last_body();
+        let encrypted = cipher
+            .encrypt(&nonce, body.as_bytes())
+            .map_err(|e| anyhow!("{e}"))?;
+
+        assert!(encrypted.len() - body.len() == MAC_SIZE);
+
+        let mut dek_and_mac = [0u8; KEY_SIZE + MAC_SIZE];
+        dek_and_mac[..KEY_SIZE].copy_from_slice(&dek);
+        dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE].copy_from_slice(&encrypted[body.len()..]);
+
+        // Collect all member devices
+        let member_jids: Vec<BareJid> = self
+            .nick_to_jid
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+
+        let mut all_member_devices = vec![];
+        for member_jid in &member_jids {
+            let devices = aparte
+                .storage
+                .get_omemo_contact_devices(account, member_jid)?;
+            all_member_devices.extend(devices);
+        }
+
+        let keys = all_member_devices
+            .iter()
+            .chain(
+                own_devices
+                    .iter()
+                    .filter(|device| device.id != own_device.id),
+            )
+            .filter_map(|device| {
+                let remote_address =
+                    ProtocolAddress::new(device.contact.clone(), (device.id as u32).into());
+                message_encrypt(
+                    &dek_and_mac,
+                    &remote_address,
+                    &mut self.signal_storage.clone(),
+                    &mut self.signal_storage.clone(),
+                    None,
+                )
+                .now_or_never()
+                .and_then(|encrypted| match encrypted {
+                    Ok(CiphertextMessage::SignalMessage(msg)) => Some(legacy_omemo::Key {
+                        rid: device.id.try_into().unwrap(),
+                        prekey: false,
+                        data: msg.serialized().to_vec(),
+                    }),
+                    Ok(CiphertextMessage::PreKeySignalMessage(msg)) => Some(legacy_omemo::Key {
+                        rid: device.id.try_into().unwrap(),
+                        prekey: true,
+                        data: msg.serialized().to_vec(),
+                    }),
+                    Ok(_) => unreachable!(),
+                    Err(e) => {
+                        log::error!("Cannot encrypt for {remote_address}: {e}");
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        let mut xmpp_message =
+            xmpp_parsers::message::Message::new(Some(Jid::from(self.room.clone())));
+        xmpp_message.id = Some(XmppParsersMessageId(message.id.clone()));
+        xmpp_message.type_ = xmpp_parsers::message::MessageType::Groupchat;
+        xmpp_message.bodies.insert(
+            Lang::default(),
+            String::from(
+                "I sent you an OMEMO encrypted message but your client doesn't seem to support that.",
+            ),
+        );
+        xmpp_message.payloads.push(
+            legacy_omemo::Encrypted {
+                header: legacy_omemo::Header {
+                    sid: own_device
+                        .id
+                        .try_into()
+                        .context("Corrupted own device id")?,
+                    iv: legacy_omemo::IV {
+                        data: nonce.to_vec(),
+                    },
+                    keys,
+                },
+                payload: Some(legacy_omemo::Payload {
+                    data: encrypted[..body.len()].to_vec(),
+                }),
+            }
+            .into(),
+        );
+        xmpp_message.payloads.push(
+            xmpp_parsers::eme::ExplicitMessageEncryption {
+                namespace: String::from("eu.siacs.conversations.axolotl"),
+                name: Some(String::from("OMEMO")),
+            }
+            .into(),
+        );
+        Ok(xmpp_message.into())
+    }
+
+    fn decrypt(
+        &mut self,
+        aparte: &Aparte,
+        account: &Account,
+        message: &XmppParsersMessage,
+    ) -> Result<XmppParsersMessage> {
+        let from_full = message
+            .from
+            .clone()
+            .context("Missing from attribute")?
+            .try_into_full()
+            .map_err(|_| anyhow!("Expected full JID for MUC message"))?;
+
+        let nick = from_full.resource().to_string();
+
+        let sender_jid = self
+            .nick_to_jid
+            .lock()
+            .unwrap()
+            .get(&nick)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!("Unknown nick '{nick}' in room {}, cannot decrypt", self.room)
+            })?;
+
+        log::info!(
+            "Decrypting MUC message from {nick} ({sender_jid}) in {}",
+            self.room
+        );
+
+        let own_device = aparte
+            .storage
+            .get_omemo_own_device(account)?
+            .ok_or(anyhow!("Omemo isn't configured"))?;
+
+        let encrypted = message
+            .payloads
+            .iter()
+            .find_map(|p| legacy_omemo::Encrypted::try_from((*p).clone()).ok())
+            .ok_or(anyhow!("Missing encrypted element in EME OMEMO message"))?;
+
+        let key = encrypted
+            .header
+            .keys
+            .iter()
+            .find(|k| i64::from(k.rid) == own_device.id)
+            .ok_or(anyhow!("Missing OMEMO key for current device"))?;
+
+        let ciphertext_message = if key.prekey {
+            libsignal_protocol::CiphertextMessage::PreKeySignalMessage(
+                libsignal_protocol::PreKeySignalMessage::try_from(key.data.as_slice())
+                    .context("Invalid prekey signal message")?,
+            )
+        } else {
+            libsignal_protocol::CiphertextMessage::SignalMessage(
+                libsignal_protocol::SignalMessage::try_from(key.data.as_slice())
+                    .context("Invalid signal message")?,
+            )
+        };
+
+        let remote_address = ProtocolAddress::new(
+            sender_jid.to_string(),
+            libsignal_protocol::DeviceId::from(encrypted.header.sid),
+        );
+
+        let dek_and_mac = message_decrypt(
+            &ciphertext_message,
+            &remote_address,
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
+            &mut self.signal_storage.clone(),
+            &mut thread_rng(),
+            None,
+        )
+        .now_or_never()
+        .ok_or(anyhow!("Cannot decrypt DEK"))??;
+
+        if self
+            .signal_storage
+            .deleted_pre_keys
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            sync_bundle_for(aparte, account)?;
+        }
+
+        if dek_and_mac.len() != MAC_SIZE + KEY_SIZE {
+            anyhow::bail!("Invalid DEK and MAC size");
+        }
+
+        let mut decrypted_message = message.clone();
+
+        if let Some(payload) = encrypted.payload {
+            let dek = aes_gcm::Key::<Aes128Gcm>::from_slice(&dek_and_mac[..KEY_SIZE]);
+            let mac = &dek_and_mac[KEY_SIZE..KEY_SIZE + MAC_SIZE];
+            let mut payload_and_mac = Vec::with_capacity(payload.data.len() + mac.len());
+            payload_and_mac.extend(payload.data);
+            payload_and_mac.extend(mac);
+
+            let cipher = Aes128Gcm::new(dek);
+            let nonce = aes_gcm::Nonce::<<Aes128Gcm as AeadCore>::NonceSize>::from_slice(
+                encrypted.header.iv.data.as_slice(),
+            );
+            let cleartext = cipher
+                .decrypt(nonce, payload_and_mac.as_slice())
+                .map_err(|_| anyhow!("Message decryption failed"))?;
+            let body = String::from_utf8(cleartext)
+                .context("Message decryption resulted in invalid utf-8")?;
+            decrypted_message.bodies.insert(Lang::default(), body);
+        }
+
+        Ok(decrypted_message)
     }
 }
 
@@ -503,9 +777,12 @@ impl CryptoEngineTrait for OmemoEngine {
     }
 }
 
+type NickToJid = Arc<std::sync::Mutex<HashMap<String, BareJid>>>;
+
 #[derive(Default)]
 pub struct OmemoMod {
     signal_stores: HashMap<Account, SignalStorage>,
+    muc_occupant_maps: HashMap<(Account, BareJid), NickToJid>,
 }
 
 fn fingerprint(pub_key: &PublicKey) -> String {
@@ -737,6 +1014,62 @@ impl OmemoMod {
                 Box::new(OmemoEngine::new(account, signal_store.clone(), contact)),
             );
         }
+
+        Ok(())
+    }
+
+    fn restore_muc_sessions(&mut self, aparte: &mut Aparte, account: &Account) -> Result<()> {
+        let signal_store = self
+            .signal_stores
+            .get(account)
+            .context("Missing signal store")?;
+
+        for room in aparte.storage.get_omemo_muc_rooms(account)?.iter() {
+            let nick_to_jid: NickToJid = Arc::new(std::sync::Mutex::new(HashMap::new()));
+            self.muc_occupant_maps
+                .insert((account.clone(), room.clone()), Arc::clone(&nick_to_jid));
+            aparte.add_crypto_engine(
+                account,
+                room,
+                Box::new(MucOmemoEngine::new(
+                    account,
+                    signal_store.clone(),
+                    room,
+                    nick_to_jid,
+                )),
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn start_muc_session(
+        aparte: &mut AparteAsync,
+        signal_store: &SignalStorage,
+        account: &Account,
+        room: &BareJid,
+        initial_occupants: Vec<(String, BareJid)>,
+        nick_to_jid: NickToJid,
+    ) -> Result<()> {
+        log::info!("Start MUC OMEMO session on {account} for room {room}");
+
+        let muc_engine = MucOmemoEngine::new(account, signal_store.clone(), room, nick_to_jid);
+
+        for (nick, real_jid) in &initial_occupants {
+            log::info!("Starting OMEMO session for MUC member {nick} ({real_jid})");
+            if let Err(err) =
+                Self::start_session(aparte, signal_store, account, real_jid).await
+            {
+                crate::error!(
+                    aparte,
+                    err,
+                    "Cannot start OMEMO session for MUC member {real_jid}"
+                );
+            }
+        }
+
+        aparte.storage.add_omemo_muc_room(account, room)?;
+        aparte.add_crypto_engine(account, room, Box::new(muc_engine));
 
         Ok(())
     }
@@ -1192,30 +1525,143 @@ impl ModTrait for OmemoMod {
                 if let Err(err) = self.restore_sessions(aparte, account) {
                     crate::error!(aparte, err, "Cannot restore OMEMO sessions");
                 }
+                if let Err(err) = self.restore_muc_sessions(aparte, account) {
+                    crate::error!(aparte, err, "Cannot restore OMEMO MUC sessions");
+                }
             }
-            Event::Omemo(event) => match event {
-                // TODO context()?
-                OmemoEvent::Enable { account, jid } => {
-                    let mut aparte = aparte.proxy();
-                    let account = account.clone();
-                    let jid = jid.clone();
-                    match self.signal_stores.get(&account) {
-                        None => crate::info!(aparte, "OMEMO not configured for {account}"),
-                        Some(signal_store) => Aparte::spawn({
-                            let signal_store = SignalStorage::clone(signal_store);
-                            async move {
-                                if let Err(err) =
-                                    Self::start_session(&mut aparte, &signal_store, &account, &jid)
-                                        .await
+            Event::Occupant {
+                account,
+                conversation,
+                occupant,
+            } => {
+                let key = (account.clone(), conversation.clone());
+                if let (Some(map), Some(real_jid)) =
+                    (self.muc_occupant_maps.get(&key), &occupant.jid)
+                {
+                    let is_new = {
+                        let mut map = map.lock().unwrap();
+                        let prev = map.insert(occupant.nick.clone(), real_jid.clone());
+                        prev.is_none()
+                    };
+                    if is_new
+                        && aparte
+                            .storage
+                            .get_omemo_contact_devices(account, real_jid)
+                            .map(|d| d.is_empty())
+                            .unwrap_or(true)
+                    {
+                        if let Some(signal_store) = self.signal_stores.get(account).cloned() {
+                            let mut async_aparte = aparte.proxy();
+                            let account = account.clone();
+                            let real_jid = real_jid.clone();
+                            Aparte::spawn(async move {
+                                if let Err(err) = Self::start_session(
+                                    &mut async_aparte,
+                                    &signal_store,
+                                    &account,
+                                    &real_jid,
+                                )
+                                .await
                                 {
                                     crate::error!(
-                                        aparte,
+                                        async_aparte,
                                         err,
-                                        "Can't start OMEMO session with {jid}",
+                                        "Cannot start OMEMO session for new MUC member {real_jid}"
                                     );
                                 }
+                            });
+                        }
+                    }
+                }
+            }
+            Event::Omemo(event) => match event {
+                OmemoEvent::Enable { account, jid } => {
+                    let is_muc = {
+                        let conv_mod = aparte.get_mod::<ConversationMod>();
+                        matches!(conv_mod.get(account, jid), Some(Conversation::Channel(_)))
+                    };
+
+                    match self.signal_stores.get(account) {
+                        None => crate::info!(aparte, "OMEMO not configured for {account}"),
+                        Some(signal_store) => {
+                            if is_muc {
+                                let occupants: Vec<(String, BareJid)> = {
+                                    let conv_mod = aparte.get_mod::<ConversationMod>();
+                                    match conv_mod.get(account, jid) {
+                                        Some(Conversation::Channel(channel)) => channel
+                                            .occupants
+                                            .values()
+                                            .filter_map(|o| {
+                                                o.jid.as_ref().map(|j| (o.nick.clone(), j.clone()))
+                                            })
+                                            .collect(),
+                                        _ => vec![],
+                                    }
+                                };
+
+                                if occupants.is_empty() {
+                                    crate::info!(
+                                        aparte,
+                                        "No visible JIDs in {jid} — room may be anonymous; OMEMO requires non-anonymous MUC"
+                                    );
+                                    return;
+                                }
+
+                                let nick_to_jid: NickToJid = Arc::new(std::sync::Mutex::new(
+                                    occupants.iter().cloned().collect(),
+                                ));
+                                self.muc_occupant_maps
+                                    .insert((account.clone(), jid.clone()), Arc::clone(&nick_to_jid));
+
+                                let mut async_aparte = aparte.proxy();
+                                let account = account.clone();
+                                let room = jid.clone();
+                                Aparte::spawn({
+                                    let signal_store = SignalStorage::clone(signal_store);
+                                    async move {
+                                        if let Err(err) = Self::start_muc_session(
+                                            &mut async_aparte,
+                                            &signal_store,
+                                            &account,
+                                            &room,
+                                            occupants,
+                                            nick_to_jid,
+                                        )
+                                        .await
+                                        {
+                                            crate::error!(
+                                                async_aparte,
+                                                err,
+                                                "Can't start OMEMO MUC session for {room}"
+                                            );
+                                        }
+                                    }
+                                });
+                            } else {
+                                let mut async_aparte = aparte.proxy();
+                                let account = account.clone();
+                                let jid = jid.clone();
+                                Aparte::spawn({
+                                    let signal_store = SignalStorage::clone(signal_store);
+                                    async move {
+                                        if let Err(err) = Self::start_session(
+                                            &mut async_aparte,
+                                            &signal_store,
+                                            &account,
+                                            &jid,
+                                        )
+                                        .await
+                                        {
+                                            crate::error!(
+                                                async_aparte,
+                                                err,
+                                                "Can't start OMEMO session with {jid}",
+                                            );
+                                        }
+                                    }
+                                });
                             }
-                        }),
+                        }
                     }
                 }
                 OmemoEvent::ShowFingerprints { account, jid } => {
