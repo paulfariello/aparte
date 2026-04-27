@@ -1728,7 +1728,11 @@ impl Aparte {
         T: TryInto<Element> + Debug,
     {
         match element.try_into() {
-            Ok(stanza) => self.send_tx.send((account.clone(), stanza)).unwrap(),
+            Ok(stanza) => {
+                if let Err(err) = self.send_tx.send((account.clone(), stanza)) {
+                    log::error!("Send channel closed: {err}");
+                }
+            }
             Err(_e) => {
                 log::error!("Cannot convert to element");
             }
@@ -1737,7 +1741,9 @@ impl Aparte {
 
     pub fn schedule(&mut self, event: Event) {
         log::trace!("Schedule event {:?}", event);
-        self.event_tx.send(event).unwrap();
+        if let Err(err) = self.event_tx.send(event) {
+            log::error!("Event channel closed: {err}");
+        }
     }
 
     pub fn log<T: IntoCharxels>(&mut self, message: T) {
@@ -1791,7 +1797,9 @@ pub struct AparteAsync {
 
 impl AparteAsync {
     pub fn send(&mut self, account: &Account, stanza: Element) {
-        self.send_tx.send((account.clone(), stanza)).unwrap();
+        if let Err(err) = self.send_tx.send((account.clone(), stanza)) {
+            log::error!("Send channel closed: {err}");
+        }
     }
 
     pub async fn iq(&mut self, account: &Account, iq: Iq) -> Result<IqResponse, IqFailure> {
@@ -1813,7 +1821,9 @@ impl AparteAsync {
             request,
             token_tx,
         };
-        self.iq_tx.send((account.clone(), envelope)).unwrap();
+        self.iq_tx
+            .send((account.clone(), envelope))
+            .map_err(|_| IqFailure::LostWorker)?;
         let token = token_rx
             .await
             .expect("connection task dropped before returning IqResponseToken");
@@ -1821,7 +1831,9 @@ impl AparteAsync {
     }
 
     pub fn schedule(&mut self, event: Event) {
-        self.event_tx.send(event).unwrap();
+        if let Err(err) = self.event_tx.send(event) {
+            log::error!("Event channel closed: {err}");
+        }
     }
 
     pub fn log<T: ToString>(&mut self, message: T) {
