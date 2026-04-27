@@ -812,9 +812,9 @@ impl UIMod {
 
     /// Render the UI if the dirty flag is set. Intended to be called once per
     /// event batch from the main loop.
-    pub fn render_if_dirty(&mut self) {
+    pub fn render_if_dirty(&mut self) -> bool {
         if !self.dirty {
-            return;
+            return false;
         }
         self.dirty = false;
 
@@ -834,6 +834,7 @@ impl UIMod {
         let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
         self.root.render(frame);
         log::trace!("Mod::UI rendered in {:.2?}", before.elapsed());
+        true
     }
 }
 

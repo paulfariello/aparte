@@ -29,9 +29,8 @@ use termion::raw::IntoRawMode;
 use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
-use tokio::sync::{mpsc, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
-use tokio::time;
-use tokio::time::Duration;
+use tokio::sync::{mpsc, Notify, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Duration;
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -844,6 +843,7 @@ pub struct Aparte {
     pub storage: Storage,
     record_path: Option<PathBuf>,
     pending_annotations: Arc<Mutex<Vec<String>>>,
+    render_notify: Arc<Notify>,
 }
 
 impl Aparte {
@@ -894,6 +894,7 @@ impl Aparte {
             read_password: AtomicBool::new(false),
             record_path,
             pending_annotations: Arc::new(Mutex::new(Vec::new())),
+            render_notify: Arc::new(Notify::new()),
         };
 
         aparte.add_mod(Mod::Completion(mods::completion::CompletionMod::default()));
@@ -1088,6 +1089,7 @@ impl Aparte {
             let mut reference_screen = OffscreenRenderBuffer::default();
             let record_path = self.record_path.take();
             let pending_annotations = Arc::clone(&self.pending_annotations);
+            let render_notify = Arc::clone(&self.render_notify);
 
             async move {
                 use crate::tee_writer::Screen;
@@ -1117,34 +1119,21 @@ impl Aparte {
                 };
 
                 let _ = write!(&mut screen, "{}", termion::clear::All);
-                let mut interval = time::interval(Duration::from_millis(UI_TICK_MS));
-                let mut fps = 0;
-                let mut last_fps_log = Instant::now();
                 let mut frame_count: u64 = 0;
                 loop {
-                    {
-                        if let Ok(mut annotations) = pending_annotations.lock() {
-                            for tag in annotations.drain(..) {
-                                screen.annotate(&tag);
-                            }
+                    render_notify.notified().await;
+
+                    if let Ok(mut annotations) = pending_annotations.lock() {
+                        for tag in annotations.drain(..) {
+                            screen.annotate(&tag);
                         }
-
-                        let render_buffer = std::sync::RwLock::read(&render_buffer).unwrap();
-
-                        render_buffer.render(&mut screen, &mut reference_screen);
-
-                        frame_count += 1;
-                        screen.dump_buffer(&reference_screen.dump_text(), frame_count);
-
-                        fps += 1;
                     }
-                    let elapsed = last_fps_log.elapsed();
-                    if elapsed > Duration::new(1, 0) {
-                        log::trace!("Rendering: {:?} fps", fps * 1000 / elapsed.as_millis());
-                        last_fps_log = Instant::now();
-                        fps = 0;
-                    }
-                    interval.tick().await;
+
+                    let render_buffer = std::sync::RwLock::read(&render_buffer).unwrap();
+                    render_buffer.render(&mut screen, &mut reference_screen);
+
+                    frame_count += 1;
+                    screen.dump_buffer(&reference_screen.dump_text(), frame_count);
                 }
             }
         });
@@ -1235,8 +1224,10 @@ impl Aparte {
                     }
                 };
 
-                // Render UI once per event batch (if state changed).
-                self.get_mod_mut::<mods::ui::UIMod>().render_if_dirty();
+                // Render UI once per event batch (if state changed) and wake render thread.
+                if self.get_mod_mut::<mods::ui::UIMod>().render_if_dirty() {
+                    self.render_notify.notify_one();
+                }
             }
         });
     }
