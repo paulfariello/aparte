@@ -856,7 +856,7 @@ impl OmemoMod {
 
         let signal_store = self.signal_stores.get(&account).unwrap();
         Aparte::spawn({
-            let signal_store = SignalStorage::clone(signal_store);
+            let mut signal_store = SignalStorage::clone(signal_store);
             async move {
                 if let Err(err) =
                     Self::ensure_device_is_registered(&mut aparte, &account, device_id).await
@@ -874,6 +874,7 @@ impl OmemoMod {
                     signed_pre_key_public,
                     signed_pre_key_signature,
                     pre_keys,
+                    &mut signal_store,
                 )
                 .await
                 {
@@ -1268,6 +1269,7 @@ impl OmemoMod {
         signed_pre_key_pub: PublicKey,
         signed_pre_key_signature: Vec<u8>,
         pre_keys: Vec<(u32, PublicKey)>,
+        signal_store: &mut SignalStorage,
     ) -> Result<()> {
         log::info!("Ensure device {device_id}'s bundle is published");
         match Self::get_bundle(aparte, account, &account.to_bare(), device_id).await? {
@@ -1288,8 +1290,58 @@ impl OmemoMod {
                 prekeys: Some(legacy_omemo::Prekeys { keys }),
                 ..
             }) if keys.len() < 20 => {
-                log::info!("Published bundle doesn't have enough prekeys");
-                todo!()
+                log::info!(
+                    "Published bundle has only {} prekeys, topping up to 100",
+                    keys.len()
+                );
+
+                // Find the highest ID already in use to avoid collisions
+                let server_max = keys.iter().map(|k| k.pre_key_id).max().unwrap_or(0);
+                let local_max = pre_keys.iter().map(|(id, _)| *id).max().unwrap_or(0);
+                let mut next_id = server_max.max(local_max) + 1;
+                let needed = 100u32.saturating_sub(keys.len() as u32);
+
+                // Generate fresh prekeys and persist them so we can decrypt later.
+                // Signal trait futures are !Send, so use now_or_never() (they always
+                // complete synchronously — the impl is a plain DB write).
+                let mut new_keys: Vec<(u32, PublicKey)> = Vec::with_capacity(needed as usize);
+                for _ in 0..needed {
+                    let key_pair = KeyPair::generate(&mut thread_rng());
+                    let record = libsignal_protocol::PreKeyRecord::new(
+                        libsignal_protocol::PreKeyId::from(next_id),
+                        &key_pair,
+                    );
+                    signal_store
+                        .save_pre_key(libsignal_protocol::PreKeyId::from(next_id), &record, None)
+                        .now_or_never()
+                        .ok_or_else(|| anyhow!("Cannot save new prekey {next_id}"))?
+                        .map_err(|e| anyhow!("Cannot save new prekey {next_id}: {e}"))?;
+                    new_keys.push((next_id, key_pair.public_key));
+                    next_id += 1;
+                }
+
+                // Keep the server's unconsumed keys; append the fresh ones
+                let merged: Vec<(u32, PublicKey)> = keys
+                    .iter()
+                    .filter_map(|k| {
+                        PublicKey::deserialize(&k.data)
+                            .ok()
+                            .map(|pk| (k.pre_key_id, pk))
+                    })
+                    .chain(new_keys)
+                    .collect();
+
+                Self::publish_bundle(
+                    aparte,
+                    account,
+                    device_id,
+                    identity_key_pair,
+                    signed_pre_key_id,
+                    signed_pre_key_pub,
+                    signed_pre_key_signature,
+                    merged,
+                )
+                .await
             }
             _ => {
                 log::info!("Bundle already published with enough prekeys");
