@@ -356,8 +356,8 @@ impl CryptoEngineTrait for MucOmemoEngine {
         // Collect all member devices
         let member_jids: Vec<BareJid> = self
             .nick_to_jid
-            .lock()
-            .unwrap()
+            .read()
+            .expect("nick_to_jid lock poisoned")
             .values()
             .cloned()
             .collect();
@@ -463,8 +463,8 @@ impl CryptoEngineTrait for MucOmemoEngine {
 
         let sender_jid = self
             .nick_to_jid
-            .lock()
-            .unwrap()
+            .read()
+            .expect("nick_to_jid lock poisoned")
             .get(&nick)
             .cloned()
             .ok_or_else(|| {
@@ -777,7 +777,7 @@ impl CryptoEngineTrait for OmemoEngine {
     }
 }
 
-type NickToJid = Arc<std::sync::Mutex<HashMap<String, BareJid>>>;
+type NickToJid = Arc<std::sync::RwLock<HashMap<String, BareJid>>>;
 
 #[derive(Default)]
 pub struct OmemoMod {
@@ -1025,7 +1025,7 @@ impl OmemoMod {
             .context("Missing signal store")?;
 
         for room in aparte.storage.get_omemo_muc_rooms(account)?.iter() {
-            let nick_to_jid: NickToJid = Arc::new(std::sync::Mutex::new(HashMap::new()));
+            let nick_to_jid: NickToJid = Arc::new(std::sync::RwLock::new(HashMap::new()));
             self.muc_occupant_maps
                 .insert((account.clone(), room.clone()), Arc::clone(&nick_to_jid));
             aparte.add_crypto_engine(
@@ -1539,7 +1539,7 @@ impl ModTrait for OmemoMod {
                     (self.muc_occupant_maps.get(&key), &occupant.jid)
                 {
                     let is_new = {
-                        let mut map = map.lock().unwrap();
+                        let mut map = map.write().expect("nick_to_jid lock poisoned");
                         let prev = map.insert(occupant.nick.clone(), real_jid.clone());
                         prev.is_none()
                     };
@@ -1607,7 +1607,7 @@ impl ModTrait for OmemoMod {
                                     return;
                                 }
 
-                                let nick_to_jid: NickToJid = Arc::new(std::sync::Mutex::new(
+                                let nick_to_jid: NickToJid = Arc::new(std::sync::RwLock::new(
                                     occupants.iter().cloned().collect(),
                                 ));
                                 self.muc_occupant_maps
