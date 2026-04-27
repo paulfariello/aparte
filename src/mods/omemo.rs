@@ -1289,7 +1289,7 @@ impl OmemoMod {
             Some(legacy_omemo::Bundle {
                 prekeys: Some(legacy_omemo::Prekeys { keys }),
                 ..
-            }) if keys.len() < 20 => {
+            }) if keys.len() < 25 => {
                 log::info!(
                     "Published bundle has only {} prekeys, topping up to 100",
                     keys.len()
