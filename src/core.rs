@@ -29,7 +29,8 @@ use termion::raw::IntoRawMode;
 use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
-use tokio::sync::{mpsc, Notify, RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
+use std::cell::{Ref, RefCell, RefMut};
+use tokio::sync::{mpsc, Notify};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -827,7 +828,7 @@ macro_rules! error(
 
 pub struct Aparte {
     pub command_parsers: Rc<HashMap<String, CommandParser>>,
-    mods: Rc<HashMap<TypeId, RwLock<Mod>>>,
+    mods: Rc<HashMap<TypeId, RefCell<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
     event_tx: mpsc::UnboundedSender<Event>,
@@ -950,64 +951,64 @@ impl Aparte {
             Mod::Completion(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::completion::CompletionMod>(),
-                    RwLock::new(Mod::Completion(r#mod)),
+                    RefCell::new(Mod::Completion(r#mod)),
                 );
             }
             Mod::Carbons(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::carbons::CarbonsMod>(),
-                    RwLock::new(Mod::Carbons(r#mod)),
+                    RefCell::new(Mod::Carbons(r#mod)),
                 );
             }
             Mod::Contact(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::contact::ContactMod>(),
-                    RwLock::new(Mod::Contact(r#mod)),
+                    RefCell::new(Mod::Contact(r#mod)),
                 );
             }
             Mod::Conversation(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::conversation::ConversationMod>(),
-                    RwLock::new(Mod::Conversation(r#mod)),
+                    RefCell::new(Mod::Conversation(r#mod)),
                 );
             }
             Mod::Disco(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::disco::DiscoMod>(),
-                    RwLock::new(Mod::Disco(r#mod)),
+                    RefCell::new(Mod::Disco(r#mod)),
                 );
             }
             Mod::Bookmarks(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::bookmarks::BookmarksMod>(),
-                    RwLock::new(Mod::Bookmarks(r#mod)),
+                    RefCell::new(Mod::Bookmarks(r#mod)),
                 );
             }
             Mod::UI(r#mod) => {
-                mods.insert(TypeId::of::<mods::ui::UIMod>(), RwLock::new(Mod::UI(r#mod)));
+                mods.insert(TypeId::of::<mods::ui::UIMod>(), RefCell::new(Mod::UI(r#mod)));
             }
             Mod::Mam(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::mam::MamMod>(),
-                    RwLock::new(Mod::Mam(r#mod)),
+                    RefCell::new(Mod::Mam(r#mod)),
                 );
             }
             Mod::Messages(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::messages::MessagesMod>(),
-                    RwLock::new(Mod::Messages(r#mod)),
+                    RefCell::new(Mod::Messages(r#mod)),
                 );
             }
             Mod::Correction(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::correction::CorrectionMod>(),
-                    RwLock::new(Mod::Correction(r#mod)),
+                    RefCell::new(Mod::Correction(r#mod)),
                 );
             }
             Mod::Omemo(r#mod) => {
                 mods.insert(
                     TypeId::of::<mods::omemo::OmemoMod>(),
-                    RwLock::new(Mod::Omemo(r#mod)),
+                    RefCell::new(Mod::Omemo(r#mod)),
                 );
             }
         }
@@ -1031,7 +1032,7 @@ impl Aparte {
 
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
-            r#mod.try_write().unwrap().init(self)?;
+            r#mod.borrow_mut().init(self)?;
         }
 
         Ok(())
@@ -1439,7 +1440,7 @@ impl Aparte {
             let mods = self.mods.clone();
             for (_, r#mod) in mods.iter() {
                 let before = Instant::now();
-                r#mod.try_write().unwrap().on_event(self, &event);
+                r#mod.borrow_mut().on_event(self, &event);
                 log::trace!("{:?} handled event in {:.2?}", r#mod, before.elapsed());
             }
         }
@@ -1649,8 +1650,7 @@ impl Aparte {
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
             let message_match = r#mod
-                .try_write()
-                .unwrap()
+                .borrow_mut()
                 .can_handle_xmpp_message(self, &account, &message, &delay);
             if message_match > best_match {
                 matched_mod = Some(r#mod);
@@ -1661,8 +1661,7 @@ impl Aparte {
         if let Some(r#mod) = matched_mod {
             log::debug!("Handling xmpp message by {:?}", r#mod);
             r#mod
-                .try_write()
-                .unwrap()
+                .borrow_mut()
                 .handle_xmpp_message(self, &account, &message, &delay, archive);
         } else {
             log::info!("Don't know how to handle message: {:?}", message);
@@ -1756,25 +1755,25 @@ impl Aparte {
         self.schedule(Event::Message(None, message));
     }
 
-    pub fn get_mod<'a, T>(&'a self) -> RwLockReadGuard<'a, T>
+    pub fn get_mod<'a, T>(&'a self) -> Ref<'a, T>
     where
         T: 'static,
         for<'b> &'b T: From<&'b Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RwLockReadGuard::map(r#mod.try_read().unwrap(), |m| m.into()),
+            Some(r#mod) => Ref::map(r#mod.borrow(), |m| m.into()),
             None => unreachable!(),
         }
     }
 
     #[allow(unused)]
-    pub fn get_mod_mut<'a, T>(&'a self) -> RwLockMappedWriteGuard<'a, T>
+    pub fn get_mod_mut<'a, T>(&'a self) -> RefMut<'a, T>
     where
         T: 'static,
         for<'b> &'b mut T: From<&'b mut Mod>,
     {
         match self.mods.get(&TypeId::of::<T>()) {
-            Some(r#mod) => RwLockWriteGuard::map(r#mod.try_write().unwrap(), |m| m.into()),
+            Some(r#mod) => RefMut::map(r#mod.borrow_mut(), |m| m.into()),
             None => unreachable!(),
         }
     }
