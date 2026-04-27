@@ -340,7 +340,15 @@ def main():
     args = parser.parse_args()
 
     cast_path = args.cast_file
-    events_path = cast_path + '.events'
+    # Support both session.cast.events and session.events (path.set_extension replaces last ext)
+    import os
+    stem, ext = os.path.splitext(cast_path)
+    events_path_replaced = stem + '.events'   # e.g. session.events
+    events_path_appended = cast_path + '.events'  # e.g. session.cast.events
+    if os.path.exists(events_path_replaced):
+        events_path = events_path_replaced
+    else:
+        events_path = events_path_appended
 
     try:
         with open(cast_path, 'rb') as fh:
