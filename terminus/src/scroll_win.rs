@@ -254,7 +254,27 @@ where
         }
     }
 
-    /// List visible children starting from bottom
+    /// Count visible children from bottom using pre-measured heights (no measure() calls).
+    fn visible_children_count(&self, dimensions: &Dimensions, heights: &[u16]) -> usize {
+        let mut remaining_height = dimensions.height;
+        let bottom = self.bottom_visible_child_index;
+        let range_end = std::cmp::min(bottom + 1, heights.len());
+
+        heights[..range_end]
+            .iter()
+            .rev()
+            .take_while(move |&&child_height| {
+                if remaining_height > 0 {
+                    remaining_height -= std::cmp::min(remaining_height, child_height);
+                    true
+                } else {
+                    false
+                }
+            })
+            .count()
+    }
+
+    /// List visible children starting from bottom (used by render after layout).
     fn visible_children<'a, 'b>(
         &'a self,
         dimensions: &'b Dimensions,
@@ -284,12 +304,12 @@ where
         })
     }
 
-    fn layout_from_bottom(&mut self, dimensions: &Dimensions) {
+    fn layout_from_bottom(&mut self, dimensions: &Dimensions, heights: &[u16]) {
         // Start layout at bottom of the view
         let mut child_top = dimensions.top + dimensions.height;
         let mut measure_specs: MeasureSpecs = dimensions.into();
 
-        let visible_children_count = self.visible_children(dimensions).count();
+        let visible_children_count = self.visible_children_count(dimensions, heights);
 
         // Empty the BTreeSet so we can mutate children
         let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
@@ -298,31 +318,30 @@ where
         let last_visible_child_index = self.bottom_visible_child_index;
         // If we have only 1 visible children, first is 0 and last is also 0
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        for layout_child in children[first_visible_child_index..=last_visible_child_index]
+        for (layout_child, &child_height) in children[first_visible_child_index..=last_visible_child_index]
             .iter_mut()
+            .zip(heights[first_visible_child_index..=last_visible_child_index].iter())
             .rev()
         {
-            let requested_dimensions = layout_child.child.measure(&measure_specs);
-            let mut child_dimensions = Dimensions::reconcile(
-                &measure_specs,
-                &requested_dimensions,
-                child_top,
-                dimensions.left,
-            );
-
-            // Force full width
-            child_dimensions.width = dimensions.width;
-
-            // Fix top
-            child_top -= child_dimensions.height;
-            child_dimensions.top = child_top;
-
-            // Update measure_specs
+            // Clamp to remaining space (topmost visible child may be partial)
             let MeasureSpec::AtMost(measure_spec_height) = measure_specs.height else {
                 unreachable!()
             };
-            measure_specs.height =
-                MeasureSpec::AtMost(measure_spec_height - child_dimensions.height);
+            let actual_height = std::cmp::min(child_height, measure_spec_height);
+
+            let mut child_dimensions = Dimensions {
+                top: child_top,
+                left: dimensions.left,
+                width: dimensions.width,
+                height: actual_height,
+            };
+
+            // Fix top
+            child_top -= actual_height;
+            child_dimensions.top = child_top;
+
+            // Update measure_specs
+            measure_specs.height = MeasureSpec::AtMost(measure_spec_height - actual_height);
 
             layout_child.dimensions = Some(child_dimensions);
 
@@ -338,12 +357,10 @@ where
         }
     }
 
-    fn layout_from_top(&mut self, dimensions: &Dimensions) {
-        // Start layout at bottom of the view
+    fn layout_from_top(&mut self, dimensions: &Dimensions, heights: &[u16]) {
         let mut child_top = dimensions.top;
-        let measure_specs: MeasureSpecs = dimensions.into();
 
-        let visible_children_count = self.visible_children(dimensions).count();
+        let visible_children_count = self.visible_children_count(dimensions, heights);
 
         // Empty the BTreeSet so we can mutate children
         let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
@@ -351,21 +368,18 @@ where
         // Layout only visible children
         let last_visible_child_index = self.bottom_visible_child_index;
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        for layout_child in
-            children[first_visible_child_index..=last_visible_child_index].iter_mut()
+        for (layout_child, &child_height) in children[first_visible_child_index..=last_visible_child_index]
+            .iter_mut()
+            .zip(heights[first_visible_child_index..=last_visible_child_index].iter())
         {
-            let requested_dimensions = layout_child.child.measure(&measure_specs);
-            let mut child_dimensions = Dimensions::reconcile(
-                &measure_specs,
-                &requested_dimensions,
-                child_top,
-                dimensions.left,
-            );
+            let child_dimensions = Dimensions {
+                top: child_top,
+                left: dimensions.left,
+                width: dimensions.width,
+                height: child_height,
+            };
 
-            // Force full width
-            child_dimensions.width = dimensions.width;
-
-            child_top += child_dimensions.height;
+            child_top += child_height;
 
             layout_child.dimensions = Some(child_dimensions);
 
@@ -434,21 +448,22 @@ where
 
         let measure_specs = MeasureSpecs::from(dimensions);
 
-        let total_children_height: u32 = self
+        // Measure all children once; reuse heights in layout helpers
+        let heights: Vec<u16> = self
             .children
             .iter()
-            .map(
-                |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height as u32,
-                    RequestedDimension::Absolute(child_height) => child_height as u32,
-                },
-            )
-            .sum();
+            .map(|LayoutChild { child, .. }| match child.measure(&measure_specs).height {
+                RequestedDimension::ExpandMax => dimensions.height,
+                RequestedDimension::Absolute(h) => h,
+            })
+            .collect();
+
+        let total_children_height: u32 = heights.iter().map(|&h| h as u32).sum();
 
         if total_children_height < dimensions.height as u32 {
-            self.layout_from_top(dimensions);
+            self.layout_from_top(dimensions, &heights);
         } else {
-            self.layout_from_bottom(dimensions);
+            self.layout_from_bottom(dimensions, &heights);
         }
     }
 

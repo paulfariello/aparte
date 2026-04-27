@@ -99,16 +99,22 @@ impl<E> LinearLayout<E> {
          *
          */
 
+        let measure_specs = MeasureSpecs::from(dimensions);
+        let measured: Vec<RequestedDimensions> = self
+            .children
+            .iter()
+            .map(|LayoutChild { child, .. }| child.view.measure(&measure_specs))
+            .collect();
+
         // Gather requested sizes
         let mut width = 0;
         let mut min_height = 0;
         let mut match_height_weight_total = 0;
 
         log::debug!("layout with vertical orientation");
-        for LayoutChild { child, .. } in self.children.iter_mut() {
-            let measure_specs = MeasureSpecs::from(dimensions);
-            let requested_dimensions = child.view.measure(&measure_specs);
-
+        for (LayoutChild { child, .. }, requested_dimensions) in
+            self.children.iter().zip(&measured)
+        {
             match requested_dimensions.height {
                 RequestedDimension::ExpandMax => match_height_weight_total += child.weight,
                 RequestedDimension::Absolute(requested_height) => min_height += requested_height,
@@ -135,14 +141,14 @@ impl<E> LinearLayout<E> {
 
         log::debug!("Start with child top: {child_top}");
 
-        for LayoutChild {
-            child,
-            dimensions: child_dimensions,
-        } in self.children.iter_mut()
+        for (
+            LayoutChild {
+                child,
+                dimensions: child_dimensions,
+            },
+            requested_dimensions,
+        ) in self.children.iter_mut().zip(&measured)
         {
-            let measure_specs = MeasureSpecs::from(dimensions);
-            let requested_dimensions = child.view.measure(&measure_specs);
-
             let child_height = match requested_dimensions.height {
                 RequestedDimension::ExpandMax => {
                     free_height * child.weight / match_height_weight_total
@@ -168,16 +174,22 @@ impl<E> LinearLayout<E> {
     }
 
     fn layout_horizontal(&mut self, dimensions: &Dimensions) {
+        let measure_specs = MeasureSpecs::from(dimensions);
+        let measured: Vec<RequestedDimensions> = self
+            .children
+            .iter()
+            .map(|LayoutChild { child, .. }| child.view.measure(&measure_specs))
+            .collect();
+
         // Gather requested sizes
         let mut height = 0;
         let mut min_width = 0;
         let mut match_width_weight_total = 0;
 
         log::debug!("layout with horizontal orientation");
-        for LayoutChild { child, .. } in self.children.iter_mut() {
-            let measure_specs = MeasureSpecs::from(dimensions);
-            let requested_dimensions = child.view.measure(&measure_specs);
-
+        for (LayoutChild { child, .. }, requested_dimensions) in
+            self.children.iter().zip(&measured)
+        {
             match requested_dimensions.height {
                 RequestedDimension::ExpandMax => height = dimensions.height,
                 RequestedDimension::Absolute(requested_width) => {
@@ -198,14 +210,14 @@ impl<E> LinearLayout<E> {
         let child_top = dimensions.top;
         let mut child_left = dimensions.left;
 
-        for LayoutChild {
-            child,
-            dimensions: child_dimensions,
-        } in self.children.iter_mut()
+        for (
+            LayoutChild {
+                child,
+                dimensions: child_dimensions,
+            },
+            requested_dimensions,
+        ) in self.children.iter_mut().zip(&measured)
         {
-            let measure_specs = MeasureSpecs::from(dimensions);
-            let requested_dimensions = child.view.measure(&measure_specs);
-
             let child_width = match requested_dimensions.width {
                 RequestedDimension::ExpandMax => {
                     free_width * child.weight / match_width_weight_total

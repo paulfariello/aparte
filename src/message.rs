@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -93,6 +94,7 @@ pub struct VersionedXmppMessage {
     pub type_: XmppMessageType,
     pub direction: Direction,
     pub archive: bool,
+    pub encrypted: bool,
 }
 
 impl VersionedXmppMessage {
@@ -197,6 +199,10 @@ impl Message {
                 .iter()
                 .filter_map(|payload| Oob::try_from(payload.clone()).ok())
                 .collect();
+            let encrypted = message.payloads.iter().any(|p| {
+                (p.name() == "encrypted" && p.ns() == "eu.siacs.conversations.axolotl")
+                    || (p.name() == "encryption" && p.ns() == "urn:xmpp:eme:0")
+            });
             let delay = match delay {
                 Some(delay) => Some(delay.clone()),
                 None => message
@@ -217,7 +223,7 @@ impl Message {
                     if from.clone().node() == account.node()
                         && from.clone().domain() == account.domain()
                     {
-                        Ok(Message::outgoing_chat(
+                        let mut msg = Message::outgoing_chat(
                             id,
                             timestamp,
                             &from,
@@ -225,9 +231,11 @@ impl Message {
                             bodies,
                             Some(oobs),
                             archive,
-                        ))
+                        );
+                        msg.set_encrypted(encrypted);
+                        Ok(msg)
                     } else {
-                        Ok(Message::incoming_chat(
+                        let mut msg = Message::incoming_chat(
                             id,
                             timestamp,
                             &from,
@@ -235,22 +243,34 @@ impl Message {
                             bodies,
                             Some(oobs),
                             archive,
-                        ))
+                        );
+                        msg.set_encrypted(encrypted);
+                        Ok(msg)
                     }
                 }
-                XmppParsersMessageType::Groupchat => Ok(Message::incoming_channel(
-                    id,
-                    timestamp,
-                    &from,
-                    &to,
-                    bodies,
-                    Some(oobs),
-                    archive,
-                )),
+                XmppParsersMessageType::Groupchat => {
+                    let mut msg = Message::incoming_channel(
+                        id,
+                        timestamp,
+                        &from,
+                        &to,
+                        bodies,
+                        Some(oobs),
+                        archive,
+                    );
+                    msg.set_encrypted(encrypted);
+                    Ok(msg)
+                }
                 _ => Err(()),
             }
         } else {
             Err(())
+        }
+    }
+
+    pub fn set_encrypted(&mut self, encrypted: bool) {
+        if let Message::Xmpp(ref mut xmpp) = self {
+            xmpp.encrypted = encrypted;
         }
     }
 
@@ -331,6 +351,7 @@ impl Message {
             type_: XmppMessageType::Chat,
             direction: Direction::Incoming,
             archive,
+            encrypted: false,
         })
     }
 
@@ -362,6 +383,7 @@ impl Message {
             type_: XmppMessageType::Chat,
             direction: Direction::Outgoing,
             archive,
+            encrypted: false,
         })
     }
 
@@ -393,6 +415,7 @@ impl Message {
             type_: XmppMessageType::Channel,
             direction: Direction::Incoming,
             archive,
+            encrypted: false,
         })
     }
 
@@ -424,6 +447,7 @@ impl Message {
             type_: XmppMessageType::Channel,
             direction: Direction::Outgoing,
             archive,
+            encrypted: false,
         })
     }
 
@@ -545,6 +569,7 @@ pub struct MessageView {
     dimensions: Option<Dimensions>,
     #[cfg(feature = "image")]
     image: Arc<RwLock<Option<SixelImage>>>,
+    measure_cache: RefCell<Option<(u16, Vec<Charxels>)>>,
 }
 
 impl Eq for MessageView {}
@@ -579,6 +604,7 @@ impl MessageView {
         MessageView {
             message,
             dimensions: None,
+            measure_cache: RefCell::new(None),
         }
     }
 
@@ -624,6 +650,7 @@ impl MessageView {
             message,
             dimensions: None,
             image,
+            measure_cache: RefCell::new(None),
         }
     }
 
@@ -680,6 +707,11 @@ impl MessageView {
         let mut attributes = "".to_string();
         if message.has_multiple_version() {
             attributes.push_str("✎ ");
+        }
+        if message.encrypted {
+            attributes.push_str("🔒 ");
+        } else {
+            attributes.push_str("🔓 ");
         }
 
         let mut header = format!("{} - {}", timestamp.format("%T"), attributes).into_charxels();
@@ -747,7 +779,16 @@ impl MessageView {
     }
 
     fn render_text(&self, frame: &mut ScreenFrame) {
-        let formatted = self.format(Some(frame.width()));
+        let width = frame.width();
+        let cache = self.measure_cache.borrow();
+        let formatted_owned;
+        let formatted = if cache.as_ref().map(|(w, _)| *w) == Some(width) {
+            &cache.as_ref().unwrap().1
+        } else {
+            drop(cache);
+            formatted_owned = self.format(Some(width));
+            &formatted_owned
+        };
 
         // Format as much as possible starting from bottom line
         for (top, line) in formatted[formatted.len() - frame.height() as usize..]
@@ -781,7 +822,11 @@ impl MessageView {
                 ),
             },
             MeasureSpec::AtMost(at_most_width) => {
-                let formatted = self.format(Some(at_most_width));
+                let mut cache = self.measure_cache.borrow_mut();
+                if cache.as_ref().map(|(w, _)| *w) != Some(at_most_width) {
+                    *cache = Some((at_most_width, self.format(Some(at_most_width))));
+                }
+                let formatted = &cache.as_ref().unwrap().1;
                 RequestedDimensions {
                     height: RequestedDimension::Absolute(formatted.len() as u16),
                     width: RequestedDimension::Absolute(cmp::min(
@@ -821,7 +866,6 @@ impl MessageView {
 
 impl<E> View<E> for MessageView {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
-        // TODO: we could avoid creating the real buffers
         #[cfg(feature = "image")]
         if self.image.read().unwrap().is_some() {
             self.measure_image(measure_specs)
@@ -883,6 +927,7 @@ mod tests {
                 dimensions: None,
                 #[cfg(feature = "image")]
                 image: Arc::new(RwLock::new(None)),
+                measure_cache: RefCell::new(None),
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )
