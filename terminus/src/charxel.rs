@@ -30,6 +30,12 @@ impl From<&str> for Grapheme {
     }
 }
 
+impl Grapheme {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Charxel {
     pub grapheme: Grapheme,

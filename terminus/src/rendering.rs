@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    charxel::{Charxel, IntoCharxels},
+    charxel::{Charxel, Grapheme, IntoCharxels},
     BgColor, CursorPos, Dimensions, FgColor, Style,
 };
 
@@ -412,6 +412,29 @@ impl<'a> ScreenFrame<'a> {
             {
                 break;
             }
+
+            // Expand tab to spaces up to the next 8-column tab stop so the
+            // offscreen buffer stays consistent with terminal rendering.
+            if charxel.grapheme.as_str() == "\t" {
+                let next_stop = (self.cursor.left / 8 + 1) * 8;
+                let spaces = next_stop.min(self.dimensions.width) - self.cursor.left;
+                let space = Charxel {
+                    grapheme: Grapheme::from(" "),
+                    foreground: charxel.foreground,
+                    background: charxel.background,
+                    styles: charxel.styles.clone(),
+                };
+                for _ in 0..spaces {
+                    if self.cursor.left >= self.dimensions.width {
+                        break;
+                    }
+                    self.offscreen[self.dimensions.top + self.cursor.top]
+                        [self.dimensions.left + self.cursor.left] = space.clone();
+                    self.cursor.left += 1;
+                }
+                continue;
+            }
+
             let w = charxel.display_width();
             // Refuse to place a wide char that wouldn't fit in the remaining
             // columns — emitting it would overflow the screen edge.

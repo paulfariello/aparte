@@ -18,6 +18,7 @@ use xmpp_parsers::jid::Jid;
 use xmpp_parsers::presence::Show;
 
 use common::describe;
+use common::grid_contains;
 use common::xmpp_fixture::{
     carbon_received, carbon_sent, chat_message, contact_offline_presence, contact_presence,
     corrected_chat_message, xmpp, xmpp_with_contact, XmppFixture,
@@ -286,6 +287,35 @@ fn wide_char_right_half_cleared_on_window_switch(xmpp: XmppFixture) {
     assert!(
         found,
         "emoji right-half cell persisted after window switch, corrupting console\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Non-regression: tab characters in /help output must not corrupt the screen after
+/// switching windows. The bug: \t has display_width()=1 but terminals advance the
+/// cursor to the next tab stop (column multiple of 8). textwrap::indent in
+/// generate_sub_help! prepends \t to each sub-command help line. This caused a
+/// divergence between reference_screen (thinks next char is at col N+1) and the
+/// terminal (wrote it at the tab stop). On window switch, compute_diff skipped cells
+/// where reference_screen coincidentally matched the new buffer, leaving ghost help
+/// text visible in the chat window.
+#[rstest]
+fn help_tab_chars_do_not_corrupt_screen_after_window_switch(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/help bookmark");
+    // Wait for a keyword from the tab-indented sub-command help to appear
+    assert!(
+        xmpp_with_contact.wait_for("autojoin", Duration::from_secs(5)),
+        "help output did not appear",
+    );
+    // Open a chat window — the delta render must correctly overwrite all console cells
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(600));
+    // With the bug, tab-shifted help text leaks as ghost chars into the chat window
+    let parser = xmpp_with_contact.snapshot();
+    assert!(
+        !grid_contains(parser.screen(), "autojoin"),
+        "help text leaked into chat window (tab rendering bug)\n{}",
         describe(parser.screen()),
     );
 }
