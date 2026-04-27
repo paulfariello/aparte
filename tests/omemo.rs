@@ -59,6 +59,14 @@ fn omemo_outgoing_encrypted() {
         eprintln!("{}", common::describe(screen.screen()));
     }
     assert!(encrypted_msg.is_some(), "no OMEMO-encrypted message stanza was sent");
+
+    // The outgoing message displayed in the UI must carry the lock emoji.
+    let lock_shown = fixture.wait_for("\u{1f512}", Duration::from_secs(5));
+    if !lock_shown {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(lock_shown, "🔒 not shown for outgoing OMEMO message");
 }
 
 /// Injecting an OMEMO-encrypted message from a contact results in decrypted plaintext in the UI.
@@ -97,4 +105,12 @@ fn omemo_incoming_decrypted() {
         eprintln!("{}", common::describe(screen.screen()));
     }
     assert!(found, "decrypted message body not found in UI");
+
+    // Encrypted incoming message must show the lock emoji in the header.
+    let lock_shown = fixture.wait_for("\u{1f512}", Duration::from_secs(5));
+    if !lock_shown {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(lock_shown, "🔒 not shown for incoming OMEMO message");
 }

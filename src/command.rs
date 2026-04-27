@@ -213,10 +213,10 @@ impl Command {
             quote = Some('"');
         }
 
-        if quote.is_none() {
-            escaped
+        if let Some(q) = quote {
+            format!("{}{}{}", q, escaped, q)
         } else {
-            format!("{}{}{}", quote.unwrap(), escaped, quote.unwrap())
+            escaped
         }
     }
 

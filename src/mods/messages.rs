@@ -86,16 +86,13 @@ impl ModTrait for MessagesMod {
                     0.01f64
                 }
             }
-            XmppParsersMessageType::Headline => {
+            XmppParsersMessageType::Headline
                 if message
                     .payloads
                     .iter()
-                    .any(|p| p.is("event", ns::PUBSUB_EVENT))
-                {
-                    0.01f64
-                } else {
-                    0f64
-                }
+                    .any(|p| p.is("event", ns::PUBSUB_EVENT)) =>
+            {
+                0.01f64
             }
             _ => 0f64,
         }

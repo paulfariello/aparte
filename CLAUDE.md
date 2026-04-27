@@ -53,8 +53,9 @@ pre-commit run --all-files
 
 ## Tests
 
-**Tests MUST be run before each commit** (from inside the dev shell or with `./dev`):
+**Tests and lints MUST pass before each commit**. Run from inside the dev shell:
 
 ```sh
 cargo test
+pre-commit run -a
 ```

@@ -47,6 +47,7 @@ use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::{contact, conversation};
 
+#[allow(clippy::large_enum_variant)]
 enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
@@ -645,16 +646,14 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => {
-                                if view.page_up() {
-                                    let from =
-                                        view.first().map(|message| message.message.timestamp());
-                                    scheduler.schedule(Event::LoadChatHistory {
-                                        account: chat_for_event.account.clone(),
-                                        contact: chat_for_event.contact.clone(),
-                                        from: from.cloned(),
-                                    });
-                                }
+                            UIEvent::Core(Event::Key(Key::PageUp)) if view.page_up() => {
+                                let from =
+                                    view.first().map(|message| message.message.timestamp());
+                                scheduler.schedule(Event::LoadChatHistory {
+                                    account: chat_for_event.account.clone(),
+                                    contact: chat_for_event.contact.clone(),
+                                    from: from.cloned(),
+                                });
                             }
                             UIEvent::Core(Event::Key(Key::PageDown)) => {
                                 view.page_down();
@@ -704,16 +703,14 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => {
-                                if view.page_up() {
-                                    let from =
-                                        view.first().map(|message| message.message.timestamp());
-                                    scheduler.schedule(Event::LoadChannelHistory {
-                                        account: channel_for_event.account.clone(),
-                                        jid: channel_for_event.jid.clone(),
-                                        from: from.cloned(),
-                                    });
-                                }
+                            UIEvent::Core(Event::Key(Key::PageUp)) if view.page_up() => {
+                                let from =
+                                    view.first().map(|message| message.message.timestamp());
+                                scheduler.schedule(Event::LoadChannelHistory {
+                                    account: channel_for_event.account.clone(),
+                                    jid: channel_for_event.jid.clone(),
+                                    from: from.cloned(),
+                                });
                             }
                             UIEvent::Core(Event::Key(Key::PageDown)) => {
                                 view.page_down();
@@ -1306,10 +1303,7 @@ impl<'a, T> IterWrapper<'a, T> {
 impl<'a, T> Iterator for IterWrapper<'a, T> {
     type Item = T;
     fn next(&mut self) -> Option<Self::Item> {
-        match self.inner.try_recv() {
-            Ok(e) => Some(e),
-            Err(_) => None,
-        }
+        self.inner.try_recv().ok()
     }
 }
 

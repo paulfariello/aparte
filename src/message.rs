@@ -761,7 +761,7 @@ impl MessageView {
             for word in line.split_word_bounds() {
                 let display_width = word.iter().map(|c| c.display_width()).sum::<u16>();
 
-                if max_width.map_or(false, |max_width| line_len + display_width > max_width) {
+                if max_width.is_some_and(|max_width| line_len + display_width > max_width) {
                     // Wrap line
                     buffers.push(chunk);
                     chunk = Charxels::default();

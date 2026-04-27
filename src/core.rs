@@ -1279,7 +1279,6 @@ impl Aparte {
                 let rand_string: String = rand::thread_rng()
                     .sample_iter(&rand::distributions::Alphanumeric)
                     .take(5)
-                    .map(char::from)
                     .collect();
                 bare_jid
                     .with_resource_str(&format!("aparte_{rand_string}"))
@@ -1470,7 +1469,15 @@ impl Aparte {
                 }
             }
             Event::SendMessage(account, message) => {
-                self.schedule(Event::Message(Some(account.clone()), message.clone()));
+                let will_encrypt = message.encryption_recipient().is_some_and(|recipient| {
+                    self.crypto_engines
+                        .lock()
+                        .unwrap()
+                        .contains_key(&(account.clone(), recipient))
+                });
+                let mut display_message = message.clone();
+                display_message.set_encrypted(will_encrypt);
+                self.schedule(Event::Message(Some(account.clone()), display_message));
 
                 // Encrypt if required
                 let encryption = message.encryption_recipient().and_then(|recipient| {
