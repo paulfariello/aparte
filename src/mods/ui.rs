@@ -622,6 +622,7 @@ impl UIMod {
                 let chat_for_event = chat.clone();
                 let chatwin = ScrollWin::<UIEvent, MessageView>::new().with_event({
                     let mut aparte = aparte.proxy();
+                    let mut mam_requested = false;
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -633,6 +634,7 @@ impl UIMod {
                                                 &mut aparte,
                                                 Message::Xmpp(message.clone()),
                                             ));
+                                            mam_requested = false;
                                         }
                                     }
                                     Direction::Outgoing => {
@@ -642,21 +644,27 @@ impl UIMod {
                                                 &mut aparte,
                                                 Message::Xmpp(message.clone()),
                                             ));
+                                            mam_requested = false;
                                         }
                                     }
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) if view.page_up() => {
-                                let from =
-                                    view.first().map(|message| message.message.timestamp());
-                                scheduler.schedule(Event::LoadChatHistory {
-                                    account: chat_for_event.account.clone(),
-                                    contact: chat_for_event.contact.clone(),
-                                    from: from.cloned(),
-                                });
+                            UIEvent::Core(Event::Key(Key::PageUp)) => {
+                                let at_top = view.page_up();
+                                if at_top && !mam_requested {
+                                    mam_requested = true;
+                                    let from =
+                                        view.first().map(|message| message.message.timestamp());
+                                    scheduler.schedule(Event::LoadChatHistory {
+                                        account: chat_for_event.account.clone(),
+                                        contact: chat_for_event.contact.clone(),
+                                        from: from.cloned(),
+                                    });
+                                }
                             }
                             UIEvent::Core(Event::Key(Key::PageDown)) => {
                                 view.page_down();
+                                mam_requested = false;
                             }
                             _ => {}
                         }
@@ -679,6 +687,7 @@ impl UIMod {
                 let channel_for_event = channel.clone();
                 let chanwin = ScrollWin::<UIEvent, MessageView>::new().with_event({
                     let mut aparte = aparte.proxy();
+                    let mut mam_requested = false;
                     move |view, event| {
                         match event {
                             UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -690,6 +699,7 @@ impl UIMod {
                                                 &mut aparte,
                                                 Message::Xmpp(message.clone()),
                                             ));
+                                            mam_requested = false;
                                         }
                                     }
                                     Direction::Outgoing => {
@@ -699,21 +709,27 @@ impl UIMod {
                                                 &mut aparte,
                                                 Message::Xmpp(message.clone()),
                                             ));
+                                            mam_requested = false;
                                         }
                                     }
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) if view.page_up() => {
-                                let from =
-                                    view.first().map(|message| message.message.timestamp());
-                                scheduler.schedule(Event::LoadChannelHistory {
-                                    account: channel_for_event.account.clone(),
-                                    jid: channel_for_event.jid.clone(),
-                                    from: from.cloned(),
-                                });
+                            UIEvent::Core(Event::Key(Key::PageUp)) => {
+                                let at_top = view.page_up();
+                                if at_top && !mam_requested {
+                                    mam_requested = true;
+                                    let from =
+                                        view.first().map(|message| message.message.timestamp());
+                                    scheduler.schedule(Event::LoadChannelHistory {
+                                        account: channel_for_event.account.clone(),
+                                        jid: channel_for_event.jid.clone(),
+                                        from: from.cloned(),
+                                    });
+                                }
                             }
                             UIEvent::Core(Event::Key(Key::PageDown)) => {
                                 view.page_down();
+                                mam_requested = false;
                             }
                             _ => {}
                         }

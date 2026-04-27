@@ -125,6 +125,7 @@ async fn run_mock_server(
     respond_to_disco: bool,
     mam_archive: Vec<(String, String, String, String)>,
     omemo_cfg: Option<OmemoMockConfig>,
+    mam_query_tx: Option<mpsc::UnboundedSender<()>>,
 ) {
     // Real XMPP servers echo roster results with from=user_bare_jid, matching
     // the `to` field in the client's request. IqResponseTracker stores by
@@ -266,8 +267,11 @@ async fn run_mock_server(
                             Iq::Set { id, payload, to, .. } => {
                                 // IqResponseTracker matches by (from, id); echo request's `to` as `from`.
                                 let from = to.clone();
-                                if payload.is("query", ns::MAM) && !mam_archive.is_empty() {
-                                    // Extract queryid from the MAM query
+                                if payload.is("query", ns::MAM) {
+                                    if let Some(tx) = &mam_query_tx {
+                                        let _ = tx.send(());
+                                    }
+                                    // Extract queryid and send archived messages
                                     if let Ok(query) = mam::Query::try_from(payload.clone()) {
                                         let queryid = query.queryid.clone();
                                         for (msg_from, msg_to, msg_id, body) in &mam_archive {
@@ -347,6 +351,7 @@ fn start_mock_server(
     respond_to_disco: bool,
     mam_archive: Vec<(String, String, String, String)>,
     omemo_cfg: Option<OmemoMockConfig>,
+    mam_query_tx: Option<mpsc::UnboundedSender<()>>,
 ) -> (MockServer, u16) {
     let listener = rt.block_on(async {
         TcpListener::bind("127.0.0.1:0")
@@ -363,6 +368,7 @@ fn start_mock_server(
         respond_to_disco,
         mam_archive,
         omemo_cfg,
+        mam_query_tx,
     ));
     (MockServer { inject_tx }, port)
 }
@@ -751,6 +757,7 @@ pub struct XmppFixture {
     rt: Option<Runtime>,
     mock: MockServer,
     harness: Option<Harness>,
+    mam_query_rx: mpsc::UnboundedReceiver<()>,
 }
 
 impl XmppFixture {
@@ -809,7 +816,8 @@ impl XmppFixture {
         omemo_cfg: Option<OmemoMockConfig>,
     ) -> (Self, ()) {
         let rt = Runtime::new().unwrap();
-        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster, respond_to_disco, mam_archive, omemo_cfg);
+        let (mam_query_tx, mam_query_rx) = mpsc::unbounded_channel::<()>();
+        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster, respond_to_disco, mam_archive, omemo_cfg, Some(mam_query_tx));
         let config = format!(
             "[accounts.test]\n\
              jid = \"user@localhost\"\n\
@@ -823,7 +831,7 @@ impl XmppFixture {
             wait_for_screen(&harness, "Connected as", Duration::from_secs(15)),
             "aparte did not connect within 15s",
         );
-        (Self { rt: Some(rt), mock, harness: Some(harness) }, ())
+        (Self { rt: Some(rt), mock, harness: Some(harness), mam_query_rx }, ())
     }
 
     pub fn inject(&self, stanza: XmppStreamElement) {
@@ -845,6 +853,19 @@ impl XmppFixture {
 
     pub fn snapshot(&self) -> vt100::Parser {
         self.harness.as_ref().unwrap().snapshot()
+    }
+
+    pub fn send_bytes(&self, bytes: &[u8]) {
+        self.harness.as_ref().unwrap().send_bytes(bytes);
+    }
+
+    /// Drain all pending MAM query notifications, returning how many were queued.
+    pub fn drain_mam_queries(&mut self) -> usize {
+        let mut count = 0;
+        while self.mam_query_rx.try_recv().is_ok() {
+            count += 1;
+        }
+        count
     }
 }
 

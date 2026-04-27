@@ -122,6 +122,12 @@ impl Harness {
         let _ = w.flush();
     }
 
+    pub fn send_bytes(&self, bytes: &[u8]) {
+        let mut w = self.writer.lock().unwrap();
+        let _ = w.write_all(bytes);
+        let _ = w.flush();
+    }
+
     pub fn shutdown(mut self) {
         {
             let mut w = self.writer.lock().unwrap();
