@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""
+render-check — compare reference_screen buffer dumps against virtual terminal replay.
+
+Reads the output of `aparte --record <file>`:
+  <file>        raw terminal bytes written by the render thread
+  <file>.events frame annotations with byte offsets and BUFFER_DUMP blocks
+
+For each frame, the tool replays the raw terminal bytes through a minimal
+virtual terminal emulator and compares the resulting cell grid against the
+reference_screen dump stored in the events file.  Any cell where the two
+disagree is a rendering divergence that can cause ghost characters.
+
+Usage:
+    render-check [OPTIONS] <cast-file>
+
+Options:
+    -f N, --frame N     Check only frame N (1-based); default: last frame
+    -r A-B, --range A-B Check frames A through B inclusive
+    -a, --all           Check every frame
+    -s, --summary       Print counts only, skip per-cell details
+    -q, --quiet         Exit 0 if no divergences, 1 otherwise (no output)
+
+Examples:
+    # Check the last frame of a recording for divergences
+    render-check /tmp/session.cast
+
+    # Check frame 42 with full cell detail
+    render-check --frame 42 /tmp/session.cast
+
+    # Summarise every frame that has divergences
+    render-check --all --summary /tmp/session.cast
+"""
+
+import sys
+import re
+import argparse
+import unicodedata
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Width computation (mirrors unicode_display_width in Rust)
+# ---------------------------------------------------------------------------
+
+def display_width(s: str) -> int:
+    w = 0
+    for ch in s:
+        ea = unicodedata.east_asian_width(ch)
+        w += 2 if ea in ('W', 'F') else 1
+    return w
+
+
+# ---------------------------------------------------------------------------
+# Virtual terminal emulator
+# ---------------------------------------------------------------------------
+
+class VirtualTerminal:
+    """Minimal terminal emulator covering the escape sequences aparte emits."""
+
+    def __init__(self, rows: int, cols: int):
+        self.rows = rows
+        self.cols = cols
+        self.grid: list[list[str]] = [[' '] * cols for _ in range(rows)]
+        self.row = 0
+        self.col = 0
+
+    def _clear(self):
+        self.grid = [[' '] * self.cols for _ in range(self.rows)]
+        self.row = 0
+        self.col = 0
+
+    def _goto(self, row: int, col: int):  # 0-indexed
+        self.row = max(0, min(row, self.rows - 1))
+        self.col = max(0, min(col, self.cols - 1))
+
+    def _put(self, ch: str):
+        w = display_width(ch)
+        if w == 0:
+            return
+        if self.col + w > self.cols:
+            # Character doesn't fit; advance to next row (auto-wrap)
+            self.col = 0
+            self.row += 1
+        if self.row >= self.rows:
+            return
+        self.grid[self.row][self.col] = ch
+        for k in range(1, w):
+            if self.col + k < self.cols:
+                self.grid[self.row][self.col + k] = ''  # wide-char continuation
+        self.col += w
+        if self.col >= self.cols:
+            self.col = 0
+            self.row += 1
+
+    def _csi(self, params: str, final: str):
+        if final == 'H':  # Goto (CUP)
+            parts = params.split(';') if params else []
+            r = int(parts[0]) - 1 if len(parts) > 0 and parts[0] else 0
+            c = int(parts[1]) - 1 if len(parts) > 1 and parts[1] else 0
+            self._goto(r, c)
+        elif final == 'J':  # Erase in display
+            n = int(params) if params else 0
+            if n == 2:
+                self._clear()
+        elif final == 'A':  # Cursor up
+            n = int(params) if params else 1
+            self.row = max(0, self.row - n)
+        elif final == 'B':  # Cursor down
+            n = int(params) if params else 1
+            self.row = min(self.rows - 1, self.row + n)
+        elif final == 'C':  # Cursor forward
+            n = int(params) if params else 1
+            self.col = min(self.cols - 1, self.col + n)
+        elif final == 'D':  # Cursor back
+            n = int(params) if params else 1
+            self.col = max(0, self.col - n)
+        # m (SGR colors/styles), h/l (modes), etc. are ignored
+
+    def process(self, data: bytes):
+        """Replay raw terminal bytes into the grid."""
+        raw = data.decode('utf-8', errors='replace')
+        i = 0
+        while i < len(raw):
+            ch = raw[i]
+            if ch == '\x1b':
+                i += 1
+                if i >= len(raw):
+                    break
+                nxt = raw[i]
+                if nxt == '[':  # CSI sequence
+                    i += 1
+                    params = ''
+                    while i < len(raw) and not (0x40 <= ord(raw[i]) <= 0x7e):
+                        params += raw[i]
+                        i += 1
+                    if i < len(raw):
+                        self._csi(params, raw[i])
+                elif nxt in ('(', ')'):
+                    i += 1  # skip charset designator
+                # Other ESC sequences ignored
+            elif ch == '\x07':  # bell
+                pass
+            elif ch == '\r':
+                self.col = 0
+            elif ch == '\n':
+                self.row = min(self.rows - 1, self.row + 1)
+            elif ord(ch) >= 0x20:
+                self._put(ch)
+            i += 1
+
+
+# ---------------------------------------------------------------------------
+# Events file parser
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Frame:
+    number: int
+    byte_offset: int          # end-of-frame byte offset in cast file
+    dump: list[list[str]]     # reference_screen grid parsed from BUFFER_DUMP
+
+
+_ROW_RE = re.compile(r'ROW (\d+):')
+_CELL_RE = re.compile(r'\[(.+?) w=(\d+)\]')
+
+
+def _parse_dump(lines: list[str], rows: int, cols: int) -> list[list[str]]:
+    """Parse a BUFFER_DUMP block into a rows×cols grid of grapheme strings."""
+    grid: list[list[str]] = [[' '] * cols for _ in range(rows)]
+    for line in lines:
+        m = _ROW_RE.match(line)
+        if not m:
+            continue
+        row = int(m.group(1))
+        if row >= rows:
+            continue
+        col = 0
+        for cm in _CELL_RE.finditer(line):
+            grapheme, w = cm.group(1), int(cm.group(2))
+            if col >= cols:
+                break
+            grid[row][col] = grapheme
+            col += 1
+    return grid
+
+
+def parse_events(events_path: str) -> tuple[int, int, list[Frame]]:
+    """
+    Parse the .events sidecar file.
+
+    Returns (rows, cols, frames) where rows/cols are inferred from the first
+    BUFFER_DUMP encountered, and frames is a list of Frame objects in order.
+    """
+    frames: list[Frame] = []
+    rows = 0
+    cols = 0
+
+    pending_offset: Optional[int] = None
+    in_dump = False
+    dump_lines: list[str] = []
+    frame_number = 0
+
+    with open(events_path, encoding='utf-8', errors='replace') as fh:
+        for raw_line in fh:
+            line = raw_line.rstrip('\n')
+
+            if line.startswith('--- BUFFER_DUMP frame '):
+                in_dump = True
+                dump_lines = []
+                m = re.search(r'frame (\d+)', line)
+                if m:
+                    frame_number = int(m.group(1))
+                continue
+
+            if in_dump:
+                if _ROW_RE.match(line):
+                    dump_lines.append(line)
+                    # Infer cols from first row if not yet known
+                    if rows == 0 and cols == 0:
+                        cells = _CELL_RE.findall(line)
+                        cols = len(cells)
+                else:
+                    # Dump ended — finalise frame if we have an offset
+                    in_dump = False
+                    if rows == 0 and dump_lines:
+                        rows = len(dump_lines)
+                    if pending_offset is not None and rows > 0 and cols > 0:
+                        dump = _parse_dump(dump_lines, rows, cols)
+                        frames.append(Frame(
+                            number=frame_number,
+                            byte_offset=pending_offset,
+                            dump=dump,
+                        ))
+                    pending_offset = None
+                    dump_lines = []
+
+            # Annotation line: "<timestamp> <byte_offset> FRAME"
+            parts = line.split(' ', 2)
+            if len(parts) == 3 and parts[2] == 'FRAME':
+                try:
+                    pending_offset = int(parts[1])
+                except ValueError:
+                    pass
+
+        # Handle trailing dump at EOF
+        if in_dump and pending_offset is not None and rows > 0 and cols > 0:
+            if rows == 0 and dump_lines:
+                rows = len(dump_lines)
+            dump = _parse_dump(dump_lines, rows, cols)
+            frames.append(Frame(
+                number=frame_number,
+                byte_offset=pending_offset,
+                dump=dump,
+            ))
+
+    return rows, cols, frames
+
+
+# ---------------------------------------------------------------------------
+# Divergence check
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Divergence:
+    row: int
+    col: int
+    term: str   # what the virtual terminal has
+    ref: str    # what reference_screen has
+
+
+def check_frame(cast_data: bytes, frame: Frame, rows: int, cols: int) -> list[Divergence]:
+    """Replay cast_data up to frame.byte_offset and compare against the dump."""
+    vt = VirtualTerminal(rows, cols)
+    vt.process(cast_data[:frame.byte_offset])
+
+    divs: list[Divergence] = []
+    for r in range(rows):
+        for c in range(cols):
+            term_cell = vt.grid[r][c]
+            ref_cell = frame.dump[r][c]
+            # Normalise: both should compare as visible graphemes
+            if term_cell != ref_cell:
+                divs.append(Divergence(row=r, col=c, term=term_cell, ref=ref_cell))
+
+    return divs
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+def report(frame: Frame, divs: list[Divergence], summary: bool):
+    if not divs:
+        print(f"Frame {frame.number:4d} (offset {frame.byte_offset:8d}): ok")
+        return
+
+    print(f"Frame {frame.number:4d} (offset {frame.byte_offset:8d}): {len(divs)} divergence(s)")
+    if summary:
+        return
+
+    # Group by row for compact output
+    by_row: dict[int, list[Divergence]] = {}
+    for d in divs:
+        by_row.setdefault(d.row, []).append(d)
+
+    for r in sorted(by_row):
+        row_divs = by_row[r]
+        cols_str = ', '.join(
+            f"col {d.col}: term={d.term!r} ref={d.ref!r}"
+            for d in row_divs[:8]
+        )
+        tail = f" (+{len(row_divs)-8} more)" if len(row_divs) > 8 else ""
+        print(f"  row {r:3d}: {cols_str}{tail}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Compare reference_screen dumps against virtual terminal replay',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__.split('Usage:')[1] if 'Usage:' in __doc__ else '',
+    )
+    parser.add_argument('cast_file', metavar='<cast-file>',
+                        help='Recording file produced by aparte --record')
+    parser.add_argument('-f', '--frame', type=int, metavar='N',
+                        help='Check only frame N (1-based)')
+    parser.add_argument('-r', '--range', metavar='A-B', dest='frame_range',
+                        help='Check frames A through B inclusive')
+    parser.add_argument('-a', '--all', action='store_true',
+                        help='Check every frame (default: last frame only)')
+    parser.add_argument('-s', '--summary', action='store_true',
+                        help='Print counts only, skip per-cell details')
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        help='No output; exit 1 if any divergences found')
+    args = parser.parse_args()
+
+    cast_path = args.cast_file
+    events_path = cast_path + '.events'
+
+    try:
+        with open(cast_path, 'rb') as fh:
+            cast_data = fh.read()
+    except OSError as e:
+        print(f"render-check: cannot open cast file: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        rows, cols, frames = parse_events(events_path)
+    except OSError as e:
+        print(f"render-check: cannot open events file: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    if not frames:
+        print("render-check: no frames found in events file", file=sys.stderr)
+        sys.exit(2)
+
+    # Select which frames to check
+    if args.frame is not None:
+        selected = [f for f in frames if f.number == args.frame]
+        if not selected:
+            print(f"render-check: frame {args.frame} not found "
+                  f"(available: {frames[0].number}–{frames[-1].number})", file=sys.stderr)
+            sys.exit(2)
+    elif args.frame_range is not None:
+        m = re.fullmatch(r'(\d+)-(\d+)', args.frame_range)
+        if not m:
+            print("render-check: --range must be A-B (e.g. 10-20)", file=sys.stderr)
+            sys.exit(2)
+        lo, hi = int(m.group(1)), int(m.group(2))
+        selected = [f for f in frames if lo <= f.number <= hi]
+    elif args.all:
+        selected = frames
+    else:
+        selected = [frames[-1]]
+
+    total_divs = 0
+    for frame in selected:
+        divs = check_frame(cast_data, frame, rows, cols)
+        total_divs += len(divs)
+        if not args.quiet:
+            report(frame, divs, args.summary)
+
+    if not args.quiet and len(selected) > 1:
+        print(f"\nTotal: {total_divs} divergence(s) across {len(selected)} frame(s)")
+
+    sys.exit(1 if total_divs > 0 else 0)
+
+
+if __name__ == '__main__':
+    main()
