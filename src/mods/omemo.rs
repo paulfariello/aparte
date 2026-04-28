@@ -468,7 +468,10 @@ impl CryptoEngineTrait for MucOmemoEngine {
             .get(&nick)
             .cloned()
             .ok_or_else(|| {
-                anyhow!("Unknown nick '{nick}' in room {}, cannot decrypt", self.room)
+                anyhow!(
+                    "Unknown nick '{nick}' in room {}, cannot decrypt",
+                    self.room
+                )
             })?;
 
         log::info!(
@@ -1058,9 +1061,7 @@ impl OmemoMod {
 
         for (nick, real_jid) in &initial_occupants {
             log::info!("Starting OMEMO session for MUC member {nick} ({real_jid})");
-            if let Err(err) =
-                Self::start_session(aparte, signal_store, account, real_jid).await
-            {
+            if let Err(err) = Self::start_session(aparte, signal_store, account, real_jid).await {
                 crate::error!(
                     aparte,
                     err,
@@ -1298,14 +1299,14 @@ impl OmemoMod {
                 // Find the highest ID already in use to avoid collisions
                 let server_max = keys.iter().map(|k| k.pre_key_id).max().unwrap_or(0);
                 let local_max = pre_keys.iter().map(|(id, _)| *id).max().unwrap_or(0);
-                let mut next_id = server_max.max(local_max) + 1;
+                let first_id = server_max.max(local_max) + 1;
                 let needed = 100u32.saturating_sub(keys.len() as u32);
 
                 // Generate fresh prekeys and persist them so we can decrypt later.
                 // Signal trait futures are !Send, so use now_or_never() (they always
                 // complete synchronously — the impl is a plain DB write).
                 let mut new_keys: Vec<(u32, PublicKey)> = Vec::with_capacity(needed as usize);
-                for _ in 0..needed {
+                for (next_id, _) in (first_id..).zip(0..needed) {
                     let key_pair = KeyPair::generate(&mut thread_rng());
                     let record = libsignal_protocol::PreKeyRecord::new(
                         libsignal_protocol::PreKeyId::from(next_id),
@@ -1317,7 +1318,6 @@ impl OmemoMod {
                         .ok_or_else(|| anyhow!("Cannot save new prekey {next_id}"))?
                         .map_err(|e| anyhow!("Cannot save new prekey {next_id}: {e}"))?;
                     new_keys.push((next_id, key_pair.public_key));
-                    next_id += 1;
                 }
 
                 // Keep the server's unconsumed keys; append the fresh ones
@@ -1662,8 +1662,10 @@ impl ModTrait for OmemoMod {
                                 let nick_to_jid: NickToJid = Arc::new(std::sync::RwLock::new(
                                     occupants.iter().cloned().collect(),
                                 ));
-                                self.muc_occupant_maps
-                                    .insert((account.clone(), jid.clone()), Arc::clone(&nick_to_jid));
+                                self.muc_occupant_maps.insert(
+                                    (account.clone(), jid.clone()),
+                                    Arc::clone(&nick_to_jid),
+                                );
 
                                 let mut async_aparte = aparte.proxy();
                                 let account = account.clone();

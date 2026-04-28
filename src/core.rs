@@ -21,6 +21,8 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
+use std::cell::{Ref, RefCell, RefMut};
+use std::time::Duration;
 use terminus::charxel::IntoCharxels;
 use terminus::cursor::Cursor;
 use terminus::rendering::OffscreenRenderBuffer;
@@ -29,9 +31,7 @@ use termion::raw::IntoRawMode;
 use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
-use std::cell::{Ref, RefCell, RefMut};
 use tokio::sync::{mpsc, Notify};
-use std::time::Duration;
 use uuid::Uuid;
 
 use xmpp_parsers::caps::{self, Caps};
@@ -848,7 +848,11 @@ pub struct Aparte {
 }
 
 impl Aparte {
-    pub fn new(config_path: PathBuf, storage_path: PathBuf, record_path: Option<PathBuf>) -> Result<Self> {
+    pub fn new(
+        config_path: PathBuf,
+        storage_path: PathBuf,
+        record_path: Option<PathBuf>,
+    ) -> Result<Self> {
         log::debug!("Loading aparté with {:?}", config_path);
         let mut config_file = OpenOptions::new()
             .read(true)
@@ -985,7 +989,10 @@ impl Aparte {
                 );
             }
             Mod::UI(r#mod) => {
-                mods.insert(TypeId::of::<mods::ui::UIMod>(), RefCell::new(Mod::UI(r#mod)));
+                mods.insert(
+                    TypeId::of::<mods::ui::UIMod>(),
+                    RefCell::new(Mod::UI(r#mod)),
+                );
             }
             Mod::Mam(r#mod) => {
                 mods.insert(
@@ -1105,13 +1112,17 @@ impl Aparte {
                 let mut screen: Screen = match record_path {
                     Some(ref path) => {
                         let rec = std::fs::OpenOptions::new()
-                            .write(true).create(true).truncate(true)
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
                             .open(path)
                             .expect("Cannot open recording file");
                         let mut events_path = path.clone();
                         events_path.set_extension("events");
                         let ev = std::fs::OpenOptions::new()
-                            .write(true).create(true).truncate(true)
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
                             .open(events_path)
                             .expect("Cannot open events file");
                         Screen::Recording(crate::tee_writer::TeeWriter::new(base, rec, ev))
