@@ -47,12 +47,19 @@ use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::{contact, conversation};
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Mode {
+    Insert,
+    Normal,
+}
+
 #[allow(clippy::large_enum_variant)]
 enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
     AddWindow(String, Option<Box<dyn View<UIEvent>>>),
+    ModeChange(Mode),
 }
 
 struct TitleBar {
@@ -150,6 +157,7 @@ struct WinBar {
     highlighted: HashMap<String, (u64, u64)>,
     pub color: ColorTuple,
     dimensions: Option<Dimensions>,
+    mode: Mode,
 }
 
 impl WinBar {
@@ -161,6 +169,7 @@ impl WinBar {
             highlighted: HashMap::new(),
             color,
             dimensions: None,
+            mode: Mode::Insert,
         }
     }
 
@@ -278,6 +287,16 @@ impl View<UIEvent> for WinBar {
             frame.write("]");
         }
 
+        let mode_label = match self.mode {
+            Mode::Insert => "-- INSERT --",
+            Mode::Normal => "-- NORMAL --",
+        };
+        let mode_charxels = mode_label.with_style(Style::Bold);
+        let mode_width = mode_charxels.display_width();
+        if frame.width() >= mode_width {
+            frame.write_at((frame.width() - mode_width, 0u16), &mode_charxels);
+        }
+
         frame.set_background(self.color.bg);
         frame.set_foreground(self.color.fg);
     }
@@ -301,6 +320,9 @@ impl View<UIEvent> for WinBar {
                 important,
             }) => {
                 self.highlight_window(&conversation.get_jid().to_string(), *important);
+            }
+            UIEvent::ModeChange(mode) => {
+                self.mode = mode.clone();
             }
             _ => {}
         }
@@ -486,12 +508,31 @@ impl UIMod {
 
         let panic_handler = PanicHandler::new();
 
-        let mut layout =
-            LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(|layout, event| {
-                for child in layout.iter_children_mut() {
-                    child.event(event);
+        let mut layout = {
+            let mut mode = Mode::Insert;
+            LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(move |layout, event| {
+                match event {
+                    UIEvent::Core(Event::Key(Key::Esc)) if mode == Mode::Insert => {
+                        mode = Mode::Normal;
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(Key::Char('i'))) if mode == Mode::Normal => {
+                        mode = Mode::Insert;
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(Key::Char(_))) if mode == Mode::Normal => {}
+                    _ => {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    }
                 }
-            });
+            })
+        };
 
         let title_bar = TitleBar::new(config.theme.title_bar.clone());
         let frame = FrameLayout::<UIEvent, String>::new().with_event(|frame, event| match event {
@@ -535,8 +576,8 @@ impl UIMod {
         });
         let win_bar = WinBar::new(config.theme.win_bar.clone());
         let input = Input::new().with_event(|input, event| {
-            if let UIEvent::Core(Event::Key(event)) = event {
-                log::debug!("Input event: {:?}", event);
+            if let UIEvent::Core(Event::Key(key)) = event {
+                log::debug!("Input event: {:?}", key);
             }
             match event {
                 UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
@@ -1339,11 +1380,17 @@ impl Stream for TermionEventStream {
         };
 
         let mut iter = IterWrapper::new(&mut self.channel);
-        if let Ok(event) = termion_parse_event(byte, &mut iter) {
-            Poll::Ready(Some(event))
-        } else {
-            self.waker.register(cx.waker());
-            Poll::Pending
+        match termion_parse_event(byte, &mut iter) {
+            Ok(event) => Poll::Ready(Some(event)),
+            Err(_) if byte == b'\x1B' => {
+                // Lone ESC byte: no further bytes in channel, so this is a
+                // standalone Escape keypress (termion errors on ESC + None).
+                Poll::Ready(Some(TermionEvent::Key(Key::Esc)))
+            }
+            Err(_) => {
+                self.waker.register(cx.waker());
+                Poll::Pending
+            }
         }
     }
 }
@@ -1387,6 +1434,7 @@ impl Stream for EventStream {
                 Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
                 Key::PageUp => Poll::Ready(Some(Event::Key(Key::PageUp))),
                 Key::PageDown => Poll::Ready(Some(Event::Key(Key::PageDown))),
+                Key::Esc => Poll::Ready(Some(Event::Key(Key::Esc))),
                 _ => {
                     self.inner.waker.register(cx.waker());
                     Poll::Pending
