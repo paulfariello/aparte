@@ -112,8 +112,7 @@ impl<E> LinearLayout<E> {
         let mut match_height_weight_total = 0;
 
         log::debug!("layout with vertical orientation");
-        for (LayoutChild { child, .. }, requested_dimensions) in
-            self.children.iter().zip(&measured)
+        for (LayoutChild { child, .. }, requested_dimensions) in self.children.iter().zip(&measured)
         {
             match requested_dimensions.height {
                 RequestedDimension::ExpandMax => match_height_weight_total += child.weight,
@@ -187,8 +186,7 @@ impl<E> LinearLayout<E> {
         let mut match_width_weight_total = 0;
 
         log::debug!("layout with horizontal orientation");
-        for (LayoutChild { child, .. }, requested_dimensions) in
-            self.children.iter().zip(&measured)
+        for (LayoutChild { child, .. }, requested_dimensions) in self.children.iter().zip(&measured)
         {
             match requested_dimensions.height {
                 RequestedDimension::ExpandMax => height = dimensions.height,

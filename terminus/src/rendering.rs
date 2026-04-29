@@ -130,7 +130,11 @@ impl OffscreenRenderBuffer {
         for (row, line) in self.lines.iter().enumerate() {
             out.push_str(&format!("ROW {:03}:", row));
             for charxel in &line.charxels {
-                out.push_str(&format!(" [{} w={}]", charxel.grapheme, charxel.display_width()));
+                out.push_str(&format!(
+                    " [{} w={}]",
+                    charxel.grapheme,
+                    charxel.display_width()
+                ));
             }
             out.push('\n');
         }

@@ -318,7 +318,8 @@ where
         let last_visible_child_index = self.bottom_visible_child_index;
         // If we have only 1 visible children, first is 0 and last is also 0
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        for (layout_child, &child_height) in children[first_visible_child_index..=last_visible_child_index]
+        for (layout_child, &child_height) in children
+            [first_visible_child_index..=last_visible_child_index]
             .iter_mut()
             .zip(heights[first_visible_child_index..=last_visible_child_index].iter())
             .rev()
@@ -368,7 +369,8 @@ where
         // Layout only visible children
         let last_visible_child_index = self.bottom_visible_child_index;
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        for (layout_child, &child_height) in children[first_visible_child_index..=last_visible_child_index]
+        for (layout_child, &child_height) in children
+            [first_visible_child_index..=last_visible_child_index]
             .iter_mut()
             .zip(heights[first_visible_child_index..=last_visible_child_index].iter())
         {
@@ -452,10 +454,12 @@ where
         let heights: Vec<u16> = self
             .children
             .iter()
-            .map(|LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height,
-                RequestedDimension::Absolute(h) => h,
-            })
+            .map(
+                |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
+                    RequestedDimension::ExpandMax => dimensions.height,
+                    RequestedDimension::Absolute(h) => h,
+                },
+            )
             .collect();
 
         let total_children_height: u32 = heights.iter().map(|&h| h as u32).sum();

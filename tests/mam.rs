@@ -12,7 +12,12 @@ use common::xmpp_fixture::XmppFixture;
 fn xmpp_with_contact_mam() -> XmppFixture {
     XmppFixture::new_with_mam(
         &["contact@localhost"],
-        &[("contact@localhost", "user@localhost", "a1", "Archived message!")],
+        &[(
+            "contact@localhost",
+            "user@localhost",
+            "a1",
+            "Archived message!",
+        )],
     )
 }
 

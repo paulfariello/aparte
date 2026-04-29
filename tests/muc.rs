@@ -9,7 +9,9 @@ use rstest::rstest;
 use xmpp_parsers::muc::user::{Affiliation, Role};
 
 use common::describe;
-use common::xmpp_fixture::{groupchat_message, muc_join_presence, room_subject_message, xmpp, XmppFixture};
+use common::xmpp_fixture::{
+    groupchat_message, muc_join_presence, room_subject_message, xmpp, XmppFixture,
+};
 
 const ROOM: &str = "dev@conference.localhost";
 const BOUND_JID: &str = "user@localhost/aparte_test";

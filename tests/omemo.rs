@@ -58,7 +58,10 @@ fn omemo_outgoing_encrypted() {
         let screen = fixture.snapshot();
         eprintln!("{}", common::describe(screen.screen()));
     }
-    assert!(encrypted_msg.is_some(), "no OMEMO-encrypted message stanza was sent");
+    assert!(
+        encrypted_msg.is_some(),
+        "no OMEMO-encrypted message stanza was sent"
+    );
 
     // The outgoing message displayed in the UI must carry the lock emoji.
     let lock_shown = fixture.wait_for("\u{1f512}", Duration::from_secs(5));
@@ -88,14 +91,14 @@ fn omemo_incoming_decrypted() {
 
     // Build an OMEMO-encrypted message from contact to aparte
     let aparte_jid = BareJid::new("user@localhost").expect("bare jid");
-    let encrypted = contact.encrypt_for(&aparte_jid, aparte_device_id, &aparte_bundle, "secret text");
+    let encrypted =
+        contact.encrypt_for(&aparte_jid, aparte_device_id, &aparte_bundle, "secret text");
 
     let mut msg = Message::chat(Some(Jid::new("user@localhost").expect("jid")));
     msg.from = Some(Jid::new(&format!("{contact_jid}/desktop")).expect("from jid"));
     msg.id = Some(Id("omemo-test-1".into()));
-    msg.payloads.push(
-        xmpp_parsers::minidom::Element::from(encrypted),
-    );
+    msg.payloads
+        .push(xmpp_parsers::minidom::Element::from(encrypted));
 
     fixture.inject(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg)));
 

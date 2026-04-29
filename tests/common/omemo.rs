@@ -89,8 +89,7 @@ impl ContactKeys {
         aparte_bundle: &legacy_omemo::Bundle,
         body: &str,
     ) -> legacy_omemo::Encrypted {
-        let aparte_addr =
-            ProtocolAddress::new(aparte_jid.to_string(), aparte_device_id.into());
+        let aparte_addr = ProtocolAddress::new(aparte_jid.to_string(), aparte_device_id.into());
         let prekey_bundle = bundle_to_prekey_bundle(aparte_device_id, aparte_bundle);
 
         let mut store2 = self.store.clone();
@@ -168,10 +167,9 @@ fn bundle_to_prekey_bundle(device_id: u32, bundle: &legacy_omemo::Bundle) -> Pre
         .as_ref()
         .expect("spk sig")
         .data;
-    let identity_key = IdentityKey::decode(
-        &bundle.identity_key.as_ref().expect("identity key").data,
-    )
-    .expect("identity key decode");
+    let identity_key =
+        IdentityKey::decode(&bundle.identity_key.as_ref().expect("identity key").data)
+            .expect("identity key decode");
     let prekey = bundle
         .prekeys
         .as_ref()

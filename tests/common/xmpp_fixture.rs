@@ -18,8 +18,7 @@ use xmpp_parsers::{
     forwarding::Forwarded,
     iq::Iq,
     jid::BareJid,
-    legacy_omemo,
-    mam,
+    legacy_omemo, mam,
     message::{Id, Message, MessageType},
     minidom::Element,
     muc::user::{Affiliation, Item as MucItem, MucUser, Role},
@@ -32,8 +31,8 @@ use xmpp_parsers::{
     stream_features::{SaslMechanisms, StreamFeatures},
 };
 
-use super::Harness;
 use super::wait_for_screen;
+use super::Harness;
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
 
@@ -386,7 +385,11 @@ fn omemo_devicelist_iq(
     let devices: Vec<legacy_omemo::Device> = omemo_cfg
         .as_ref()
         .and_then(|c| c.contact_devices.get(target_jid))
-        .map(|devs| devs.iter().map(|(id, _)| legacy_omemo::Device { id: *id }).collect())
+        .map(|devs| {
+            devs.iter()
+                .map(|(id, _)| legacy_omemo::Device { id: *id })
+                .collect()
+        })
         .unwrap_or_default();
     let device_list = legacy_omemo::DeviceList { devices };
     let item = pubsub::pubsub::Item {
@@ -595,7 +598,12 @@ pub fn contact_offline_presence(from: &str, to: &str) -> XmppStreamElement {
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Presence(presence))
 }
 
-pub fn muc_join_presence(from: &str, to: &str, affiliation: Affiliation, role: Role) -> XmppStreamElement {
+pub fn muc_join_presence(
+    from: &str,
+    to: &str,
+    affiliation: Affiliation,
+    role: Role,
+) -> XmppStreamElement {
     let muc_user = MucUser {
         status: vec![],
         items: vec![MucItem::new(affiliation, role)],
@@ -659,8 +667,12 @@ pub fn corrected_chat_message(
     msg.from = Some(Jid::new(from).unwrap());
     msg.id = Some(Id(new_id.to_string()));
     msg.bodies.insert(Default::default(), body.to_string());
-    msg.payloads
-        .push(Replace { id: Id(original_id.to_string()) }.into());
+    msg.payloads.push(
+        Replace {
+            id: Id(original_id.to_string()),
+        }
+        .into(),
+    );
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
@@ -679,7 +691,10 @@ pub fn bookmarks_v1_push_event(
             password: None,
         })
         .collect();
-    let storage = Storage { conferences, urls: vec![] };
+    let storage = Storage {
+        conferences,
+        urls: vec![],
+    };
     let storage_elem: Element = storage.into();
 
     let item = pubsub_event::Item {
@@ -769,10 +784,7 @@ impl XmppFixture {
         Self::new_impl(roster, true, vec![], None).0
     }
 
-    pub fn new_with_mam(
-        roster: &[&str],
-        archive: &[(&str, &str, &str, &str)],
-    ) -> Self {
+    pub fn new_with_mam(roster: &[&str], archive: &[(&str, &str, &str, &str)]) -> Self {
         let mam_archive = archive
             .iter()
             .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
@@ -790,7 +802,13 @@ impl XmppFixture {
             stanza_tx,
         };
         let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg));
-        (fixture, OmemoCapture { bundle_rx, stanza_rx })
+        (
+            fixture,
+            OmemoCapture {
+                bundle_rx,
+                stanza_rx,
+            },
+        )
     }
 
     /// Create fixture with OMEMO support and one fake contact device+bundle.
@@ -803,10 +821,20 @@ impl XmppFixture {
         contact_devices.insert(contact_jid.to_string(), vec![(device_id, bundle)]);
         let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
         let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
-        let cfg = OmemoMockConfig { contact_devices, bundle_tx, stanza_tx };
+        let cfg = OmemoMockConfig {
+            contact_devices,
+            bundle_tx,
+            stanza_tx,
+        };
         let roster = [contact_jid];
         let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg));
-        (fixture, OmemoCapture { bundle_rx, stanza_rx })
+        (
+            fixture,
+            OmemoCapture {
+                bundle_rx,
+                stanza_rx,
+            },
+        )
     }
 
     fn new_impl(
@@ -817,7 +845,15 @@ impl XmppFixture {
     ) -> (Self, ()) {
         let rt = Runtime::new().unwrap();
         let (mam_query_tx, mam_query_rx) = mpsc::unbounded_channel::<()>();
-        let (mock, port) = start_mock_server(&rt, BOUND_JID, roster, respond_to_disco, mam_archive, omemo_cfg, Some(mam_query_tx));
+        let (mock, port) = start_mock_server(
+            &rt,
+            BOUND_JID,
+            roster,
+            respond_to_disco,
+            mam_archive,
+            omemo_cfg,
+            Some(mam_query_tx),
+        );
         let config = format!(
             "[accounts.test]\n\
              jid = \"user@localhost\"\n\
@@ -831,7 +867,15 @@ impl XmppFixture {
             wait_for_screen(&harness, "Connected as", Duration::from_secs(15)),
             "aparte did not connect within 15s",
         );
-        (Self { rt: Some(rt), mock, harness: Some(harness), mam_query_rx }, ())
+        (
+            Self {
+                rt: Some(rt),
+                mock,
+                harness: Some(harness),
+                mam_query_rx,
+            },
+            (),
+        )
     }
 
     pub fn inject(&self, stanza: XmppStreamElement) {
@@ -848,7 +892,10 @@ impl XmppFixture {
 
     pub fn switch_window(&self, name: &str) {
         thread::sleep(Duration::from_millis(400));
-        self.harness.as_ref().unwrap().send_command(&format!("/win {name}"));
+        self.harness
+            .as_ref()
+            .unwrap()
+            .send_command(&format!("/win {name}"));
     }
 
     pub fn snapshot(&self) -> vt100::Parser {
