@@ -234,17 +234,20 @@ where
         self.bottom_visible_child_index == 0 || self.bottom_visible_child_index == initial_index
     }
 
-    /// Scroll to the very top (first messages visible). Returns true (always at top).
-    pub fn scroll_to_top(&mut self) -> bool {
+    /// Scroll to the very top (first messages visible).
+    /// Returns `(old_selected, new_selected)` indices.
+    pub fn scroll_to_top(&mut self) -> (Option<usize>, Option<usize>) {
+        let old = self.selected_child_index;
         if self.children.is_empty() {
-            return true;
+            self.selected_child_index = None;
+            return (old, None);
         }
         let dimensions = match &self.dimensions {
             Some(d) => d.clone(),
             None => {
                 self.bottom_visible_child_index = 0;
-                self.selected_child_index = None;
-                return true;
+                self.selected_child_index = Some(0);
+                return (old, Some(0));
             }
         };
         let measure_specs = MeasureSpecs::from(&dimensions);
@@ -264,16 +267,23 @@ where
         }
 
         self.bottom_visible_child_index = bottom;
-        self.selected_child_index = None;
-        true
+        self.selected_child_index = Some(0);
+        (old, Some(0))
     }
 
     /// Scroll to the very bottom (last messages visible).
-    pub fn scroll_to_bottom(&mut self) {
+    /// Returns `(old_selected, new_selected)` indices.
+    pub fn scroll_to_bottom(&mut self) -> (Option<usize>, Option<usize>) {
+        let old = self.selected_child_index;
         if !self.children.is_empty() {
-            self.bottom_visible_child_index = self.children.len() - 1;
+            let last = self.children.len() - 1;
+            self.bottom_visible_child_index = last;
+            self.selected_child_index = Some(last);
+            (old, Some(last))
+        } else {
+            self.selected_child_index = None;
+            (old, None)
         }
-        self.selected_child_index = None;
     }
 
     /// PageDown the window, return true if bottom is reached

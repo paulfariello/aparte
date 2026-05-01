@@ -186,6 +186,22 @@ pub fn describe(screen: &vt100::Screen) -> String {
     s
 }
 
+/// Default selection highlight color (matches config default `selected_message`).
+pub const SELECTION_BGCOLOR: vt100::Color = vt100::Color::Rgb(49, 50, 68);
+
+pub fn find_row_with(screen: &vt100::Screen, needle: &str) -> Option<u16> {
+    (0..ROWS).find(|&r| row_text(screen, r).contains(needle))
+}
+
+pub fn row_has_bgcolor(screen: &vt100::Screen, r: u16, color: vt100::Color) -> bool {
+    (0..COLS).any(|c| {
+        screen
+            .cell(r, c)
+            .map(|cell| cell.bgcolor() == color)
+            .unwrap_or(false)
+    })
+}
+
 pub fn wait_for_screen(h: &Harness, needle: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {

@@ -662,7 +662,17 @@ impl UIMod {
                                     }
                                 }
                                 NormalCommand::ScrollToTop => {
-                                    view.scroll_to_top();
+                                    let (old, new) = view.scroll_to_top();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
                                     if !mam_requested {
                                         mam_requested = true;
                                         let from =
@@ -675,7 +685,17 @@ impl UIMod {
                                     }
                                 }
                                 NormalCommand::ScrollToBottom => {
-                                    view.scroll_to_bottom();
+                                    let (old, new) = view.scroll_to_bottom();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
                                     mam_requested = false;
                                 }
                             },
@@ -789,7 +809,17 @@ impl UIMod {
                                     }
                                 }
                                 NormalCommand::ScrollToTop => {
-                                    view.scroll_to_top();
+                                    let (old, new) = view.scroll_to_top();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
                                     if !mam_requested {
                                         mam_requested = true;
                                         let from =
@@ -802,7 +832,17 @@ impl UIMod {
                                     }
                                 }
                                 NormalCommand::ScrollToBottom => {
-                                    view.scroll_to_bottom();
+                                    let (old, new) = view.scroll_to_bottom();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
                                     mam_requested = false;
                                 }
                             },
@@ -1150,10 +1190,30 @@ impl ModTrait for UIMod {
                                 }
                             }
                             NormalCommand::ScrollToTop => {
-                                view.scroll_to_top();
+                                let (old, new) = view.scroll_to_top();
+                                if let Some(i) = old {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
+                                if let Some(i) = new {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
                             }
                             NormalCommand::ScrollToBottom => {
-                                view.scroll_to_bottom();
+                                let (old, new) = view.scroll_to_bottom();
+                                if let Some(i) = old {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
+                                if let Some(i) = new {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
                             }
                         },
                         UIEvent::ModeChange(Mode::Insert) => {
