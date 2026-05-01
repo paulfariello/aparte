@@ -202,6 +202,13 @@ pub fn row_has_bgcolor(screen: &vt100::Screen, r: u16, color: vt100::Color) -> b
     })
 }
 
+/// Returns the set of rows that contain at least one cell with `color` as background.
+pub fn rows_with_bgcolor(screen: &vt100::Screen, color: vt100::Color) -> Vec<u16> {
+    (0..ROWS)
+        .filter(|&r| row_has_bgcolor(screen, r, color))
+        .collect()
+}
+
 pub fn wait_for_screen(h: &Harness, needle: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {

@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    describe, find_row_with, grid_contains, row_has_bgcolor, wait_for_screen, Harness,
+    describe, grid_contains, row_text, rows_with_bgcolor, wait_for_screen, Harness,
     SELECTION_BGCOLOR,
 };
 
@@ -312,13 +312,23 @@ fn gg_selects_first_visible_message() {
     let screen = parser.screen();
     h.shutdown();
 
-    // After gg the first visible message must be highlighted with the selection color.
-    let selected = find_row_with(screen, "\u{258C}")
-        .map(|r| row_has_bgcolor(screen, r, SELECTION_BGCOLOR))
-        .unwrap_or(false);
+    // After gg exactly one message (the welcome banner) must be highlighted.
+    let selected_rows = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
     assert!(
-        selected,
-        "Expected the welcome-banner row to have the selection background after gg\n{}",
+        !selected_rows.is_empty(),
+        "Expected some rows to have the selection background after gg\n{}",
+        describe(screen)
+    );
+    assert!(
+        selected_rows.windows(2).all(|w| w[1] == w[0] + 1),
+        "Selection spans non-contiguous rows — more than one message is highlighted\n{}",
+        describe(screen)
+    );
+    assert!(
+        selected_rows
+            .iter()
+            .any(|&r| row_text(screen, r).contains('\u{258C}')),
+        "Expected the selected block to contain the welcome-banner glyph after gg\n{}",
         describe(screen)
     );
 }
@@ -343,13 +353,23 @@ fn G_selects_last_message() {
     let screen = parser.screen();
     h.shutdown();
 
-    // After G the newest message must be highlighted.
-    let selected = find_row_with(screen, "bad29")
-        .map(|r| row_has_bgcolor(screen, r, SELECTION_BGCOLOR))
-        .unwrap_or(false);
+    // After G exactly one message ('bad29') must be highlighted.
+    let selected_rows = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
     assert!(
-        selected,
-        "Expected 'bad29' row to have the selection background after G\n{}",
+        !selected_rows.is_empty(),
+        "Expected some rows to have the selection background after G\n{}",
+        describe(screen)
+    );
+    assert!(
+        selected_rows.windows(2).all(|w| w[1] == w[0] + 1),
+        "Selection spans non-contiguous rows — more than one message is highlighted\n{}",
+        describe(screen)
+    );
+    assert!(
+        selected_rows
+            .iter()
+            .any(|&r| row_text(screen, r).contains("bad29")),
+        "Expected the selected block to contain 'bad29' after G\n{}",
         describe(screen)
     );
 }
