@@ -375,6 +375,56 @@ fn G_selects_last_message() {
 }
 
 #[test]
+fn insert_mode_page_up_does_not_scroll_message_window() {
+    let h = Harness::spawn("", &[]);
+    thread::sleep(Duration::from_millis(1500));
+
+    fill_console(&h);
+
+    // Verify latest message is visible at bottom
+    let found = wait_for_screen(&h, "bad29", Duration::from_secs(5));
+    assert!(found, "Expected bad29 visible before PageUp test");
+
+    // In INSERT mode (the default), PageUp must NOT scroll the message window
+    h.send_bytes(b"\x1b[5~");
+    thread::sleep(Duration::from_millis(400));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        grid_contains(screen, "bad29"),
+        "PageUp in INSERT mode scrolled the message window — key propagation not blocked\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn normal_mode_page_up_does_scroll_message_window() {
+    let h = Harness::spawn("", &[]);
+    thread::sleep(Duration::from_millis(1500));
+
+    fill_console(&h);
+
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+
+    enter_normal(&h);
+    h.send_bytes(b"\x1b[5~"); // PageUp
+    thread::sleep(Duration::from_millis(400));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        !grid_contains(screen, "bad29"),
+        "PageUp in NORMAL mode should scroll the message window away from newest message\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
 #[allow(non_snake_case)]
 fn G_scrolls_to_newest_message() {
     let h = Harness::spawn("", &[]);

@@ -1038,6 +1038,11 @@ impl ModTrait for UIMod {
                             }
                         }
                     }
+                    UIEvent::Core(Event::Key(_)) if mode == Mode::Insert => {
+                        if let Some(focused) = layout.focused_child_mut() {
+                            focused.event(event);
+                        }
+                    }
                     _ => {
                         for child in layout.iter_children_mut() {
                             child.event(event);
@@ -1133,6 +1138,7 @@ impl ModTrait for UIMod {
         self.root.push(frame, 1);
         self.root.push(win_bar, 0);
         self.root.push(input, 0);
+        self.root.set_focus(INPUT_INDEX);
 
         let mut console =
             LinearLayout::<UIEvent>::new(Orientation::Horizontal).with_event(|layout, event| {
