@@ -66,6 +66,10 @@ where
 {
     /// Index in children of last visible child (bottom child)
     bottom_visible_child_index: usize,
+    /// Index in children of first visible child (top child); updated after layout
+    first_visible_child_index: usize,
+    /// Index of the currently selected child, if any
+    selected_child_index: Option<usize>,
     event_handler: Option<EventHandler<Self, E>>,
     children: BTreeSet<LayoutChild<I>>,
     layouts: LayoutParams,
@@ -89,6 +93,8 @@ where
         Self {
             children: BTreeSet::new(),
             bottom_visible_child_index: 0,
+            first_visible_child_index: 0,
+            selected_child_index: None,
             event_handler: None,
             layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
@@ -116,6 +122,51 @@ where
             .iter()
             .next()
             .map(|LayoutChild { child, .. }| child)
+    }
+
+    /// Returns a reference to the child at the given sorted index (O(n)).
+    pub fn child_at(&self, index: usize) -> Option<&I> {
+        self.children
+            .iter()
+            .nth(index)
+            .map(|LayoutChild { child, .. }| child)
+    }
+
+    /// Moves selection to the previous (older) child.
+    /// Returns `(old_index, new_index, at_top)`.
+    pub fn select_prev(&mut self) -> (Option<usize>, Option<usize>, bool) {
+        let old = self.selected_child_index;
+        let new = match old {
+            None => self.bottom_visible_child_index,
+            Some(0) => 0,
+            Some(i) => i - 1,
+        };
+        self.selected_child_index = Some(new);
+        if new < self.first_visible_child_index && self.bottom_visible_child_index > 0 {
+            self.bottom_visible_child_index -= 1;
+        }
+        (old, Some(new), new == 0)
+    }
+
+    /// Moves selection to the next (newer) child.
+    /// Returns `(old_index, new_index)`.
+    pub fn select_next(&mut self) -> (Option<usize>, Option<usize>) {
+        let last = self.children.len().saturating_sub(1);
+        let old = self.selected_child_index;
+        let new = match old {
+            None => self.bottom_visible_child_index,
+            Some(i) => (i + 1).min(last),
+        };
+        self.selected_child_index = Some(new);
+        if new > self.bottom_visible_child_index {
+            self.bottom_visible_child_index = new;
+        }
+        (old, Some(new))
+    }
+
+    /// Clears the selection and returns the previously selected index.
+    pub fn clear_selection(&mut self) -> Option<usize> {
+        self.selected_child_index.take()
     }
 
     pub fn insert(&mut self, item: I) {
@@ -181,6 +232,48 @@ where
         log::debug!("View at: {}", self.bottom_visible_child_index);
         // Return true only if we've reached the top
         self.bottom_visible_child_index == 0 || self.bottom_visible_child_index == initial_index
+    }
+
+    /// Scroll to the very top (first messages visible). Returns true (always at top).
+    pub fn scroll_to_top(&mut self) -> bool {
+        if self.children.is_empty() {
+            return true;
+        }
+        let dimensions = match &self.dimensions {
+            Some(d) => d.clone(),
+            None => {
+                self.bottom_visible_child_index = 0;
+                self.selected_child_index = None;
+                return true;
+            }
+        };
+        let measure_specs = MeasureSpecs::from(&dimensions);
+        let mut accumulated: u32 = 0;
+        let mut bottom = 0usize;
+
+        for (i, LayoutChild { child, .. }) in self.children.iter().enumerate() {
+            let h = match child.measure(&measure_specs).height {
+                RequestedDimension::ExpandMax => dimensions.height as u32,
+                RequestedDimension::Absolute(h) => h as u32,
+            };
+            accumulated += h;
+            bottom = i;
+            if accumulated >= dimensions.height as u32 {
+                break;
+            }
+        }
+
+        self.bottom_visible_child_index = bottom;
+        self.selected_child_index = None;
+        true
+    }
+
+    /// Scroll to the very bottom (last messages visible).
+    pub fn scroll_to_bottom(&mut self) {
+        if !self.children.is_empty() {
+            self.bottom_visible_child_index = self.children.len() - 1;
+        }
+        self.selected_child_index = None;
     }
 
     /// PageDown the window, return true if bottom is reached
@@ -318,6 +411,7 @@ where
         let last_visible_child_index = self.bottom_visible_child_index;
         // If we have only 1 visible children, first is 0 and last is also 0
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
+        self.first_visible_child_index = first_visible_child_index;
         for (layout_child, &child_height) in children
             [first_visible_child_index..=last_visible_child_index]
             .iter_mut()
@@ -369,6 +463,7 @@ where
         // Layout only visible children
         let last_visible_child_index = self.bottom_visible_child_index;
         let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
+        self.first_visible_child_index = first_visible_child_index;
         for (layout_child, &child_height) in children
             [first_visible_child_index..=last_visible_child_index]
             .iter_mut()
@@ -907,5 +1002,125 @@ mod tests {
             visible_children[2].dimensions.as_ref().map(|d| d.height),
             Some(10)
         );
+    }
+
+    fn three_child_win() -> ScrollWin<(), MockView> {
+        let mut w = ScrollWin::<(), MockView>::new();
+        for ord in 0..3 {
+            w.insert(MockView {
+                ord,
+                height: 10,
+                ..Default::default()
+            });
+        }
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: 80,
+            height: 30,
+        };
+        w.layout(&dims);
+        w
+    }
+
+    #[test]
+    fn test_select_prev_initialises_at_bottom() {
+        let mut w = three_child_win();
+        let (old, new, _at_top) = w.select_prev();
+        assert_eq!(old, None);
+        assert_eq!(new, Some(w.bottom_visible_child_index));
+    }
+
+    #[test]
+    fn test_select_next_initialises_at_bottom() {
+        let mut w = three_child_win();
+        let (old, new) = w.select_next();
+        assert_eq!(old, None);
+        assert_eq!(new, Some(w.bottom_visible_child_index));
+    }
+
+    #[test]
+    fn test_select_prev_moves_up() {
+        let mut w = three_child_win();
+        w.select_prev(); // init at index 2
+        let (old, new, at_top) = w.select_prev();
+        assert_eq!(old, Some(2));
+        assert_eq!(new, Some(1));
+        assert!(!at_top);
+    }
+
+    #[test]
+    fn test_select_next_moves_down() {
+        let mut w = three_child_win();
+        w.select_prev(); // init at 2
+        w.select_prev(); // move to 1
+        let (old, new) = w.select_next();
+        assert_eq!(old, Some(1));
+        assert_eq!(new, Some(2));
+    }
+
+    #[test]
+    fn test_select_prev_clamped_at_zero() {
+        let mut w = three_child_win();
+        w.select_prev(); // 2
+        w.select_prev(); // 1
+        w.select_prev(); // 0 – at top
+        let (old, new, at_top) = w.select_prev();
+        assert_eq!(old, Some(0));
+        assert_eq!(new, Some(0));
+        assert!(at_top);
+    }
+
+    #[test]
+    fn test_select_next_clamped_at_last() {
+        let mut w = three_child_win();
+        w.select_next(); // init at 2 (bottom)
+        let (old, new) = w.select_next();
+        assert_eq!(old, Some(2));
+        assert_eq!(new, Some(2)); // already at last
+    }
+
+    #[test]
+    fn test_clear_selection_returns_index() {
+        let mut w = three_child_win();
+        w.select_prev();
+        w.select_prev(); // now at 1
+        let prev = w.clear_selection();
+        assert_eq!(prev, Some(1));
+        // A subsequent select_prev initialises again from bottom
+        let (old, new, _) = w.select_prev();
+        assert_eq!(old, None);
+        assert_eq!(new, Some(w.bottom_visible_child_index));
+    }
+
+    #[test]
+    fn test_select_prev_scrolls_viewport_up() {
+        // 4 children of height 10, viewport height 20 → only 2 visible at a time
+        let mut w = ScrollWin::<(), MockView>::new();
+        for ord in 0..4 {
+            w.insert(MockView {
+                ord,
+                height: 10,
+                ..Default::default()
+            });
+        }
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: 80,
+            height: 20,
+        };
+        w.layout(&dims);
+
+        // bottom_visible_child_index should be 3, first_visible 2
+        assert_eq!(w.bottom_visible_child_index, 3);
+        assert_eq!(w.first_visible_child_index, 2);
+
+        w.select_prev(); // init at 3
+        w.select_prev(); // move to 2 (still visible)
+        assert_eq!(w.bottom_visible_child_index, 3); // no scroll yet
+
+        w.select_prev(); // move to 1 – now above first_visible(2), should scroll
+        assert_eq!(w.bottom_visible_child_index, 2); // scrolled up by 1
     }
 }

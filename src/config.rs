@@ -3,13 +3,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use terminus::Color;
+use terminus::{BgColor, Color};
 
 use crate::account::ConnectionInfo;
 use crate::color::ColorTuple;
 
 fn true_() -> bool {
     true
+}
+
+fn default_selected_message() -> BgColor {
+    BgColor(Color::Rgb(49, 50, 68))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -27,6 +31,10 @@ pub struct Theme {
     pub win_bar: ColorTuple,
     pub roster: ColorTuple,
     pub occupants: ColorTuple,
+    #[serde(default = "default_selected_message")]
+    #[serde(serialize_with = "crate::color::serialize_color")]
+    #[serde(deserialize_with = "crate::color::deserialize_color")]
+    pub selected_message: BgColor,
 }
 
 impl Default for Theme {
@@ -48,6 +56,7 @@ impl Default for Theme {
                 Color::Named(terminus::NamedColor::Blue),
                 Color::Named(terminus::NamedColor::Black),
             ),
+            selected_message: BgColor(Color::Rgb(49, 50, 68)),
         }
     }
 }

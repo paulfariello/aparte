@@ -53,6 +53,21 @@ enum Mode {
     Normal,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum NormalCommand {
+    SelectNext,
+    SelectPrev,
+    ScrollToTop,
+    ScrollToBottom,
+}
+
+const NORMAL_COMMANDS: &[(&str, NormalCommand)] = &[
+    ("j", NormalCommand::SelectNext),
+    ("k", NormalCommand::SelectPrev),
+    ("gg", NormalCommand::ScrollToTop),
+    ("G", NormalCommand::ScrollToBottom),
+];
+
 #[allow(clippy::large_enum_variant)]
 enum UIEvent {
     Core(Event),
@@ -60,6 +75,8 @@ enum UIEvent {
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
     AddWindow(String, Option<Box<dyn View<UIEvent>>>),
     ModeChange(Mode),
+    NormalCommand(NormalCommand),
+    CommandBufferUpdate(String),
 }
 
 struct TitleBar {
@@ -158,6 +175,7 @@ struct WinBar {
     pub color: ColorTuple,
     dimensions: Option<Dimensions>,
     mode: Mode,
+    command_buffer: String,
 }
 
 impl WinBar {
@@ -170,6 +188,7 @@ impl WinBar {
             color,
             dimensions: None,
             mode: Mode::Insert,
+            command_buffer: String::new(),
         }
     }
 
@@ -297,6 +316,15 @@ impl View<UIEvent> for WinBar {
             frame.write_at((frame.width() - mode_width, 0u16), &mode_charxels);
         }
 
+        if !self.command_buffer.is_empty() {
+            let cmd_cx = self.command_buffer.as_str().with_style(Style::Bold);
+            let cmd_w = cmd_cx.display_width();
+            let total = mode_width + 1 + cmd_w;
+            if frame.width() >= total {
+                frame.write_at((frame.width() - total, 0u16), &cmd_cx);
+            }
+        }
+
         frame.set_background(self.color.bg);
         frame.set_foreground(self.color.fg);
     }
@@ -323,6 +351,9 @@ impl View<UIEvent> for WinBar {
             }
             UIEvent::ModeChange(mode) => {
                 self.mode = mode.clone();
+            }
+            UIEvent::CommandBufferUpdate(buf) => {
+                self.command_buffer = buf.clone();
             }
             _ => {}
         }
@@ -503,124 +534,9 @@ pub struct UIMod {
 }
 
 impl UIMod {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(_config: &Config) -> Self {
         let screen = Arc::new(RwLock::new(OffscreenRenderBuffer::default()));
-
         let panic_handler = PanicHandler::new();
-
-        let mut layout = {
-            let mut mode = Mode::Insert;
-            LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(move |layout, event| {
-                match event {
-                    UIEvent::Core(Event::Key(Key::Esc)) if mode == Mode::Insert => {
-                        mode = Mode::Normal;
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
-                        }
-                    }
-                    UIEvent::Core(Event::Key(Key::Char('i'))) if mode == Mode::Normal => {
-                        mode = Mode::Insert;
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
-                        }
-                    }
-                    UIEvent::Core(Event::Key(Key::Char(_))) if mode == Mode::Normal => {}
-                    _ => {
-                        for child in layout.iter_children_mut() {
-                            child.event(event);
-                        }
-                    }
-                }
-            })
-        };
-
-        let title_bar = TitleBar::new(config.theme.title_bar.clone());
-        let frame = FrameLayout::<UIEvent, String>::new().with_event(|frame, event| match event {
-            UIEvent::Core(Event::ChangeWindow(name)) => {
-                frame.set_current(name.to_string());
-            }
-            UIEvent::AddWindow(name, view) => {
-                let view = view.take().unwrap();
-                frame.insert_boxed(name.to_string(), view);
-
-                // propagate AddWindow with name only to each subview
-                // required at least for console view
-                for child in frame.iter_children_mut() {
-                    child.event(&mut UIEvent::AddWindow(name.to_string(), None));
-                }
-            }
-            UIEvent::Core(Event::Close(window)) => {
-                frame.remove(window);
-
-                // propagate Close with name only to each subview
-                // required at least for console view
-                for child in frame.iter_children_mut() {
-                    child.event(&mut UIEvent::Core(Event::Close(window.clone())));
-                }
-            }
-            // Interaction events → current window only
-            UIEvent::Core(Event::Key(_))
-            | UIEvent::Core(Event::Completed(_, _))
-            | UIEvent::Core(Event::ResetCompletion)
-            | UIEvent::Core(Event::ReadPassword(_)) => {
-                if let Some(current) = frame.get_current_mut() {
-                    current.event(event);
-                }
-            }
-            // Global events (Message, Notification, Subject, etc.) → all windows
-            _ => {
-                for child in frame.iter_children_mut() {
-                    child.event(event);
-                }
-            }
-        });
-        let win_bar = WinBar::new(config.theme.win_bar.clone());
-        let input = Input::new().with_event(|input, event| {
-            if let UIEvent::Core(Event::Key(key)) = event {
-                log::debug!("Input event: {:?}", key);
-            }
-            match event {
-                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
-                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
-                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
-                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
-                UIEvent::Core(Event::Key(Key::End)) => input.end(),
-                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
-                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
-                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
-                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
-                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
-                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
-                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
-                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
-                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
-                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
-                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
-                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
-                UIEvent::Core(Event::Key(Key::CtrlLeft)) => input.word_left(),
-                UIEvent::Core(Event::Key(Key::CtrlRight)) => input.word_right(),
-                UIEvent::Validate(result) => {
-                    let mut result = result.borrow_mut();
-                    result.replace(input.validate());
-                }
-                UIEvent::GetInput(result) => {
-                    let mut result = result.borrow_mut();
-                    result.replace((input.buf.clone(), input.cursor.clone(), input.password));
-                }
-                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                    input.buf = raw_buf.clone();
-                    input.cursor = cursor.clone();
-                }
-                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
-                _ => {}
-            }
-        });
-
-        layout.push(title_bar, 0);
-        layout.push(frame, 1);
-        layout.push(win_bar, 0);
-        layout.push(input, 0);
-
         let (width, height) = termion::terminal_size().unwrap();
         RwLock::write(&screen)
             .unwrap()
@@ -628,7 +544,7 @@ impl UIMod {
 
         Self {
             render_buffer: screen,
-            root: layout,
+            root: LinearLayout::new(Orientation::Vertical),
             windows: Vec::new(),
             unread_windows: HashMap::new(),
             current_window: None,
@@ -658,6 +574,7 @@ impl UIMod {
 
     fn add_conversation(&mut self, aparte: &mut Aparte, conversation: Conversation) {
         let scheduler = self.get_scheduler();
+        let selection_bg = aparte.config.theme.selected_message;
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
@@ -706,6 +623,68 @@ impl UIMod {
                             UIEvent::Core(Event::Key(Key::PageDown)) => {
                                 view.page_down();
                                 mam_requested = false;
+                            }
+                            UIEvent::NormalCommand(cmd) => match cmd {
+                                NormalCommand::SelectPrev => {
+                                    let (old, new, at_top) = view.select_prev();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                    if at_top && !mam_requested {
+                                        mam_requested = true;
+                                        let from =
+                                            view.first().map(|message| message.message.timestamp());
+                                        scheduler.schedule(Event::LoadChatHistory {
+                                            account: chat_for_event.account.clone(),
+                                            contact: chat_for_event.contact.clone(),
+                                            from: from.cloned(),
+                                        });
+                                    }
+                                }
+                                NormalCommand::SelectNext => {
+                                    let (old, new) = view.select_next();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
+                                NormalCommand::ScrollToTop => {
+                                    view.scroll_to_top();
+                                    if !mam_requested {
+                                        mam_requested = true;
+                                        let from =
+                                            view.first().map(|message| message.message.timestamp());
+                                        scheduler.schedule(Event::LoadChatHistory {
+                                            account: chat_for_event.account.clone(),
+                                            contact: chat_for_event.contact.clone(),
+                                            from: from.cloned(),
+                                        });
+                                    }
+                                }
+                                NormalCommand::ScrollToBottom => {
+                                    view.scroll_to_bottom();
+                                    mam_requested = false;
+                                }
+                            },
+                            UIEvent::ModeChange(Mode::Insert) => {
+                                if let Some(i) = view.clear_selection() {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -771,6 +750,68 @@ impl UIMod {
                             UIEvent::Core(Event::Key(Key::PageDown)) => {
                                 view.page_down();
                                 mam_requested = false;
+                            }
+                            UIEvent::NormalCommand(cmd) => match cmd {
+                                NormalCommand::SelectPrev => {
+                                    let (old, new, at_top) = view.select_prev();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                    if at_top && !mam_requested {
+                                        mam_requested = true;
+                                        let from =
+                                            view.first().map(|message| message.message.timestamp());
+                                        scheduler.schedule(Event::LoadChannelHistory {
+                                            account: channel_for_event.account.clone(),
+                                            jid: channel_for_event.jid.clone(),
+                                            from: from.cloned(),
+                                        });
+                                    }
+                                }
+                                NormalCommand::SelectNext => {
+                                    let (old, new) = view.select_next();
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
+                                NormalCommand::ScrollToTop => {
+                                    view.scroll_to_top();
+                                    if !mam_requested {
+                                        mam_requested = true;
+                                        let from =
+                                            view.first().map(|message| message.message.timestamp());
+                                        scheduler.schedule(Event::LoadChannelHistory {
+                                            account: channel_for_event.account.clone(),
+                                            jid: channel_for_event.jid.clone(),
+                                            from: from.cloned(),
+                                        });
+                                    }
+                                }
+                                NormalCommand::ScrollToBottom => {
+                                    view.scroll_to_bottom();
+                                    mam_requested = false;
+                                }
+                            },
+                            UIEvent::ModeChange(Mode::Insert) => {
+                                if let Some(i) = view.clear_selection() {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -884,6 +925,175 @@ impl ModTrait for UIMod {
         let (width, height) = termion::terminal_size().unwrap();
         log::debug!("Init UI on screen ({width}×{height})");
 
+        // Indices into the root LinearLayout's children (push order below).
+        const FRAME_LAYOUT_INDEX: usize = 1;
+        const INPUT_INDEX: usize = 3;
+
+        {
+            let mut mode = Mode::Insert;
+            let mut command_buffer = String::new();
+            let mut timeout_generation: u64 = 0;
+            let aparte_proxy = aparte.proxy();
+            self.root = LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(
+                move |layout, event| match event {
+                    UIEvent::Core(Event::Key(Key::Esc)) if mode == Mode::Insert => {
+                        mode = Mode::Normal;
+                        command_buffer.clear();
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(Key::Char('i'))) if mode == Mode::Normal => {
+                        command_buffer.clear();
+                        mode = Mode::Insert;
+                        layout.set_focus(INPUT_INDEX);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(Key::Char(c))) if mode == Mode::Normal => {
+                        command_buffer.push(*c);
+
+                        if let Some((_, cmd)) = NORMAL_COMMANDS
+                            .iter()
+                            .find(|(s, _)| *s == command_buffer.as_str())
+                        {
+                            let cmd = *cmd;
+                            command_buffer.clear();
+                            if let Some(focused) = layout.focused_child_mut() {
+                                focused.event(&mut UIEvent::NormalCommand(cmd));
+                            }
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            }
+                        } else if NORMAL_COMMANDS
+                            .iter()
+                            .any(|(s, _)| s.starts_with(command_buffer.as_str()))
+                        {
+                            timeout_generation += 1;
+                            let gen = timeout_generation;
+                            let mut aparte_for_task = aparte_proxy.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                                aparte_for_task.schedule(Event::CommandTimeout(gen));
+                            });
+                            let buf = command_buffer.clone();
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(buf.clone()));
+                            }
+                        } else {
+                            command_buffer.clear();
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::CommandTimeout(gen)) => {
+                        if *gen == timeout_generation && !command_buffer.is_empty() {
+                            command_buffer.clear();
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            }
+                        }
+                    }
+                    _ => {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    }
+                },
+            );
+        }
+
+        let title_bar = TitleBar::new(aparte.config.theme.title_bar.clone());
+        let frame = FrameLayout::<UIEvent, String>::new().with_event(|frame, event| match event {
+            UIEvent::Core(Event::ChangeWindow(name)) => {
+                frame.set_current(name.to_string());
+            }
+            UIEvent::AddWindow(name, view) => {
+                let view = view.take().unwrap();
+                frame.insert_boxed(name.to_string(), view);
+
+                // propagate AddWindow with name only to each subview
+                // required at least for console view
+                for child in frame.iter_children_mut() {
+                    child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                }
+            }
+            UIEvent::Core(Event::Close(window)) => {
+                frame.remove(window);
+
+                // propagate Close with name only to each subview
+                // required at least for console view
+                for child in frame.iter_children_mut() {
+                    child.event(&mut UIEvent::Core(Event::Close(window.clone())));
+                }
+            }
+            // Interaction events → current window only
+            UIEvent::Core(Event::Key(_))
+            | UIEvent::Core(Event::Completed(_, _))
+            | UIEvent::Core(Event::ResetCompletion)
+            | UIEvent::Core(Event::ReadPassword(_)) => {
+                if let Some(current) = frame.get_current_mut() {
+                    current.event(event);
+                }
+            }
+            // Global events (Message, Notification, Subject, etc.) → all windows
+            _ => {
+                for child in frame.iter_children_mut() {
+                    child.event(event);
+                }
+            }
+        });
+        let win_bar = WinBar::new(aparte.config.theme.win_bar.clone());
+        let input = Input::new().with_event(|input, event| {
+            if let UIEvent::Core(Event::Key(key)) = event {
+                log::debug!("Input event: {:?}", key);
+            }
+            match event {
+                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
+                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
+                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
+                UIEvent::Core(Event::Key(Key::End)) => input.end(),
+                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
+                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
+                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
+                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
+                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
+                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
+                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
+                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
+                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
+                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
+                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
+                UIEvent::Core(Event::Key(Key::CtrlLeft)) => input.word_left(),
+                UIEvent::Core(Event::Key(Key::CtrlRight)) => input.word_right(),
+                UIEvent::Validate(result) => {
+                    let mut result = result.borrow_mut();
+                    result.replace(input.validate());
+                }
+                UIEvent::GetInput(result) => {
+                    let mut result = result.borrow_mut();
+                    result.replace((input.buf.clone(), input.cursor.clone(), input.password));
+                }
+                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+                    input.buf = raw_buf.clone();
+                    input.cursor = cursor.clone();
+                }
+                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+                _ => {}
+            }
+        });
+
+        self.root.push(title_bar, 0);
+        self.root.push(frame, 1);
+        self.root.push(win_bar, 0);
+        self.root.push(input, 0);
+
         let mut console =
             LinearLayout::<UIEvent>::new(Orientation::Horizontal).with_event(|layout, event| {
                 for LayoutChild { child, .. } in layout.children.iter_mut() {
@@ -898,6 +1108,7 @@ impl ModTrait for UIMod {
                 })
                 .with_event({
                     let mut aparte = aparte.proxy();
+                    let selection_bg = aparte.config.theme.selected_message;
                     move |view, event| match event {
                         UIEvent::Core(Event::Message(_, Message::Log(message))) => {
                             view.insert(MessageView::new(
@@ -910,6 +1121,47 @@ impl ModTrait for UIMod {
                         }
                         UIEvent::Core(Event::Key(Key::PageDown)) => {
                             view.page_down();
+                        }
+                        UIEvent::NormalCommand(cmd) => match cmd {
+                            NormalCommand::SelectPrev => {
+                                let (old, new, _) = view.select_prev();
+                                if let Some(i) = old {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
+                                if let Some(i) = new {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
+                            }
+                            NormalCommand::SelectNext => {
+                                let (old, new) = view.select_next();
+                                if let Some(i) = old {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
+                                if let Some(i) = new {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
+                            }
+                            NormalCommand::ScrollToTop => {
+                                view.scroll_to_top();
+                            }
+                            NormalCommand::ScrollToBottom => {
+                                view.scroll_to_bottom();
+                            }
+                        },
+                        UIEvent::ModeChange(Mode::Insert) => {
+                            if let Some(i) = view.clear_selection() {
+                                if let Some(c) = view.child_at(i) {
+                                    c.deselect();
+                                }
+                            }
                         }
                         _ => {}
                     }

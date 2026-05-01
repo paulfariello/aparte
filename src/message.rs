@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::{self, Ordering};
 use std::collections::HashMap;
@@ -23,7 +24,8 @@ use sixel_image::SixelImage;
 use terminus::charxel::{Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
 use terminus::{
-    self, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions, View,
+    self, BgColor, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions,
+    View,
 };
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
@@ -570,6 +572,7 @@ pub struct MessageView {
     #[cfg(feature = "image")]
     image: Arc<RwLock<Option<SixelImage>>>,
     measure_cache: RefCell<Option<(u16, Vec<Charxels>)>>,
+    selected: Cell<Option<BgColor>>,
 }
 
 impl Eq for MessageView {}
@@ -605,6 +608,7 @@ impl MessageView {
             message,
             dimensions: None,
             measure_cache: RefCell::new(None),
+            selected: Cell::new(None),
         }
     }
 
@@ -651,6 +655,7 @@ impl MessageView {
             dimensions: None,
             image,
             measure_cache: RefCell::new(None),
+            selected: Cell::new(None),
         }
     }
 
@@ -778,6 +783,14 @@ impl MessageView {
         buffers
     }
 
+    pub fn select(&self, color: BgColor) {
+        self.selected.set(Some(color));
+    }
+
+    pub fn deselect(&self) {
+        self.selected.set(None);
+    }
+
     fn render_text(&self, frame: &mut ScreenFrame) {
         let width = frame.width();
         let cache = self.measure_cache.borrow();
@@ -898,7 +911,11 @@ impl<E> View<E> for MessageView {
         }
 
         #[cfg(not(feature = "image"))]
-        self.render_text(&mut frame)
+        self.render_text(&mut frame);
+
+        if let Some(color) = self.selected.get() {
+            frame.set_background(color);
+        }
     }
 
     fn event(&mut self, _event: &mut E) {}
@@ -928,6 +945,7 @@ mod tests {
                 #[cfg(feature = "image")]
                 image: Arc::new(RwLock::new(None)),
                 measure_cache: RefCell::new(None),
+                selected: Cell::new(None),
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )

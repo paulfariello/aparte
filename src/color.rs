@@ -11,7 +11,7 @@ use terminus::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-fn deserialize_color<'de, C, D>(deserializer: D) -> Result<C, D::Error>
+pub fn deserialize_color<'de, C, D>(deserializer: D) -> Result<C, D::Error>
 where
     D: Deserializer<'de>,
     C: ConfigColor,
@@ -21,7 +21,7 @@ where
     C::from_str(s).map_err(de::Error::custom)
 }
 
-fn serialize_color<C, S>(color: &C, serializer: S) -> Result<S::Ok, S::Error>
+pub fn serialize_color<C, S>(color: &C, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
     C: ConfigColor,

@@ -36,6 +36,7 @@ pub struct LinearLayout<E> {
     pub event_handler: Option<EventHandler<Self, E>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
+    focused_child_index: Option<usize>,
 }
 
 impl<E> LinearLayout<E> {
@@ -49,7 +50,17 @@ impl<E> LinearLayout<E> {
                 height: LayoutParam::MatchParent,
             },
             dimensions: None,
+            focused_child_index: None,
         }
+    }
+
+    pub fn set_focus(&mut self, index: usize) {
+        self.focused_child_index = Some(index);
+    }
+
+    pub fn focused_child_mut(&mut self) -> Option<&mut Box<dyn View<E>>> {
+        self.focused_child_index
+            .and_then(|i| self.children.get_mut(i).map(|lc| &mut lc.child.view))
     }
 
     pub fn push<T>(&mut self, view: T, weight: u16)
@@ -566,5 +577,39 @@ mod tests {
             width: 100,
             height: 200,
         });
+    }
+
+    #[test]
+    fn test_focused_child_mut_with_no_focus_returns_none() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut view = MockView::new();
+        view.expect_measure().return_const(RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::ExpandMax,
+        });
+        layout.push(view, 1);
+        assert!(layout.focused_child_mut().is_none());
+    }
+
+    #[test]
+    fn test_set_focus_returns_correct_child() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        for _ in 0..3 {
+            let mut view = MockView::new();
+            view.expect_measure().return_const(RequestedDimensions {
+                width: RequestedDimension::ExpandMax,
+                height: RequestedDimension::Absolute(10),
+            });
+            layout.push(view, 1);
+        }
+        layout.set_focus(1);
+        assert!(layout.focused_child_mut().is_some());
+    }
+
+    #[test]
+    fn test_set_focus_out_of_bounds_returns_none() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        layout.set_focus(99);
+        assert!(layout.focused_child_mut().is_none());
     }
 }
