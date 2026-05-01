@@ -375,33 +375,54 @@ fn G_selects_last_message() {
 }
 
 #[test]
-fn insert_mode_page_up_does_not_scroll_message_window() {
+fn insert_mode_page_up_scrolls_message_window() {
     let h = Harness::spawn("", &[]);
     thread::sleep(Duration::from_millis(1500));
 
     fill_console(&h);
 
-    // Verify latest message is visible at bottom
     let found = wait_for_screen(&h, "bad29", Duration::from_secs(5));
     assert!(found, "Expected bad29 visible before PageUp test");
 
-    // In INSERT mode (the default), PageUp must NOT scroll the message window
+    // Confirm the app has settled in INSERT mode before sending PageUp.
+    let in_insert = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    assert!(
+        in_insert,
+        "Expected INSERT mode indicator before PageUp test"
+    );
+
+    // In INSERT mode (the default), PageUp SHOULD scroll the message window.
     h.send_bytes(b"\x1b[5~");
-    thread::sleep(Duration::from_millis(400));
+
+    // Poll until bad29 scrolls off — more robust than a fixed sleep.
+    let scrolled = {
+        use std::time::Instant;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut found = false;
+        while Instant::now() < deadline {
+            let parser = h.snapshot();
+            if !grid_contains(parser.screen(), "bad29") {
+                found = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        found
+    };
 
     let parser = h.snapshot();
     let screen = parser.screen();
     h.shutdown();
 
     assert!(
-        grid_contains(screen, "bad29"),
-        "PageUp in INSERT mode scrolled the message window — key propagation not blocked\n{}",
+        scrolled,
+        "PageUp in INSERT mode should scroll the message window away from newest message\n{}",
         describe(screen)
     );
 }
 
 #[test]
-fn normal_mode_page_up_does_scroll_message_window() {
+fn normal_mode_page_up_scrolls_message_window() {
     let h = Harness::spawn("", &[]);
     thread::sleep(Duration::from_millis(1500));
 
@@ -420,6 +441,40 @@ fn normal_mode_page_up_does_scroll_message_window() {
     assert!(
         !grid_contains(screen, "bad29"),
         "PageUp in NORMAL mode should scroll the message window away from newest message\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn insert_mode_jk_do_not_move_message_selection() {
+    let h = Harness::spawn("", &[]);
+    thread::sleep(Duration::from_millis(1500));
+
+    fill_console(&h);
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+
+    // Enter NORMAL mode and select a message with 'k'.
+    enter_normal(&h);
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    // Return to INSERT mode — ModeChange clears the selection.
+    h.send_bytes(b"i");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+
+    // Typing 'j' and 'k' in INSERT mode must not re-select any message.
+    h.send_bytes(b"jk");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "j/k in INSERT mode should not select any message, but {} rows are highlighted\n{}",
+        selected.len(),
         describe(screen)
     );
 }

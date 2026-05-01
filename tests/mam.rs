@@ -47,11 +47,8 @@ fn mam_pageup_triggers_only_once_at_top() {
     std::thread::sleep(Duration::from_millis(500));
     xmpp.drain_mam_queries();
 
-    // PageUp only reaches the message window in NORMAL mode.
-    xmpp.send_bytes(b"\x1b");
-    xmpp.wait_for("NORMAL", Duration::from_secs(2));
-
     // First PageUp at top — should trigger exactly one MAM history fetch.
+    // PageUp scrolls in both INSERT and NORMAL mode.
     xmpp.send_bytes(b"\x1b[5~");
     std::thread::sleep(Duration::from_millis(300));
     let count = xmpp.drain_mam_queries();

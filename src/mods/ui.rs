@@ -1038,6 +1038,15 @@ impl ModTrait for UIMod {
                             }
                         }
                     }
+                    // Scroll keys reach the message window in any mode.
+                    UIEvent::Core(Event::Key(Key::PageUp | Key::PageDown))
+                        if mode == Mode::Insert =>
+                    {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    }
+                    // All other keys in INSERT mode go only to the focused input.
                     UIEvent::Core(Event::Key(_)) if mode == Mode::Insert => {
                         if let Some(focused) = layout.focused_child_mut() {
                             focused.event(event);
