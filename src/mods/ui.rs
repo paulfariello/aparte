@@ -38,6 +38,8 @@ use termion::get_tty;
 use uuid::Uuid;
 use xmpp_parsers::jid::{BareJid, Jid};
 
+use radix_trie::Trie;
+
 use crate::color::{id_to_rgb, ColorTuple};
 use crate::command::Command;
 use crate::config::Config;
@@ -61,12 +63,14 @@ enum NormalCommand {
     ScrollToBottom,
 }
 
-const NORMAL_COMMANDS: &[(&str, NormalCommand)] = &[
-    ("j", NormalCommand::SelectNext),
-    ("k", NormalCommand::SelectPrev),
-    ("gg", NormalCommand::ScrollToTop),
-    ("G", NormalCommand::ScrollToBottom),
-];
+fn build_normal_command_trie() -> Trie<String, NormalCommand> {
+    let mut trie = Trie::new();
+    trie.insert("j".to_string(), NormalCommand::SelectNext);
+    trie.insert("k".to_string(), NormalCommand::SelectPrev);
+    trie.insert("gg".to_string(), NormalCommand::ScrollToTop);
+    trie.insert("G".to_string(), NormalCommand::ScrollToBottom);
+    trie
+}
 
 #[allow(clippy::large_enum_variant)]
 enum UIEvent {
@@ -973,6 +977,7 @@ impl ModTrait for UIMod {
             let mut mode = Mode::Insert;
             let mut command_buffer = String::new();
             let mut timeout_generation: u64 = 0;
+            let normal_commands = build_normal_command_trie();
             let aparte_proxy = aparte.proxy();
             self.root = LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
@@ -996,11 +1001,7 @@ impl ModTrait for UIMod {
                     UIEvent::Core(Event::Key(Key::Char(c))) if mode == Mode::Normal => {
                         command_buffer.push(*c);
 
-                        if let Some((_, cmd)) = NORMAL_COMMANDS
-                            .iter()
-                            .find(|(s, _)| *s == command_buffer.as_str())
-                        {
-                            let cmd = *cmd;
+                        if let Some(&cmd) = normal_commands.get(&command_buffer) {
                             command_buffer.clear();
                             if let Some(focused) = layout.focused_child_mut() {
                                 focused.event(&mut UIEvent::NormalCommand(cmd));
@@ -1008,9 +1009,9 @@ impl ModTrait for UIMod {
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                             }
-                        } else if NORMAL_COMMANDS
-                            .iter()
-                            .any(|(s, _)| s.starts_with(command_buffer.as_str()))
+                        } else if normal_commands
+                            .get_raw_descendant(&command_buffer)
+                            .is_some()
                         {
                             timeout_generation += 1;
                             let gen = timeout_generation;
