@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ops::{Index, IndexMut},
     sync::atomic::AtomicBool,
 };
@@ -232,7 +233,17 @@ impl OffscreenRenderBuffer {
         // TODO try to be smart and avoid setting and resetting style and color
         let mut current_bg = None;
         let mut current_fg = None;
+        let mut current_styles: Option<HashSet<Style>> = None;
         for charxel in chunk {
+            if current_styles.as_ref() != Some(&charxel.styles) {
+                let _ = write!(screen, "{}", termion::style::Reset);
+                current_bg = None;
+                current_fg = None;
+                for style in &charxel.styles {
+                    let _ = write!(screen, "{}", style);
+                }
+                current_styles = Some(charxel.styles.clone());
+            }
             if Some(charxel.background) != current_bg {
                 let _ = write!(screen, "{}", charxel.background);
                 current_bg = Some(charxel.background);
@@ -241,7 +252,6 @@ impl OffscreenRenderBuffer {
                 let _ = write!(screen, "{}", charxel.foreground);
                 current_fg = Some(charxel.foreground);
             }
-            // TODO style
             let _ = write!(screen, "{}", charxel.grapheme);
         }
     }
@@ -254,6 +264,7 @@ impl OffscreenRenderBuffer {
         // by ScreenFrame::write() for wide (multi-column) characters.
         let mut current_bg = None;
         let mut current_fg = None;
+        let mut current_styles: Option<HashSet<Style>> = None;
         let mut skip = 0u16;
 
         // Optional widechar cursor-advance verification. Only enabled with
@@ -277,6 +288,15 @@ impl OffscreenRenderBuffer {
             }
             let w = charxel.display_width();
             skip = w.saturating_sub(1);
+            if current_styles.as_ref() != Some(&charxel.styles) {
+                let _ = write!(screen, "{}", termion::style::Reset);
+                current_bg = None;
+                current_fg = None;
+                for style in &charxel.styles {
+                    let _ = write!(screen, "{}", style);
+                }
+                current_styles = Some(charxel.styles.clone());
+            }
             if Some(charxel.background) != current_bg {
                 let _ = write!(screen, "{}", charxel.background);
                 current_bg = Some(charxel.background);
@@ -285,7 +305,6 @@ impl OffscreenRenderBuffer {
                 let _ = write!(screen, "{}", charxel.foreground);
                 current_fg = Some(charxel.foreground);
             }
-            // TODO style
             let _ = write!(screen, "{}", charxel.grapheme);
             #[cfg(feature = "widechar-cursor-check")]
             {

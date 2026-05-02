@@ -566,6 +566,21 @@ impl Hash for Style {
     }
 }
 
+impl fmt::Display for Style {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Style::Bold => write!(f, "{}", termion::style::Bold),
+            Style::Faint => write!(f, "{}", termion::style::Faint),
+            Style::Italic => write!(f, "{}", termion::style::Italic),
+            Style::Underline => write!(f, "{}", termion::style::Underline),
+            Style::Blink => write!(f, "{}", termion::style::Blink),
+            Style::Invert => write!(f, "{}", termion::style::Invert),
+            Style::CrossedOut => write!(f, "{}", termion::style::CrossedOut),
+            Style::Framed => write!(f, "{}", termion::style::Framed),
+        }
+    }
+}
+
 /// Represent any component that can be displayed.
 ///
 /// Rendering is done in 3 steps:

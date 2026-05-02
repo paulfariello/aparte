@@ -21,12 +21,15 @@ use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use image::io::Reader as ImageReader;
 #[cfg(feature = "image")]
 use sixel_image::SixelImage;
-use terminus::charxel::{Charxels, IntoCharxels};
+use std::collections::HashSet;
+
+use terminus::charxel::{Charxel, Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
 use terminus::{
     self, BgColor, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    View,
+    Style, View,
 };
+use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::jid::{BareJid, Jid};
@@ -601,6 +604,87 @@ impl Hash for MessageView {
     }
 }
 
+fn charxel_with_styles(g: &str, styles: &HashSet<Style>) -> Charxel {
+    let mut c = Charxel::new(g.into());
+    for s in styles {
+        c.add_style(*s);
+    }
+    c
+}
+
+fn span_marker_style(g: &str) -> Option<Style> {
+    match g {
+        "*" => Some(Style::Bold),
+        "_" => Some(Style::Italic),
+        "~" => Some(Style::CrossedOut),
+        _ => None,
+    }
+}
+
+// Returns the index of the matching closing marker, if any.
+// Closing marker must not be preceded by whitespace and must be on the same line.
+fn find_closing_span(graphemes: &[&str], open: usize) -> Option<usize> {
+    let marker = graphemes[open];
+    let mut j = open + 2;
+    while j < graphemes.len() {
+        if graphemes[j] == "\n" {
+            return None;
+        }
+        if graphemes[j] == marker && !graphemes[j - 1].chars().all(char::is_whitespace) {
+            return Some(j);
+        }
+        j += 1;
+    }
+    None
+}
+
+// XEP-0393 §2.1: parse inline spans (*bold*, _italic_, ~strike~) in `graphemes`,
+// applying `styles` to all chars plus any additional style for each matched span.
+fn push_spans(graphemes: &[&str], styles: &HashSet<Style>, out: &mut Charxels) {
+    let mut i = 0;
+    while i < graphemes.len() {
+        let g = graphemes[i];
+        if let Some(style) = span_marker_style(g) {
+            // Opening rule: must be followed by non-whitespace (XEP-0393 §2.1)
+            let next_nonws = graphemes
+                .get(i + 1)
+                .is_some_and(|n| !n.chars().all(char::is_whitespace));
+            if next_nonws {
+                if let Some(close) = find_closing_span(graphemes, i) {
+                    // Marker chars inherit outer styles only
+                    out.push(charxel_with_styles(g, styles));
+                    let mut inner = styles.clone();
+                    inner.insert(style);
+                    push_spans(&graphemes[i + 1..close], &inner, out);
+                    out.push(charxel_with_styles(graphemes[close], styles));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(charxel_with_styles(g, styles));
+        i += 1;
+    }
+}
+
+// XEP-0393 §2.2: parse one message line, detecting block-quote prefix (`> `).
+fn parse_message_line(line: &str) -> Charxels {
+    let mut result = Charxels::default();
+    if let Some(rest) = line.strip_prefix("> ") {
+        let mut quote_style = HashSet::new();
+        quote_style.insert(Style::Faint);
+        for g in "> ".graphemes(true) {
+            result.push(charxel_with_styles(g, &quote_style));
+        }
+        let rest_graphemes: Vec<&str> = rest.graphemes(true).collect();
+        push_spans(&rest_graphemes, &HashSet::new(), &mut result);
+    } else {
+        let graphemes: Vec<&str> = line.graphemes(true).collect();
+        push_spans(&graphemes, &HashSet::new(), &mut result);
+    }
+    result
+}
+
 impl MessageView {
     #[cfg(not(feature = "image"))]
     pub fn new(_aparte: &mut AparteAsync, message: Message) -> Self {
@@ -741,10 +825,11 @@ impl MessageView {
         let mut iter = body.strip_prefix("/me").unwrap_or(body).lines();
 
         if let Some(line) = iter.next() {
-            header.append(terminus::clean_str(line));
+            header.append(parse_message_line(&terminus::clean_str(line)));
         }
         for line in iter {
-            header.append(format!("\n{}{}", padding, terminus::clean_str(line)));
+            header.append(format!("\n{}", padding));
+            header.append(parse_message_line(&terminus::clean_str(line)));
         }
 
         Self::format_text(header, max_width)
@@ -1048,5 +1133,171 @@ mod tests {
         // we should only render:
         //  log
         assert_eq!(buffer_line(&buffer, 1, 1, 40), " log");
+    }
+
+    // ── XEP-0393 style parsing ───────────────────────────────────────────────
+
+    fn styles(charxels: Charxels) -> Vec<(String, HashSet<Style>)> {
+        charxels
+            .into_iter()
+            .map(|c| (c.grapheme.to_string(), c.styles))
+            .collect()
+    }
+
+    #[test]
+    fn test_plain_text_no_styles() {
+        let result = styles(parse_message_line("hello world"));
+        for (_, s) in &result {
+            assert!(s.is_empty(), "plain text must have no styles");
+        }
+    }
+
+    #[test]
+    fn test_bold_span() {
+        let result = styles(parse_message_line("*bold*"));
+        assert_eq!(result.len(), 6);
+        assert!(result[0].1.is_empty(), "opening * marker must be unstyled");
+        for (g, s) in &result[1..5] {
+            assert!(s.contains(&Style::Bold), "'{g}' must be Bold", g = g);
+        }
+        assert!(result[5].1.is_empty(), "closing * marker must be unstyled");
+    }
+
+    #[test]
+    fn test_italic_span() {
+        let result = styles(parse_message_line("_hi_"));
+        assert!(result[0].1.is_empty(), "opening _ must be unstyled");
+        assert!(result[1].1.contains(&Style::Italic));
+        assert!(result[2].1.contains(&Style::Italic));
+        assert!(result[3].1.is_empty(), "closing _ must be unstyled");
+    }
+
+    #[test]
+    fn test_strikethrough_span() {
+        let result = styles(parse_message_line("~del~"));
+        assert_eq!(result.len(), 5);
+        assert!(result[0].1.is_empty(), "opening ~ must be unstyled");
+        assert!(result[1].1.contains(&Style::CrossedOut));
+        assert!(result[2].1.contains(&Style::CrossedOut));
+        assert!(result[3].1.contains(&Style::CrossedOut));
+        assert!(result[4].1.is_empty(), "closing ~ must be unstyled");
+    }
+
+    #[test]
+    fn test_opening_followed_by_space_is_not_a_span() {
+        // XEP-0393 §2.1: opening directive must not be followed by whitespace
+        let result = styles(parse_message_line("* text*"));
+        for (_, s) in &result {
+            assert!(
+                s.is_empty(),
+                "no span when opening marker followed by space"
+            );
+        }
+    }
+
+    #[test]
+    fn test_closing_preceded_by_space_is_not_a_span() {
+        // XEP-0393 §2.1: closing directive must not be preceded by whitespace
+        let result = styles(parse_message_line("*text *"));
+        for (_, s) in &result {
+            assert!(
+                s.is_empty(),
+                "no span when closing marker preceded by space"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unmatched_opening_marker_no_style() {
+        let result = styles(parse_message_line("*unclosed"));
+        for (_, s) in &result {
+            assert!(s.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_empty_span_not_valid() {
+        // ** has no content between markers so find_closing_span returns None
+        let result = styles(parse_message_line("**"));
+        assert_eq!(result.len(), 2);
+        for (_, s) in &result {
+            assert!(s.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_multiple_spans_on_one_line() {
+        let result = styles(parse_message_line("*a* _b_"));
+        // *a* → unstyled *, Bold a, unstyled *
+        assert!(result[0].1.is_empty());
+        assert!(result[1].1.contains(&Style::Bold));
+        assert!(result[2].1.is_empty());
+        // space
+        assert!(result[3].1.is_empty());
+        // _b_ → unstyled _, Italic b, unstyled _
+        assert!(result[4].1.is_empty());
+        assert!(result[5].1.contains(&Style::Italic));
+        assert!(result[6].1.is_empty());
+    }
+
+    #[test]
+    fn test_nested_spans() {
+        // *_bold italic_* — outer Bold, inner Bold+Italic
+        let result = styles(parse_message_line("*_hi_*"));
+        assert!(result[0].1.is_empty(), "outer * has no styles");
+        // inner _ marker inherits outer Bold but not Italic
+        assert!(result[1].1.contains(&Style::Bold));
+        assert!(!result[1].1.contains(&Style::Italic), "_ marker not Italic");
+        // content between _ markers has both
+        assert!(result[2].1.contains(&Style::Bold));
+        assert!(result[2].1.contains(&Style::Italic));
+        assert!(result[3].1.contains(&Style::Bold));
+        assert!(result[3].1.contains(&Style::Italic));
+        // closing _ marker inherits Bold but not Italic
+        assert!(result[4].1.contains(&Style::Bold));
+        assert!(!result[4].1.contains(&Style::Italic));
+        assert!(result[5].1.is_empty(), "outer * has no styles");
+    }
+
+    #[test]
+    fn test_block_quote_prefix_is_faint() {
+        // XEP-0393 §2.2: lines beginning with "> " are block quotes
+        let result = styles(parse_message_line("> hello"));
+        assert!(result[0].1.contains(&Style::Faint), "'>' must be Faint");
+        assert!(result[1].1.contains(&Style::Faint), "' ' must be Faint");
+        for (g, s) in &result[2..] {
+            assert!(
+                !s.contains(&Style::Faint),
+                "'{g}' content must not be Faint",
+                g = g
+            );
+        }
+    }
+
+    #[test]
+    fn test_block_quote_content_supports_spans() {
+        let result = styles(parse_message_line("> *hi*"));
+        // "> " faint
+        assert!(result[0].1.contains(&Style::Faint));
+        assert!(result[1].1.contains(&Style::Faint));
+        // * marker unstyled
+        assert!(result[2].1.is_empty());
+        // "hi" bold
+        assert!(result[3].1.contains(&Style::Bold));
+        assert!(result[4].1.contains(&Style::Bold));
+        // closing * unstyled
+        assert!(result[5].1.is_empty());
+    }
+
+    #[test]
+    fn test_greater_than_without_space_is_not_a_block_quote() {
+        // XEP-0393 §2.2 requires "> " (with space)
+        let result = styles(parse_message_line(">no space"));
+        for (_, s) in &result {
+            assert!(
+                !s.contains(&Style::Faint),
+                "'>no space' must not be a quote"
+            );
+        }
     }
 }
