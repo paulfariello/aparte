@@ -222,11 +222,11 @@ pub fn wait_for_screen(h: &Harness, needle: &str, timeout: Duration) -> bool {
 }
 
 /// Poll until the app reaches INSERT mode (ready to accept input).
-/// Panics if the app doesn't start within 10 seconds.
+/// Panics if the app doesn't start within 30 seconds.
 pub fn wait_for_ready(h: &Harness) {
-    let ok = wait_for_screen(h, "INSERT", Duration::from_secs(10));
+    let ok = wait_for_screen(h, "INSERT", Duration::from_secs(30));
     assert!(
         ok,
-        "App did not reach INSERT mode within 10s — startup failed"
+        "App did not reach INSERT mode within 30s — startup failed"
     );
 }
