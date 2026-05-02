@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use common::{
-    describe, grid_contains, row_text, rows_with_bgcolor, wait_for_screen, Harness,
+    describe, grid_contains, row_text, rows_with_bgcolor, wait_for_ready, wait_for_screen, Harness,
     SELECTION_BGCOLOR,
 };
 
@@ -26,7 +26,7 @@ fn enter_normal(h: &Harness) {
 #[test]
 fn default_mode_is_insert() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -43,7 +43,7 @@ fn default_mode_is_insert() {
 #[test]
 fn escape_switches_to_normal_mode() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     h.send_bytes(b"\x1b");
 
@@ -63,7 +63,7 @@ fn escape_switches_to_normal_mode() {
 #[test]
 fn i_in_normal_mode_returns_to_insert() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     h.send_bytes(b"\x1b");
     let _ = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
@@ -85,7 +85,7 @@ fn i_in_normal_mode_returns_to_insert() {
 #[test]
 fn typing_in_normal_mode_does_not_reach_input() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     h.send_bytes(b"\x1b");
     let _ = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
@@ -108,7 +108,7 @@ fn typing_in_normal_mode_does_not_reach_input() {
 #[test]
 fn k_in_normal_mode_does_not_type_in_input() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     h.send_bytes(b"k");
@@ -128,7 +128,7 @@ fn k_in_normal_mode_does_not_type_in_input() {
 #[test]
 fn j_in_normal_mode_does_not_type_in_input() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     h.send_bytes(b"j");
@@ -148,7 +148,7 @@ fn j_in_normal_mode_does_not_type_in_input() {
 #[test]
 fn i_after_jk_navigation_returns_to_insert() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     h.send_bytes(b"k");
@@ -173,7 +173,7 @@ fn i_after_jk_navigation_returns_to_insert() {
 #[test]
 fn insert_mode_typing_works_after_jk_navigation() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     h.send_bytes(b"kkj");
@@ -183,14 +183,14 @@ fn insert_mode_typing_works_after_jk_navigation() {
     h.send_bytes(b"i");
     let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
     h.send_bytes(b"hello");
-    thread::sleep(Duration::from_millis(300));
+    let found = wait_for_screen(&h, "hello", Duration::from_secs(2));
 
     let parser = h.snapshot();
     let screen = parser.screen();
     h.shutdown();
 
     assert!(
-        grid_contains(screen, "hello"),
+        found,
         "Typed text should appear in input after returning from Normal mode\n{}",
         describe(screen)
     );
@@ -199,7 +199,7 @@ fn insert_mode_typing_works_after_jk_navigation() {
 #[test]
 fn gg_in_normal_mode_does_not_appear_in_input() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     h.send_bytes(b"gg");
@@ -219,7 +219,7 @@ fn gg_in_normal_mode_does_not_appear_in_input() {
 #[test]
 fn partial_command_shows_in_winbar() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     // Send 'g' — partial prefix for both 'gg' and 'gG'
@@ -240,7 +240,7 @@ fn partial_command_shows_in_winbar() {
 #[test]
 fn partial_command_clears_on_nonmatch() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     enter_normal(&h);
     // 'g' then 'x' — 'gx' matches no command, buffer should clear
@@ -266,7 +266,7 @@ fn partial_command_clears_on_nonmatch() {
 #[test]
 fn gg_scrolls_to_oldest_message() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     // Push enough messages to scroll the welcome banner off-screen
     fill_console(&h);
@@ -299,7 +299,7 @@ fn gg_scrolls_to_oldest_message() {
 #[test]
 fn gg_selects_first_visible_message() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     fill_console(&h);
 
@@ -337,7 +337,7 @@ fn gg_selects_first_visible_message() {
 #[allow(non_snake_case)]
 fn G_selects_last_message() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     fill_console(&h);
 
@@ -377,7 +377,7 @@ fn G_selects_last_message() {
 #[test]
 fn insert_mode_page_up_scrolls_message_window() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     fill_console(&h);
 
@@ -424,7 +424,7 @@ fn insert_mode_page_up_scrolls_message_window() {
 #[test]
 fn normal_mode_page_up_scrolls_message_window() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     fill_console(&h);
 
@@ -448,7 +448,7 @@ fn normal_mode_page_up_scrolls_message_window() {
 #[test]
 fn insert_mode_jk_do_not_move_message_selection() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     fill_console(&h);
     wait_for_screen(&h, "bad29", Duration::from_secs(5));
@@ -483,7 +483,7 @@ fn insert_mode_jk_do_not_move_message_selection() {
 #[allow(non_snake_case)]
 fn G_scrolls_to_newest_message() {
     let h = Harness::spawn("", &[]);
-    thread::sleep(Duration::from_millis(1500));
+    wait_for_ready(&h);
 
     fill_console(&h);
 
