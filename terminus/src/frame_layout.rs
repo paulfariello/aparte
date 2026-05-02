@@ -14,18 +14,18 @@ use super::{
 };
 
 /// Component that can hold multiple children but display only one at a time
-pub struct FrameLayout<E, K>
+pub struct FrameLayout<E, K, C = ()>
 where
     K: Hash + Eq + Clone,
 {
-    children: HashMap<K, Box<dyn View<E>>>,
+    children: HashMap<K, Box<dyn View<E, C>>>,
     current: Option<K>,
     event_handler: Option<EventHandler<Self, E>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
 }
 
-impl<E, K> Default for FrameLayout<E, K>
+impl<E, K, C> Default for FrameLayout<E, K, C>
 where
     K: Hash + Eq + Clone,
 {
@@ -34,7 +34,7 @@ where
     }
 }
 
-impl<E, K> FrameLayout<E, K>
+impl<E, K, C> FrameLayout<E, K, C>
 where
     K: Hash + Eq + Clone,
 {
@@ -70,7 +70,7 @@ where
         }
     }
 
-    pub fn get_current_mut(&mut self) -> Option<&mut Box<dyn View<E>>> {
+    pub fn get_current_mut(&mut self) -> Option<&mut Box<dyn View<E, C>>> {
         if let Some(current) = &self.current {
             if let Some(child) = self.children.get_mut(current) {
                 Some(child)
@@ -82,7 +82,7 @@ where
         }
     }
 
-    pub fn get_current(&self) -> Option<&dyn View<E>> {
+    pub fn get_current(&self) -> Option<&dyn View<E, C>> {
         if let Some(current) = &self.current {
             if let Some(child) = self.children.get(current) {
                 Some(child.as_ref())
@@ -100,12 +100,12 @@ where
 
     pub fn insert<T>(&mut self, key: K, view: T)
     where
-        T: View<E> + 'static,
+        T: View<E, C> + 'static,
     {
         self.children.insert(key, Box::new(view));
     }
 
-    pub fn insert_boxed(&mut self, key: K, view: Box<dyn View<E> + 'static>) {
+    pub fn insert_boxed(&mut self, key: K, view: Box<dyn View<E, C> + 'static>) {
         self.children.insert(key, view);
     }
 
@@ -116,16 +116,16 @@ where
         }
     }
 
-    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E>>> {
+    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E, C>>> {
         self.children.iter_mut().map(|(_, child)| child)
     }
 
-    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E>>> {
+    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E, C>>> {
         self.children.values()
     }
 }
 
-impl<E, K> View<E> for FrameLayout<E, K>
+impl<E, K, C> View<E, C> for FrameLayout<E, K, C>
 where
     K: Hash + Eq + Clone,
 {
@@ -150,11 +150,11 @@ where
         }
     }
 
-    fn render(&self, frame: ScreenFrame) {
+    fn render(&self, frame: ScreenFrame, config: &C) {
         log::debug!("rendering {}", std::any::type_name::<Self>(),);
 
         if let Some(child) = self.get_current() {
-            child.render(frame);
+            child.render(frame, config);
         }
     }
 

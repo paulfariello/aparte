@@ -21,6 +21,7 @@ use std::time::Instant;
 use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
+use terminus::Style;
 use terminus::{
     self,
     cursor::Cursor,
@@ -32,7 +33,6 @@ use terminus::{
     Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, View,
 };
-use terminus::{Color, FgColor, NamedColor, Style};
 use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
 use termion::get_tty;
 use uuid::Uuid;
@@ -42,7 +42,7 @@ use radix_trie::Trie;
 
 use crate::color::{id_to_rgb, ColorTuple};
 use crate::command::Command;
-use crate::config::Config;
+use crate::config::{Config, Theme};
 use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::i18n;
@@ -77,7 +77,7 @@ enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
-    AddWindow(String, Option<Box<dyn View<UIEvent>>>),
+    AddWindow(String, Option<Box<dyn View<UIEvent, Theme>>>),
     ModeChange(Mode),
     NormalCommand(NormalCommand),
     CommandBufferUpdate(String),
@@ -110,7 +110,7 @@ impl TitleBar {
     }
 }
 
-impl View<UIEvent> for TitleBar {
+impl<C> View<UIEvent, C> for TitleBar {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -123,7 +123,7 @@ impl View<UIEvent> for TitleBar {
         self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, mut frame: ScreenFrame) {
+    fn render(&self, mut frame: ScreenFrame, _config: &C) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
@@ -221,7 +221,7 @@ impl WinBar {
     }
 }
 
-impl View<UIEvent> for WinBar {
+impl<C> View<UIEvent, C> for WinBar {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -234,7 +234,7 @@ impl View<UIEvent> for WinBar {
         self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, mut frame: ScreenFrame) {
+    fn render(&self, mut frame: ScreenFrame, _config: &C) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
@@ -364,11 +364,9 @@ impl View<UIEvent> for WinBar {
     }
 }
 
-impl CharxelDisplay for contact::Group {
-    fn colored_fmt(&self) -> Charxels {
-        self.0
-            .clone()
-            .with_foreground(FgColor(Color::Named(NamedColor::Yellow)))
+impl CharxelDisplay<Theme> for contact::Group {
+    fn colored_fmt(&self, config: &Theme) -> Charxels {
+        self.0.clone().with_foreground(config.roster_group_fg)
     }
 }
 
@@ -402,18 +400,18 @@ impl PartialEq for RosterItem {
 
 impl Eq for RosterItem {}
 
-impl CharxelDisplay for RosterItem {
-    fn colored_fmt(&self) -> Charxels {
+impl CharxelDisplay<Theme> for RosterItem {
+    fn colored_fmt(&self, config: &Theme) -> Charxels {
         match &self {
             Self::Contact(contact) => {
                 let fg = match contact.presence {
                     contact::Presence::Available | contact::Presence::Chat => {
-                        FgColor(Color::Named(NamedColor::Green))
+                        config.roster_available_fg
                     }
                     contact::Presence::Away
                     | contact::Presence::Dnd
                     | contact::Presence::Xa
-                    | contact::Presence::Unavailable => FgColor(Color::Default),
+                    | contact::Presence::Unavailable => config.roster_unavailable_fg,
                 };
 
                 let disp = match &contact.name {
@@ -437,23 +435,24 @@ impl CharxelDisplay for RosterItem {
     }
 }
 
-impl CharxelDisplay for conversation::Occupant {
-    fn colored_fmt(&self) -> Charxels {
+impl CharxelDisplay<Theme> for conversation::Occupant {
+    fn colored_fmt(&self, _config: &Theme) -> Charxels {
         self.nick
             .clone()
             .with_foreground(terminus::FgColor(id_to_rgb(&self.nick)))
     }
 }
 
-impl CharxelDisplay for conversation::Role {
-    fn colored_fmt(&self) -> Charxels {
+impl CharxelDisplay<Theme> for conversation::Role {
+    fn colored_fmt(&self, config: &Theme) -> Charxels {
+        let fg = config.roster_role_fg;
         match self {
             conversation::Role::Moderator => "Moderators",
             conversation::Role::Participant => "Participants",
             conversation::Role::Visitor => "Visitors",
             conversation::Role::None => "Others",
         }
-        .with_foreground(FgColor(Color::Named(NamedColor::Yellow)))
+        .with_foreground(fg)
     }
 }
 
@@ -529,7 +528,7 @@ pub struct UIMod {
     current_window: Option<String>,
     unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
-    root: LinearLayout<UIEvent>,
+    root: LinearLayout<UIEvent, Theme>,
     dirty: bool,
     password_command: Option<Command>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
@@ -582,7 +581,7 @@ impl UIMod {
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin = ScrollWin::<UIEvent, MessageView>::new().with_event({
+                let chatwin = ScrollWin::<UIEvent, MessageView, Theme>::new().with_event({
                     let mut aparte = aparte.proxy();
                     let mut mam_requested = false;
                     move |view, event| {
@@ -720,16 +719,15 @@ impl UIMod {
                     .insert(chat.contact.to_string(), conversation.clone());
             }
             Conversation::Channel(channel) => {
-                let mut layout = LinearLayout::<UIEvent>::new(Orientation::Horizontal).with_event(
-                    |layout, event| {
+                let mut layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal)
+                    .with_event(|layout, event| {
                         for child in layout.iter_children_mut() {
                             child.event(event);
                         }
-                    },
-                );
+                    });
 
                 let channel_for_event = channel.clone();
-                let chanwin = ScrollWin::<UIEvent, MessageView>::new().with_event({
+                let chanwin = ScrollWin::<UIEvent, MessageView, Theme>::new().with_event({
                     let mut aparte = aparte.proxy();
                     let mut mam_requested = false;
                     move |view, event| {
@@ -864,26 +862,27 @@ impl UIMod {
                 layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
-                let roster = ListView::<UIEvent, conversation::Role, conversation::Occupant>::new()
-                    .with_layout(LayoutParams {
-                        width: LayoutParam::WrapContent,
-                        height: LayoutParam::MatchParent,
-                    })
-                    .with_none_group()
-                    .with_unique_item()
-                    .with_sort_item()
-                    .with_event(move |view, event| {
-                        if let UIEvent::Core(Event::Occupant {
-                            conversation,
-                            occupant,
-                            ..
-                        }) = event
-                        {
-                            if roster_jid == *conversation {
-                                view.insert(occupant.clone(), Some(occupant.role));
+                let roster =
+                    ListView::<UIEvent, conversation::Role, conversation::Occupant, Theme>::new()
+                        .with_layout(LayoutParams {
+                            width: LayoutParam::WrapContent,
+                            height: LayoutParam::MatchParent,
+                        })
+                        .with_none_group()
+                        .with_unique_item()
+                        .with_sort_item()
+                        .with_event(move |view, event| {
+                            if let UIEvent::Core(Event::Occupant {
+                                conversation,
+                                occupant,
+                                ..
+                            }) = event
+                            {
+                                if roster_jid == *conversation {
+                                    view.insert(occupant.clone(), Some(occupant.role));
+                                }
                             }
-                        }
-                    });
+                        });
                 layout.push(roster, 3);
 
                 self.add_window(channel.get_name(), Box::new(layout));
@@ -893,7 +892,7 @@ impl UIMod {
         }
     }
 
-    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent>>) {
+    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent, Theme>>) {
         self.windows.push(name.clone());
         self.root.event(&mut UIEvent::AddWindow(name, Some(window)));
     }
@@ -938,7 +937,7 @@ impl UIMod {
 
     /// Render the UI if the dirty flag is set. Intended to be called once per
     /// event batch from the main loop.
-    pub fn render_if_dirty(&mut self) -> bool {
+    pub fn render_if_dirty(&mut self, config: &Theme) -> bool {
         if !self.dirty {
             return false;
         }
@@ -958,7 +957,7 @@ impl UIMod {
         render_buffer.set_size((width, height).into());
         render_buffer.clear();
         let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
-        self.root.render(frame);
+        self.root.render(frame, config);
         log::trace!("Mod::UI rendered in {:.2?}", before.elapsed());
         true
     }
@@ -979,7 +978,7 @@ impl ModTrait for UIMod {
             let mut timeout_generation: u64 = 0;
             let normal_commands = build_normal_command_trie();
             let aparte_proxy = aparte.proxy();
-            self.root = LinearLayout::<UIEvent>::new(Orientation::Vertical).with_event(
+            self.root = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(Key::Esc)) if mode == Mode::Insert => {
                         mode = Mode::Normal;
@@ -1063,45 +1062,46 @@ impl ModTrait for UIMod {
         }
 
         let title_bar = TitleBar::new(aparte.config.theme.title_bar.clone());
-        let frame = FrameLayout::<UIEvent, String>::new().with_event(|frame, event| match event {
-            UIEvent::Core(Event::ChangeWindow(name)) => {
-                frame.set_current(name.to_string());
-            }
-            UIEvent::AddWindow(name, view) => {
-                let view = view.take().unwrap();
-                frame.insert_boxed(name.to_string(), view);
+        let frame =
+            FrameLayout::<UIEvent, String, Theme>::new().with_event(|frame, event| match event {
+                UIEvent::Core(Event::ChangeWindow(name)) => {
+                    frame.set_current(name.to_string());
+                }
+                UIEvent::AddWindow(name, view) => {
+                    let view = view.take().unwrap();
+                    frame.insert_boxed(name.to_string(), view);
 
-                // propagate AddWindow with name only to each subview
-                // required at least for console view
-                for child in frame.iter_children_mut() {
-                    child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                    // propagate AddWindow with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                    }
                 }
-            }
-            UIEvent::Core(Event::Close(window)) => {
-                frame.remove(window);
+                UIEvent::Core(Event::Close(window)) => {
+                    frame.remove(window);
 
-                // propagate Close with name only to each subview
-                // required at least for console view
-                for child in frame.iter_children_mut() {
-                    child.event(&mut UIEvent::Core(Event::Close(window.clone())));
+                    // propagate Close with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::Core(Event::Close(window.clone())));
+                    }
                 }
-            }
-            // Interaction events → current window only
-            UIEvent::Core(Event::Key(_))
-            | UIEvent::Core(Event::Completed(_, _))
-            | UIEvent::Core(Event::ResetCompletion)
-            | UIEvent::Core(Event::ReadPassword(_)) => {
-                if let Some(current) = frame.get_current_mut() {
-                    current.event(event);
+                // Interaction events → current window only
+                UIEvent::Core(Event::Key(_))
+                | UIEvent::Core(Event::Completed(_, _))
+                | UIEvent::Core(Event::ResetCompletion)
+                | UIEvent::Core(Event::ReadPassword(_)) => {
+                    if let Some(current) = frame.get_current_mut() {
+                        current.event(event);
+                    }
                 }
-            }
-            // Global events (Message, Notification, Subject, etc.) → all windows
-            _ => {
-                for child in frame.iter_children_mut() {
-                    child.event(event);
+                // Global events (Message, Notification, Subject, etc.) → all windows
+                _ => {
+                    for child in frame.iter_children_mut() {
+                        child.event(event);
+                    }
                 }
-            }
-        });
+            });
         let win_bar = WinBar::new(aparte.config.theme.win_bar.clone());
         let input = Input::new().with_event(|input, event| {
             if let UIEvent::Core(Event::Key(key)) = event {
@@ -1150,14 +1150,15 @@ impl ModTrait for UIMod {
         self.root.push(input, 0);
         self.root.set_focus(INPUT_INDEX);
 
-        let mut console =
-            LinearLayout::<UIEvent>::new(Orientation::Horizontal).with_event(|layout, event| {
+        let mut console = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal).with_event(
+            |layout, event| {
                 for LayoutChild { child, .. } in layout.children.iter_mut() {
                     child.view.event(event);
                 }
-            });
+            },
+        );
         console.push(
-            ScrollWin::<UIEvent, MessageView>::new()
+            ScrollWin::<UIEvent, MessageView, Theme>::new()
                 .with_layout(LayoutParams {
                     width: LayoutParam::MatchParent,
                     height: LayoutParam::MatchParent,
@@ -1244,7 +1245,7 @@ impl ModTrait for UIMod {
                 }),
             7,
         );
-        let roster = ListView::<UIEvent, contact::Group, RosterItem>::new()
+        let roster = ListView::<UIEvent, contact::Group, RosterItem, Theme>::new()
             .with_layout(LayoutParams {
                 width: LayoutParam::WrapContent,
                 height: LayoutParam::MatchParent,
@@ -1312,7 +1313,7 @@ impl ModTrait for UIMod {
             let mut render_buffer = self.render_buffer.write().unwrap();
             render_buffer.clear();
             let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
-            self.root.render(frame);
+            self.root.render(frame, &aparte.config.get_theme());
         }
 
         Ok(())

@@ -31,10 +31,11 @@ impl fmt::Display for NonExistentGroup {
 
 impl std::error::Error for NonExistentGroup {}
 
-pub struct ListView<E, G, V>
+pub struct ListView<E, G, V, C = ()>
 where
-    G: CharxelDisplay + Hash + Eq,
-    V: CharxelDisplay + Hash + Eq,
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
 {
     items: LinkedHashMap<Option<G>, HashSet<V>>,
     unique: bool,
@@ -45,20 +46,22 @@ where
     dimensions: Option<Dimensions>,
 }
 
-impl<E, G, V> Default for ListView<E, G, V>
+impl<E, G, V, C> Default for ListView<E, G, V, C>
 where
-    G: CharxelDisplay + Hash + Eq,
-    V: CharxelDisplay + Hash + Eq,
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E, G, V> ListView<E, G, V>
+impl<E, G, V, C> ListView<E, G, V, C>
 where
-    G: CharxelDisplay + Hash + Eq,
-    V: CharxelDisplay + Hash + Eq,
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
 {
     pub fn new() -> Self {
         Self {
@@ -167,10 +170,11 @@ where
     }
 }
 
-impl<E, G, V> View<E> for ListView<E, G, V>
+impl<E, G, V, C> View<E, C> for ListView<E, G, V, C>
 where
-    G: CharxelDisplay + Hash + Eq,
-    V: CharxelDisplay + Hash + Eq,
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         let max_width = match self.layouts.width {
@@ -182,12 +186,13 @@ where
                         Some(_) => "  ",
                         None => "",
                     };
+                    let config = C::default();
 
                     group
                         .iter()
-                        .map(|group| group.colored_fmt().display_width())
+                        .map(|group| group.colored_fmt(&C::default()).display_width())
                         .chain(items.iter().map(move |item| {
-                            item.colored_fmt().display_width() + indent.len() as u16
+                            item.colored_fmt(&config).display_width() + indent.len() as u16
                         }))
                 })
                 .max()
@@ -246,7 +251,7 @@ where
         }
     }
 
-    fn render(&self, mut frame: ScreenFrame) {
+    fn render(&self, mut frame: ScreenFrame, config: &C) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
@@ -263,7 +268,7 @@ where
             }
 
             if let Some(group) = group {
-                let mut disp = group.colored_fmt();
+                let mut disp = group.colored_fmt(config);
                 disp.truncate(max_width, "…");
 
                 frame.write_at((0, top), disp);
@@ -283,10 +288,10 @@ where
                 let mut disp = match group {
                     Some(_) => {
                         let mut indent = "  ".into_charxels();
-                        indent.append(item.colored_fmt());
+                        indent.append(item.colored_fmt(config));
                         indent
                     }
-                    None => item.colored_fmt(),
+                    None => item.colored_fmt(config),
                 };
                 disp.truncate(max_width, "…");
                 frame.write_at((0, top), disp);

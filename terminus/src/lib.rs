@@ -578,7 +578,7 @@ impl Hash for Style {
 /// Layout apply the definitive dimension, setting the final x and y position.
 /// Render draw the component on the given screen.
 #[cfg_attr(test, automock)]
-pub trait View<E> {
+pub trait View<E, C = ()> {
     /// Compute the wanted dimension given passed width and height
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions;
 
@@ -590,14 +590,13 @@ pub trait View<E> {
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
-    #[allow(clippy::needless_lifetimes)]
-    fn render<'a>(&self, frame: ScreenFrame<'a>);
+    fn render(&self, frame: ScreenFrame, config: &C);
 
     /// Handle an event
     fn event(&mut self, event: &mut E);
 }
 
-impl<E> dyn View<E> {}
+impl<E, C> dyn View<E, C> {}
 
 #[cfg(test)]
 mod tests {

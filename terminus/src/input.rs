@@ -206,7 +206,7 @@ impl<E> Input<E> {
     }
 }
 
-impl<E> View<E> for Input<E> {
+impl<E, C> View<E, C> for Input<E> {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             width: RequestedDimension::ExpandMax,
@@ -221,7 +221,7 @@ impl<E> View<E> for Input<E> {
         }
     }
 
-    fn render(&self, mut frame: ScreenFrame) {
+    fn render(&self, mut frame: ScreenFrame, _config: &C) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),

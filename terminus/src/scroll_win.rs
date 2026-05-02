@@ -60,9 +60,9 @@ where
 }
 
 /// Ordered vertical window giving ability to scroll
-pub struct ScrollWin<E, I>
+pub struct ScrollWin<E, I, C = ()>
 where
-    I: View<E> + Hash + Eq + Ord,
+    I: View<E, C> + Hash + Eq + Ord,
 {
     /// Index in children of last visible child (bottom child)
     bottom_visible_child_index: usize,
@@ -76,18 +76,18 @@ where
     dimensions: Option<Dimensions>,
 }
 
-impl<E, I> Default for ScrollWin<E, I>
+impl<E, I, C> Default for ScrollWin<E, I, C>
 where
-    I: View<E> + Hash + Eq + Ord,
+    I: View<E, C> + Hash + Eq + Ord,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<E, I> ScrollWin<E, I>
+impl<E, I, C> ScrollWin<E, I, C>
 where
-    I: View<E> + Hash + Eq + Ord,
+    I: View<E, C> + Hash + Eq + Ord,
 {
     pub fn new() -> Self {
         Self {
@@ -503,9 +503,9 @@ where
     }
 }
 
-impl<E, I> View<E> for ScrollWin<E, I>
+impl<E, I, C> View<E, C> for ScrollWin<E, I, C>
 where
-    I: View<E> + Hash + Eq + Ord,
+    I: View<E, C> + Hash + Eq + Ord,
 {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         // Should we measure only visible children?
@@ -576,7 +576,7 @@ where
         }
     }
 
-    fn render(&self, frame: ScreenFrame) {
+    fn render(&self, frame: ScreenFrame, config: &C) {
         log::debug!("rendering {}", std::any::type_name::<Self>(),);
 
         if self.children.is_empty() {
@@ -589,7 +589,7 @@ where
             self.visible_children(self.dimensions.as_ref().expect(MISSING_DIMENSIONS))
         {
             let frame = ScreenFrame::new(offscreen, dimensions.as_ref().expect(MISSING_DIMENSIONS));
-            child.render(frame);
+            child.render(frame, config);
         }
     }
 
@@ -641,7 +641,7 @@ mod tests {
         }
     }
 
-    impl<E> View<E> for MockView {
+    impl<E, C> View<E, C> for MockView {
         fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
             RequestedDimensions {
                 height: RequestedDimension::Absolute(self.height),
@@ -653,7 +653,7 @@ mod tests {
             self.dimensions.replace(dimensions.clone());
         }
 
-        fn render<'a>(&self, _frame: ScreenFrame<'a>) {
+        fn render(&self, _frame: ScreenFrame, _config: &C) {
             unreachable!()
         }
 

@@ -877,7 +877,7 @@ impl MessageView {
     }
 }
 
-impl<E> View<E> for MessageView {
+impl<E, C> View<E, C> for MessageView {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         #[cfg(feature = "image")]
         if self.image.read().unwrap().is_some() {
@@ -896,7 +896,7 @@ impl<E> View<E> for MessageView {
         self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, mut frame: ScreenFrame) {
+    fn render(&self, mut frame: ScreenFrame, _config: &C) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
@@ -986,7 +986,7 @@ mod tests {
 
         // When
         message_view.layout(&dimensions);
-        message_view.render(ScreenFrame::new(&mut buffer, &dimensions));
+        message_view.render(ScreenFrame::new(&mut buffer, &dimensions), &());
 
         // Then
         assert_eq!(
@@ -1012,7 +1012,7 @@ mod tests {
 
         // When
         message_view.layout(&dimensions);
-        message_view.render(ScreenFrame::new(&mut buffer, &dimensions));
+        message_view.render(ScreenFrame::new(&mut buffer, &dimensions), &());
 
         // Then
         // we should render:
@@ -1042,7 +1042,7 @@ mod tests {
 
         // When
         message_view.layout(&dimensions);
-        message_view.render(ScreenFrame::new(&mut buffer, &dimensions));
+        message_view.render(ScreenFrame::new(&mut buffer, &dimensions), &());
 
         // Then
         // we should only render:

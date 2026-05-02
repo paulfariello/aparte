@@ -1238,7 +1238,8 @@ impl Aparte {
                 };
 
                 // Render UI once per event batch (if state changed) and wake render thread.
-                if self.get_mod_mut::<mods::ui::UIMod>().render_if_dirty() {
+                let theme = self.config.get_theme();
+                if self.get_mod_mut::<mods::ui::UIMod>().render_if_dirty(&theme) {
                     self.render_notify.notify_one();
                 }
             }

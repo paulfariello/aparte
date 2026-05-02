@@ -16,30 +16,30 @@ pub enum Orientation {
     Vertical,
 }
 
-pub struct Child<E> {
-    pub view: Box<dyn View<E>>,
+pub struct Child<E, C = ()> {
+    pub view: Box<dyn View<E, C>>,
     weight: u16,
 }
 
 // TODO make it priv, issue it with ui.rs that wants to access child but can't use
 // iter_children_mut
-pub struct LayoutChild<E> {
-    pub child: Child<E>,
+pub struct LayoutChild<E, C = ()> {
+    pub child: Child<E, C>,
     pub dimensions: Option<Dimensions>,
 }
 
 /// Component with multiple ordered children sharing the same space.
 /// Each child is placed according to the orientation of the component.
-pub struct LinearLayout<E> {
+pub struct LinearLayout<E, C = ()> {
     pub orientation: Orientation,
-    pub children: Vec<LayoutChild<E>>,
+    pub children: Vec<LayoutChild<E, C>>,
     pub event_handler: Option<EventHandler<Self, E>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
     focused_child_index: Option<usize>,
 }
 
-impl<E> LinearLayout<E> {
+impl<E, C> LinearLayout<E, C> {
     pub fn new(orientation: Orientation) -> Self {
         Self {
             orientation,
@@ -58,14 +58,14 @@ impl<E> LinearLayout<E> {
         self.focused_child_index = Some(index);
     }
 
-    pub fn focused_child_mut(&mut self) -> Option<&mut Box<dyn View<E>>> {
+    pub fn focused_child_mut(&mut self) -> Option<&mut Box<dyn View<E, C>>> {
         self.focused_child_index
             .and_then(|i| self.children.get_mut(i).map(|lc| &mut lc.child.view))
     }
 
     pub fn push<T>(&mut self, view: T, weight: u16)
     where
-        T: View<E> + 'static,
+        T: View<E, C> + 'static,
     {
         self.children.push(LayoutChild {
             child: Child {
@@ -89,13 +89,13 @@ impl<E> LinearLayout<E> {
         self
     }
 
-    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E>>> {
+    pub fn iter_children_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn View<E, C>>> {
         self.children
             .iter_mut()
             .map(|LayoutChild { child, .. }| &mut child.view)
     }
 
-    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E>>> {
+    pub fn iter_children(&self) -> impl Iterator<Item = &Box<dyn View<E, C>>> {
         self.children
             .iter()
             .map(|LayoutChild { child, .. }| &child.view)
@@ -251,7 +251,7 @@ impl<E> LinearLayout<E> {
     }
 }
 
-impl<E> View<E> for LinearLayout<E> {
+impl<E, C> View<E, C> for LinearLayout<E, C> {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         let children_requested_dimensions: Vec<RequestedDimensions> = self
             .iter_children()
@@ -297,12 +297,12 @@ impl<E> View<E> for LinearLayout<E> {
         }
     }
 
-    fn render(&self, frame: ScreenFrame) {
+    fn render(&self, frame: ScreenFrame, config: &C) {
         log::debug!("rendering {}", std::any::type_name::<Self>());
         let ScreenFrame { offscreen, .. } = frame;
         for LayoutChild { child, dimensions } in self.children.iter() {
             let child_frame = ScreenFrame::new(offscreen, dimensions.as_ref().unwrap());
-            child.view.render(child_frame);
+            child.view.render(child_frame, config);
         }
     }
 
@@ -326,20 +326,21 @@ mod tests {
 
     use super::*;
     use crate::{MockView, RequestedDimension};
+    type TestMockView = MockView<(), ()>;
 
     #[test]
     fn test_vertical_layout_children_evenly() {
         // Given
         let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
 
-        let mut first_view = MockView::new();
+        let mut first_view = TestMockView::new();
         first_view
             .expect_measure()
             .return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::ExpandMax,
             });
-        let mut second_view = MockView::new();
+        let mut second_view = TestMockView::new();
         second_view
             .expect_measure()
             .return_const(RequestedDimensions {
@@ -386,21 +387,21 @@ mod tests {
         // Given
         let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
 
-        let mut first_view = MockView::new();
+        let mut first_view = TestMockView::new();
         first_view
             .expect_measure()
             .return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::ExpandMax,
             });
-        let mut second_view = MockView::new();
+        let mut second_view = TestMockView::new();
         second_view
             .expect_measure()
             .return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::ExpandMax,
             });
-        let mut third_view = MockView::new();
+        let mut third_view = TestMockView::new();
         third_view
             .expect_measure()
             .return_const(RequestedDimensions {
@@ -458,14 +459,14 @@ mod tests {
         // Given
         let mut layout = LinearLayout::<()>::new(Orientation::Horizontal);
 
-        let mut first_view = MockView::new();
+        let mut first_view = TestMockView::new();
         first_view
             .expect_measure()
             .return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::ExpandMax,
             });
-        let mut second_view = MockView::new();
+        let mut second_view = TestMockView::new();
         second_view
             .expect_measure()
             .return_const(RequestedDimensions {
@@ -512,21 +513,21 @@ mod tests {
         // Given
         let mut layout = LinearLayout::<()>::new(Orientation::Horizontal);
 
-        let mut first_view = MockView::new();
+        let mut first_view = TestMockView::new();
         first_view
             .expect_measure()
             .return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::ExpandMax,
             });
-        let mut second_view = MockView::new();
+        let mut second_view = TestMockView::new();
         second_view
             .expect_measure()
             .return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::ExpandMax,
             });
-        let mut third_view = MockView::new();
+        let mut third_view = TestMockView::new();
         third_view
             .expect_measure()
             .return_const(RequestedDimensions {
@@ -582,7 +583,7 @@ mod tests {
     #[test]
     fn test_focused_child_mut_with_no_focus_returns_none() {
         let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
-        let mut view = MockView::new();
+        let mut view = TestMockView::new();
         view.expect_measure().return_const(RequestedDimensions {
             width: RequestedDimension::ExpandMax,
             height: RequestedDimension::ExpandMax,
@@ -595,7 +596,7 @@ mod tests {
     fn test_set_focus_returns_correct_child() {
         let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
         for _ in 0..3 {
-            let mut view = MockView::new();
+            let mut view = TestMockView::new();
             view.expect_measure().return_const(RequestedDimensions {
                 width: RequestedDimension::ExpandMax,
                 height: RequestedDimension::Absolute(10),

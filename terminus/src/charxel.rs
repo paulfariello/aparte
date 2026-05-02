@@ -198,8 +198,8 @@ impl IntoIterator for Charxels {
     }
 }
 
-pub trait CharxelDisplay {
-    fn colored_fmt(&self) -> Charxels;
+pub trait CharxelDisplay<C = ()> {
+    fn colored_fmt(&self, config: &C) -> Charxels;
 }
 
 pub trait IntoCharxels: Sized {
