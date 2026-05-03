@@ -1561,8 +1561,7 @@ impl ModTrait for UIMod {
             Event::Key(key) => {
                 match key {
                     KeyEvent {
-                        code: KeyCode::Char('\t'),
-                        ..
+                        code: KeyCode::Tab, ..
                     } => {
                         let result = Rc::new(RefCell::new(None));
 
@@ -1575,7 +1574,7 @@ impl ModTrait for UIMod {
 
                         if password {
                             aparte.schedule(Event::Key(KeyEvent::new(
-                                KeyCode::Char('\t'),
+                                KeyCode::Tab,
                                 KeyModifiers::NONE,
                             )));
                         } else {
