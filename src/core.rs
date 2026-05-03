@@ -7,7 +7,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug, Display};
 use std::fs::OpenOptions;
 use std::future::Future;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
+use crossterm::{event::KeyEvent, execute, terminal};
 use futures::stream::StreamExt;
 use rand::Rng;
 use secrecy::ExposeSecret;
@@ -26,9 +27,6 @@ use std::time::Duration;
 use terminus::charxel::IntoCharxels;
 use terminus::cursor::Cursor;
 use terminus::rendering::OffscreenRenderBuffer;
-use termion::event::Key;
-use termion::raw::IntoRawMode;
-use termion::screen::IntoAlternateScreen;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, Notify};
@@ -155,7 +153,7 @@ pub enum Event {
         from: Option<DateTime<FixedOffset>>,
     },
     Quit,
-    Key(Key),
+    Key(KeyEvent),
     AutoComplete {
         account: Option<Account>,
         context: String,
@@ -1090,7 +1088,9 @@ impl Aparte {
             }
         });
 
-        rt.spawn({
+        {
+            use crate::tee_writer::Screen;
+
             let render_buffer = {
                 let ui = self.get_mod::<mods::ui::UIMod>();
                 Arc::clone(&ui.render_buffer)
@@ -1100,38 +1100,37 @@ impl Aparte {
             let pending_annotations = Arc::clone(&self.pending_annotations);
             let render_notify = Arc::clone(&self.render_notify);
 
-            async move {
-                use crate::tee_writer::Screen;
+            // Set up raw mode and alternate screen synchronously so the
+            // terminal is ready before any render notifications arrive.
+            terminal::enable_raw_mode().unwrap();
+            let mut base = std::io::stdout();
+            execute!(base, terminal::EnterAlternateScreen).unwrap();
 
+            let mut screen: Screen = match record_path {
+                Some(ref path) => {
+                    let rec = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(path)
+                        .expect("Cannot open recording file");
+                    let mut events_path = path.clone();
+                    events_path.set_extension("events");
+                    let ev = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(events_path)
+                        .expect("Cannot open events file");
+                    Screen::Recording(crate::tee_writer::TeeWriter::new(base, rec, ev))
+                }
+                None => Screen::Plain(base),
+            };
+
+            let _ = execute!(&mut screen, terminal::Clear(terminal::ClearType::All));
+
+            rt.spawn(async move {
                 log::debug!("Start UI thread");
-                let base = std::io::stdout()
-                    .into_raw_mode()
-                    .unwrap()
-                    .into_alternate_screen()
-                    .unwrap();
-
-                let mut screen: Screen = match record_path {
-                    Some(ref path) => {
-                        let rec = std::fs::OpenOptions::new()
-                            .write(true)
-                            .create(true)
-                            .truncate(true)
-                            .open(path)
-                            .expect("Cannot open recording file");
-                        let mut events_path = path.clone();
-                        events_path.set_extension("events");
-                        let ev = std::fs::OpenOptions::new()
-                            .write(true)
-                            .create(true)
-                            .truncate(true)
-                            .open(events_path)
-                            .expect("Cannot open events file");
-                        Screen::Recording(crate::tee_writer::TeeWriter::new(base, rec, ev))
-                    }
-                    None => Screen::Plain(base),
-                };
-
-                let _ = write!(&mut screen, "{}", termion::clear::All);
                 let mut frame_count: u64 = 0;
                 loop {
                     render_notify.notified().await;
@@ -1148,8 +1147,12 @@ impl Aparte {
                     frame_count += 1;
                     screen.dump_buffer(&reference_screen.dump_text(), frame_count);
                 }
-            }
-        });
+                #[allow(unreachable_code)]
+                let _ = execute!(screen, terminal::LeaveAlternateScreen);
+                #[allow(unreachable_code)]
+                let _ = terminal::disable_raw_mode();
+            });
+        }
 
         rt.block_on(async move {
             self.schedule(Event::Start);
@@ -1443,7 +1446,13 @@ impl Aparte {
 
     pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
         if self.read_password.load(Relaxed) && matches!(event, Event::Key(..)) {
-            log::trace!("Handle event: {:?}", Event::Key(Key::Char('*')),);
+            log::trace!(
+                "Handle event: {:?}",
+                Event::Key(KeyEvent::new(
+                    crossterm::event::KeyCode::Char('*'),
+                    crossterm::event::KeyModifiers::empty()
+                ))
+            );
         } else {
             log::trace!("Handle event: {:?}", event);
         }

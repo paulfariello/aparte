@@ -4,9 +4,6 @@
 use std::fs::File;
 use std::io::{self, Write};
 
-use termion::raw::RawTerminal;
-use termion::screen::AlternateScreen;
-
 pub struct TeeWriter<W: Write> {
     inner: W,
     record_file: File,
@@ -49,8 +46,8 @@ impl<W: Write> Write for TeeWriter<W> {
     }
 }
 
-pub type PlainScreen = AlternateScreen<RawTerminal<std::io::Stdout>>;
-pub type RecordingScreen = TeeWriter<AlternateScreen<RawTerminal<std::io::Stdout>>>;
+pub type PlainScreen = std::io::Stdout;
+pub type RecordingScreen = TeeWriter<std::io::Stdout>;
 
 pub enum Screen {
     Plain(PlainScreen),

@@ -9,12 +9,12 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::{cmp, iter::Sum};
 
+use crossterm::style::{
+    Attribute, Color as CColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 #[cfg(test)]
 use mockall::automock;
 use rendering::ScreenFrame;
-use termion::color::Color as _;
-use termion::raw::RawTerminal;
-use termion::screen::AlternateScreen;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub mod charxel;
@@ -25,8 +25,6 @@ pub mod linear_layout;
 pub mod list_view;
 pub mod rendering;
 pub mod scroll_win;
-
-pub type Screen<W> = AlternateScreen<RawTerminal<W>>;
 
 pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 
@@ -334,46 +332,33 @@ pub enum NamedColor {
 }
 
 impl NamedColor {
-    pub fn write_fg(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn to_crossterm(self) -> CColor {
         match self {
-            NamedColor::Black => termion::color::Black.write_fg(f),
-            NamedColor::Blue => termion::color::Blue.write_fg(f),
-            NamedColor::Cyan => termion::color::Cyan.write_fg(f),
-            NamedColor::Green => termion::color::Green.write_fg(f),
-            NamedColor::LightBlack => termion::color::LightBlack.write_fg(f),
-            NamedColor::LightBlue => termion::color::LightBlue.write_fg(f),
-            NamedColor::LightCyan => termion::color::LightCyan.write_fg(f),
-            NamedColor::LightGreen => termion::color::LightGreen.write_fg(f),
-            NamedColor::LightMagenta => termion::color::LightMagenta.write_fg(f),
-            NamedColor::LightRed => termion::color::LightRed.write_fg(f),
-            NamedColor::LightWhite => termion::color::LightWhite.write_fg(f),
-            NamedColor::LightYellow => termion::color::LightYellow.write_fg(f),
-            NamedColor::Magenta => termion::color::Magenta.write_fg(f),
-            NamedColor::Red => termion::color::Red.write_fg(f),
-            NamedColor::White => termion::color::White.write_fg(f),
-            NamedColor::Yellow => termion::color::Yellow.write_fg(f),
+            NamedColor::Black => CColor::Black,
+            NamedColor::Red => CColor::DarkRed,
+            NamedColor::Green => CColor::DarkGreen,
+            NamedColor::Yellow => CColor::DarkYellow,
+            NamedColor::Blue => CColor::DarkBlue,
+            NamedColor::Magenta => CColor::DarkMagenta,
+            NamedColor::Cyan => CColor::DarkCyan,
+            NamedColor::White => CColor::Grey,
+            NamedColor::LightBlack => CColor::DarkGrey,
+            NamedColor::LightRed => CColor::Red,
+            NamedColor::LightGreen => CColor::Green,
+            NamedColor::LightYellow => CColor::Yellow,
+            NamedColor::LightBlue => CColor::Blue,
+            NamedColor::LightMagenta => CColor::Magenta,
+            NamedColor::LightCyan => CColor::Cyan,
+            NamedColor::LightWhite => CColor::White,
         }
     }
 
+    pub fn write_fg(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", SetForegroundColor(self.to_crossterm()))
+    }
+
     pub fn write_bg(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            NamedColor::Black => termion::color::Black.write_bg(f),
-            NamedColor::Blue => termion::color::Blue.write_bg(f),
-            NamedColor::Cyan => termion::color::Cyan.write_bg(f),
-            NamedColor::Green => termion::color::Green.write_bg(f),
-            NamedColor::LightBlack => termion::color::LightBlack.write_bg(f),
-            NamedColor::LightBlue => termion::color::LightBlue.write_bg(f),
-            NamedColor::LightCyan => termion::color::LightCyan.write_bg(f),
-            NamedColor::LightGreen => termion::color::LightGreen.write_bg(f),
-            NamedColor::LightMagenta => termion::color::LightMagenta.write_bg(f),
-            NamedColor::LightRed => termion::color::LightRed.write_bg(f),
-            NamedColor::LightWhite => termion::color::LightWhite.write_bg(f),
-            NamedColor::LightYellow => termion::color::LightYellow.write_bg(f),
-            NamedColor::Magenta => termion::color::Magenta.write_bg(f),
-            NamedColor::Red => termion::color::Red.write_bg(f),
-            NamedColor::White => termion::color::White.write_bg(f),
-            NamedColor::Yellow => termion::color::Yellow.write_bg(f),
-        }
+        write!(f, "{}", SetBackgroundColor(self.to_crossterm()))
     }
 }
 
@@ -509,8 +494,8 @@ impl fmt::Display for FgColor {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
             Color::Named(color) => color.write_fg(f),
-            Color::Rgb(r, g, b) => termion::color::Rgb(r, g, b).write_fg(f),
-            Color::Default => termion::color::Reset.write_fg(f),
+            Color::Rgb(r, g, b) => write!(f, "{}", SetForegroundColor(CColor::Rgb { r, g, b })),
+            Color::Default => write!(f, "{}", SetForegroundColor(CColor::Reset)),
         }
     }
 }
@@ -519,8 +504,8 @@ impl fmt::Display for BgColor {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
             Color::Named(color) => color.write_bg(f),
-            Color::Rgb(r, g, b) => termion::color::Rgb(r, g, b).write_bg(f),
-            Color::Default => termion::color::Reset.write_bg(f),
+            Color::Rgb(r, g, b) => write!(f, "{}", SetBackgroundColor(CColor::Rgb { r, g, b })),
+            Color::Default => write!(f, "{}", SetBackgroundColor(CColor::Reset)),
         }
     }
 }
@@ -568,16 +553,17 @@ impl Hash for Style {
 
 impl fmt::Display for Style {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Style::Bold => write!(f, "{}", termion::style::Bold),
-            Style::Faint => write!(f, "{}", termion::style::Faint),
-            Style::Italic => write!(f, "{}", termion::style::Italic),
-            Style::Underline => write!(f, "{}", termion::style::Underline),
-            Style::Blink => write!(f, "{}", termion::style::Blink),
-            Style::Invert => write!(f, "{}", termion::style::Invert),
-            Style::CrossedOut => write!(f, "{}", termion::style::CrossedOut),
-            Style::Framed => write!(f, "{}", termion::style::Framed),
-        }
+        let attr = match self {
+            Style::Bold => Attribute::Bold,
+            Style::Faint => Attribute::Dim,
+            Style::Italic => Attribute::Italic,
+            Style::Underline => Attribute::Underlined,
+            Style::Blink => Attribute::SlowBlink,
+            Style::Invert => Attribute::Reverse,
+            Style::CrossedOut => Attribute::CrossedOut,
+            Style::Framed => Attribute::Framed,
+        };
+        write!(f, "{}", SetAttribute(attr))
     }
 }
 

@@ -48,7 +48,7 @@ serde = { version = "^1.0", features = ["derive"] }
 sha1 = "0.10.6"
 sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1", optional = true }
 terminus = { path = "terminus" }
-termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
+crossterm = { version = "0.28", features = ["event-stream"] }
 textwrap = "^0.12"
 tokio = { version = "^1.10", features = ["full"] }
 tokio-xmpp = { version = "5.0", features = ["starttls", "direct-tls"] }

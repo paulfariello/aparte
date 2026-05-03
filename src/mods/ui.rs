@@ -3,20 +3,20 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use backtrace::Backtrace;
 use chrono::Local as LocalTz;
-use futures::task::{AtomicWaker, Context, Poll};
+use crossterm::event::{
+    Event as CrosstermEvent, EventStream as CrosstermEventStream, KeyCode, KeyEvent, KeyModifiers,
+};
+use futures::task::{Context, Poll};
 use futures::Stream;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::panic;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::{mpsc, RwLock};
+use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Instant;
 use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
 use terminus::linear_layout::LayoutChild;
@@ -33,8 +33,6 @@ use terminus::{
     Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, View,
 };
-use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
-use termion::get_tty;
 use uuid::Uuid;
 use xmpp_parsers::jid::{BareJid, Jid};
 
@@ -540,7 +538,7 @@ impl UIMod {
     pub fn new(_config: &Config) -> Self {
         let screen = Arc::new(RwLock::new(OffscreenRenderBuffer::default()));
         let panic_handler = PanicHandler::new();
-        let (width, height) = termion::terminal_size().unwrap();
+        let (width, height) = crossterm::terminal::size().unwrap();
         RwLock::write(&screen)
             .unwrap()
             .set_size((width, height).into());
@@ -610,7 +608,10 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => {
+                            UIEvent::Core(Event::Key(KeyEvent {
+                                code: KeyCode::PageUp,
+                                ..
+                            })) => {
                                 let at_top = view.page_up();
                                 if at_top && !mam_requested {
                                     mam_requested = true;
@@ -623,7 +624,10 @@ impl UIMod {
                                     });
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageDown)) => {
+                            UIEvent::Core(Event::Key(KeyEvent {
+                                code: KeyCode::PageDown,
+                                ..
+                            })) => {
                                 view.page_down();
                                 mam_requested = false;
                             }
@@ -756,7 +760,10 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => {
+                            UIEvent::Core(Event::Key(KeyEvent {
+                                code: KeyCode::PageUp,
+                                ..
+                            })) => {
                                 let at_top = view.page_up();
                                 if at_top && !mam_requested {
                                     mam_requested = true;
@@ -769,7 +776,10 @@ impl UIMod {
                                     });
                                 }
                             }
-                            UIEvent::Core(Event::Key(Key::PageDown)) => {
+                            UIEvent::Core(Event::Key(KeyEvent {
+                                code: KeyCode::PageDown,
+                                ..
+                            })) => {
                                 view.page_down();
                                 mam_requested = false;
                             }
@@ -903,7 +913,7 @@ impl UIMod {
         self.current_window = Some(window.to_string());
     }
 
-    #[allow(unused)] // XXX Should be used when alt+arrow is fixed see https://gitlab.redox-os.org/redox-os/termion/-/issues/183
+    #[allow(unused)] // XXX Should be used when alt+arrow navigation is fixed
     pub fn next_window(&mut self) {
         if let Some(current) = &self.current_window {
             let index = self.windows.iter().position(|e| e == current).unwrap();
@@ -915,7 +925,7 @@ impl UIMod {
         }
     }
 
-    #[allow(unused)] // XXX Should be used when alt+arrow is fixed see https://gitlab.redox-os.org/redox-os/termion/-/issues/183
+    #[allow(unused)] // XXX Should be used when alt+arrow navigation is fixed
     pub fn prev_window(&mut self) {
         if let Some(current) = &self.current_window {
             let index = self.windows.iter().position(|e| e == current).unwrap();
@@ -944,7 +954,7 @@ impl UIMod {
         self.dirty = false;
 
         let before = Instant::now();
-        let (width, height) = termion::terminal_size().unwrap();
+        let (width, height) = crossterm::terminal::size().unwrap();
         let measure_specs = MeasureSpecs {
             width: MeasureSpec::AtMost(width),
             height: MeasureSpec::AtMost(height),
@@ -965,7 +975,7 @@ impl UIMod {
 
 impl ModTrait for UIMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        let (width, height) = termion::terminal_size().unwrap();
+        let (width, height) = crossterm::terminal::size().unwrap();
         log::debug!("Init UI on screen ({width}×{height})");
 
         // Indices into the root LinearLayout's children (push order below).
@@ -980,7 +990,9 @@ impl ModTrait for UIMod {
             let aparte_proxy = aparte.proxy();
             self.root = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
-                    UIEvent::Core(Event::Key(Key::Esc)) if mode == Mode::Insert => {
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Insert => {
                         mode = Mode::Normal;
                         command_buffer.clear();
                         layout.set_focus(FRAME_LAYOUT_INDEX);
@@ -988,7 +1000,10 @@ impl ModTrait for UIMod {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                         }
                     }
-                    UIEvent::Core(Event::Key(Key::Char('i'))) if mode == Mode::Normal => {
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('i'),
+                        ..
+                    })) if mode == Mode::Normal => {
                         command_buffer.clear();
                         mode = Mode::Insert;
                         layout.set_focus(INPUT_INDEX);
@@ -997,7 +1012,10 @@ impl ModTrait for UIMod {
                             child.event(&mut UIEvent::ModeChange(Mode::Insert));
                         }
                     }
-                    UIEvent::Core(Event::Key(Key::Char(c))) if mode == Mode::Normal => {
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    })) if mode == Mode::Normal => {
                         command_buffer.push(*c);
 
                         if let Some(&cmd) = normal_commands.get(&command_buffer) {
@@ -1039,9 +1057,10 @@ impl ModTrait for UIMod {
                         }
                     }
                     // Scroll keys reach the message window in any mode.
-                    UIEvent::Core(Event::Key(Key::PageUp | Key::PageDown))
-                        if mode == Mode::Insert =>
-                    {
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::PageUp | KeyCode::PageDown,
+                        ..
+                    })) if mode == Mode::Insert => {
                         for child in layout.iter_children_mut() {
                             child.event(event);
                         }
@@ -1108,25 +1127,98 @@ impl ModTrait for UIMod {
                 log::debug!("Input event: {:?}", key);
             }
             match event {
-                UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
-                UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
-                UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
-                UIEvent::Core(Event::Key(Key::Home)) => input.home(),
-                UIEvent::Core(Event::Key(Key::End)) => input.end(),
-                UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
-                UIEvent::Core(Event::Key(Key::Down)) => input.next(),
-                UIEvent::Core(Event::Key(Key::Left)) => input.left(),
-                UIEvent::Core(Event::Key(Key::Right)) => input.right(),
-                UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
-                UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
-                UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
-                UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
-                UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
-                UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
-                UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
-                UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
-                UIEvent::Core(Event::Key(Key::CtrlLeft)) => input.word_left(),
-                UIEvent::Core(Event::Key(Key::CtrlRight)) => input.word_right(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                })) => input.key(*c),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char(c),
+                    modifiers: KeyModifiers::SHIFT,
+                    ..
+                })) => input.key(*c),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Backspace,
+                    ..
+                })) => input.backspace(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Delete,
+                    ..
+                })) => input.delete(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Home,
+                    ..
+                })) => input.home(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::End, ..
+                })) => input.end(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Up, ..
+                })) => input.previous(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Down,
+                    ..
+                })) => input.next(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Left,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                })) => input.left(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                })) => input.right(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('a'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.home(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('b'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.left(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('e'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.end(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('f'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.right(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('h'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.backspace(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('w'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.backward_delete_word(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('u'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.delete_from_cursor_to_start(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Char('k'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.delete_from_cursor_to_end(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Left,
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.word_left(),
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Right,
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                })) => input.word_right(),
                 UIEvent::Validate(result) => {
                     let mut result = result.borrow_mut();
                     result.replace(input.validate());
@@ -1173,10 +1265,16 @@ impl ModTrait for UIMod {
                                 Message::Log(message.clone()),
                             ));
                         }
-                        UIEvent::Core(Event::Key(Key::PageUp)) => {
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp,
+                            ..
+                        })) => {
                             view.page_up();
                         }
-                        UIEvent::Core(Event::Key(Key::PageDown)) => {
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageDown,
+                            ..
+                        })) => {
                             view.page_down();
                         }
                         UIEvent::NormalCommand(cmd) => match cmd {
@@ -1462,7 +1560,10 @@ impl ModTrait for UIMod {
             }
             Event::Key(key) => {
                 match key {
-                    Key::Char('\t') => {
+                    KeyEvent {
+                        code: KeyCode::Char('\t'),
+                        ..
+                    } => {
                         let result = Rc::new(RefCell::new(None));
 
                         let (raw_buf, cursor, password) = {
@@ -1473,7 +1574,10 @@ impl ModTrait for UIMod {
                         };
 
                         if password {
-                            aparte.schedule(Event::Key(Key::Char('\t')));
+                            aparte.schedule(Event::Key(KeyEvent::new(
+                                KeyCode::Char('\t'),
+                                KeyModifiers::NONE,
+                            )));
                         } else {
                             let window = self.current_window.clone().unwrap();
                             let account = match self.conversations.get(&window) {
@@ -1491,7 +1595,10 @@ impl ModTrait for UIMod {
                             });
                         }
                     }
-                    Key::Char('\n') => {
+                    KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    } => {
                         let result = Rc::new(RefCell::new(None));
                         // TODO avoid direct send to root, should go back to main event loop
                         self.root.event(&mut UIEvent::Validate(Rc::clone(&result)));
@@ -1572,7 +1679,11 @@ impl ModTrait for UIMod {
                             }
                         }
                     }
-                    Key::Alt('a') => {
+                    KeyEvent {
+                        code: KeyCode::Char('a'),
+                        modifiers: KeyModifiers::ALT,
+                        ..
+                    } => {
                         if !self.unread_windows.is_empty() {
                             let next = {
                                 let mut sorted = self.unread_windows.iter().collect::<Vec<_>>();
@@ -1633,105 +1744,14 @@ impl fmt::Display for UIMod {
     }
 }
 
-struct TermionEventStream {
-    channel: mpsc::Receiver<Result<u8, IoError>>,
-    waker: Arc<AtomicWaker>,
-}
-
-impl TermionEventStream {
-    pub fn new() -> Self {
-        let (send, recv) = mpsc::channel();
-        let waker = Arc::new(AtomicWaker::new());
-
-        let waker_for_tty = waker.clone();
-        thread::spawn(move || {
-            let mut input = get_tty().expect("cannot get tty for stdin reading");
-            let mut buf = [0u8; 256];
-            loop {
-                match input.read(&mut buf[..]) {
-                    Ok(n) => {
-                        for byte in buf[..n].iter() {
-                            if send.send(Ok(*byte)).is_err() {
-                                // channel has been closed, get out
-                                return;
-                            }
-                        }
-                        waker_for_tty.wake();
-                    }
-                    Err(err) => match err.kind() {
-                        IoErrorKind::Interrupted => continue,
-                        _ => {
-                            log::error!("Cannot read input pipe: {}", err);
-                            break;
-                        }
-                    },
-                }
-            }
-        });
-
-        Self {
-            channel: recv,
-            waker,
-        }
-    }
-}
-
-struct IterWrapper<'a, T> {
-    inner: &'a mut mpsc::Receiver<T>,
-}
-
-impl<'a, T> IterWrapper<'a, T> {
-    fn new(inner: &'a mut mpsc::Receiver<T>) -> Self {
-        Self { inner }
-    }
-}
-
-#[allow(clippy::needless_lifetimes)]
-impl<'a, T> Iterator for IterWrapper<'a, T> {
-    type Item = T;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.try_recv().ok()
-    }
-}
-
-impl Stream for TermionEventStream {
-    type Item = TermionEvent;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let byte = match self.channel.try_recv() {
-            Ok(Ok(byte)) => byte,
-            Ok(Err(_)) => return Poll::Ready(None),
-            Err(mpsc::TryRecvError::Empty) => {
-                self.waker.register(cx.waker());
-                return Poll::Pending;
-            }
-            Err(mpsc::TryRecvError::Disconnected) => return Poll::Ready(None),
-        };
-
-        let mut iter = IterWrapper::new(&mut self.channel);
-        match termion_parse_event(byte, &mut iter) {
-            Ok(event) => Poll::Ready(Some(event)),
-            Err(_) if byte == b'\x1B' => {
-                // Lone ESC byte: no further bytes in channel, so this is a
-                // standalone Escape keypress (termion errors on ESC + None).
-                Poll::Ready(Some(TermionEvent::Key(Key::Esc)))
-            }
-            Err(_) => {
-                self.waker.register(cx.waker());
-                Poll::Pending
-            }
-        }
-    }
-}
-
 pub struct EventStream {
-    inner: TermionEventStream,
+    inner: CrosstermEventStream,
 }
 
 impl EventStream {
     pub fn new() -> Self {
         Self {
-            inner: TermionEventStream::new(),
+            inner: CrosstermEventStream::new(),
         }
     }
 }
@@ -1747,41 +1767,13 @@ impl Stream for EventStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(TermionEvent::Key(key))) => match key {
-                Key::Char(c) => Poll::Ready(Some(Event::Key(Key::Char(c)))),
-                Key::Backspace => Poll::Ready(Some(Event::Key(Key::Backspace))),
-                Key::Delete => Poll::Ready(Some(Event::Key(Key::Delete))),
-                Key::Home => Poll::Ready(Some(Event::Key(Key::Home))),
-                Key::End => Poll::Ready(Some(Event::Key(Key::End))),
-                Key::Up => Poll::Ready(Some(Event::Key(Key::Up))),
-                Key::Down => Poll::Ready(Some(Event::Key(Key::Down))),
-                Key::Left => Poll::Ready(Some(Event::Key(Key::Left))),
-                Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
-                Key::CtrlLeft => Poll::Ready(Some(Event::Key(Key::CtrlLeft))),
-                Key::CtrlRight => Poll::Ready(Some(Event::Key(Key::CtrlRight))),
-                Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
-                Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
-                Key::PageUp => Poll::Ready(Some(Event::Key(Key::PageUp))),
-                Key::PageDown => Poll::Ready(Some(Event::Key(Key::PageDown))),
-                Key::Esc => Poll::Ready(Some(Event::Key(Key::Esc))),
-                _ => {
-                    self.inner.waker.register(cx.waker());
-                    Poll::Pending
-                }
-            },
-            Poll::Ready(Some(TermionEvent::Mouse(_))) => {
-                self.inner.waker.register(cx.waker());
+            Poll::Ready(Some(Ok(CrosstermEvent::Key(key)))) => Poll::Ready(Some(Event::Key(key))),
+            Poll::Ready(Some(Ok(_))) => {
+                cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Poll::Ready(Some(TermionEvent::Unsupported(_))) => {
-                self.inner.waker.register(cx.waker());
-                Poll::Pending
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => {
-                self.inner.waker.register(cx.waker());
-                Poll::Pending
-            }
+            Poll::Ready(Some(Err(_))) | Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

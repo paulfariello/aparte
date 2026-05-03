@@ -12,12 +12,11 @@ image = ["dep:sixel-image"]
 # the query is racy and slow whenever another thread also reads /dev/tty
 # (e.g. aparte's key-reader), and is intended only for interactive
 # diagnosis of widechar mis-renders.
-widechar-cursor-check = []
 
 [dependencies]
 linked-hash-map = "^0.5"
 log = "^0.4"
-termion = { git = "https://gitlab.redox-os.org/redox-os/termion.git", rev = "1ce26d61" } # "3.0.0" + ctrl-arrow
+crossterm = "0.28"
 unicode-segmentation = "^1.6"
 anyhow = "^1.0"
 itertools = "^0.13"

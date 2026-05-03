@@ -4,6 +4,12 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+use crossterm::{
+    cursor::{Hide, MoveTo, Show},
+    style::{Attribute, SetAttribute},
+    terminal::{Clear, ClearType},
+};
+
 use crate::{
     charxel::{Charxel, Grapheme, IntoCharxels},
     BgColor, CursorPos, Dimensions, FgColor, Style,
@@ -187,11 +193,7 @@ impl OffscreenRenderBuffer {
     {
         log::trace!("Diff render");
         for diff in diffs {
-            let _ = write!(
-                screen,
-                "{}",
-                termion::cursor::Goto(diff.pos.left + 1, diff.pos.top + 1)
-            );
+            let _ = write!(screen, "{}", MoveTo(diff.pos.left, diff.pos.top));
             Self::render_chunk(screen, &diff.charxels);
         }
     }
@@ -236,7 +238,7 @@ impl OffscreenRenderBuffer {
         let mut current_styles: Option<HashSet<Style>> = None;
         for charxel in chunk {
             if current_styles.as_ref() != Some(&charxel.styles) {
-                let _ = write!(screen, "{}", termion::style::Reset);
+                let _ = write!(screen, "{}", SetAttribute(Attribute::Reset));
                 current_bg = None;
                 current_fg = None;
                 for style in &charxel.styles {
@@ -258,7 +260,7 @@ impl OffscreenRenderBuffer {
 
     fn render_line<W>(screen: &mut W, line: &[Charxel])
     where
-        W: std::io::Write + termion::cursor::DetectCursorPos,
+        W: std::io::Write,
     {
         // Like render_chunk but skips continuation placeholder cells that were written
         // by ScreenFrame::write() for wide (multi-column) characters.
@@ -266,20 +268,6 @@ impl OffscreenRenderBuffer {
         let mut current_fg = None;
         let mut current_styles: Option<HashSet<Style>> = None;
         let mut skip = 0u16;
-
-        // Optional widechar cursor-advance verification. Only enabled with
-        // the `widechar-cursor-check` feature because the cursor_pos() call
-        // (DSR CSI 6 n) is unreliable when another thread is also reading
-        // from /dev/tty and adds a ~100 ms termion timeout per render line
-        // when the response is stolen — which slowed first-frame rendering
-        // by ~2 s per full render in aparte's main loop.
-        #[cfg(feature = "widechar-cursor-check")]
-        let start_pos = {
-            let _ = screen.flush();
-            screen.cursor_pos().ok()
-        };
-        #[cfg(feature = "widechar-cursor-check")]
-        let mut expected_advance: u16 = 0;
 
         for charxel in line {
             if skip > 0 {
@@ -289,7 +277,7 @@ impl OffscreenRenderBuffer {
             let w = charxel.display_width();
             skip = w.saturating_sub(1);
             if current_styles.as_ref() != Some(&charxel.styles) {
-                let _ = write!(screen, "{}", termion::style::Reset);
+                let _ = write!(screen, "{}", SetAttribute(Attribute::Reset));
                 current_bg = None;
                 current_fg = None;
                 for style in &charxel.styles {
@@ -306,38 +294,17 @@ impl OffscreenRenderBuffer {
                 current_fg = Some(charxel.foreground);
             }
             let _ = write!(screen, "{}", charxel.grapheme);
-            #[cfg(feature = "widechar-cursor-check")]
-            {
-                expected_advance += w;
-            }
-        }
-
-        #[cfg(feature = "widechar-cursor-check")]
-        {
-            if let Some((start_col, start_row)) = start_pos {
-                let _ = screen.flush();
-                if let Ok((end_col, end_row)) = screen.cursor_pos() {
-                    if end_row == start_row {
-                        let actual_advance = end_col.saturating_sub(start_col);
-                        assert_eq!(
-                            actual_advance, expected_advance,
-                            "render_line widechar mismatch (row {}, start_col {}, end_col {})",
-                            start_row, start_col, end_col
-                        );
-                    }
-                }
-            }
         }
     }
 
     fn full_render<W>(&self, screen: &mut W)
     where
-        W: std::io::Write + termion::cursor::DetectCursorPos,
+        W: std::io::Write,
     {
         log::trace!("Full render");
-        let _ = write!(screen, "{}", termion::cursor::Hide,);
-        let _ = write!(screen, "{}", termion::cursor::Goto(1, 1));
-        let _ = write!(screen, "{}", termion::clear::All);
+        let _ = write!(screen, "{}", Hide);
+        let _ = write!(screen, "{}", MoveTo(0, 0));
+        let _ = write!(screen, "{}", Clear(ClearType::All));
 
         for line in self.lines.iter() {
             Self::render_line(screen, &line.charxels);
@@ -352,14 +319,14 @@ impl OffscreenRenderBuffer {
         let _ = write!(
             screen,
             "{}{}",
-            termion::cursor::Goto(self.cursor.left + 1, self.cursor.top + 1),
-            termion::cursor::Show
+            MoveTo(self.cursor.left, self.cursor.top),
+            Show
         );
     }
 
     pub fn render<W>(&self, screen: &mut W, reference_screen: &mut Self)
     where
-        W: std::io::Write + termion::cursor::DetectCursorPos,
+        W: std::io::Write,
     {
         let mut cursor_moved = false;
         if self.size != reference_screen.size {

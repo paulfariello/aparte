@@ -118,7 +118,7 @@ impl Harness {
     pub fn send_command(&self, cmd: &str) {
         let mut w = self.writer.lock().unwrap();
         let _ = w.write_all(cmd.as_bytes());
-        let _ = w.write_all(b"\n");
+        let _ = w.write_all(b"\r");
         let _ = w.flush();
     }
 
@@ -131,7 +131,7 @@ impl Harness {
     pub fn shutdown(mut self) {
         {
             let mut w = self.writer.lock().unwrap();
-            let _ = w.write_all(b"/quit\n");
+            let _ = w.write_all(b"/quit\r");
             let _ = w.flush();
         }
         let deadline = Instant::now() + Duration::from_millis(800);

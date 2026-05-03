@@ -944,14 +944,9 @@ impl MessageView {
     fn measure_image(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         let image = self.image.read().unwrap();
         let image = image.as_ref().unwrap();
-        let term_size_pixel =
-            termion::terminal_size_pixels().expect("Can't get terminal pixel size");
-        let term_size = termion::terminal_size().expect("Can't get terminal size");
+        let ws = crossterm::terminal::window_size().expect("Can't get terminal size");
 
-        let resolution = (
-            term_size_pixel.0 / term_size.0,
-            term_size_pixel.1 / term_size.1,
-        );
+        let resolution = (ws.width / ws.columns, ws.height / ws.rows);
 
         let (x, y) = image.pixel_size();
 
