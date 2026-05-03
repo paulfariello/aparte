@@ -1845,9 +1845,7 @@ impl AparteAsync {
         self.iq_tx
             .send((account.clone(), envelope))
             .map_err(|_| IqFailure::LostWorker)?;
-        let token = token_rx
-            .await
-            .expect("connection task dropped before returning IqResponseToken");
+        let token = token_rx.await.map_err(|_| IqFailure::LostWorker)?;
         token.await
     }
 
