@@ -1247,6 +1247,9 @@ impl Aparte {
                 }
             }
         });
+
+        let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
     }
 
     pub fn start(&mut self) {
