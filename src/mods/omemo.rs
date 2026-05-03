@@ -117,6 +117,34 @@ Examples:
     }
 );
 
+command_def!(
+    omemo_debug,
+    r#"/omemo debug
+
+Description:
+    Show OMEMO debug information for the current conversation.
+    Fetches the device list and own bundle from the server and
+    shows local session state for all known devices.
+
+Examples:
+    /omemo debug
+"#,
+    {},
+    |aparte, _command| {
+        let current = {
+            let ui = aparte.get_mod::<UIMod>();
+            ui.current_window().cloned()
+        };
+        if let Some(account) = aparte.current_account() {
+            let context = current
+                .filter(|w| w != "console")
+                .and_then(|w| BareJid::from_str(&w).ok());
+            aparte.schedule(Event::Omemo(OmemoEvent::Debug { account, context }));
+        }
+        Ok(())
+    }
+);
+
 command_def!(omemo,
 r#"/omemo enable"#,
 {
@@ -124,6 +152,7 @@ r#"/omemo enable"#,
         children: {
             "enable": omemo_enable,
             "fingerprint": omemo_fingerprint,
+            "debug": omemo_debug,
         }
     },
 });
@@ -137,6 +166,10 @@ pub enum OmemoEvent {
     ShowFingerprints {
         account: Account,
         jid: Option<BareJid>,
+    },
+    Debug {
+        account: Account,
+        context: Option<BareJid>,
     },
 }
 
@@ -1005,6 +1038,94 @@ impl OmemoMod {
         Ok(())
     }
 
+    async fn debug_info(
+        aparte: &mut AparteAsync,
+        signal_store: &SignalStorage,
+        account: &Account,
+        context: Option<&BareJid>,
+        muc_map: Option<NickToJid>,
+    ) -> Result<()> {
+        // Own device
+        let own_device = signal_store
+            .storage
+            .get_omemo_own_device(account)?
+            .context("OMEMO not configured")?;
+        let device_id: u32 = own_device
+            .id
+            .try_into()
+            .context("Corrupted own device id")?;
+        let identity = own_device.identity.context("Missing identity")?;
+        let identity_key_pair = IdentityKeyPair::try_from(identity.as_ref())?;
+        let fp = fingerprint(identity_key_pair.public_key());
+        crate::info!(aparte, "=== OMEMO debug: {account} ===");
+        crate::info!(aparte, "Own device ID : {device_id}");
+        crate::info!(aparte, "Own fingerprint: {fp}");
+
+        // Server device list
+        match Self::get_device_list(aparte, account, &account.to_bare()).await {
+            Ok(list) => {
+                let ids: Vec<String> = list.devices.iter().map(|d| d.id.to_string()).collect();
+                crate::info!(aparte, "Server device list: [{}]", ids.join(", "));
+                if list.devices.iter().any(|d| d.id == device_id) {
+                    crate::info!(aparte, "✓ Own device is in server list");
+                } else {
+                    crate::info!(aparte, "✗ Own device is NOT in server list");
+                }
+            }
+            Err(e) => crate::info!(aparte, "Failed to fetch server device list: {e}"),
+        }
+
+        // Own bundle on server
+        match Self::get_bundle(aparte, account, &account.to_bare(), device_id).await {
+            Ok(Some(bundle)) => {
+                let n = bundle.prekeys.as_ref().map(|p| p.keys.len()).unwrap_or(0);
+                crate::info!(aparte, "✓ Bundle published ({n} prekeys)");
+            }
+            Ok(None) => crate::info!(aparte, "✗ No bundle found on server"),
+            Err(e) => crate::info!(aparte, "Failed to fetch bundle: {e}"),
+        }
+
+        // Session state for the current conversation
+        if let Some(ctx) = context {
+            crate::info!(aparte, "--- Sessions for {ctx} ---");
+            let member_jids: Vec<BareJid> = match &muc_map {
+                Some(map) => map
+                    .read()
+                    .expect("nick_to_jid lock poisoned")
+                    .values()
+                    .cloned()
+                    .collect(),
+                None => vec![ctx.clone()],
+            };
+
+            if member_jids.is_empty() {
+                crate::info!(aparte, "No members with known real JIDs");
+            }
+
+            for member_jid in &member_jids {
+                let devices = signal_store
+                    .storage
+                    .get_omemo_contact_devices(account, member_jid)?;
+                if devices.is_empty() {
+                    crate::info!(aparte, "{member_jid}: no devices in local storage");
+                } else {
+                    for device in &devices {
+                        let dev_id: u32 = device.id.try_into().unwrap_or(0);
+                        let addr = ProtocolAddress::new(member_jid.to_string(), dev_id.into());
+                        let has_session = signal_store
+                            .storage
+                            .load_omemo_session(account, &addr)?
+                            .is_some();
+                        let icon = if has_session { "✓" } else { "✗" };
+                        crate::info!(aparte, "{member_jid} device {dev_id}: {icon} session");
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn restore_sessions(&mut self, aparte: &mut Aparte, account: &Account) -> Result<()> {
         let signal_store = self
             .signal_stores
@@ -1750,6 +1871,35 @@ impl ModTrait for OmemoMod {
                         crate::error!(aparte, e, "Cannot get own OMEMO fingerprint");
                     }
                 }
+                OmemoEvent::Debug { account, context } => match self.signal_stores.get(account) {
+                    None => crate::info!(aparte, "OMEMO not configured for {account}"),
+                    Some(signal_store) => {
+                        let mut async_aparte = aparte.proxy();
+                        let account = account.clone();
+                        let context = context.clone();
+                        let muc_map = context.as_ref().and_then(|ctx| {
+                            self.muc_occupant_maps
+                                .get(&(account.clone(), ctx.clone()))
+                                .cloned()
+                        });
+                        Aparte::spawn({
+                            let signal_store = SignalStorage::clone(signal_store);
+                            async move {
+                                if let Err(err) = Self::debug_info(
+                                    &mut async_aparte,
+                                    &signal_store,
+                                    &account,
+                                    context.as_ref(),
+                                    muc_map,
+                                )
+                                .await
+                                {
+                                    crate::error!(async_aparte, err, "OMEMO debug failed");
+                                }
+                            }
+                        });
+                    }
+                },
             },
             //Event::PubSub { account: _, from: Some(from), event } => match event {
             //    pubsub::PubSubEvent::PublishedItems { node, items } => {
