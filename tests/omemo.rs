@@ -1,16 +1,21 @@
 mod common;
 
+use std::convert::TryFrom;
 use std::thread;
 use std::time::Duration;
 
 use tokio_xmpp::xmlstream::XmppStreamElement;
 use xmpp_parsers::{
     jid::{BareJid, Jid},
+    legacy_omemo,
     message::{Id, Message},
+    muc::user::{Affiliation, Role},
 };
 
 use common::omemo::ContactKeys;
-use common::xmpp_fixture::XmppFixture;
+use common::xmpp_fixture::{muc_join_presence_with_jid, room_subject_message, XmppFixture};
+
+const BOUND_JID: &str = "user@localhost/aparte_test";
 
 fn message_has_omemo(msg: &xmpp_parsers::message::Message) -> bool {
     msg.payloads
@@ -116,4 +121,107 @@ fn omemo_incoming_decrypted() {
         eprintln!("{}", common::describe(screen.screen()));
     }
     assert!(lock_shown, "🔒 not shown for incoming OMEMO message");
+}
+
+/// Sending an OMEMO message in a MUC produces an encrypted stanza that includes a key
+/// for each occupant's device and that the occupant can actually decrypt.
+#[test]
+fn omemo_muc_outgoing_encrypted() {
+    let mut contact = ContactKeys::generate();
+    let contact_jid_str = "contact@localhost";
+
+    let (fixture, mut capture) = XmppFixture::new_with_omemo_contact(
+        contact_jid_str,
+        contact.device_id,
+        contact.bundle.clone(),
+    );
+
+    // Wait for aparte to publish its own bundle so we know configure() finished.
+    let (aparte_device_id, _aparte_bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    let room = "room@conference.localhost";
+
+    // Join the MUC.
+    fixture.send_command(&format!("/join {room}"));
+    thread::sleep(Duration::from_millis(400));
+
+    // Self-presence (real JID must be a full JID so conversation.rs converts it to bare).
+    fixture.inject(muc_join_presence_with_jid(
+        &format!("{room}/user"),
+        BOUND_JID,
+        Affiliation::Member,
+        Role::Participant,
+        "user@localhost/aparte",
+    ));
+
+    // Contact's presence with their real JID — this is what OMEMO uses to look up their bundle.
+    fixture.inject(muc_join_presence_with_jid(
+        &format!("{room}/contact"),
+        BOUND_JID,
+        Affiliation::Member,
+        Role::Participant,
+        &format!("{contact_jid_str}/desktop"),
+    ));
+
+    // Room subject marks the join as complete in the UI.
+    fixture.inject(room_subject_message(
+        &format!("{room}/user"),
+        BOUND_JID,
+        "subj-1",
+        "Test room",
+    ));
+    thread::sleep(Duration::from_millis(300));
+
+    // Enable OMEMO — this triggers start_session() for each occupant with a known real JID.
+    fixture.send_command(&format!("/omemo enable {room}"));
+    // Give start_session() time to fetch the contact's device list + bundle and build a session.
+    thread::sleep(Duration::from_secs(4));
+
+    fixture.switch_window(room);
+    fixture.send_command("hello encrypted muc");
+
+    let encrypted_msg = capture.recv_message_matching(message_has_omemo, Duration::from_secs(5));
+
+    if encrypted_msg.is_none() {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(
+        encrypted_msg.is_some(),
+        "no OMEMO-encrypted groupchat message was sent"
+    );
+
+    let msg = encrypted_msg.unwrap();
+    let encrypted = msg
+        .payloads
+        .iter()
+        .find_map(|p| legacy_omemo::Encrypted::try_from(p.clone()).ok())
+        .expect("no <encrypted> element in the groupchat stanza");
+
+    // The encrypted message must include a key for the contact's device.
+    assert!(
+        encrypted
+            .header
+            .keys
+            .iter()
+            .any(|k| k.rid == contact.device_id),
+        "encrypted groupchat message has no key for contact device {}; keys present: {:?}",
+        contact.device_id,
+        encrypted
+            .header
+            .keys
+            .iter()
+            .map(|k| k.rid)
+            .collect::<Vec<_>>(),
+    );
+
+    // The contact must be able to decrypt the message end-to-end.
+    let aparte_bare = BareJid::new("user@localhost").expect("bare jid");
+    let plaintext = contact
+        .decrypt_from(&aparte_bare, aparte_device_id, &encrypted)
+        .expect("contact could not decrypt the MUC message");
+    assert_eq!(
+        plaintext, "hello encrypted muc",
+        "decrypted MUC message body mismatch"
+    );
 }

@@ -1362,7 +1362,7 @@ impl OmemoMod {
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Result<()> {
         log::info!("Publish device {device_id}'s bundle");
-        let _ = aparte
+        match aparte
             .iq(
                 account,
                 Self::publish_bundle_iq(
@@ -1375,7 +1375,23 @@ impl OmemoMod {
                     pre_keys,
                 ),
             )
-            .await;
+            .await
+        {
+            Ok(IqResponse::Result(_)) => {
+                log::info!("Bundle for device {device_id} published successfully")
+            }
+            Ok(IqResponse::Error(error)) => {
+                let text = match i18n::get_best(&error.texts, vec![]) {
+                    Some((_, text)) => text.to_string(),
+                    None => format!("{:?}", error.defined_condition),
+                };
+                log::error!(
+                    "Failed to publish bundle for device {device_id}: {}: {text}",
+                    error.type_
+                );
+            }
+            Err(e) => log::error!("Failed to publish bundle for device {device_id}: {e}"),
+        }
 
         Ok(())
     }
@@ -1396,16 +1412,25 @@ impl OmemoMod {
         list.devices.push(legacy_omemo::Device { id: device_id });
         log::debug!("{:?}", list);
 
-        let response = aparte
+        match aparte
             .iq(account, Self::set_devices_iq(&account.to_bare(), list))
-            .await;
-        log::debug!("{:?}", response);
-        // match response.payload {
-        //     IqType::Result(None) => todo!(),
-        //     IqType::Error(_) => todo!(),
-        //     _ => todo!(),
-        // }
-        // TODO publish device identity
+            .await
+        {
+            Ok(IqResponse::Result(_)) => {
+                log::info!("Device {device_id} registered successfully in device list")
+            }
+            Ok(IqResponse::Error(error)) => {
+                let text = match i18n::get_best(&error.texts, vec![]) {
+                    Some((_, text)) => text.to_string(),
+                    None => format!("{:?}", error.defined_condition),
+                };
+                log::error!(
+                    "Failed to register device {device_id}: {}: {text}",
+                    error.type_
+                );
+            }
+            Err(e) => log::error!("Failed to register device {device_id}: {e}"),
+        }
 
         Ok(())
     }
