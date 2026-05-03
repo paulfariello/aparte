@@ -15,7 +15,6 @@ use super::{
 };
 
 const MISSING_DIMENSIONS: &str = "Missing dimensions";
-const INVALID_VIEW: &str = "Invalid view detected";
 
 #[derive(Debug)]
 struct LayoutChild<I> {
@@ -348,12 +347,8 @@ where
         if self.children.is_empty() {
             None
         } else {
-            Some(
-                self.children
-                    .iter()
-                    .nth(self.bottom_visible_child_index)
-                    .expect(INVALID_VIEW),
-            )
+            let index = self.bottom_visible_child_index.min(self.children.len() - 1);
+            self.children.iter().nth(index)
         }
     }
 

@@ -515,11 +515,9 @@ impl std::cmp::Eq for Message {}
 
 impl Ord for Message {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.eq(other) {
-            Ordering::Equal
-        } else {
-            self.timestamp().cmp(other.timestamp())
-        }
+        self.timestamp()
+            .cmp(other.timestamp())
+            .then_with(|| self.id().cmp(other.id()))
     }
 }
 
