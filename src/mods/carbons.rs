@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -18,7 +19,9 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::mods::disco;
 
 #[derive(Default)]
-pub struct CarbonsMod {}
+pub struct CarbonsMod {
+    sent_ids: HashSet<String>,
+}
 
 impl CarbonsMod {
     fn enable(&self) -> Element {
@@ -80,14 +83,29 @@ impl ModTrait for CarbonsMod {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
                 self.handle_carbon(aparte, account, received.forwarded, archive);
             } else if let Ok(sent) = carbons::Sent::try_from(payload.clone()) {
-                self.handle_carbon(aparte, account, sent.forwarded, archive);
+                let already_sent = sent
+                    .forwarded
+                    .message
+                    .id
+                    .as_ref()
+                    .map(|id| self.sent_ids.contains(&id.0))
+                    .unwrap_or(false);
+                if !already_sent {
+                    self.handle_carbon(aparte, account, sent.forwarded, archive);
+                }
             }
         }
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
-        if let Event::Connected(account, _jid) = event {
-            aparte.send(account, self.enable());
+        match event {
+            Event::Connected(account, _jid) => {
+                aparte.send(account, self.enable());
+            }
+            Event::SendMessage(_, message) => {
+                self.sent_ids.insert(message.id().to_string());
+            }
+            _ => {}
         }
     }
 }

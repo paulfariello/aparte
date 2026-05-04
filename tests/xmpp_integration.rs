@@ -19,10 +19,13 @@ use xmpp_parsers::presence::Show;
 
 use common::describe;
 use common::grid_contains;
+use common::row_text;
 use common::xmpp_fixture::{
-    carbon_received, carbon_sent, chat_message, contact_offline_presence, contact_presence,
-    corrected_chat_message, xmpp, xmpp_with_contact, XmppFixture,
+    carbon_received, carbon_sent, carbon_sent_groupchat, chat_message, contact_offline_presence,
+    contact_presence, corrected_chat_message, muc_join_presence, xmpp, xmpp_with_contact,
+    XmppFixture,
 };
+use common::ROWS;
 
 /// Verify that carbon stanzas can be built and round-trip through xmpp-parsers.
 #[test]
@@ -338,6 +341,114 @@ fn outgoing_carbon_sent_appears_in_ui(xmpp: XmppFixture) {
     assert!(
         found,
         "carbon-sent message not in UI\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// A carbons::Sent copy of a message we sent on this device must not duplicate it in the UI.
+/// Regression: before the fix, the carbon copy was re-processed and could cause a decryption
+/// error or show the message a second time.
+#[test]
+fn carbon_sent_own_chat_message_deduplicated() {
+    let (xmpp, mut capture) = XmppFixture::new_with_omemo(&["contact@localhost"]);
+    thread::sleep(Duration::from_millis(300));
+
+    xmpp.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp.send_command("dedup-chat-9x7z");
+
+    // Capture the outgoing stanza to get the message ID assigned by aparte.
+    let sent = capture
+        .recv_message_matching(
+            |m| m.bodies.values().any(|b| b.contains("dedup-chat-9x7z")),
+            Duration::from_secs(5),
+        )
+        .expect("outgoing stanza not captured — is the mock server connected?");
+    let msg_id = sent.id.as_ref().expect("sent stanza has no id").0.clone();
+
+    assert!(
+        xmpp.wait_for("dedup-chat-9x7z", Duration::from_secs(5)),
+        "outgoing message did not appear in UI"
+    );
+
+    // Server echoes the message back as carbons::Sent with the same stanza ID.
+    xmpp.inject(carbon_sent(
+        "user@localhost",
+        "user@localhost/aparte_test",
+        "user@localhost/aparte_test",
+        "contact@localhost",
+        &msg_id,
+        "dedup-chat-9x7z",
+    ));
+    thread::sleep(Duration::from_millis(500));
+
+    let parser = xmpp.snapshot();
+    let count = (0..ROWS)
+        .filter(|&r| row_text(parser.screen(), r).contains("dedup-chat-9x7z"))
+        .count();
+    assert_eq!(
+        count,
+        1,
+        "message appeared {count} times; expected once (carbon copy was not deduplicated)\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// A carbons::Sent copy of a groupchat message we sent must not be re-processed.
+/// This is the primary bug: OMEMO-encrypted MUC messages can't be decrypted from
+/// their own carbon copy, because the crypto engine is keyed by room JID but the
+/// carbon's inner message has from=our_jid.
+#[test]
+fn carbon_sent_own_muc_message_deduplicated() {
+    let (xmpp, mut capture) = XmppFixture::new_with_omemo(&[]);
+    thread::sleep(Duration::from_millis(300));
+
+    let room = "dev@conference.localhost";
+    xmpp.send_command(&format!("/join {room}"));
+    thread::sleep(Duration::from_millis(400));
+    xmpp.inject(muc_join_presence(
+        &format!("{room}/user"),
+        "user@localhost/aparte_test",
+        xmpp_parsers::muc::user::Affiliation::Member,
+        xmpp_parsers::muc::user::Role::Participant,
+    ));
+    thread::sleep(Duration::from_millis(300));
+
+    xmpp.switch_window(room);
+    xmpp.send_command("dedup-muc-4k2q");
+
+    // Capture the outgoing groupchat stanza to get its ID.
+    let sent = capture
+        .recv_message_matching(
+            |m| m.bodies.values().any(|b| b.contains("dedup-muc-4k2q")),
+            Duration::from_secs(5),
+        )
+        .expect("outgoing MUC stanza not captured");
+    let msg_id = sent.id.as_ref().expect("sent stanza has no id").0.clone();
+
+    assert!(
+        xmpp.wait_for("dedup-muc-4k2q", Duration::from_secs(5)),
+        "outgoing MUC message did not appear in UI"
+    );
+
+    // Server echoes back a carbons::Sent wrapping the groupchat message.
+    xmpp.inject(carbon_sent_groupchat(
+        "user@localhost",
+        "user@localhost/aparte_test",
+        "user@localhost/aparte_test",
+        room,
+        &msg_id,
+        "dedup-muc-4k2q",
+    ));
+    thread::sleep(Duration::from_millis(500));
+
+    let parser = xmpp.snapshot();
+    let count = (0..ROWS)
+        .filter(|&r| row_text(parser.screen(), r).contains("dedup-muc-4k2q"))
+        .count();
+    assert_eq!(
+        count, 1,
+        "MUC message appeared {count} times; expected once (groupchat carbon copy was not deduplicated)\n{}",
         describe(parser.screen()),
     );
 }
