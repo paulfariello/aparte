@@ -160,8 +160,10 @@ impl ModTrait for MamMod {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Join {
-                account, channel, ..
-            } => {
+                account,
+                channel,
+                user_request,
+            } if *user_request => {
                 let query = Query {
                     jid: channel.to_bare(),
                     with: None,

@@ -84,6 +84,8 @@ enum UIEvent {
 
 struct TitleBar {
     name: Option<String>,
+    mode: Mode,
+    connection: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
     dimensions: Option<Dimensions>,
 }
@@ -92,6 +94,8 @@ impl TitleBar {
     fn new() -> Self {
         Self {
             name: None,
+            mode: Mode::Insert,
+            connection: None,
             subjects: HashMap::new(),
             dimensions: None,
         }
@@ -127,8 +131,37 @@ impl View<UIEvent, Theme> for TitleBar {
             self.dimensions
         );
 
+        frame.set_background(config.title_bar.bg);
+        frame.set_foreground(config.title_bar.fg);
+
+        let mut frame_space = frame.width();
+
+        let mode_label = match self.mode {
+            Mode::Insert => " INSERT ",
+            Mode::Normal => " NORMAL ",
+        };
+        let mode_charxels = mode_label
+            .with_style(Style::Bold)
+            .with_color(&config.title_bar_mode);
+        let mode_width = mode_charxels.display_width();
+        if frame.width() >= mode_width {
+            frame.write(&mode_charxels);
+            frame_space -= mode_width;
+        }
+
+        if let Some(connection) = &self.connection {
+            let connection = format!(" {} |", connection)
+                .into_charxels()
+                .with_color(&config.title_bar);
+            let connection_width = connection.display_width();
+            if frame_space > connection_width {
+                frame.write(&connection);
+                frame_space -= connection_width;
+            }
+        }
+
         if let Some(name) = &self.name {
-            let mut title = name.into_charxels().with_styles(&[Style::Bold]);
+            let mut title = format!(" {}", name).into_charxels();
 
             let subjects = self.subjects.get(name).unwrap();
             if !subjects.is_empty() {
@@ -140,16 +173,19 @@ impl View<UIEvent, Theme> for TitleBar {
                 }
             }
 
-            title.truncate(frame.width(), "…");
+            title.truncate(frame_space, "…");
+            title = title
+                .with_styles(&[Style::Bold])
+                .with_color(&config.title_bar);
             frame.write(title);
         }
-
-        frame.set_background(config.title_bar.bg);
-        frame.set_foreground(config.title_bar.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
         match event {
+            UIEvent::Core(Event::Connected(account, _)) => {
+                self.connection = Some(terminus::clean_str(&account.to_string()));
+            }
             UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_name(name);
             }
@@ -163,30 +199,29 @@ impl View<UIEvent, Theme> for TitleBar {
                         .collect(),
                 );
             }
+            UIEvent::ModeChange(mode) => {
+                self.mode = mode.clone();
+            }
             _ => {}
         }
     }
 }
 
 struct WinBar {
-    connection: Option<String>,
     windows: Vec<String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
     dimensions: Option<Dimensions>,
-    mode: Mode,
     command_buffer: String,
 }
 
 impl WinBar {
     pub fn new() -> Self {
         Self {
-            connection: None,
             windows: Vec::new(),
             current_window: None,
             highlighted: HashMap::new(),
             dimensions: None,
-            mode: Mode::Insert,
             command_buffer: String::new(),
         }
     }
@@ -235,17 +270,11 @@ impl View<UIEvent, Theme> for WinBar {
             std::any::type_name::<Self>(),
             self.dimensions
         );
+
         let mut frame_space = frame.width();
-        if let Some(connection) = &self.connection {
-            let connection = format!(" {}", connection).into_charxels();
-            frame.write(&connection);
-            frame_space -= connection.display_width();
-            log::debug!(
-                "connection len: {} ({})",
-                connection.display_width(),
-                frame_space
-            );
-        }
+
+        frame.set_background(config.win_bar.bg);
+        frame.set_foreground(config.win_bar.fg);
 
         let mut first = true;
         let mut remaining = self.highlighted.len();
@@ -305,27 +334,13 @@ impl View<UIEvent, Theme> for WinBar {
             frame.write("]");
         }
 
-        let mode_label = match self.mode {
-            Mode::Insert => "-- INSERT --",
-            Mode::Normal => "-- NORMAL --",
-        };
-        let mode_charxels = mode_label.with_style(Style::Bold);
-        let mode_width = mode_charxels.display_width();
-        if frame.width() >= mode_width {
-            frame.write_at((frame.width() - mode_width, 0u16), &mode_charxels);
-        }
-
         if !self.command_buffer.is_empty() {
-            let cmd_cx = self.command_buffer.as_str().with_style(Style::Bold);
-            let cmd_w = cmd_cx.display_width();
-            let total = mode_width + 1 + cmd_w;
-            if frame.width() >= total {
-                frame.write_at((frame.width() - total, 0u16), &cmd_cx);
+            let cmd_buf = self.command_buffer.as_str().with_style(Style::Bold);
+            let cmd_buf_width = cmd_buf.display_width();
+            if frame.width() >= cmd_buf_width {
+                frame.write_at((frame.width() - cmd_buf_width, 0u16), &cmd_buf);
             }
         }
-
-        frame.set_background(config.win_bar.bg);
-        frame.set_foreground(config.win_bar.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -339,17 +354,11 @@ impl View<UIEvent, Theme> for WinBar {
             UIEvent::Core(Event::Close(window)) => {
                 self.del_window(window);
             }
-            UIEvent::Core(Event::Connected(account, _)) => {
-                self.connection = Some(terminus::clean_str(&account.to_string()));
-            }
             UIEvent::Core(Event::Notification {
                 conversation,
                 important,
             }) => {
                 self.highlight_window(&conversation.get_jid().to_string(), *important);
-            }
-            UIEvent::ModeChange(mode) => {
-                self.mode = mode.clone();
             }
             UIEvent::CommandBufferUpdate(buf) => {
                 self.command_buffer = buf.clone();
@@ -861,6 +870,18 @@ impl UIMod {
                                     mam_requested = false;
                                 }
                             },
+                            UIEvent::Core(Event::ChangeWindow(name))
+                                if name == &channel_for_event.jid.to_string()
+                                    && view.first().is_none()
+                                    && !mam_requested =>
+                            {
+                                mam_requested = true;
+                                scheduler.schedule(Event::LoadChannelHistory {
+                                    account: channel_for_event.account.clone(),
+                                    jid: channel_for_event.jid.clone(),
+                                    from: None,
+                                });
+                            }
                             UIEvent::ModeChange(Mode::Insert) => {
                                 if let Some(i) = view.clear_selection() {
                                     if let Some(c) = view.child_at(i) {
@@ -1083,11 +1104,14 @@ impl ModTrait for UIMod {
             );
         }
 
-        let title_bar = TitleBar::new();
+        let win_bar = WinBar::new();
         let frame =
             FrameLayout::<UIEvent, String, Theme>::new().with_event(|frame, event| match event {
                 UIEvent::Core(Event::ChangeWindow(name)) => {
                     frame.set_current(name.to_string());
+                    for child in frame.iter_children_mut() {
+                        child.event(event);
+                    }
                 }
                 UIEvent::AddWindow(name, view) => {
                     let view = view.take().unwrap();
@@ -1124,7 +1148,7 @@ impl ModTrait for UIMod {
                     }
                 }
             });
-        let win_bar = WinBar::new();
+        let title_bar = TitleBar::new();
         let input = Input::new().with_event(|input, event| {
             if let UIEvent::Core(Event::Key(key)) = event {
                 log::debug!("Input event: {:?}", key);
@@ -1239,9 +1263,9 @@ impl ModTrait for UIMod {
             }
         });
 
-        self.root.push(title_bar, 0);
-        self.root.push(frame, 1);
         self.root.push(win_bar, 0);
+        self.root.push(frame, 1);
+        self.root.push(title_bar, 0);
         self.root.push(input, 0);
         self.root.set_focus(INPUT_INDEX);
 

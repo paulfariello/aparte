@@ -7,7 +7,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 #[cfg(feature = "image")]
 use sixel_image::SixelImage;
 
-use crate::{is_clean_str, BgColor, FgColor, Style};
+use crate::{is_clean_str, BgColor, ColorTuple, FgColor, Style};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grapheme(String);
@@ -50,6 +50,11 @@ impl Charxel {
             grapheme,
             ..Default::default()
         }
+    }
+
+    pub fn set_color(&mut self, color: ColorTuple) {
+        self.background = color.bg;
+        self.foreground = color.fg;
     }
 
     pub fn set_background(&mut self, color: BgColor) {
@@ -204,6 +209,15 @@ pub trait CharxelDisplay<C = ()> {
 
 pub trait IntoCharxels: Sized {
     fn into_charxels(self) -> Charxels;
+
+    fn with_color(self, color: &ColorTuple) -> Charxels {
+        let mut charxels = self.into_charxels();
+        for charxel in charxels.0.iter_mut() {
+            charxel.set_background(color.bg);
+            charxel.set_foreground(color.fg);
+        }
+        charxels
+    }
 
     fn with_background(self, background: BgColor) -> Charxels {
         let mut charxels = self.into_charxels();

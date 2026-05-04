@@ -2,52 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use hsluv::hsluv_to_rgb;
-use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 use sha1::{Digest, Sha1};
 use std::convert::TryInto;
 use terminus::{
     charxel::{Charxel, Charxels},
-    BgColor, Color, ConfigColor, FgColor,
+    Color, FgColor,
 };
 use unicode_segmentation::UnicodeSegmentation;
-
-pub fn deserialize_color<'de, C, D>(deserializer: D) -> Result<C, D::Error>
-where
-    D: Deserializer<'de>,
-    C: ConfigColor,
-    <C as ConfigColor>::Err: std::fmt::Display,
-{
-    let s: &str = de::Deserialize::deserialize(deserializer)?;
-    C::from_str(s).map_err(de::Error::custom)
-}
-
-pub fn serialize_color<C, S>(color: &C, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-    C: ConfigColor,
-{
-    let color = color.to_string();
-    ser::Serialize::serialize(&color, serializer)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColorTuple {
-    #[serde(serialize_with = "serialize_color")]
-    #[serde(deserialize_with = "deserialize_color")]
-    pub bg: BgColor,
-    #[serde(serialize_with = "serialize_color")]
-    #[serde(deserialize_with = "deserialize_color")]
-    pub fg: FgColor,
-}
-
-impl ColorTuple {
-    pub fn new(bg: Color, fg: Color) -> Self {
-        Self {
-            bg: BgColor(bg),
-            fg: FgColor(fg),
-        }
-    }
-}
 
 pub fn id_to_rgb(identifier: &str) -> Color {
     // Follow xep 0392 for color generation

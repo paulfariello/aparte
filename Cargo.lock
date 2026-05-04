@@ -3949,6 +3949,7 @@ dependencies = [
  "linked-hash-map",
  "log",
  "mockall",
+ "serde",
  "sixel-image",
  "test-log",
  "unicode-display-width",

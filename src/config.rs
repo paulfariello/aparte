@@ -3,10 +3,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use terminus::{BgColor, Color, FgColor, NamedColor};
+use terminus::{
+    deserialize_color, serialize_color, BgColor, Color, ColorTuple, FgColor, NamedColor,
+};
 
 use crate::account::ConnectionInfo;
-use crate::color::ColorTuple;
 
 fn true_() -> bool {
     true
@@ -67,27 +68,28 @@ pub fn builtin_theme(name: &str) -> Option<Theme> {
 pub struct Theme {
     pub title_bar: ColorTuple,
     pub win_bar: ColorTuple,
+    pub title_bar_mode: ColorTuple,
     pub roster: ColorTuple,
     pub occupants: ColorTuple,
     #[serde(default = "default_selected_message")]
-    #[serde(serialize_with = "crate::color::serialize_color")]
-    #[serde(deserialize_with = "crate::color::deserialize_color")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
     pub selected_message: BgColor,
     #[serde(default = "default_roster_available_fg")]
-    #[serde(serialize_with = "crate::color::serialize_color")]
-    #[serde(deserialize_with = "crate::color::deserialize_color")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
     pub roster_available_fg: FgColor,
     #[serde(default = "default_roster_unavailable_fg")]
-    #[serde(serialize_with = "crate::color::serialize_color")]
-    #[serde(deserialize_with = "crate::color::deserialize_color")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
     pub roster_unavailable_fg: FgColor,
     #[serde(default = "default_roster_group_fg")]
-    #[serde(serialize_with = "crate::color::serialize_color")]
-    #[serde(deserialize_with = "crate::color::deserialize_color")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
     pub roster_group_fg: FgColor,
     #[serde(default = "default_roster_role_fg")]
-    #[serde(serialize_with = "crate::color::serialize_color")]
-    #[serde(deserialize_with = "crate::color::deserialize_color")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
     pub roster_role_fg: FgColor,
 }
 
@@ -104,6 +106,10 @@ fn profanity() -> Theme {
             Color::Named(NamedColor::Black),
         ),
         win_bar: ColorTuple::new(
+            Color::Named(NamedColor::Blue),
+            Color::Named(NamedColor::Black),
+        ),
+        title_bar_mode: ColorTuple::new(
             Color::Named(NamedColor::Blue),
             Color::Named(NamedColor::Black),
         ),
@@ -178,8 +184,9 @@ fn catppuccin_mocha() -> Theme {
     let crust = Color::Rgb(17, 17, 27);
 
     Theme {
-        title_bar: ColorTuple::new(lavender, overlay_0),
-        win_bar: ColorTuple::new(crust, blue),
+        win_bar: ColorTuple::new(surface_0, lavender),
+        title_bar: ColorTuple::new(surface_0, lavender),
+        title_bar_mode: ColorTuple::new(lavender, base),
         roster: ColorTuple::new(mantle, text),
         occupants: ColorTuple::new(mantle, text),
         selected_message: BgColor(surface_1),
@@ -197,6 +204,10 @@ fn catppuccin_latte() -> Theme {
             Color::Rgb(76, 79, 105),   // Text
         ),
         win_bar: ColorTuple::new(
+            Color::Rgb(204, 208, 218), // Surface0
+            Color::Rgb(76, 79, 105),   // Text
+        ),
+        title_bar_mode: ColorTuple::new(
             Color::Rgb(204, 208, 218), // Surface0
             Color::Rgb(76, 79, 105),   // Text
         ),
@@ -223,6 +234,10 @@ fn catppuccin_frappe() -> Theme {
             Color::Rgb(198, 208, 245), // Text
         ),
         win_bar: ColorTuple::new(
+            Color::Rgb(65, 69, 89),    // Surface0
+            Color::Rgb(198, 208, 245), // Text
+        ),
+        title_bar_mode: ColorTuple::new(
             Color::Rgb(65, 69, 89),    // Surface0
             Color::Rgb(198, 208, 245), // Text
         ),
