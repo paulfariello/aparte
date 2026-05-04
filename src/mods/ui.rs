@@ -39,7 +39,7 @@ use xmpp_parsers::jid::{BareJid, Jid};
 
 use radix_trie::Trie;
 
-use crate::color::{id_to_rgb, ColorTuple};
+use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::config::{Config, Theme};
 use crate::conversation::{Channel, Chat, Conversation};
@@ -85,16 +85,14 @@ enum UIEvent {
 struct TitleBar {
     name: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
-    pub color: ColorTuple,
     dimensions: Option<Dimensions>,
 }
 
 impl TitleBar {
-    fn new(color: ColorTuple) -> Self {
+    fn new() -> Self {
         Self {
             name: None,
             subjects: HashMap::new(),
-            color,
             dimensions: None,
         }
     }
@@ -109,7 +107,7 @@ impl TitleBar {
     }
 }
 
-impl<C> View<UIEvent, C> for TitleBar {
+impl View<UIEvent, Theme> for TitleBar {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -122,7 +120,7 @@ impl<C> View<UIEvent, C> for TitleBar {
         self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, mut frame: ScreenFrame, _config: &C) {
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
@@ -146,8 +144,8 @@ impl<C> View<UIEvent, C> for TitleBar {
             frame.write(title);
         }
 
-        frame.set_background(self.color.bg);
-        frame.set_foreground(self.color.fg);
+        frame.set_background(config.title_bar.bg);
+        frame.set_foreground(config.title_bar.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -175,20 +173,18 @@ struct WinBar {
     windows: Vec<String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
-    pub color: ColorTuple,
     dimensions: Option<Dimensions>,
     mode: Mode,
     command_buffer: String,
 }
 
 impl WinBar {
-    pub fn new(color: ColorTuple) -> Self {
+    pub fn new() -> Self {
         Self {
             connection: None,
             windows: Vec::new(),
             current_window: None,
             highlighted: HashMap::new(),
-            color,
             dimensions: None,
             mode: Mode::Insert,
             command_buffer: String::new(),
@@ -220,7 +216,7 @@ impl WinBar {
     }
 }
 
-impl<C> View<UIEvent, C> for WinBar {
+impl View<UIEvent, Theme> for WinBar {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -233,7 +229,7 @@ impl<C> View<UIEvent, C> for WinBar {
         self.dimensions.replace(dimensions.clone());
     }
 
-    fn render(&self, mut frame: ScreenFrame, _config: &C) {
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
         log::debug!(
             "rendering {} at {:?}",
             std::any::type_name::<Self>(),
@@ -328,8 +324,8 @@ impl<C> View<UIEvent, C> for WinBar {
             }
         }
 
-        frame.set_background(self.color.bg);
-        frame.set_foreground(self.color.fg);
+        frame.set_background(config.win_bar.bg);
+        frame.set_foreground(config.win_bar.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -1087,7 +1083,7 @@ impl ModTrait for UIMod {
             );
         }
 
-        let title_bar = TitleBar::new(aparte.config.theme.title_bar.clone());
+        let title_bar = TitleBar::new();
         let frame =
             FrameLayout::<UIEvent, String, Theme>::new().with_event(|frame, event| match event {
                 UIEvent::Core(Event::ChangeWindow(name)) => {
@@ -1128,7 +1124,7 @@ impl ModTrait for UIMod {
                     }
                 }
             });
-        let win_bar = WinBar::new(aparte.config.theme.win_bar.clone());
+        let win_bar = WinBar::new();
         let input = Input::new().with_event(|input, event| {
             if let UIEvent::Core(Event::Key(key)) = event {
                 log::debug!("Input event: {:?}", key);

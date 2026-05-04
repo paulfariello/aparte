@@ -124,28 +124,69 @@ fn profanity() -> Theme {
 }
 
 fn catppuccin_mocha() -> Theme {
+    #[allow(unused_variables)]
+    let rosewater = Color::Rgb(245, 224, 220);
+    #[allow(unused_variables)]
+    let flamingo = Color::Rgb(242, 205, 205);
+    #[allow(unused_variables)]
+    let pink = Color::Rgb(245, 194, 231);
+    #[allow(unused_variables)]
+    let mauve = Color::Rgb(203, 166, 247);
+    #[allow(unused_variables)]
+    let red = Color::Rgb(243, 139, 168);
+    #[allow(unused_variables)]
+    let maroon = Color::Rgb(235, 160, 172);
+    #[allow(unused_variables)]
+    let peach = Color::Rgb(250, 179, 135);
+    #[allow(unused_variables)]
+    let yellow = Color::Rgb(249, 226, 175);
+    #[allow(unused_variables)]
+    let green = Color::Rgb(166, 227, 161);
+    #[allow(unused_variables)]
+    let teal = Color::Rgb(148, 226, 213);
+    #[allow(unused_variables)]
+    let sky = Color::Rgb(137, 220, 235);
+    #[allow(unused_variables)]
+    let sapphire = Color::Rgb(116, 199, 236);
+    #[allow(unused_variables)]
+    let blue = Color::Rgb(137, 180, 250);
+    #[allow(unused_variables)]
+    let lavender = Color::Rgb(180, 190, 254);
+    #[allow(unused_variables)]
+    let text = Color::Rgb(205, 214, 244);
+    #[allow(unused_variables)]
+    let subtext_1 = Color::Rgb(186, 194, 222);
+    #[allow(unused_variables)]
+    let subtext_0 = Color::Rgb(166, 173, 200);
+    #[allow(unused_variables)]
+    let overlay_2 = Color::Rgb(147, 153, 178);
+    #[allow(unused_variables)]
+    let overlay_1 = Color::Rgb(127, 132, 156);
+    #[allow(unused_variables)]
+    let overlay_0 = Color::Rgb(108, 112, 134);
+    #[allow(unused_variables)]
+    let surface_2 = Color::Rgb(88, 91, 112);
+    #[allow(unused_variables)]
+    let surface_1 = Color::Rgb(69, 71, 90);
+    #[allow(unused_variables)]
+    let surface_0 = Color::Rgb(49, 50, 68);
+    #[allow(unused_variables)]
+    let base = Color::Rgb(30, 30, 46);
+    #[allow(unused_variables)]
+    let mantle = Color::Rgb(24, 24, 37);
+    #[allow(unused_variables)]
+    let crust = Color::Rgb(17, 17, 27);
+
     Theme {
-        title_bar: ColorTuple::new(
-            Color::Rgb(30, 30, 46),    // Base
-            Color::Rgb(205, 214, 244), // Text
-        ),
-        win_bar: ColorTuple::new(
-            Color::Rgb(49, 50, 68),    // Surface0
-            Color::Rgb(205, 214, 244), // Text
-        ),
-        roster: ColorTuple::new(
-            Color::Rgb(24, 24, 37),    // Mantle
-            Color::Rgb(205, 214, 244), // Text
-        ),
-        occupants: ColorTuple::new(
-            Color::Rgb(24, 24, 37),    // Mantle
-            Color::Rgb(205, 214, 244), // Text
-        ),
-        selected_message: BgColor(Color::Rgb(69, 71, 90)), // Surface1
-        roster_available_fg: FgColor(Color::Rgb(166, 227, 161)), // Green
-        roster_unavailable_fg: FgColor(Color::Rgb(108, 112, 134)), // Overlay0
-        roster_group_fg: FgColor(Color::Rgb(203, 166, 247)), // Mauve
-        roster_role_fg: FgColor(Color::Rgb(203, 166, 247)), // Mauve
+        title_bar: ColorTuple::new(lavender, overlay_0),
+        win_bar: ColorTuple::new(crust, blue),
+        roster: ColorTuple::new(mantle, text),
+        occupants: ColorTuple::new(mantle, text),
+        selected_message: BgColor(surface_1),
+        roster_available_fg: FgColor(green),
+        roster_unavailable_fg: FgColor(overlay_0),
+        roster_group_fg: FgColor(mauve),
+        roster_role_fg: FgColor(mauve),
     }
 }
 
