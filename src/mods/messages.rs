@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use xmpp_parsers::delay::Delay;
@@ -10,12 +10,13 @@ use xmpp_parsers::ns;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
-use crate::message::Message;
+use crate::message::{Message, XmppMessageType};
 use crate::mods::disco;
 
 #[derive(Default)]
 pub struct MessagesMod {
     messages: HashMap<Option<Account>, HashMap<String, Message>>,
+    sent_muc_ids: HashSet<String>,
 }
 
 impl MessagesMod {
@@ -114,8 +115,16 @@ impl ModTrait for MessagesMod {
             }
             XmppParsersMessageType::Groupchat => {
                 if !message.bodies.is_empty() {
-                    if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
-                        aparte.schedule(Event::Message(Some(account.clone()), message));
+                    let is_own_echo = !archive
+                        && message
+                            .id
+                            .as_ref()
+                            .map(|id| self.sent_muc_ids.contains(&id.0))
+                            .unwrap_or(false);
+                    if !is_own_echo {
+                        if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
+                            aparte.schedule(Event::Message(Some(account.clone()), message));
+                        }
                     }
                 }
 
@@ -144,8 +153,16 @@ impl ModTrait for MessagesMod {
     }
 
     fn on_event(&mut self, _aparte: &mut Aparte, event: &Event) {
-        if let Event::Message(account, message) = event {
-            self.handle_message(account, message)
+        match event {
+            Event::Message(account, message) => self.handle_message(account, message),
+            Event::SendMessage(_, message) => {
+                if let Message::Xmpp(xmpp) = message {
+                    if xmpp.type_ == XmppMessageType::Channel {
+                        self.sent_muc_ids.insert(message.id().to_string());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

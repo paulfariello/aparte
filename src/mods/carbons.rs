@@ -10,7 +10,7 @@ use xmpp_parsers::carbons;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::forwarding::Forwarded;
 use xmpp_parsers::iq::Iq;
-use xmpp_parsers::message::Message as XmppParsersMessage;
+use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType};
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::ns;
 
@@ -81,8 +81,15 @@ impl ModTrait for CarbonsMod {
     ) {
         for payload in message.payloads.iter() {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
-                self.handle_carbon(aparte, account, received.forwarded, archive);
+                // XEP-0280: clients SHOULD ignore carbon copies of groupchat messages
+                if received.forwarded.message.type_ != MessageType::Groupchat {
+                    self.handle_carbon(aparte, account, received.forwarded, archive);
+                }
             } else if let Ok(sent) = carbons::Sent::try_from(payload.clone()) {
+                // XEP-0280: clients SHOULD ignore carbon copies of groupchat messages
+                if sent.forwarded.message.type_ == MessageType::Groupchat {
+                    continue;
+                }
                 let already_sent = sent
                     .forwarded
                     .message

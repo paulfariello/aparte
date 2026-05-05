@@ -21,9 +21,9 @@ use common::describe;
 use common::grid_contains;
 use common::row_text;
 use common::xmpp_fixture::{
-    carbon_received, carbon_sent, carbon_sent_groupchat, chat_message, contact_offline_presence,
-    contact_presence, corrected_chat_message, muc_join_presence, xmpp, xmpp_with_contact,
-    XmppFixture,
+    carbon_received, carbon_received_groupchat, carbon_sent, carbon_sent_groupchat, chat_message,
+    contact_offline_presence, contact_presence, corrected_chat_message, groupchat_message,
+    muc_join_presence, xmpp, xmpp_with_contact, XmppFixture,
 };
 use common::ROWS;
 
@@ -449,6 +449,100 @@ fn carbon_sent_own_muc_message_deduplicated() {
     assert_eq!(
         count, 1,
         "MUC message appeared {count} times; expected once (groupchat carbon copy was not deduplicated)\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// The MUC server echoes back your own groupchat message (from room/nick). When the echo
+/// carries the same stanza ID as the message we sent, it must be suppressed — we already
+/// showed it immediately via SendMessage.
+#[test]
+fn muc_own_message_echo_not_duplicated() {
+    let (xmpp, mut capture) = XmppFixture::new_with_omemo(&[]);
+    thread::sleep(Duration::from_millis(300));
+
+    let room = "dev@conference.localhost";
+    xmpp.send_command(&format!("/join {room}"));
+    thread::sleep(Duration::from_millis(400));
+    xmpp.inject(muc_join_presence(
+        &format!("{room}/user"),
+        "user@localhost/aparte_test",
+        xmpp_parsers::muc::user::Affiliation::Member,
+        xmpp_parsers::muc::user::Role::Participant,
+    ));
+    thread::sleep(Duration::from_millis(300));
+
+    xmpp.switch_window(room);
+    xmpp.send_command("echo-dedup-7z3x");
+
+    // Capture the outgoing stanza to learn the stanza ID assigned by aparte.
+    let sent = capture
+        .recv_message_matching(
+            |m| m.bodies.values().any(|b| b.contains("echo-dedup-7z3x")),
+            Duration::from_secs(5),
+        )
+        .expect("outgoing MUC stanza not captured");
+    let msg_id = sent.id.as_ref().expect("sent stanza has no id").0.clone();
+
+    assert!(
+        xmpp.wait_for("echo-dedup-7z3x", Duration::from_secs(5)),
+        "outgoing MUC message did not appear in UI"
+    );
+
+    // Inject the MUC server echo with the same stanza ID — this must be suppressed.
+    xmpp.inject(groupchat_message(
+        &format!("{room}/user"),
+        "user@localhost/aparte_test",
+        &msg_id,
+        "echo-dedup-7z3x",
+    ));
+    thread::sleep(Duration::from_millis(500));
+
+    let parser = xmpp.snapshot();
+    let count = (0..ROWS)
+        .filter(|&r| row_text(parser.screen(), r).contains("echo-dedup-7z3x"))
+        .count();
+    assert_eq!(
+        count, 1,
+        "MUC message appeared {count} times; expected once (server echo with same ID must be suppressed)\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// A carbons::Received wrapping a groupchat message must be silently ignored per
+/// XEP-0280 — the MUC server delivers it directly to all resources anyway.
+#[test]
+fn carbon_received_muc_message_ignored() {
+    let xmpp = XmppFixture::new(&[]);
+    thread::sleep(Duration::from_millis(300));
+
+    let room = "dev@conference.localhost";
+    xmpp.send_command(&format!("/join {room}"));
+    thread::sleep(Duration::from_millis(400));
+    xmpp.inject(muc_join_presence(
+        &format!("{room}/user"),
+        "user@localhost/aparte_test",
+        xmpp_parsers::muc::user::Affiliation::Member,
+        xmpp_parsers::muc::user::Role::Participant,
+    ));
+    thread::sleep(Duration::from_millis(300));
+    xmpp.switch_window(room);
+
+    // Inject a carbons::Received wrapping a groupchat message. This must be dropped.
+    xmpp.inject(carbon_received_groupchat(
+        "user@localhost",
+        "user@localhost/aparte_test",
+        &format!("{room}/contact"),
+        "user@localhost/aparte_test",
+        "carbon-muc-id-9f1w",
+        "carbon-muc-body-9f1w",
+    ));
+    thread::sleep(Duration::from_millis(500));
+
+    let parser = xmpp.snapshot();
+    assert!(
+        !(0..ROWS).any(|r| row_text(parser.screen(), r).contains("carbon-muc-body-9f1w")),
+        "groupchat carbons::Received should be ignored but message appeared in UI\n{}",
         describe(parser.screen()),
     );
 }
