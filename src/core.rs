@@ -1145,10 +1145,6 @@ impl Aparte {
                     frame_count += 1;
                     screen.dump_buffer(&reference_screen.dump_text(), frame_count);
                 }
-                #[allow(unreachable_code)]
-                let _ = execute!(screen, terminal::LeaveAlternateScreen);
-                #[allow(unreachable_code)]
-                let _ = terminal::disable_raw_mode();
             });
         }
 
@@ -1246,7 +1242,12 @@ impl Aparte {
             }
         });
 
-        let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen);
+        let _ = execute!(
+            std::io::stdout(),
+            crossterm::cursor::Show,
+            crossterm::cursor::SetCursorStyle::DefaultUserShape,
+            terminal::LeaveAlternateScreen
+        );
         let _ = terminal::disable_raw_mode();
     }
 

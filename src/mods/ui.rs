@@ -525,7 +525,11 @@ impl Drop for PanicHandler {
         // Reset terminal state before printing so output is visible regardless
         // of whether this is a clean shutdown or a crash. These are no-ops when
         // the terminal was never set up (e.g. in tests).
-        let _ = execute!(std::io::stdout(), terminal::LeaveAlternateScreen);
+        let _ = execute!(
+            std::io::stdout(),
+            crossterm::cursor::Show,
+            terminal::LeaveAlternateScreen
+        );
         let _ = terminal::disable_raw_mode();
 
         if let Some(panic) = self.panic.lock().expect("cannot lock panic").as_ref() {
