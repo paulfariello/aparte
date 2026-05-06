@@ -5,7 +5,7 @@ use std::{
 };
 
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
+    cursor::{Hide, MoveTo, SetCursorStyle, Show},
     style::{Attribute, SetAttribute},
     terminal::{Clear, ClearType},
 };
@@ -41,6 +41,7 @@ pub struct OffscreenRenderBuffer {
     lines: Vec<OffscreenLine>,
     size: ScreenSize,
     cursor: CursorPos,
+    show_cursor: bool,
     do_bell: AtomicBool,
 }
 
@@ -50,6 +51,7 @@ impl Clone for OffscreenRenderBuffer {
             lines: self.lines.clone(),
             size: self.size,
             cursor: self.cursor,
+            show_cursor: self.show_cursor,
             do_bell: AtomicBool::new(self.do_bell.load(std::sync::atomic::Ordering::Relaxed)),
         }
     }
@@ -58,6 +60,7 @@ impl Clone for OffscreenRenderBuffer {
         self.lines.clone_from(&source.lines);
         self.size = source.size;
         self.cursor = source.cursor;
+        self.show_cursor = source.show_cursor;
         self.do_bell.swap(
             source.do_bell.load(std::sync::atomic::Ordering::Relaxed),
             std::sync::atomic::Ordering::Relaxed,
@@ -130,6 +133,10 @@ impl OffscreenRenderBuffer {
 
     pub fn set_cursor(&mut self, pos: CursorPos) {
         self.cursor = pos;
+    }
+
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        self.show_cursor = visible;
     }
 
     pub fn dump_text(&self) -> String {
@@ -318,7 +325,8 @@ impl OffscreenRenderBuffer {
         log::trace!("Render cursor");
         let _ = write!(
             screen,
-            "{}{}",
+            "{}{}{}",
+            SetCursorStyle::SteadyBar,
             MoveTo(self.cursor.left, self.cursor.top),
             Show
         );
@@ -340,9 +348,17 @@ impl OffscreenRenderBuffer {
             cursor_moved = true;
         }
 
-        if cursor_moved || self.cursor != reference_screen.cursor {
-            self.render_cursor(screen);
+        if cursor_moved
+            || self.cursor != reference_screen.cursor
+            || self.show_cursor != reference_screen.show_cursor
+        {
+            if self.show_cursor {
+                self.render_cursor(screen);
+            } else {
+                let _ = write!(screen, "{}", Hide);
+            }
             reference_screen.cursor = self.cursor;
+            reference_screen.show_cursor = self.show_cursor;
         }
 
         if self
@@ -455,6 +471,10 @@ impl<'a> ScreenFrame<'a> {
 
     pub fn set_cursor(&mut self, position: CursorPos) {
         self.offscreen.set_cursor(position)
+    }
+
+    pub fn set_cursor_visible(&mut self, visible: bool) {
+        self.offscreen.set_cursor_visible(visible)
     }
 
     pub fn width(&self) -> u16 {

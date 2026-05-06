@@ -1301,6 +1301,8 @@ impl ModTrait for UIMod {
                     input.cursor = cursor.clone();
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+                UIEvent::ModeChange(Mode::Normal) => input.set_show_cursor(false),
+                UIEvent::ModeChange(Mode::Insert) => input.set_show_cursor(true),
                 _ => {}
             }
         });

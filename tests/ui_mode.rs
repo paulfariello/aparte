@@ -480,6 +480,62 @@ fn insert_mode_jk_do_not_move_message_selection() {
 }
 
 #[test]
+fn cursor_visible_in_insert_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+
+    h.shutdown();
+
+    assert!(
+        !screen.hide_cursor(),
+        "Cursor should be visible in INSERT mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn cursor_hidden_in_normal_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+
+    // wait_for_screen already confirmed the render completed (NORMAL indicator appeared),
+    // so the Hide escape has been sent by the time we snapshot.
+    let parser = h.snapshot();
+    let screen = parser.screen();
+
+    h.shutdown();
+
+    assert!(
+        screen.hide_cursor(),
+        "Cursor should be hidden in NORMAL mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn cursor_steady_bar_escape_sent_in_insert_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // SetCursorStyle::SteadyBar emits ESC [ 6 SP q  (DECSCUSR = 6)
+    let steady_bar: &[u8] = b"\x1b[6 q";
+    let bytes = h.bytes.lock().unwrap().clone();
+    let found = bytes.windows(steady_bar.len()).any(|w| w == steady_bar);
+
+    h.shutdown();
+
+    assert!(
+        found,
+        "SteadyBar escape (ESC[6 q) should have been sent during INSERT mode rendering"
+    );
+}
+
+#[test]
 #[allow(non_snake_case)]
 fn G_scrolls_to_newest_message() {
     let h = Harness::spawn("", &[]);

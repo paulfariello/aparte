@@ -31,6 +31,7 @@ pub struct Input<E> {
     //     |-----------|
     pub view: Cursor,
     pub event_handler: Option<EventHandler<Self, E>>,
+    pub show_cursor: bool,
     width: Cell<usize>,
     dimensions: Option<Dimensions>,
 }
@@ -52,9 +53,14 @@ impl<E> Input<E> {
             cursor: Cursor::new(0),
             view: Cursor::new(0),
             event_handler: None,
+            show_cursor: true,
             width: Cell::new(0),
             dimensions: None,
         }
+    }
+
+    pub fn set_show_cursor(&mut self, visible: bool) {
+        self.show_cursor = visible;
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
@@ -274,6 +280,7 @@ impl<E, C> View<E, C> for Input<E> {
                 });
             }
         }
+        frame.set_cursor_visible(self.show_cursor);
     }
 
     fn event(&mut self, event: &mut E) {
