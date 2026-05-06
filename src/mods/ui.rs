@@ -46,6 +46,7 @@ use crate::conversation::{Channel, Chat, Conversation};
 use crate::core::{Aparte, Event, ModTrait};
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
+use crate::mods::bookmarks::BookmarksMod;
 use crate::{contact, conversation};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -76,14 +77,20 @@ enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
-    AddWindow(String, Option<Box<dyn View<UIEvent, Theme>>>),
+    AddWindow(
+        String,
+        Option<String>,
+        Option<Box<dyn View<UIEvent, Theme>>>,
+    ),
     ModeChange(Mode),
     NormalCommand(NormalCommand),
     CommandBufferUpdate(String),
 }
 
 struct TitleBar {
-    name: Option<String>,
+    current_jid: Option<String>,
+    display_name: Option<String>,
+    display_names: HashMap<String, String>,
     mode: Mode,
     connection: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
@@ -93,7 +100,9 @@ struct TitleBar {
 impl TitleBar {
     fn new() -> Self {
         Self {
-            name: None,
+            current_jid: None,
+            display_name: None,
+            display_names: HashMap::new(),
             mode: Mode::Insert,
             connection: None,
             subjects: HashMap::new(),
@@ -101,9 +110,14 @@ impl TitleBar {
         }
     }
 
-    fn set_name(&mut self, name: &str) {
-        self.name = Some(name.to_string());
-        self.subjects.entry(name.to_string()).or_default();
+    fn set_window(&mut self, jid: &str) {
+        self.current_jid = Some(jid.to_string());
+        self.display_name = self
+            .display_names
+            .get(jid)
+            .cloned()
+            .or_else(|| Some(jid.to_string()));
+        self.subjects.entry(jid.to_string()).or_default();
     }
 
     fn add_subjects(&mut self, jid: String, subjects: HashMap<String, String>) {
@@ -160,11 +174,14 @@ impl View<UIEvent, Theme> for TitleBar {
             }
         }
 
-        if let Some(name) = &self.name {
-            let mut title = format!(" {}", name).into_charxels();
+        if let Some(display) = &self.display_name {
+            let mut title = format!(" {}", display).into_charxels();
 
-            let subjects = self.subjects.get(name).unwrap();
-            if !subjects.is_empty() {
+            let subjects = self
+                .current_jid
+                .as_deref()
+                .and_then(|jid| self.subjects.get(jid));
+            if let Some(subjects) = subjects {
                 if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
                     if let Some(subject) = subject.lines().next() {
                         title.append(" – ");
@@ -187,7 +204,10 @@ impl View<UIEvent, Theme> for TitleBar {
                 self.connection = Some(terminus::clean_str(&account.to_string()));
             }
             UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_name(name);
+                self.set_window(name);
+            }
+            UIEvent::AddWindow(jid, Some(name), _) => {
+                self.display_names.insert(jid.clone(), name.clone());
             }
             UIEvent::Core(Event::Subject(_, jid, subjects)) => {
                 let window: BareJid = jid.to_bare();
@@ -209,6 +229,7 @@ impl View<UIEvent, Theme> for TitleBar {
 
 struct WinBar {
     windows: Vec<String>,
+    display_names: HashMap<String, String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
     dimensions: Option<Dimensions>,
@@ -219,6 +240,7 @@ impl WinBar {
     pub fn new() -> Self {
         Self {
             windows: Vec::new(),
+            display_names: HashMap::new(),
             current_window: None,
             highlighted: HashMap::new(),
             dimensions: None,
@@ -273,9 +295,6 @@ impl View<UIEvent, Theme> for WinBar {
 
         let mut frame_space = frame.width();
 
-        frame.set_background(config.win_bar.bg);
-        frame.set_foreground(config.win_bar.fg);
-
         let mut first = true;
         let mut remaining = self.highlighted.len();
 
@@ -283,9 +302,8 @@ impl View<UIEvent, Theme> for WinBar {
         sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
 
         if !sorted.is_empty() {
-            frame.write(" [");
+            frame.write(" ");
             frame_space -= 3; // Subtract space and enclosing []
-            log::debug!("start hl: {}", frame_space);
 
             for (window, state) in sorted {
                 // Ensure at all time that we can close hl and add remaining info
@@ -296,42 +314,37 @@ impl View<UIEvent, Theme> for WinBar {
                 };
 
                 if !first {
-                    frame.write(", ");
+                    frame.write(" | ");
                     frame_space -= 2;
-                    log::debug!("separate hl: {}", frame_space);
                 }
 
+                let label = self
+                    .display_names
+                    .get(window.as_str())
+                    .map_or(window.as_str(), String::as_str);
                 let highlighted = if state.1 > 0 {
-                    let mut highlighted = window.with_style(Style::Bold);
+                    let mut highlighted = label.with_style(Style::Bold);
                     highlighted.append(" (");
                     highlighted.append(format!("{}", state.1).with_style(Style::Bold));
                     highlighted.append(format!(", {})", state.0));
                     highlighted
                 } else {
-                    format!("{} ({})", window, state.0).into_charxels()
+                    format!("{} ({})", label, state.0).into_charxels()
                 };
 
                 // Don't write current hl if we can't put remaining info afterward
                 if highlighted.display_width() + remaining_charxels.display_width() >= frame_space {
                     // We are sure that previous hl has let us enough space for remaining info
                     frame.write(&remaining_charxels);
-                    log::debug!(
-                        "remaining: {} ({})",
-                        remaining_charxels.display_width(),
-                        frame_space
-                    );
                     break;
                 } else {
                     frame.write(&highlighted);
                     frame_space -= highlighted.display_width();
-                    log::debug!("hl: {} ({})", highlighted.display_width(), frame_space);
                 }
 
                 first = false;
                 remaining -= 1;
             }
-
-            frame.write("]");
         }
 
         if !self.command_buffer.is_empty() {
@@ -341,6 +354,9 @@ impl View<UIEvent, Theme> for WinBar {
                 frame.write_at((frame.width() - cmd_buf_width, 0u16), &cmd_buf);
             }
         }
+
+        frame.set_background(config.win_bar.bg);
+        frame.set_foreground(config.win_bar.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
@@ -348,8 +364,11 @@ impl View<UIEvent, Theme> for WinBar {
             UIEvent::Core(Event::ChangeWindow(name)) => {
                 self.set_current_window(&terminus::clean_str(name));
             }
-            UIEvent::AddWindow(name, _) => {
-                self.add_window(terminus::clean_str(name));
+            UIEvent::AddWindow(jid, display_name, _) => {
+                if let Some(name) = display_name {
+                    self.display_names.insert(jid.clone(), name.clone());
+                }
+                self.add_window(terminus::clean_str(jid));
             }
             UIEvent::Core(Event::Close(window)) => {
                 self.del_window(window);
@@ -538,6 +557,7 @@ pub struct UIMod {
     current_window: Option<String>,
     unread_windows: HashMap<String, u64>,
     conversations: HashMap<String, Conversation>,
+    jid_to_name: HashMap<BareJid, String>,
     root: LinearLayout<UIEvent, Theme>,
     dirty: bool,
     password_command: Option<Command>,
@@ -562,6 +582,7 @@ impl UIMod {
             unread_windows: HashMap::new(),
             current_window: None,
             conversations: HashMap::new(),
+            jid_to_name: HashMap::new(),
             password_command: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
@@ -730,7 +751,7 @@ impl UIMod {
                     }
                 });
 
-                self.add_window(chat.contact.to_string(), Box::new(chatwin));
+                self.add_window(chat.contact.to_string(), None, Box::new(chatwin));
                 self.conversations
                     .insert(chat.contact.to_string(), conversation.clone());
             }
@@ -919,16 +940,25 @@ impl UIMod {
                         });
                 layout.push(roster, 3);
 
-                self.add_window(channel.get_name(), Box::new(layout));
-                self.conversations
-                    .insert(channel.get_name(), conversation.clone());
+                let jid_str = channel.jid.to_string();
+                if let Some(name) = &channel.name {
+                    self.jid_to_name.insert(channel.jid.clone(), name.clone());
+                }
+                self.add_window(jid_str.clone(), channel.name.clone(), Box::new(layout));
+                self.conversations.insert(jid_str, conversation.clone());
             }
         }
     }
 
-    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent, Theme>>) {
-        self.windows.push(name.clone());
-        self.root.event(&mut UIEvent::AddWindow(name, Some(window)));
+    fn add_window(
+        &mut self,
+        jid: String,
+        display: Option<String>,
+        window: Box<dyn View<UIEvent, Theme>>,
+    ) {
+        self.windows.push(jid.clone());
+        self.root
+            .event(&mut UIEvent::AddWindow(jid, display, Some(window)));
     }
 
     pub fn change_window(&mut self, window: &str) {
@@ -963,6 +993,14 @@ impl UIMod {
 
     pub fn get_windows(&self) -> Vec<String> {
         self.windows.clone()
+    }
+
+    pub fn get_conversation(&self, window: &str) -> Option<&Conversation> {
+        self.conversations.get(window)
+    }
+
+    pub fn get_display_name(&self, jid: &BareJid) -> Option<&str> {
+        self.jid_to_name.get(jid).map(String::as_str)
     }
 
     pub fn current_window(&self) -> Option<&String> {
@@ -1113,14 +1151,18 @@ impl ModTrait for UIMod {
                         child.event(event);
                     }
                 }
-                UIEvent::AddWindow(name, view) => {
+                UIEvent::AddWindow(jid, display_name, view) => {
                     let view = view.take().unwrap();
-                    frame.insert_boxed(name.to_string(), view);
+                    frame.insert_boxed(jid.to_string(), view);
 
-                    // propagate AddWindow with name only to each subview
+                    // propagate AddWindow with jid only to each subview
                     // required at least for console view
                     for child in frame.iter_children_mut() {
-                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
+                        child.event(&mut UIEvent::AddWindow(
+                            jid.to_string(),
+                            display_name.clone(),
+                            None,
+                        ));
                     }
                 }
                 UIEvent::Core(Event::Close(window)) => {
@@ -1370,6 +1412,7 @@ impl ModTrait for UIMod {
                 }),
             7,
         );
+        let mut window_display: HashMap<String, String> = HashMap::new();
         let roster = ListView::<UIEvent, contact::Group, RosterItem, Theme>::new()
             .with_layout(LayoutParams {
                 width: LayoutParam::WrapContent,
@@ -1377,7 +1420,7 @@ impl ModTrait for UIMod {
             })
             .with_none_group()
             .with_sort_item()
-            .with_event(|view, event| match event {
+            .with_event(move |view, event| match event {
                 UIEvent::Core(Event::Connected(_, _)) => {
                     view.add_group(contact::Group(String::from("Windows")));
                     view.add_group(contact::Group(String::from("Contacts")));
@@ -1410,19 +1453,24 @@ impl ModTrait for UIMod {
                     };
                     let _ = view.remove(RosterItem::Bookmark(bookmark), Some(group));
                 }
-                UIEvent::AddWindow(name, _) => {
+                UIEvent::AddWindow(jid, display_name, _) => {
                     let group = contact::Group(String::from("Windows"));
-                    view.insert(RosterItem::Window(name.clone()), Some(group));
+                    let label = display_name.as_deref().unwrap_or(jid.as_str()).to_string();
+                    window_display.insert(jid.clone(), label.clone());
+                    view.insert(RosterItem::Window(label), Some(group));
                 }
                 UIEvent::Core(Event::Close(window)) => {
                     let group = contact::Group(String::from("Windows"));
-                    let _ = view.remove(RosterItem::Window(window.clone()), Some(group));
+                    let label = window_display
+                        .remove(window.as_str())
+                        .unwrap_or_else(|| window.clone());
+                    let _ = view.remove(RosterItem::Window(label), Some(group));
                 }
                 _ => {}
             });
         console.push(roster, 3);
 
-        self.add_window("console".to_string(), Box::new(console));
+        self.add_window("console".to_string(), None, Box::new(console));
         self.change_window("console");
 
         // Measure, layout and render
@@ -1546,18 +1594,24 @@ impl ModTrait for UIMod {
                 user_request,
             } => {
                 let bare: BareJid = channel.to_bare();
+                let name = {
+                    let bookmarks = aparte.get_mod::<BookmarksMod>();
+                    bookmarks
+                        .bookmarks_by_jid
+                        .get(&Jid::from(bare.clone()))
+                        .and_then(|&idx| bookmarks.bookmarks.get(idx))
+                        .and_then(|b| b.name.clone())
+                };
+                let ch = Channel {
+                    account: account.clone(),
+                    jid: bare.clone(),
+                    nick: channel.resource().to_string(),
+                    name,
+                    occupants: HashMap::new(),
+                };
                 let win_name = bare.to_string();
                 if !self.windows.contains(&win_name) {
-                    self.add_conversation(
-                        aparte,
-                        Conversation::Channel(Channel {
-                            account: account.clone(),
-                            jid: channel.to_bare(),
-                            nick: channel.resource().to_string(),
-                            name: None, // TODO use name from bookmark
-                            occupants: HashMap::new(),
-                        }),
-                    );
+                    self.add_conversation(aparte, Conversation::Channel(ch));
                 }
                 if *user_request {
                     self.change_window(&win_name);
@@ -1567,12 +1621,26 @@ impl ModTrait for UIMod {
                 if self.windows.contains(window) {
                     self.change_window(window);
                 } else {
-                    crate::info!(aparte, "Unknown window {window}");
+                    let jid = self
+                        .jid_to_name
+                        .iter()
+                        .find(|(_, name)| name.as_str() == window.as_str())
+                        .map(|(jid, _)| jid.to_string());
+                    if let Some(jid) = jid {
+                        self.change_window(&jid);
+                    } else {
+                        crate::info!(aparte, "Unknown window {window}");
+                    }
                 }
             }
             Event::WindowChange => {}
             Event::Close(window) => {
                 if window != "console" {
+                    if let Some(Conversation::Channel(channel)) =
+                        self.conversations.get(window.as_str())
+                    {
+                        self.jid_to_name.remove(&channel.jid);
+                    }
                     self.windows.retain(|win| win != window);
                     self.unread_windows.remove(window);
                     if Some(window) == self.current_window.as_ref() {

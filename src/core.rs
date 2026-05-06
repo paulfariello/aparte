@@ -173,6 +173,7 @@ pub enum Event {
     CommandTimeout(u64),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum Mod {
     Messages(mods::messages::MessagesMod),
     Completion(mods::completion::CompletionMod),
@@ -458,6 +459,14 @@ Examples:
         completion: |aparte, _command| {
             let ui = aparte.get_mod::<mods::ui::UIMod>();
             ui.get_windows()
+                .iter()
+                .map(|jid| {
+                    BareJid::from_str(jid)
+                        .ok()
+                        .and_then(|bare| ui.get_display_name(&bare).map(str::to_string))
+                        .unwrap_or_else(|| jid.clone())
+                })
+                .collect()
         }
     }
 },
@@ -513,20 +522,9 @@ Examples:
     window: Option<String> = {
         completion: |aparte, _command| {
             let ui = aparte.get_mod::<mods::ui::UIMod>();
-            let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
-            ui.get_windows().iter().map(|window| {
-                if let Some(account) = aparte.current_account() {
-                    if let Ok(jid) = BareJid::from_str(window) {
-                        conversation_mod.get(&account, &jid).cloned()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }).filter_map(|conversation| {
-                if let Some(Conversation::Channel(channel)) = conversation {
-                    Some(channel.jid.to_string())
+            ui.get_windows().iter().filter_map(|window| {
+                if let Some(Conversation::Channel(_)) = ui.get_conversation(window) {
+                    Some(window.clone())
                 } else {
                     None
                 }
@@ -535,22 +533,22 @@ Examples:
     }
 },
 |aparte, _command| {
-    let current =  {
+    let current = {
         let ui = aparte.get_mod::<mods::ui::UIMod>();
         ui.current_window().cloned()
     };
     let window = window.or(current);
     if let Some(window) = window {
-        if let Some(account) = aparte.current_account() {
-            if let Ok(jid) = BareJid::from_str(&window) {
-                let conversation =  {
-                    let conversation_mod = aparte.get_mod::<mods::conversation::ConversationMod>();
-                    conversation_mod.get(&account, &jid).cloned()
-                };
-                if let Some(Conversation::Channel(channel)) = conversation {
-                    aparte.schedule(Event::Leave(channel));
-                }
+        let channel = {
+            let ui = aparte.get_mod::<mods::ui::UIMod>();
+            if let Some(Conversation::Channel(ch)) = ui.get_conversation(&window) {
+                Some(ch.clone())
+            } else {
+                None
             }
+        };
+        if let Some(channel) = channel {
+            aparte.schedule(Event::Leave(channel));
         }
     }
     Ok(())

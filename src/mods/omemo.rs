@@ -72,9 +72,13 @@ Examples:
         ui.current_window().cloned()
     };
     let jid = jid.or(current).clone();
-    if let Some(jid) = jid {
+    if let Some(window) = jid {
         if let Some(account) = aparte.current_account() {
-            if let Ok(jid) = BareJid::from_str(&jid) {
+            let jid = BareJid::from_str(&window).ok().or_else(|| {
+                let ui = aparte.get_mod::<UIMod>();
+                ui.get_conversation(&window).map(|c| c.get_jid().clone())
+            });
+            if let Some(jid) = jid {
                 aparte.schedule(Event::Omemo(OmemoEvent::Enable { account, jid }));
             }
         }
@@ -104,8 +108,12 @@ Examples:
         if current == Some(String::from("console")) {
             current = None;
         }
-        let contact = jid.or(current).map(|jid| BareJid::from_str(&jid))
-            .transpose()?;
+        let contact = jid.or(current).and_then(|window| {
+            BareJid::from_str(&window).ok().or_else(|| {
+                let ui = aparte.get_mod::<UIMod>();
+                ui.get_conversation(&window).map(|c| c.get_jid().clone())
+            })
+        });
 
         if let Some(account) = aparte.current_account() {
             aparte.schedule(Event::Omemo(OmemoEvent::ShowFingerprints {
@@ -136,9 +144,12 @@ Examples:
             ui.current_window().cloned()
         };
         if let Some(account) = aparte.current_account() {
-            let context = current
-                .filter(|w| w != "console")
-                .and_then(|w| BareJid::from_str(&w).ok());
+            let context = current.filter(|w| w != "console").and_then(|window| {
+                BareJid::from_str(&window).ok().or_else(|| {
+                    let ui = aparte.get_mod::<UIMod>();
+                    ui.get_conversation(&window).map(|c| c.get_jid().clone())
+                })
+            });
             aparte.schedule(Event::Omemo(OmemoEvent::Debug { account, context }));
         }
         Ok(())
