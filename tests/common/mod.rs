@@ -4,6 +4,7 @@ pub mod omemo;
 pub mod xmpp_fixture;
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,6 +18,8 @@ pub struct Harness {
     pub bytes: Arc<Mutex<Vec<u8>>>,
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// Set to true by the reader thread when the child's PTY reaches EOF (process exited).
+    pub exited: Arc<AtomicBool>,
     pub _tmp: tempfile::TempDir,
 }
 
@@ -70,15 +73,20 @@ impl Harness {
             Arc::new(Mutex::new(pair.master.take_writer().expect("take writer")));
 
         let bytes = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let exited = Arc::new(AtomicBool::new(false));
         {
             let bytes = Arc::clone(&bytes);
             let writer = Arc::clone(&writer);
+            let exited = Arc::clone(&exited);
             thread::spawn(move || {
                 let mut shadow = vt100::Parser::new(ROWS, COLS, 0);
                 let mut buf = [0u8; 4096];
                 loop {
                     match reader.read(&mut buf) {
-                        Ok(0) => break,
+                        Ok(0) | Err(_) => {
+                            exited.store(true, Ordering::Relaxed);
+                            break;
+                        }
                         Ok(n) => {
                             let chunk = &buf[..n];
                             bytes.lock().unwrap().extend_from_slice(chunk);
@@ -94,7 +102,6 @@ impl Harness {
                                 let _ = w.flush();
                             }
                         }
-                        Err(_) => break,
                     }
                 }
             });
@@ -104,6 +111,7 @@ impl Harness {
             bytes,
             child,
             writer,
+            exited,
             _tmp: tmp,
         }
     }
@@ -209,9 +217,19 @@ pub fn rows_with_bgcolor(screen: &vt100::Screen, color: vt100::Color) -> Vec<u16
         .collect()
 }
 
+/// Poll until `needle` appears on screen or the timeout elapses.
+/// Returns `false` on timeout. Panics immediately if the child process exits unexpectedly.
 pub fn wait_for_screen(h: &Harness, needle: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
+        if h.exited.load(Ordering::Relaxed) {
+            let parser = h.snapshot();
+            panic!(
+                "Child process exited unexpectedly while waiting for {:?}\n{}",
+                needle,
+                describe(parser.screen())
+            );
+        }
         let parser = h.snapshot();
         if grid_contains(parser.screen(), needle) {
             return true;
@@ -222,11 +240,26 @@ pub fn wait_for_screen(h: &Harness, needle: &str, timeout: Duration) -> bool {
 }
 
 /// Poll until the app reaches INSERT mode (ready to accept input).
-/// Panics if the app doesn't start within 30 seconds.
+/// Fails immediately if the process exits, or after 60 s on a loaded machine.
 pub fn wait_for_ready(h: &Harness) {
-    let ok = wait_for_screen(h, "INSERT", Duration::from_secs(30));
-    assert!(
-        ok,
-        "App did not reach INSERT mode within 30s — startup failed"
-    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if h.exited.load(Ordering::Relaxed) {
+            let parser = h.snapshot();
+            panic!(
+                "App exited before reaching INSERT mode — likely a startup crash\n{}",
+                describe(parser.screen())
+            );
+        }
+        let parser = h.snapshot();
+        if grid_contains(parser.screen(), "INSERT") {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "App did not reach INSERT mode within 60s — startup hung\n{}",
+            describe(parser.screen())
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
