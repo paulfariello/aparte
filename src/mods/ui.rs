@@ -1110,6 +1110,21 @@ impl ModTrait for UIMod {
                             }
                         }
                     }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Up, ..
+                    })) if mode == Mode::Normal => {
+                        if let Some(focused) = layout.focused_child_mut() {
+                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SelectPrev));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Down,
+                        ..
+                    })) if mode == Mode::Normal => {
+                        if let Some(focused) = layout.focused_child_mut() {
+                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SelectNext));
+                        }
+                    }
                     UIEvent::Core(Event::CommandTimeout(gen)) => {
                         if *gen == timeout_generation && !command_buffer.is_empty() {
                             command_buffer.clear();
