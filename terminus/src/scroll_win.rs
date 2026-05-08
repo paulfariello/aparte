@@ -199,8 +199,11 @@ where
         }
     }
 
-    /// PageUp the window, return true if top is reached
-    pub fn page_up(&mut self) -> bool {
+    /// PageUp the window.
+    /// Returns `(at_top, old_selected, new_selected)`.
+    /// If a message was selected and scrolled off the bottom of the new viewport,
+    /// the selection is clamped to the last visible message.
+    pub fn page_up(&mut self) -> (bool, Option<usize>, Option<usize>) {
         log::debug!("Page up");
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
@@ -219,7 +222,8 @@ where
         if total_children_height < dimensions.height as u32 {
             // All children fits in the current dimensions
             // don't bother to page up
-            return true;
+            let sel = self.selected_child_index;
+            return (true, sel, sel);
         }
 
         // Look for children index that correspond to a page up
@@ -231,6 +235,7 @@ where
             self.children.range(..)
         };
 
+        let old_selected = self.selected_child_index;
         let initial_index = self.bottom_visible_child_index;
         for (i, LayoutChild { child, .. }) in range.rev().enumerate() {
             let child_height = match child.measure(&measure_specs).height {
@@ -247,9 +252,16 @@ where
             remaining_height -= child_height;
         }
 
+        if let Some(sel) = self.selected_child_index {
+            if sel > self.bottom_visible_child_index {
+                self.selected_child_index = Some(self.bottom_visible_child_index);
+            }
+        }
+
         log::debug!("View at: {}", self.bottom_visible_child_index);
-        // Return true only if we've reached the top
-        self.bottom_visible_child_index == 0 || self.bottom_visible_child_index == initial_index
+        let at_top = self.bottom_visible_child_index == 0
+            || self.bottom_visible_child_index == initial_index;
+        (at_top, old_selected, self.selected_child_index)
     }
 
     /// Scroll to the very top (first messages visible).
@@ -304,8 +316,11 @@ where
         }
     }
 
-    /// PageDown the window, return true if bottom is reached
-    pub fn page_down(&mut self) -> bool {
+    /// PageDown the window.
+    /// Returns `(old_selected, new_selected)`.
+    /// If a message was selected and scrolled off the top of the new viewport,
+    /// the selection is clamped to the first visible message.
+    pub fn page_down(&mut self) -> (Option<usize>, Option<usize>) {
         log::debug!("Page down");
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
         let measure_specs = MeasureSpecs::from(dimensions);
@@ -324,10 +339,12 @@ where
             )
             .sum();
 
+        let old_selected = self.selected_child_index;
+
         if total_children_height < dimensions.height as u32 {
             // All children fits in the current dimensions
             // don't bother to page down
-            return true;
+            return (old_selected, old_selected);
         }
 
         // Look for children index that correspond to a page down
@@ -358,8 +375,15 @@ where
             None => self.bottom_visible_child_index = self.children.len() - 1,
         }
 
+        if let Some(sel) = self.selected_child_index {
+            let new_first = self.compute_first_visible();
+            if sel < new_first {
+                self.selected_child_index = Some(new_first);
+            }
+        }
+
         log::debug!("View at: {}", self.bottom_visible_child_index);
-        true
+        (old_selected, self.selected_child_index)
     }
 
     fn bottom_visible_child(&self) -> Option<&LayoutChild<I>> {
@@ -369,6 +393,32 @@ where
             let index = self.bottom_visible_child_index.min(self.children.len() - 1);
             self.children.iter().nth(index)
         }
+    }
+
+    /// Compute the index of the first (topmost) visible child for the current
+    /// `bottom_visible_child_index`, using live `measure()` calls.
+    fn compute_first_visible(&self) -> usize {
+        let Some(dimensions) = &self.dimensions else {
+            return 0;
+        };
+        let measure_specs = MeasureSpecs::from(dimensions);
+        let Some(bottom_child) = self.bottom_visible_child() else {
+            return 0;
+        };
+        let mut remaining = dimensions.height;
+        let mut count = 0usize;
+        for LayoutChild { child, .. } in self.children.range(..=bottom_child).rev() {
+            let h = match child.measure(&measure_specs).height {
+                RequestedDimension::ExpandMax => dimensions.height,
+                RequestedDimension::Absolute(h) => h,
+            };
+            if h > remaining {
+                break;
+            }
+            remaining -= h;
+            count += 1;
+        }
+        self.bottom_visible_child_index + 1 - count.max(1)
     }
 
     /// Count visible children from bottom using pre-measured heights (no measure() calls).

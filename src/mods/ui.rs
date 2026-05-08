@@ -665,7 +665,19 @@ impl UIMod {
                                 code: KeyCode::PageUp,
                                 ..
                             })) => {
-                                let at_top = view.page_up();
+                                let (at_top, old_sel, new_sel) = view.page_up();
+                                if old_sel != new_sel {
+                                    if let Some(i) = old_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
                                 if at_top && !mam_requested {
                                     mam_requested = true;
                                     let from =
@@ -681,7 +693,19 @@ impl UIMod {
                                 code: KeyCode::PageDown,
                                 ..
                             })) => {
-                                view.page_down();
+                                let (old_sel, new_sel) = view.page_down();
+                                if old_sel != new_sel {
+                                    if let Some(i) = old_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
                                 mam_requested = false;
                             }
                             UIEvent::NormalCommand(cmd) => match cmd {
@@ -825,7 +849,19 @@ impl UIMod {
                                 code: KeyCode::PageUp,
                                 ..
                             })) => {
-                                let at_top = view.page_up();
+                                let (at_top, old_sel, new_sel) = view.page_up();
+                                if old_sel != new_sel {
+                                    if let Some(i) = old_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
                                 if at_top && !mam_requested {
                                     mam_requested = true;
                                     let from =
@@ -841,7 +877,19 @@ impl UIMod {
                                 code: KeyCode::PageDown,
                                 ..
                             })) => {
-                                view.page_down();
+                                let (old_sel, new_sel) = view.page_down();
+                                if old_sel != new_sel {
+                                    if let Some(i) = old_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new_sel {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
                                 mam_requested = false;
                             }
                             UIEvent::NormalCommand(cmd) => match cmd {
@@ -1396,13 +1444,37 @@ impl ModTrait for UIMod {
                             code: KeyCode::PageUp,
                             ..
                         })) => {
-                            view.page_up();
+                            let (_, old_sel, new_sel) = view.page_up();
+                            if old_sel != new_sel {
+                                if let Some(i) = old_sel {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
+                                if let Some(i) = new_sel {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
+                            }
                         }
                         UIEvent::Core(Event::Key(KeyEvent {
                             code: KeyCode::PageDown,
                             ..
                         })) => {
-                            view.page_down();
+                            let (old_sel, new_sel) = view.page_down();
+                            if old_sel != new_sel {
+                                if let Some(i) = old_sel {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.deselect();
+                                    }
+                                }
+                                if let Some(i) = new_sel {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
+                            }
                         }
                         UIEvent::NormalCommand(cmd) => match cmd {
                             NormalCommand::SelectPrev => {
