@@ -497,23 +497,30 @@ fn cursor_visible_in_insert_mode() {
 }
 
 #[test]
-fn cursor_hidden_in_normal_mode() {
+fn cursor_steady_block_in_normal_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
     enter_normal(&h);
 
-    // wait_for_screen already confirmed the render completed (NORMAL indicator appeared),
-    // so the Hide escape has been sent by the time we snapshot.
     let parser = h.snapshot();
     let screen = parser.screen();
+
+    // SetCursorStyle::SteadyBlock emits ESC [ 2 SP q  (DECSCUSR = 2)
+    let steady_block: &[u8] = b"\x1b[2 q";
+    let bytes = h.bytes.lock().unwrap().clone();
+    let found = bytes.windows(steady_block.len()).any(|w| w == steady_block);
 
     h.shutdown();
 
     assert!(
-        screen.hide_cursor(),
-        "Cursor should be hidden in NORMAL mode\n{}",
+        !screen.hide_cursor(),
+        "Cursor should be visible in NORMAL mode\n{}",
         describe(screen)
+    );
+    assert!(
+        found,
+        "SteadyBlock escape (ESC[2 q) should have been sent when entering NORMAL mode"
     );
 }
 

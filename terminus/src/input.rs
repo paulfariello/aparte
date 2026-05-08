@@ -4,6 +4,7 @@
 use crate::cursor::Cursor;
 use crate::rendering::ScreenFrame;
 use crate::CursorPos;
+use crate::CursorStyle;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use unicode_display_width;
@@ -32,6 +33,7 @@ pub struct Input<E> {
     pub view: Cursor,
     pub event_handler: Option<EventHandler<Self, E>>,
     pub show_cursor: bool,
+    pub cursor_style: CursorStyle,
     width: Cell<usize>,
     dimensions: Option<Dimensions>,
 }
@@ -54,6 +56,7 @@ impl<E> Input<E> {
             view: Cursor::new(0),
             event_handler: None,
             show_cursor: true,
+            cursor_style: CursorStyle::SteadyBar,
             width: Cell::new(0),
             dimensions: None,
         }
@@ -61,6 +64,10 @@ impl<E> Input<E> {
 
     pub fn set_show_cursor(&mut self, visible: bool) {
         self.show_cursor = visible;
+    }
+
+    pub fn set_cursor_style(&mut self, style: CursorStyle) {
+        self.cursor_style = style;
     }
 
     pub fn with_event<F>(mut self, event_handler: F) -> Self
@@ -241,10 +248,13 @@ impl<E, C> View<E, C> for Input<E> {
             true => {
                 let prompt = "password: ";
                 frame.write(prompt);
-                frame.set_cursor(CursorPos {
-                    top: frame.dimensions.top,
-                    left: frame.dimensions.left + prompt.len() as u16,
-                });
+                frame.set_cursor_with_priority(
+                    CursorPos {
+                        top: frame.dimensions.top,
+                        left: frame.dimensions.left + prompt.len() as u16,
+                    },
+                    1,
+                );
             }
             false => {
                 // Max displayable size is view width less 1 for cursor
@@ -276,12 +286,16 @@ impl<E, C> View<E, C> for Input<E> {
                     .graphemes(true)
                     .map(|g| unicode_display_width::width(g) as u16)
                     .sum();
-                frame.set_cursor(CursorPos {
-                    top: frame.dimensions.top,
-                    left: frame.dimensions.left + cursor_col,
-                });
+                frame.set_cursor_with_priority(
+                    CursorPos {
+                        top: frame.dimensions.top,
+                        left: frame.dimensions.left + cursor_col,
+                    },
+                    1,
+                );
             }
         }
+        frame.set_cursor_style(self.cursor_style);
         frame.set_cursor_visible(self.show_cursor);
     }
 

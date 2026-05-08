@@ -174,6 +174,22 @@ impl From<(u16, u16)> for CursorPos {
     }
 }
 
+#[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+pub enum CursorStyle {
+    #[default]
+    SteadyBar,
+    SteadyBlock,
+}
+
+impl From<CursorStyle> for crossterm::cursor::SetCursorStyle {
+    fn from(style: CursorStyle) -> Self {
+        match style {
+            CursorStyle::SteadyBar => crossterm::cursor::SetCursorStyle::SteadyBar,
+            CursorStyle::SteadyBlock => crossterm::cursor::SetCursorStyle::SteadyBlock,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum LayoutParam {
     MatchParent,

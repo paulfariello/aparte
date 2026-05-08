@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::rc::Rc;
 
+use crate::CursorPos;
 use crate::ScreenFrame;
 
 use super::Dimensions;
@@ -603,6 +604,22 @@ where
         {
             let frame = ScreenFrame::new(offscreen, dimensions.as_ref().expect(MISSING_DIMENSIONS));
             child.render(frame, config);
+        }
+
+        if let Some(idx) = self.selected_child_index {
+            if let Some(LayoutChild {
+                dimensions: Some(dims),
+                ..
+            }) = self.children.iter().nth(idx)
+            {
+                offscreen.set_cursor_with_priority(
+                    CursorPos {
+                        top: dims.top,
+                        left: dims.left,
+                    },
+                    2,
+                );
+            }
         }
     }
 

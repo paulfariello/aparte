@@ -31,8 +31,8 @@ use terminus::{
     linear_layout::{LinearLayout, Orientation},
     list_view::ListView,
     scroll_win::ScrollWin,
-    Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, View,
+    CursorStyle, Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    RequestedDimension, RequestedDimensions, View,
 };
 use uuid::Uuid;
 use xmpp_parsers::jid::{BareJid, Jid};
@@ -1352,8 +1352,13 @@ impl ModTrait for UIMod {
                     input.cursor = cursor.clone();
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
-                UIEvent::ModeChange(Mode::Normal) => input.set_show_cursor(false),
-                UIEvent::ModeChange(Mode::Insert) => input.set_show_cursor(true),
+                UIEvent::ModeChange(Mode::Normal) => {
+                    input.set_cursor_style(CursorStyle::SteadyBlock);
+                }
+                UIEvent::ModeChange(Mode::Insert) => {
+                    input.set_show_cursor(true);
+                    input.set_cursor_style(CursorStyle::SteadyBar);
+                }
                 _ => {}
             }
         });
