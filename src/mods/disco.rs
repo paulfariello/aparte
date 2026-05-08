@@ -23,6 +23,7 @@ pub struct DiscoMod {
     identity: disco::Identity,
     client_features: HashSet<Feature>,
     server_features: HashMap<Account, Vec<String>>,
+    jid_features: HashMap<(Account, Jid), Vec<String>>,
 }
 
 impl DiscoMod {
@@ -36,6 +37,7 @@ impl DiscoMod {
             identity: disco::Identity::new(category, type_, lang, name),
             client_features: HashSet::new(),
             server_features: HashMap::new(),
+            jid_features: HashMap::new(),
         }
     }
 
@@ -51,6 +53,40 @@ impl DiscoMod {
             .unwrap()
             .iter()
             .any(|i| i == feature)
+    }
+
+    pub fn has_jid_feature(&self, account: &Account, jid: &Jid, feature: &str) -> bool {
+        self.jid_features
+            .get(&(account.clone(), jid.clone()))
+            .map(|features| features.iter().any(|f| f == feature))
+            .unwrap_or(false)
+    }
+
+    async fn get_jid_disco(aparte: &mut AparteAsync, account: &Account, jid: &Jid) -> Result<()> {
+        match aparte
+            .iq(account, Self::disco_info_query_iq(jid, None))
+            .await
+        {
+            Ok(IqResponse::Result(Some(el))) => {
+                if let Ok(disco) = disco::DiscoInfoResult::try_from(el) {
+                    aparte.schedule(Event::JidDisco(
+                        account.clone(),
+                        jid.clone(),
+                        disco.features.iter().map(|i| i.var.clone()).collect(),
+                    ));
+                    Ok(())
+                } else {
+                    Err(anyhow!("Cannot get jid disco info: invalid response"))
+                }
+            }
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
+                "Cannot get jid disco info: {}",
+                i18n::xmpp_err_to_string(&error, vec![]).1
+            )),
+            Ok(IqResponse::Result(None)) | Err(_) => {
+                Err(anyhow!("Cannot get jid disco info: invalid response"))
+            }
+        }
     }
 
     async fn get_server_disco(
@@ -131,6 +167,26 @@ impl ModTrait for DiscoMod {
                 if let Some(server_features) = self.server_features.get_mut(account) {
                     server_features.extend(features.clone());
                 }
+            }
+            Event::JidDisco(account, jid, features) => {
+                self.jid_features
+                    .entry((account.clone(), jid.clone()))
+                    .or_default()
+                    .extend(features.clone());
+            }
+            Event::Joined {
+                account, channel, ..
+            } => {
+                let jid = Jid::from(channel.to_bare());
+                Aparte::spawn({
+                    let mut aparte = aparte.proxy();
+                    let account = account.clone();
+                    async move {
+                        if let Err(err) = Self::get_jid_disco(&mut aparte, &account, &jid).await {
+                            crate::error!(aparte, err, "Cannot get MUC disco");
+                        }
+                    }
+                });
             }
             Event::Iq(account, iq) => {
                 if let Iq::Get { payload: el, .. } = iq.clone() {

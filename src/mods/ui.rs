@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use backtrace::Backtrace;
-use chrono::Local as LocalTz;
+use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use crossterm::event::{
     Event as CrosstermEvent, EventStream as CrosstermEventStream, KeyCode, KeyEvent, KeyModifiers,
 };
@@ -10,7 +10,7 @@ use crossterm::{execute, terminal};
 use futures::task::{Context, Poll};
 use futures::Stream;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::panic;
@@ -47,6 +47,7 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::mods::bookmarks::BookmarksMod;
+use crate::mods::messages::MessagesMod;
 use crate::{contact, conversation};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -85,6 +86,7 @@ enum UIEvent {
     ModeChange(Mode),
     NormalCommand(NormalCommand),
     CommandBufferUpdate(String),
+    ReduceHighlight(String, u64, u64),
 }
 
 struct TitleBar {
@@ -271,6 +273,16 @@ impl WinBar {
             }
         }
     }
+
+    pub fn reduce_highlight(&mut self, window: &str, total: u64, important: u64) {
+        if let Some(state) = self.highlighted.get_mut(window) {
+            state.0 = state.0.saturating_sub(total);
+            state.1 = state.1.saturating_sub(important);
+            if state.0 == 0 {
+                self.highlighted.remove(window);
+            }
+        }
+    }
 }
 
 impl View<UIEvent, Theme> for WinBar {
@@ -376,8 +388,12 @@ impl View<UIEvent, Theme> for WinBar {
             UIEvent::Core(Event::Notification {
                 conversation,
                 important,
+                ..
             }) => {
                 self.highlight_window(&conversation.get_jid().to_string(), *important);
+            }
+            UIEvent::ReduceHighlight(window, total, important) => {
+                self.reduce_highlight(window, *total, *important);
             }
             UIEvent::CommandBufferUpdate(buf) => {
                 self.command_buffer = buf.clone();
@@ -559,7 +575,7 @@ pub struct UIMod {
     pub render_buffer: Arc<RwLock<OffscreenRenderBuffer>>,
     windows: Vec<String>,
     current_window: Option<String>,
-    unread_windows: HashMap<String, u64>,
+    unread_windows: HashMap<String, VecDeque<(DateTime<FixedOffset>, bool)>>,
     conversations: HashMap<String, Conversation>,
     jid_to_name: HashMap<BareJid, String>,
     root: LinearLayout<UIEvent, Theme>,
@@ -1568,24 +1584,6 @@ impl ModTrait for UIMod {
 
                             self.add_conversation(aparte, conversation);
                         }
-
-                        if message.direction == Direction::Incoming {
-                            let mut window = None;
-                            for existing in &self.windows {
-                                if &message.from.to_string() == existing
-                                    && Some(existing) != self.current_window.as_ref()
-                                {
-                                    window = Some(existing.clone());
-                                }
-                            }
-
-                            if window != self.current_window {
-                                if let Some(window) = window {
-                                    let important = self.unread_windows.entry(window).or_insert(0);
-                                    *important += 1;
-                                }
-                            }
-                        }
                     }
                     Message::Log(_message) => {}
                 };
@@ -1802,7 +1800,7 @@ impl ModTrait for UIMod {
                         if !self.unread_windows.is_empty() {
                             let next = {
                                 let mut sorted = self.unread_windows.iter().collect::<Vec<_>>();
-                                sorted.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap());
+                                sorted.sort_by_key(|(_, b)| std::cmp::Reverse(b.len()));
                                 sorted[0].0.clone()
                             };
 
@@ -1825,14 +1823,61 @@ impl ModTrait for UIMod {
             Event::Notification {
                 conversation,
                 important,
+                timestamp,
             } => {
+                let win = conversation.get_jid().to_string();
+                if Some(&win) != self.current_window.as_ref() && self.windows.contains(&win) {
+                    self.unread_windows
+                        .entry(win)
+                        .or_default()
+                        .push_back((*timestamp, *important));
+                }
                 if *important && aparte.config.bell {
                     self.render_buffer.read().unwrap().bell();
                 }
                 self.root.event(&mut UIEvent::Core(Event::Notification {
                     conversation: conversation.clone(),
                     important: *important,
+                    timestamp: *timestamp,
                 }));
+            }
+            Event::DisplayedMarker { account, jid, id } => {
+                let win = jid.to_string();
+                let cut_ts = {
+                    let msgs = aparte.get_mod::<MessagesMod>();
+                    let acct_key = Some(account.clone());
+                    msgs.get_by_stanza_id(&acct_key, id)
+                        .or_else(|| msgs.get(&acct_key, id))
+                        .and_then(|m| {
+                            if let Message::Xmpp(x) = m {
+                                x.history.iter().max().map(|v| v.timestamp)
+                            } else {
+                                None
+                            }
+                        })
+                };
+                if let Some(cut_ts) = cut_ts {
+                    if let Some(deque) = self.unread_windows.get_mut(&win) {
+                        let n_important = deque
+                            .iter()
+                            .take_while(|(ts, _)| *ts <= cut_ts)
+                            .filter(|(_, imp)| *imp)
+                            .count() as u64;
+                        let before = deque.len();
+                        deque.retain(|(ts, _)| *ts > cut_ts);
+                        let n_drained = (before - deque.len()) as u64;
+                        if n_drained > 0 {
+                            self.root.event(&mut UIEvent::ReduceHighlight(
+                                win.clone(),
+                                n_drained,
+                                n_important,
+                            ));
+                        }
+                        if deque.is_empty() {
+                            self.unread_windows.remove(&win);
+                        }
+                    }
+                }
             }
             Event::UIRender(_) => {
                 log::debug!("Force render");

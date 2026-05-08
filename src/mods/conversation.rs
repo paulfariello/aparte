@@ -102,8 +102,11 @@ impl ModTrait for ConversationMod {
                     self.conversations.insert(index.clone(), conversation);
                 }
 
-                // Schedule a notification
-                if !message.archive && message.direction == message::Direction::Incoming {
+                // Schedule a notification — skip historical (archived or delayed) messages
+                if !message.archive
+                    && !message.delayed
+                    && message.direction == message::Direction::Incoming
+                {
                     let conversation = self.conversations.get(&index);
                     if let Some(conversation) = conversation {
                         let important = match &conversation {
@@ -120,9 +123,16 @@ impl ModTrait for ConversationMod {
                                 mention
                             }
                         };
+                        let timestamp = message
+                            .history
+                            .iter()
+                            .max()
+                            .map(|v| v.timestamp)
+                            .unwrap_or_else(|| chrono::Local::now().into());
                         aparte.schedule(Event::Notification {
                             conversation: conversation.clone(),
                             important,
+                            timestamp,
                         });
                     }
                 }

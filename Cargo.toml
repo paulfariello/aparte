@@ -78,6 +78,10 @@ required-features = ["insecure-xmpp"]
 name = "omemo"
 required-features = ["insecure-xmpp"]
 
+[[test]]
+name = "displayed_markers"
+required-features = ["insecure-xmpp"]
+
 [dev-dependencies]
 mockall = "^0.9"
 rstest = "0.22"

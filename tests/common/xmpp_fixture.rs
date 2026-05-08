@@ -15,6 +15,7 @@ use xmpp_parsers::{
     bind::{BindFeature, BindResponse},
     bookmarks::{Conference, Storage},
     carbons::{Received, Sent},
+    disco,
     forwarding::Forwarded,
     iq::Iq,
     jid::BareJid,
@@ -125,6 +126,7 @@ async fn run_mock_server(
     mam_archive: Vec<(String, String, String, String)>,
     omemo_cfg: Option<OmemoMockConfig>,
     mam_query_tx: Option<mpsc::UnboundedSender<()>>,
+    muc_with_sid: Vec<String>,
 ) {
     // Real XMPP servers echo roster results with from=user_bare_jid, matching
     // the `to` field in the client's request. IqResponseTracker stores by
@@ -237,14 +239,33 @@ async fn run_mock_server(
                                         roster_contacts.iter().map(|s| s.as_str()).collect();
                                     let resp = roster_result_iq(id, &user_bare_jid, &refs);
                                     let _ = stream.send(&resp).await;
-                                } else if payload.is("query", ns::DISCO_INFO) && respond_to_disco {
-                                    let resp = Iq::Result {
-                                        from: None,
-                                        to: None,
-                                        id: id.to_string(),
-                                        payload: None,
-                                    };
-                                    let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(resp))).await;
+                                } else if payload.is("query", ns::DISCO_INFO) {
+                                    let to_str = to.as_ref().map(|j| j.to_string()).unwrap_or_default();
+                                    if muc_with_sid.contains(&to_str) {
+                                        // Respond with XEP-0359 (Stanza IDs) support for this MUC.
+                                        // IqResponseTracker matches by (from, id); from must equal the request's to.
+                                        let disco_result = disco::DiscoInfoResult {
+                                            node: None,
+                                            identities: vec![],
+                                            features: vec![disco::Feature::new(ns::SID)],
+                                            extensions: vec![],
+                                        };
+                                        let resp = Iq::Result {
+                                            from: to.clone(),
+                                            to: None,
+                                            id: id.to_string(),
+                                            payload: Some(disco_result.into()),
+                                        };
+                                        let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(resp))).await;
+                                    } else if respond_to_disco {
+                                        let resp = Iq::Result {
+                                            from: None,
+                                            to: None,
+                                            id: id.to_string(),
+                                            payload: None,
+                                        };
+                                        let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(resp))).await;
+                                    }
                                 } else if payload.is("pubsub", ns::PUBSUB) {
                                     if let Ok(PubSub::Items(items)) = PubSub::try_from(payload.clone()) {
                                         let node = items.node.0.as_str();
@@ -351,6 +372,7 @@ fn start_mock_server(
     mam_archive: Vec<(String, String, String, String)>,
     omemo_cfg: Option<OmemoMockConfig>,
     mam_query_tx: Option<mpsc::UnboundedSender<()>>,
+    muc_with_sid: Vec<String>,
 ) -> (MockServer, u16) {
     let listener = rt.block_on(async {
         TcpListener::bind("127.0.0.1:0")
@@ -368,6 +390,7 @@ fn start_mock_server(
         mam_archive,
         omemo_cfg,
         mam_query_tx,
+        muc_with_sid,
     ));
     (MockServer { inject_tx }, port)
 }
@@ -818,6 +841,74 @@ fn mam_fin_iq(req_id: &str, complete: bool) -> XmppStreamElement {
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
 }
 
+/// A self-sent chat `<displayed>` marker (XEP-0333) referencing a message by ID.
+/// Simulates another device (same JID, different resource) marking a chat message as read.
+pub fn chat_displayed_marker(from: &str, to: &str, referenced_id: &str) -> XmppStreamElement {
+    let marker: Element =
+        format!("<displayed xmlns='urn:xmpp:chat-markers:0' id='{referenced_id}'/>",)
+            .parse()
+            .expect("valid displayed element");
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(marker);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+/// A groupchat `<displayed>` marker (XEP-0333) from a specific occupant nick.
+/// Simulates our own nick marking a MUC message as read (e.g. from another device).
+pub fn groupchat_displayed_marker(from: &str, to: &str, referenced_id: &str) -> XmppStreamElement {
+    let marker: Element =
+        format!("<displayed xmlns='urn:xmpp:chat-markers:0' id='{referenced_id}'/>",)
+            .parse()
+            .expect("valid displayed element");
+    let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(marker);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+/// A groupchat message with an embedded XEP-0359 `<stanza-id>` element.
+/// The stanza-id's `by` attribute is set to the room's bare JID (derived from `from`).
+pub fn groupchat_message_with_stanza_id(
+    from: &str,
+    to: &str,
+    id: &str,
+    stanza_id: &str,
+    body: &str,
+) -> XmppStreamElement {
+    let room_bare = Jid::new(from).unwrap().to_bare();
+    let sid_elem: Element =
+        format!("<stanza-id xmlns='urn:xmpp:sid:0' by='{room_bare}' id='{stanza_id}'/>",)
+            .parse()
+            .expect("valid stanza-id element");
+    let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    msg.bodies.insert(Default::default(), body.to_string());
+    msg.payloads.push(sid_elem);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+/// A chat message with an explicit XEP-0203 `<delay>` timestamp.
+/// `stamp` must be an RFC 3339 / XEP-0082 timestamp string (e.g. `"2024-01-01T10:00:00Z"`).
+pub fn chat_message_with_delay(
+    from: &str,
+    to: &str,
+    id: &str,
+    body: &str,
+    stamp: &str,
+) -> XmppStreamElement {
+    let delay_elem: Element = format!("<delay xmlns='urn:xmpp:delay' stamp='{stamp}'/>")
+        .parse()
+        .expect("valid delay element");
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    msg.bodies.insert(Default::default(), body.to_string());
+    msg.payloads.push(delay_elem);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
@@ -831,11 +922,11 @@ pub struct XmppFixture {
 
 impl XmppFixture {
     pub fn new(roster: &[&str]) -> Self {
-        Self::new_impl(roster, false, vec![], None).0
+        Self::new_impl(roster, false, vec![], None, vec![]).0
     }
 
     pub fn new_with_disco(roster: &[&str]) -> Self {
-        Self::new_impl(roster, true, vec![], None).0
+        Self::new_impl(roster, true, vec![], None, vec![]).0
     }
 
     pub fn new_with_mam(roster: &[&str], archive: &[(&str, &str, &str, &str)]) -> Self {
@@ -843,7 +934,7 @@ impl XmppFixture {
             .iter()
             .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
             .collect();
-        Self::new_impl(roster, true, mam_archive, None).0
+        Self::new_impl(roster, true, mam_archive, None, vec![]).0
     }
 
     /// Create fixture with OMEMO-aware mock server (empty contact devices).
@@ -855,7 +946,7 @@ impl XmppFixture {
             bundle_tx,
             stanza_tx,
         };
-        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg));
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![]);
         (
             fixture,
             OmemoCapture {
@@ -881,7 +972,7 @@ impl XmppFixture {
             stanza_tx,
         };
         let roster = [contact_jid];
-        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg));
+        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![]);
         (
             fixture,
             OmemoCapture {
@@ -891,11 +982,20 @@ impl XmppFixture {
         )
     }
 
+    /// Create a fixture whose mock server responds to XEP-0030 disco#info queries for
+    /// the given MUC JIDs with XEP-0359 (Stanza IDs) support. Used to test
+    /// `<displayed>` marker handling in MUC contexts.
+    pub fn new_with_muc_sid(roster: &[&str], muc_jids: &[&str]) -> Self {
+        let muc_with_sid = muc_jids.iter().map(|s| s.to_string()).collect();
+        Self::new_impl(roster, true, vec![], None, muc_with_sid).0
+    }
+
     fn new_impl(
         roster: &[&str],
         respond_to_disco: bool,
         mam_archive: Vec<(String, String, String, String)>,
         omemo_cfg: Option<OmemoMockConfig>,
+        muc_with_sid: Vec<String>,
     ) -> (Self, ()) {
         let rt = Runtime::new().unwrap();
         let (mam_query_tx, mam_query_rx) = mpsc::unbounded_channel::<()>();
@@ -907,6 +1007,7 @@ impl XmppFixture {
             mam_archive,
             omemo_cfg,
             Some(mam_query_tx),
+            muc_with_sid,
         );
         let config = format!(
             "[accounts.test]\n\

@@ -38,6 +38,7 @@ use xmpp_parsers::message::{
     MessageType as XmppParsersMessageType,
 };
 use xmpp_parsers::oob::Oob;
+use xmpp_parsers::stanza_id::StanzaId;
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
@@ -99,7 +100,9 @@ pub struct VersionedXmppMessage {
     pub type_: XmppMessageType,
     pub direction: Direction,
     pub archive: bool,
+    pub delayed: bool,
     pub encrypted: bool,
+    pub stanza_id: Option<String>,
 }
 
 impl VersionedXmppMessage {
@@ -208,6 +211,16 @@ impl Message {
                 (p.name() == "encrypted" && p.ns() == "eu.siacs.conversations.axolotl")
                     || (p.name() == "encryption" && p.ns() == "urn:xmpp:eme:0")
             });
+            let muc_bare = from.to_bare();
+            let stanza_id = message
+                .payloads
+                .iter()
+                .find_map(|p| {
+                    StanzaId::try_from(p.clone())
+                        .ok()
+                        .filter(|sid| sid.by.to_bare() == muc_bare)
+                })
+                .map(|sid| sid.id);
             let delay = match delay {
                 Some(delay) => Some(delay.clone()),
                 None => message
@@ -215,6 +228,7 @@ impl Message {
                     .iter()
                     .find_map(|payload| Delay::try_from(payload.clone()).ok()),
             };
+            let delayed = delay.is_some();
             let timestamp = delay
                 .map(|delay| delay.stamp.0)
                 .unwrap_or(LocalTz::now().into());
@@ -238,6 +252,8 @@ impl Message {
                             archive,
                         );
                         msg.set_encrypted(encrypted);
+                        msg.set_stanza_id(stanza_id);
+                        msg.set_delayed(delayed);
                         Ok(msg)
                     } else {
                         let mut msg = Message::incoming_chat(
@@ -250,6 +266,8 @@ impl Message {
                             archive,
                         );
                         msg.set_encrypted(encrypted);
+                        msg.set_stanza_id(stanza_id);
+                        msg.set_delayed(delayed);
                         Ok(msg)
                     }
                 }
@@ -264,6 +282,8 @@ impl Message {
                         archive,
                     );
                     msg.set_encrypted(encrypted);
+                    msg.set_stanza_id(stanza_id);
+                    msg.set_delayed(delayed);
                     Ok(msg)
                 }
                 _ => Err(()),
@@ -276,6 +296,18 @@ impl Message {
     pub fn set_encrypted(&mut self, encrypted: bool) {
         if let Message::Xmpp(ref mut xmpp) = self {
             xmpp.encrypted = encrypted;
+        }
+    }
+
+    pub fn set_stanza_id(&mut self, stanza_id: Option<String>) {
+        if let Message::Xmpp(ref mut xmpp) = self {
+            xmpp.stanza_id = stanza_id;
+        }
+    }
+
+    pub fn set_delayed(&mut self, delayed: bool) {
+        if let Message::Xmpp(ref mut xmpp) = self {
+            xmpp.delayed = delayed;
         }
     }
 
@@ -356,7 +388,9 @@ impl Message {
             type_: XmppMessageType::Chat,
             direction: Direction::Incoming,
             archive,
+            delayed: false,
             encrypted: false,
+            stanza_id: None,
         })
     }
 
@@ -388,7 +422,9 @@ impl Message {
             type_: XmppMessageType::Chat,
             direction: Direction::Outgoing,
             archive,
+            delayed: false,
             encrypted: false,
+            stanza_id: None,
         })
     }
 
@@ -420,7 +456,9 @@ impl Message {
             type_: XmppMessageType::Channel,
             direction: Direction::Incoming,
             archive,
+            delayed: false,
             encrypted: false,
+            stanza_id: None,
         })
     }
 
@@ -452,7 +490,9 @@ impl Message {
             type_: XmppMessageType::Channel,
             direction: Direction::Outgoing,
             archive,
+            delayed: false,
             encrypted: false,
+            stanza_id: None,
         })
     }
 

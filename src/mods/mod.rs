@@ -8,6 +8,7 @@ pub mod contact;
 pub mod conversation;
 pub mod correction;
 pub mod disco;
+pub mod displayed_markers;
 pub mod mam;
 pub mod messages;
 pub mod omemo;

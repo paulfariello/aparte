@@ -122,6 +122,7 @@ pub enum Event {
         payload: StanzaError,
     },
     Disco(Account, Vec<String>),
+    JidDisco(Account, Jid, Vec<String>),
     PubSub {
         account: Account,
         from: Option<Jid>,
@@ -166,11 +167,17 @@ pub enum Event {
     Notification {
         conversation: conversation::Conversation,
         important: bool,
+        timestamp: DateTime<FixedOffset>,
     },
     Subject(Account, Jid, HashMap<String, String>),
     Omemo(mods::omemo::OmemoEvent),
     UIRender(bool),
     CommandTimeout(u64),
+    DisplayedMarker {
+        account: Account,
+        jid: BareJid,
+        id: String,
+    },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -186,6 +193,7 @@ pub enum Mod {
     Mam(mods::mam::MamMod),
     Correction(mods::correction::CorrectionMod),
     Omemo(mods::omemo::OmemoMod),
+    DisplayedMarkers(mods::displayed_markers::DisplayedMarkersMod),
 }
 
 macro_rules! from_mod {
@@ -220,6 +228,10 @@ from_mod!(UI, mods::ui::UIMod);
 from_mod!(Mam, mods::mam::MamMod);
 from_mod!(Messages, mods::messages::MessagesMod);
 from_mod!(Correction, mods::correction::CorrectionMod);
+from_mod!(
+    DisplayedMarkers,
+    mods::displayed_markers::DisplayedMarkersMod
+);
 
 pub trait ModTrait: Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
@@ -262,6 +274,7 @@ impl ModTrait for Mod {
             Mod::Messages(r#mod) => r#mod.init(aparte),
             Mod::Correction(r#mod) => r#mod.init(aparte),
             Mod::Omemo(r#mod) => r#mod.init(aparte),
+            Mod::DisplayedMarkers(r#mod) => r#mod.init(aparte),
         }
     }
 
@@ -278,6 +291,7 @@ impl ModTrait for Mod {
             Mod::Messages(r#mod) => r#mod.on_event(aparte, event),
             Mod::Correction(r#mod) => r#mod.on_event(aparte, event),
             Mod::Omemo(r#mod) => r#mod.on_event(aparte, event),
+            Mod::DisplayedMarkers(r#mod) => r#mod.on_event(aparte, event),
         }
     }
 
@@ -306,6 +320,9 @@ impl ModTrait for Mod {
                 r#mod.can_handle_xmpp_message(aparte, account, message, delay)
             }
             Mod::Omemo(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
+            Mod::DisplayedMarkers(r#mod) => {
+                r#mod.can_handle_xmpp_message(aparte, account, message, delay)
+            }
         }
     }
 
@@ -347,6 +364,9 @@ impl ModTrait for Mod {
             Mod::Omemo(r#mod) => {
                 r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
             }
+            Mod::DisplayedMarkers(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
         }
     }
 }
@@ -365,6 +385,7 @@ impl fmt::Debug for Mod {
             Mod::Messages(_) => f.write_str("Mod::Messages"),
             Mod::Correction(_) => f.write_str("Mod::Correction"),
             Mod::Omemo(_) => f.write_str("Mod::Omemo"),
+            Mod::DisplayedMarkers(_) => f.write_str("Mod::DisplayedMarkers"),
         }
     }
 }
@@ -383,6 +404,7 @@ impl Display for Mod {
             Mod::Messages(r#mod) => r#mod.fmt(f),
             Mod::Correction(r#mod) => r#mod.fmt(f),
             Mod::Omemo(r#mod) => r#mod.fmt(f),
+            Mod::DisplayedMarkers(r#mod) => r#mod.fmt(f),
         }
     }
 }
@@ -914,6 +936,9 @@ impl Aparte {
         aparte.add_mod(Mod::Messages(mods::messages::MessagesMod::default()));
         aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::default()));
         aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::default()));
+        aparte.add_mod(Mod::DisplayedMarkers(
+            mods::displayed_markers::DisplayedMarkersMod,
+        ));
 
         Ok(aparte)
     }
@@ -1013,6 +1038,12 @@ impl Aparte {
                 mods.insert(
                     TypeId::of::<mods::omemo::OmemoMod>(),
                     RefCell::new(Mod::Omemo(r#mod)),
+                );
+            }
+            Mod::DisplayedMarkers(r#mod) => {
+                mods.insert(
+                    TypeId::of::<mods::displayed_markers::DisplayedMarkersMod>(),
+                    RefCell::new(Mod::DisplayedMarkers(r#mod)),
                 );
             }
         }

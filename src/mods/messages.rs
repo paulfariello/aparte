@@ -16,6 +16,7 @@ use crate::mods::disco;
 #[derive(Default)]
 pub struct MessagesMod {
     messages: HashMap<Option<Account>, HashMap<String, Message>>,
+    stanza_id_index: HashMap<Option<Account>, HashMap<String, String>>,
     sent_muc_ids: HashSet<String>,
 }
 
@@ -32,9 +33,26 @@ impl MessagesMod {
         self.messages.get_mut(account)?.get_mut(id)
     }
 
+    pub fn get_by_stanza_id<'a>(
+        &'a self,
+        account: &Option<Account>,
+        stanza_id: &str,
+    ) -> Option<&'a Message> {
+        let msg_id = self.stanza_id_index.get(account)?.get(stanza_id)?;
+        self.get(account, msg_id)
+    }
+
     pub fn handle_message(&mut self, account: &Option<Account>, message: &Message) {
         let messages = self.messages.entry(account.clone()).or_default();
         messages.insert(message.id().to_string(), message.clone());
+        if let Message::Xmpp(xmpp) = message {
+            if let Some(sid) = &xmpp.stanza_id {
+                self.stanza_id_index
+                    .entry(account.clone())
+                    .or_default()
+                    .insert(sid.clone(), xmpp.id.clone());
+            }
+        }
     }
 
     fn handle_headline_message(
