@@ -17,6 +17,10 @@ use super::{
 
 const MISSING_DIMENSIONS: &str = "Missing dimensions";
 
+pub trait Searchable {
+    fn matches(&self, query: &str) -> bool;
+}
+
 #[derive(Debug)]
 struct LayoutChild<I> {
     child: I,
@@ -74,6 +78,7 @@ where
     children: BTreeSet<LayoutChild<I>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
+    search_query: Option<String>,
 }
 
 impl<E, I, C> Default for ScrollWin<E, I, C>
@@ -101,6 +106,7 @@ where
                 height: LayoutParam::MatchParent,
             },
             dimensions: None,
+            search_query: None,
         }
     }
 
@@ -682,6 +688,81 @@ where
     }
 }
 
+impl<E, I, C> ScrollWin<E, I, C>
+where
+    I: View<E, C> + Hash + Eq + Ord + Searchable,
+{
+    fn search_from(&mut self, query: &str, indices: &[usize]) -> (Option<usize>, Option<usize>) {
+        let old = self.selected_child_index;
+        let children: Vec<&LayoutChild<I>> = self.children.iter().collect();
+        for &i in indices {
+            if children[i].child.matches(query) {
+                self.selected_child_index = Some(i);
+                if i > self.bottom_visible_child_index {
+                    self.bottom_visible_child_index = i;
+                }
+                return (old, Some(i));
+            }
+        }
+        (old, old)
+    }
+
+    pub fn set_search(&mut self, query: &str) -> (Option<usize>, Option<usize>) {
+        self.search_query = Some(query.to_string());
+        let len = self.children.len();
+        if len == 0 {
+            return (self.selected_child_index, self.selected_child_index);
+        }
+        let anchor = self
+            .selected_child_index
+            .unwrap_or(self.bottom_visible_child_index);
+        let before: Vec<usize> = (0..anchor).rev().collect();
+        let after: Vec<usize> = (anchor..len).rev().collect();
+        let indices: Vec<usize> = before.into_iter().chain(after).collect();
+        self.search_from(query, &indices)
+    }
+
+    pub fn search_next(&mut self) -> (Option<usize>, Option<usize>) {
+        let query = match self.search_query.clone() {
+            Some(q) => q,
+            None => return (self.selected_child_index, self.selected_child_index),
+        };
+        let len = self.children.len();
+        if len == 0 {
+            return (self.selected_child_index, self.selected_child_index);
+        }
+        let anchor = self
+            .selected_child_index
+            .unwrap_or(self.bottom_visible_child_index);
+        let before: Vec<usize> = (0..anchor).rev().collect();
+        let after: Vec<usize> = (anchor + 1..len).rev().collect();
+        let indices: Vec<usize> = after.into_iter().chain(before).collect();
+        self.search_from(&query, &indices)
+    }
+
+    pub fn search_prev(&mut self) -> (Option<usize>, Option<usize>) {
+        let query = match self.search_query.clone() {
+            Some(q) => q,
+            None => return (self.selected_child_index, self.selected_child_index),
+        };
+        let len = self.children.len();
+        if len == 0 {
+            return (self.selected_child_index, self.selected_child_index);
+        }
+        let anchor = self
+            .selected_child_index
+            .unwrap_or(self.bottom_visible_child_index);
+        let after: Vec<usize> = (anchor + 1..len).collect();
+        let before: Vec<usize> = (0..=anchor).collect();
+        let indices: Vec<usize> = after.into_iter().chain(before).collect();
+        self.search_from(&query, &indices)
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search_query = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use test_log::test;
@@ -740,6 +821,141 @@ mod tests {
         fn event(&mut self, _event: &mut E) {
             unreachable!()
         }
+    }
+
+    impl Searchable for MockView {
+        fn matches(&self, query: &str) -> bool {
+            query == self.ord.to_string()
+        }
+    }
+
+    #[test]
+    fn test_search_first_finds_match() {
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for i in 0..5 {
+            scroll_win.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 50,
+            top: 0,
+            left: 0,
+        });
+        scroll_win.selected_child_index = Some(4);
+
+        let (old, new) = scroll_win.set_search("2");
+
+        assert_eq!(old, Some(4));
+        assert_eq!(new, Some(2));
+        assert_eq!(scroll_win.selected_child_index, Some(2));
+    }
+
+    #[test]
+    fn test_search_no_match_returns_same() {
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for i in 0..3 {
+            scroll_win.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 50,
+            top: 0,
+            left: 0,
+        });
+        scroll_win.selected_child_index = Some(1);
+
+        let (old, new) = scroll_win.set_search("99");
+
+        assert_eq!(old, Some(1));
+        assert_eq!(new, Some(1));
+        assert_eq!(scroll_win.selected_child_index, Some(1));
+    }
+
+    #[test]
+    fn test_search_next_wraps() {
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for i in 0..5 {
+            scroll_win.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 50,
+            top: 0,
+            left: 0,
+        });
+        scroll_win.set_search("0");
+        assert_eq!(scroll_win.selected_child_index, Some(0));
+
+        // Already at index 0, next should wrap to find... no other "0". So stays.
+        // Use a different query for a proper wrap test.
+        scroll_win.set_search("2");
+        assert_eq!(scroll_win.selected_child_index, Some(2));
+        // next goes toward lower index (older), past 0, wraps to find 2 again
+        let (_, new) = scroll_win.search_next();
+        assert_eq!(new, Some(2)); // only one "2", wrap returns same
+    }
+
+    #[test]
+    fn test_search_prev_direction() {
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for i in 0..5 {
+            scroll_win.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 50,
+            top: 0,
+            left: 0,
+        });
+        scroll_win.selected_child_index = Some(2);
+        scroll_win.search_query = Some("4".to_string());
+
+        // prev goes toward newer (higher index)
+        let (_, new) = scroll_win.search_prev();
+
+        assert_eq!(new, Some(4));
+        assert_eq!(scroll_win.selected_child_index, Some(4));
+    }
+
+    #[test]
+    fn test_clear_search_disables_next() {
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for i in 0..3 {
+            scroll_win.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        scroll_win.layout(&Dimensions {
+            width: 100,
+            height: 50,
+            top: 0,
+            left: 0,
+        });
+        scroll_win.selected_child_index = Some(1);
+        scroll_win.search_query = Some("0".to_string());
+        scroll_win.clear_search();
+
+        let (old, new) = scroll_win.search_next();
+
+        assert_eq!(old, new);
     }
 
     #[test]

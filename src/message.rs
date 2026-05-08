@@ -27,7 +27,7 @@ use terminus::charxel::{Charxel, Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
 use terminus::{
     self, BgColor, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    Style, View,
+    Searchable, Style, View,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
@@ -1037,6 +1037,16 @@ impl<E, C> View<E, C> for MessageView {
     }
 
     fn event(&mut self, _event: &mut E) {}
+}
+
+impl Searchable for MessageView {
+    fn matches(&self, query: &str) -> bool {
+        let lower = query.to_lowercase();
+        match &self.message {
+            Message::Xmpp(msg) => msg.get_last_body().to_lowercase().contains(&lower),
+            Message::Log(log_msg) => log_msg.body.to_string().to_lowercase().contains(&lower),
+        }
+    }
 }
 
 #[cfg(test)]

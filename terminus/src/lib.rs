@@ -29,6 +29,7 @@ pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 pub use color::{
     deserialize_color, serialize_color, BgColor, Color, ColorTuple, FgColor, NamedColor,
 };
+pub use scroll_win::Searchable;
 
 fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
     // XXX utf char boundary?

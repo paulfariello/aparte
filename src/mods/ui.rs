@@ -56,12 +56,16 @@ enum Mode {
     Normal,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum NormalCommand {
     SelectNext,
     SelectPrev,
     ScrollToTop,
     ScrollToBottom,
+    SearchFirst(String),
+    SearchNext,
+    SearchPrev,
+    SearchCancel,
 }
 
 fn build_normal_command_trie() -> Trie<String, NormalCommand> {
@@ -70,6 +74,8 @@ fn build_normal_command_trie() -> Trie<String, NormalCommand> {
     trie.insert("k".to_string(), NormalCommand::SelectPrev);
     trie.insert("gg".to_string(), NormalCommand::ScrollToTop);
     trie.insert("G".to_string(), NormalCommand::ScrollToBottom);
+    trie.insert("n".to_string(), NormalCommand::SearchNext);
+    trie.insert("N".to_string(), NormalCommand::SearchPrev);
     trie
 }
 
@@ -782,6 +788,54 @@ impl UIMod {
                                     }
                                     mam_requested = false;
                                 }
+                                NormalCommand::SearchFirst(query) => {
+                                    let (old, new) = view.set_search(query);
+                                    if old != new {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
+                                        }
+                                    }
+                                }
+                                NormalCommand::SearchNext => {
+                                    let (old, new) = view.search_next();
+                                    if old != new {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
+                                        }
+                                    }
+                                }
+                                NormalCommand::SearchPrev => {
+                                    let (old, new) = view.search_prev();
+                                    if old != new {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
+                                        }
+                                    }
+                                }
+                                NormalCommand::SearchCancel => {
+                                    view.clear_search();
+                                }
                             },
                             UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
                                 let (_, new) = view.select_last_visible();
@@ -966,6 +1020,54 @@ impl UIMod {
                                     }
                                     mam_requested = false;
                                 }
+                                NormalCommand::SearchFirst(query) => {
+                                    let (old, new) = view.set_search(query);
+                                    if old != new {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
+                                        }
+                                    }
+                                }
+                                NormalCommand::SearchNext => {
+                                    let (old, new) = view.search_next();
+                                    if old != new {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
+                                        }
+                                    }
+                                }
+                                NormalCommand::SearchPrev => {
+                                    let (old, new) = view.search_prev();
+                                    if old != new {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
+                                        }
+                                    }
+                                }
+                                NormalCommand::SearchCancel => {
+                                    view.clear_search();
+                                }
                             },
                             UIEvent::Core(Event::ChangeWindow(name))
                                 if name == &channel_for_event.jid.to_string()
@@ -1131,6 +1233,8 @@ impl ModTrait for UIMod {
         {
             let mut mode = Mode::Insert;
             let mut command_buffer = String::new();
+            let mut searching = false;
+            let mut search_buffer = String::new();
             let mut timeout_generation: u64 = 0;
             let normal_commands = build_normal_command_trie();
             let aparte_proxy = aparte.proxy();
@@ -1151,6 +1255,8 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal => {
                         command_buffer.clear();
+                        searching = false;
+                        search_buffer.clear();
                         mode = Mode::Insert;
                         layout.set_focus(INPUT_INDEX);
                         for child in layout.iter_children_mut() {
@@ -1159,12 +1265,76 @@ impl ModTrait for UIMod {
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('/'),
+                        ..
+                    })) if mode == Mode::Normal && !searching => {
+                        searching = true;
+                        search_buffer.clear();
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate("/".to_string()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    })) if mode == Mode::Normal && searching => {
+                        search_buffer.push(*c);
+                        let display = format!("/{search_buffer}");
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(display.clone()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Backspace,
+                        ..
+                    })) if mode == Mode::Normal && searching => {
+                        search_buffer.pop();
+                        let display = if search_buffer.is_empty() {
+                            "/".to_string()
+                        } else {
+                            format!("/{search_buffer}")
+                        };
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(display.clone()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    })) if mode == Mode::Normal && searching => {
+                        searching = false;
+                        let query = search_buffer.clone();
+                        search_buffer.clear();
+                        if !query.is_empty() {
+                            if let Some(focused) = layout.focused_child_mut() {
+                                focused.event(&mut UIEvent::NormalCommand(
+                                    NormalCommand::SearchFirst(query),
+                                ));
+                            }
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Normal && searching => {
+                        searching = false;
+                        search_buffer.clear();
+                        if let Some(focused) = layout.focused_child_mut() {
+                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SearchCancel));
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(c),
                         ..
                     })) if mode == Mode::Normal => {
                         command_buffer.push(*c);
 
-                        if let Some(&cmd) = normal_commands.get(&command_buffer) {
+                        if let Some(cmd) = normal_commands.get(&command_buffer).cloned() {
                             command_buffer.clear();
                             if let Some(focused) = layout.focused_child_mut() {
                                 focused.event(&mut UIEvent::NormalCommand(cmd));
@@ -1528,6 +1698,54 @@ impl ModTrait for UIMod {
                                         c.select(selection_bg);
                                     }
                                 }
+                            }
+                            NormalCommand::SearchFirst(query) => {
+                                let (old, new) = view.set_search(query);
+                                if old != new {
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
+                            }
+                            NormalCommand::SearchNext => {
+                                let (old, new) = view.search_next();
+                                if old != new {
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
+                            }
+                            NormalCommand::SearchPrev => {
+                                let (old, new) = view.search_prev();
+                                if old != new {
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
+                                    }
+                                }
+                            }
+                            NormalCommand::SearchCancel => {
+                                view.clear_search();
                             }
                         },
                         UIEvent::ModeChange(Mode::Insert) => {

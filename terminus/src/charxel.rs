@@ -91,7 +91,7 @@ impl Charxels {
     }
 
     #[allow(clippy::inherent_to_string)]
-    fn to_string(&self) -> String {
+    pub fn to_string(&self) -> String {
         self.0
             .iter()
             .map(|charxel| charxel.grapheme.0.clone())
