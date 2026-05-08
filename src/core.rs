@@ -178,6 +178,11 @@ pub enum Event {
         jid: BareJid,
         id: String,
     },
+    MucMamComplete {
+        account: Account,
+        jid: BareJid,
+        last_stanza_id: Option<String>,
+    },
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -937,7 +942,7 @@ impl Aparte {
         aparte.add_mod(Mod::Correction(mods::correction::CorrectionMod::default()));
         aparte.add_mod(Mod::Omemo(mods::omemo::OmemoMod::default()));
         aparte.add_mod(Mod::DisplayedMarkers(
-            mods::displayed_markers::DisplayedMarkersMod,
+            mods::displayed_markers::DisplayedMarkersMod::default(),
         ));
 
         Ok(aparte)
@@ -1730,9 +1735,6 @@ impl Aparte {
                     let message = Message::log(text.clone());
                     self.schedule(Event::Message(Some(account.clone()), message));
                 }
-            }
-            Iq::Result { payload, .. } => {
-                log::info!("Received unexpected Iq result {:?}", payload);
             }
             other => {
                 self.schedule(Event::Iq(account, other));

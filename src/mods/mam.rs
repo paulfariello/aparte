@@ -16,13 +16,17 @@ use xmpp_parsers::ns;
 use xmpp_parsers::rsm::SetQuery;
 
 use crate::account::Account;
+use crate::conversation::Conversation;
 use crate::core::{Aparte, Event, ModTrait};
+use crate::mods::conversation::ConversationMod;
 
 struct Query {
     jid: BareJid,
     with: Option<BareJid>,
     from: Option<DateTime<FixedOffset>>,
     count: usize,
+    is_muc_join: bool,
+    last_stanza_id: Option<String>,
 }
 
 impl Query {
@@ -94,6 +98,44 @@ impl MamMod {
         if let Some(id) = &result.queryid {
             if let Some(query) = self.queries.get_mut(&id.0) {
                 query.count -= 1;
+
+                if query.is_muc_join && query.last_stanza_id.is_none() {
+                    let stanza_id = result
+                        .forwarded
+                        .message
+                        .payloads
+                        .iter()
+                        .find(|p| p.is("stanza-id", ns::SID))
+                        .and_then(|p| p.attr("id").map(str::to_string));
+
+                    if let Some(sid) = stanza_id {
+                        let sender_nick = result
+                            .forwarded
+                            .message
+                            .from
+                            .as_ref()
+                            .and_then(|j| j.clone().try_into_full().ok())
+                            .map(|fj| fj.resource().to_string());
+
+                        let our_nick = {
+                            let conv_mod = aparte.get_mod::<ConversationMod>();
+                            match conv_mod.get(account, &query.jid) {
+                                Some(Conversation::Channel(ch)) => Some(ch.nick.clone()),
+                                _ => None,
+                            }
+                        };
+
+                        let is_self = matches!(
+                            (sender_nick, our_nick),
+                            (Some(sender), Some(ours)) if sender == ours
+                        );
+
+                        if !is_self {
+                            query.last_stanza_id = Some(sid);
+                        }
+                    }
+                }
+
                 aparte.schedule(Event::RawMessage {
                     account: account.clone(),
                     message: result.forwarded.message,
@@ -118,6 +160,12 @@ impl MamMod {
                 self.iq2id.insert(iq.id().to_string(), queryid);
                 aparte.send(account, iq);
             }
+        } else if query.is_muc_join {
+            aparte.schedule(Event::MucMamComplete {
+                account: account.clone(),
+                jid: query.jid.clone(),
+                last_stanza_id: query.last_stanza_id,
+            });
         }
     }
 }
@@ -169,6 +217,8 @@ impl ModTrait for MamMod {
                     with: None,
                     from: None,
                     count: 100,
+                    is_muc_join: true,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
@@ -178,6 +228,8 @@ impl ModTrait for MamMod {
                     with: Some(contact.clone()),
                     from: None,
                     count: 100,
+                    is_muc_join: false,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
@@ -187,6 +239,8 @@ impl ModTrait for MamMod {
                     with: None,
                     from: *from,
                     count: 100,
+                    is_muc_join: false,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
@@ -200,6 +254,8 @@ impl ModTrait for MamMod {
                     with: Some(contact.clone()),
                     from: *from,
                     count: 100,
+                    is_muc_join: false,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }

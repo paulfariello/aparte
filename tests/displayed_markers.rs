@@ -5,6 +5,8 @@
 //! - A self-sent groupchat `<displayed>` marker clears the MUC unread indicator.
 //! - A marker only clears messages at or before its referenced timestamp (partial clear).
 //! - A groupchat marker is ignored when the MUC has not announced XEP-0359 support.
+//! - A displayed marker is sent to the MUC after MAM catchup when the window is current.
+//! - No displayed marker is sent on join when the MUC does not announce XEP-0359 support.
 
 mod common;
 
@@ -20,6 +22,8 @@ use common::xmpp_fixture::{
     chat_displayed_marker, chat_message, groupchat_displayed_marker, groupchat_message,
     groupchat_message_with_stanza_id, muc_join_presence, xmpp, xmpp_with_contact, XmppFixture,
 };
+
+const NICK: &str = "user";
 
 const ROOM: &str = "dev@conference.localhost";
 const BOUND_JID: &str = "user@localhost/aparte_test";
@@ -223,5 +227,86 @@ fn muc_marker_ignored_without_xep359_support(xmpp: XmppFixture) {
         grid_contains(parser.screen(), &format!("{ROOM} (")),
         "unread indicator was cleared despite no XEP-0359 support — marker should be ignored\n{}",
         describe(parser.screen()),
+    );
+}
+
+/// After MAM catchup on MUC join with the window currently visible, aparte sends
+/// a `<displayed>` groupchat marker to the MUC for the most recent non-self message.
+#[test]
+fn muc_join_sends_displayed_marker_when_window_current() {
+    let mut xmpp = XmppFixture::new_with_muc_sid_and_gc_mam(
+        &[],
+        &[ROOM],
+        &[(
+            "sid-gc-1",
+            &format!("{ROOM}/otheruser"),
+            "msg-gc-1",
+            "Hello",
+        )],
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    // Join the room — the MUC window is automatically focused on join.
+    join_room(&xmpp, ROOM, NICK);
+
+    // MAM catchup completes → window is visible → marker must be sent.
+    let sent = xmpp.recv_outgoing_displayed_marker_for(ROOM, Duration::from_secs(5));
+    assert!(
+        sent,
+        "expected aparte to send a <displayed> marker to {ROOM} after MAM catchup",
+    );
+}
+
+/// No displayed marker is sent when the MUC does not support XEP-0359 (Stanza IDs).
+/// The pending marker must be discarded when disco confirms the absence of the feature.
+#[test]
+fn muc_join_no_marker_without_xep0359_on_join() {
+    let mut xmpp = XmppFixture::new_with_gc_mam_no_sid(
+        &[],
+        &[(
+            "sid-no-xep-1",
+            &format!("{ROOM}/otheruser"),
+            "msg-no-xep-1",
+            "Hello",
+        )],
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    join_room(&xmpp, ROOM, NICK);
+
+    // Wait long enough for MAM and disco to complete, then verify no marker.
+    thread::sleep(Duration::from_millis(800));
+    let sent = xmpp.recv_outgoing_displayed_marker_for(ROOM, Duration::from_millis(200));
+    assert!(
+        !sent,
+        "marker was sent even though the MUC does not support XEP-0359",
+    );
+}
+
+/// When all MAM results were sent by ourselves, no displayed marker is emitted
+/// (XEP-0333 forbids marking self-sent messages as displayed).
+#[test]
+fn muc_join_no_marker_when_all_mam_messages_are_self() {
+    let mut xmpp = XmppFixture::new_with_muc_sid_and_gc_mam(
+        &[],
+        &[ROOM],
+        // Message from our own nick — must not be marked.
+        &[(
+            "sid-self-1",
+            &format!("{ROOM}/{NICK}"),
+            "msg-self-1",
+            "I said this",
+        )],
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    join_room(&xmpp, ROOM, NICK);
+
+    // Wait long enough for MAM to complete, then verify no marker was sent.
+    thread::sleep(Duration::from_millis(800));
+    let sent = xmpp.recv_outgoing_displayed_marker_for(ROOM, Duration::from_millis(200));
+    assert!(
+        !sent,
+        "marker was sent even though all MAM messages were from ourselves",
     );
 }

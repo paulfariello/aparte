@@ -127,6 +127,9 @@ async fn run_mock_server(
     omemo_cfg: Option<OmemoMockConfig>,
     mam_query_tx: Option<mpsc::UnboundedSender<()>>,
     muc_with_sid: Vec<String>,
+    // Groupchat MAM archive for MUC queries: (stanza_id, from_full_jid, msg_id, body)
+    muc_mam_archive: Vec<(String, String, String, String)>,
+    outgoing_msg_tx: mpsc::UnboundedSender<Message>,
 ) {
     // Real XMPP servers echo roster results with from=user_bare_jid, matching
     // the `to` field in the client's request. IqResponseTracker stores by
@@ -226,7 +229,7 @@ async fn run_mock_server(
             msg = stream.next() => {
                 match msg {
                     Some(Ok(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(xmpp_msg)))) => {
-                        // Capture outgoing Message stanzas for OMEMO tests
+                        let _ = outgoing_msg_tx.send(xmpp_msg.clone());
                         if let Some(cfg) = &omemo_cfg {
                             let _ = cfg.stanza_tx.send(xmpp_msg);
                         }
@@ -291,22 +294,39 @@ async fn run_mock_server(
                                     if let Some(tx) = &mam_query_tx {
                                         let _ = tx.send(());
                                     }
-                                    // Extract queryid and send archived messages
+                                    let target = to.as_ref().map(|j| j.to_string()).unwrap_or_default();
+                                    let is_muc = muc_with_sid.contains(&target);
                                     if let Ok(query) = mam::Query::try_from(payload.clone()) {
                                         let queryid = query.queryid.clone();
-                                        for (msg_from, msg_to, msg_id, body) in &mam_archive {
-                                            let result = mam_result_message(
-                                                queryid.as_ref().map(|q| q.0.as_str()).unwrap_or(""),
-                                                msg_id,
-                                                msg_from,
-                                                msg_to,
-                                                msg_id,
-                                                body,
-                                            );
-                                            let _ = stream.send(&result).await;
+                                        let qid = queryid.as_ref().map(|q| q.0.as_str()).unwrap_or("");
+                                        if is_muc {
+                                            for (archive_id, from_full, msg_id, body) in &muc_mam_archive {
+                                                let result = mam_result_groupchat(
+                                                    qid,
+                                                    archive_id,
+                                                    from_full,
+                                                    &target,
+                                                    msg_id,
+                                                    archive_id,
+                                                    body,
+                                                );
+                                                let _ = stream.send(&result).await;
+                                            }
+                                        } else {
+                                            for (msg_from, msg_to, msg_id, body) in &mam_archive {
+                                                let result = mam_result_message(
+                                                    qid,
+                                                    msg_id,
+                                                    msg_from,
+                                                    msg_to,
+                                                    msg_id,
+                                                    body,
+                                                );
+                                                let _ = stream.send(&result).await;
+                                            }
                                         }
                                     }
-                                    let fin = mam_fin_iq(id, true);
+                                    let fin = mam_fin_iq(id, &target, true);
                                     let _ = stream.send(&fin).await;
                                 } else if payload.is("pubsub", ns::PUBSUB) {
                                     if let Ok(pubsub) = PubSub::try_from(payload.clone()) {
@@ -373,7 +393,8 @@ fn start_mock_server(
     omemo_cfg: Option<OmemoMockConfig>,
     mam_query_tx: Option<mpsc::UnboundedSender<()>>,
     muc_with_sid: Vec<String>,
-) -> (MockServer, u16) {
+    muc_mam_archive: Vec<(String, String, String, String)>,
+) -> (MockServer, u16, mpsc::UnboundedReceiver<Message>) {
     let listener = rt.block_on(async {
         TcpListener::bind("127.0.0.1:0")
             .await
@@ -381,6 +402,7 @@ fn start_mock_server(
     });
     let port = listener.local_addr().unwrap().port();
     let (inject_tx, inject_rx) = mpsc::unbounded_channel::<XmppStreamElement>();
+    let (outgoing_msg_tx, outgoing_msg_rx) = mpsc::unbounded_channel::<Message>();
     rt.spawn(run_mock_server(
         listener,
         bound_jid.to_string(),
@@ -391,8 +413,10 @@ fn start_mock_server(
         omemo_cfg,
         mam_query_tx,
         muc_with_sid,
+        muc_mam_archive,
+        outgoing_msg_tx,
     ));
-    (MockServer { inject_tx }, port)
+    (MockServer { inject_tx }, port, outgoing_msg_rx)
 }
 
 // ---------------------------------------------------------------------------
@@ -825,7 +849,7 @@ fn mam_result_message(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
 }
 
-fn mam_fin_iq(req_id: &str, complete: bool) -> XmppStreamElement {
+fn mam_fin_iq(req_id: &str, from_jid: &str, complete: bool) -> XmppStreamElement {
     let fin = mam::Fin {
         complete,
         set: SetResult {
@@ -837,8 +861,54 @@ fn mam_fin_iq(req_id: &str, complete: bool) -> XmppStreamElement {
             count: None,
         },
     };
-    let iq = Iq::from_result(req_id.to_string(), Some(fin));
+    let from = Jid::new(from_jid).ok();
+    let iq = Iq::Result {
+        from,
+        to: None,
+        id: req_id.to_string(),
+        payload: Some(fin.into()),
+    };
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+}
+
+/// A MAM result wrapping a groupchat message with an embedded XEP-0359 stanza-id.
+/// Used to simulate MUC MAM archives in tests.
+fn mam_result_groupchat(
+    queryid: &str,
+    archive_id: &str,
+    from_full: &str,
+    room_bare: &str,
+    msg_id: &str,
+    stanza_id: &str,
+    body: &str,
+) -> XmppStreamElement {
+    let sid_elem: Element =
+        format!("<stanza-id xmlns='urn:xmpp:sid:0' by='{room_bare}' id='{stanza_id}'/>")
+            .parse()
+            .expect("valid stanza-id element");
+    let mut inner =
+        Message::new_with_type(MessageType::Groupchat, Some(Jid::new(room_bare).unwrap()));
+    inner.from = Some(Jid::new(from_full).unwrap());
+    inner.id = Some(Id(msg_id.to_string()));
+    inner.bodies.insert(Default::default(), body.to_string());
+    inner.payloads.push(sid_elem);
+
+    let result = mam::Result_ {
+        id: archive_id.to_string(),
+        queryid: if queryid.is_empty() {
+            None
+        } else {
+            Some(mam::QueryId(queryid.to_string()))
+        },
+        forwarded: Forwarded {
+            delay: None,
+            message: inner,
+        },
+    };
+
+    let mut outer = Message::new_with_type(MessageType::Normal, Some(Jid::new(room_bare).unwrap()));
+    outer.payloads.push(result.into());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
 }
 
 /// A self-sent chat `<displayed>` marker (XEP-0333) referencing a message by ID.
@@ -918,15 +988,16 @@ pub struct XmppFixture {
     mock: MockServer,
     harness: Option<Harness>,
     mam_query_rx: mpsc::UnboundedReceiver<()>,
+    outgoing_msg_rx: mpsc::UnboundedReceiver<Message>,
 }
 
 impl XmppFixture {
     pub fn new(roster: &[&str]) -> Self {
-        Self::new_impl(roster, false, vec![], None, vec![]).0
+        Self::new_impl(roster, false, vec![], None, vec![], vec![]).0
     }
 
     pub fn new_with_disco(roster: &[&str]) -> Self {
-        Self::new_impl(roster, true, vec![], None, vec![]).0
+        Self::new_impl(roster, true, vec![], None, vec![], vec![]).0
     }
 
     pub fn new_with_mam(roster: &[&str], archive: &[(&str, &str, &str, &str)]) -> Self {
@@ -934,7 +1005,7 @@ impl XmppFixture {
             .iter()
             .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
             .collect();
-        Self::new_impl(roster, true, mam_archive, None, vec![]).0
+        Self::new_impl(roster, true, mam_archive, None, vec![], vec![]).0
     }
 
     /// Create fixture with OMEMO-aware mock server (empty contact devices).
@@ -946,7 +1017,7 @@ impl XmppFixture {
             bundle_tx,
             stanza_tx,
         };
-        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![]);
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![]);
         (
             fixture,
             OmemoCapture {
@@ -972,7 +1043,7 @@ impl XmppFixture {
             stanza_tx,
         };
         let roster = [contact_jid];
-        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![]);
+        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![], vec![]);
         (
             fixture,
             OmemoCapture {
@@ -987,7 +1058,52 @@ impl XmppFixture {
     /// `<displayed>` marker handling in MUC contexts.
     pub fn new_with_muc_sid(roster: &[&str], muc_jids: &[&str]) -> Self {
         let muc_with_sid = muc_jids.iter().map(|s| s.to_string()).collect();
-        Self::new_impl(roster, true, vec![], None, muc_with_sid).0
+        Self::new_impl(roster, true, vec![], None, muc_with_sid, vec![]).0
+    }
+
+    /// Create a fixture with XEP-0359 MUC support and a pre-populated groupchat MAM archive.
+    /// `gc_archive` entries: (stanza_id, from_full_jid, msg_id, body).
+    pub fn new_with_muc_sid_and_gc_mam(
+        roster: &[&str],
+        muc_jids: &[&str],
+        gc_archive: &[(&str, &str, &str, &str)],
+    ) -> Self {
+        let muc_with_sid = muc_jids.iter().map(|s| s.to_string()).collect();
+        let muc_mam_archive = gc_archive
+            .iter()
+            .map(|(sid, from, id, body)| {
+                (
+                    sid.to_string(),
+                    from.to_string(),
+                    id.to_string(),
+                    body.to_string(),
+                )
+            })
+            .collect();
+        Self::new_impl(roster, true, vec![], None, muc_with_sid, muc_mam_archive).0
+    }
+
+    /// Create a fixture with a groupchat MAM archive but WITHOUT XEP-0359 support
+    /// for any MUC. Disco responds (with no SID feature) to confirm the absence.
+    /// `gc_archive` entries: (stanza_id, from_full_jid, msg_id, body).
+    pub fn new_with_gc_mam_no_sid(
+        roster: &[&str],
+        gc_archive: &[(&str, &str, &str, &str)],
+    ) -> Self {
+        let muc_mam_archive = gc_archive
+            .iter()
+            .map(|(sid, from, id, body)| {
+                (
+                    sid.to_string(),
+                    from.to_string(),
+                    id.to_string(),
+                    body.to_string(),
+                )
+            })
+            .collect();
+        // respond_to_disco=true so the mock sends an empty disco result (no SID),
+        // which causes JidDisco to fire and confirm that XEP-0359 is unsupported.
+        Self::new_impl(roster, true, vec![], None, vec![], muc_mam_archive).0
     }
 
     fn new_impl(
@@ -996,10 +1112,11 @@ impl XmppFixture {
         mam_archive: Vec<(String, String, String, String)>,
         omemo_cfg: Option<OmemoMockConfig>,
         muc_with_sid: Vec<String>,
+        muc_mam_archive: Vec<(String, String, String, String)>,
     ) -> (Self, ()) {
         let rt = Runtime::new().unwrap();
         let (mam_query_tx, mam_query_rx) = mpsc::unbounded_channel::<()>();
-        let (mock, port) = start_mock_server(
+        let (mock, port, outgoing_msg_rx) = start_mock_server(
             &rt,
             BOUND_JID,
             roster,
@@ -1008,6 +1125,7 @@ impl XmppFixture {
             omemo_cfg,
             Some(mam_query_tx),
             muc_with_sid,
+            muc_mam_archive,
         );
         let config = format!(
             "[accounts.test]\n\
@@ -1028,6 +1146,7 @@ impl XmppFixture {
                 mock,
                 harness: Some(harness),
                 mam_query_rx,
+                outgoing_msg_rx,
             },
             (),
         )
@@ -1068,6 +1187,37 @@ impl XmppFixture {
             count += 1;
         }
         count
+    }
+
+    /// Wait until aparte sends a groupchat `<displayed>` marker to `room_jid`.
+    /// Returns `true` if the marker arrives within `timeout`, `false` otherwise.
+    pub fn recv_outgoing_displayed_marker_for(
+        &mut self,
+        room_jid: &str,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            while let Ok(msg) = self.outgoing_msg_rx.try_recv() {
+                let to_matches = msg
+                    .to
+                    .as_ref()
+                    .map(|j| j.to_string() == room_jid)
+                    .unwrap_or(false);
+                let is_groupchat = msg.type_ == MessageType::Groupchat;
+                let has_displayed = msg
+                    .payloads
+                    .iter()
+                    .any(|p| p.is("displayed", "urn:xmpp:chat-markers:0"));
+                if to_matches && is_groupchat && has_displayed {
+                    return true;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
