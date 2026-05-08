@@ -759,6 +759,14 @@ impl UIMod {
                                     mam_requested = false;
                                 }
                             },
+                            UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
+                                let (_, new) = view.select_last_visible();
+                                if let Some(i) = new {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
+                            }
                             UIEvent::ModeChange(Mode::Insert) => {
                                 if let Some(i) = view.clear_selection() {
                                     if let Some(c) = view.child_at(i) {
@@ -922,6 +930,14 @@ impl UIMod {
                                     jid: channel_for_event.jid.clone(),
                                     from: None,
                                 });
+                            }
+                            UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
+                                let (_, new) = view.select_last_visible();
+                                if let Some(i) = new {
+                                    if let Some(c) = view.child_at(i) {
+                                        c.select(selection_bg);
+                                    }
+                                }
                             }
                             UIEvent::ModeChange(Mode::Insert) => {
                                 if let Some(i) = view.clear_selection() {

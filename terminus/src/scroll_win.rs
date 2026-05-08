@@ -168,6 +168,24 @@ where
         self.selected_child_index.take()
     }
 
+    pub fn has_selection(&self) -> bool {
+        self.selected_child_index.is_some()
+    }
+
+    /// Selects the last visible child without changing the scroll position.
+    /// Returns `(old_index, new_index)`.
+    pub fn select_last_visible(&mut self) -> (Option<usize>, Option<usize>) {
+        let old = self.selected_child_index;
+        if self.children.is_empty() {
+            self.selected_child_index = None;
+            (old, None)
+        } else {
+            let new = self.bottom_visible_child_index;
+            self.selected_child_index = Some(new);
+            (old, Some(new))
+        }
+    }
+
     pub fn insert(&mut self, item: I) {
         // If view index is on last child, then keep it there
         let stick_to_bottom = self.bottom_visible_child_index + 1 == self.children.len();
