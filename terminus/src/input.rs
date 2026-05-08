@@ -144,6 +144,7 @@ impl<E> Input<E> {
         self.view.set(0);
         let _ = self.tmp_buf.take();
         self.password = false;
+        self.show_cursor = true;
     }
 
     pub fn left(&mut self) {
@@ -170,6 +171,7 @@ impl<E> Input<E> {
 
     pub fn password(&mut self) {
         self.password = true;
+        self.show_cursor = false;
     }
 
     pub fn validate(&mut self) -> (String, bool) {
