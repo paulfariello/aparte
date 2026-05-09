@@ -1,11 +1,11 @@
 mod common;
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{
-    describe, grid_contains, row_text, rows_with_bgcolor, wait_for_ready, wait_for_screen, Harness,
-    SELECTION_BGCOLOR,
+    describe, find_row_with, grid_contains, row_text, rows_with_bgcolor, wait_for_ready,
+    wait_for_screen, Harness, SELECTION_BGCOLOR,
 };
 
 /// Send enough unknown commands to push the welcome banner off-screen.
@@ -417,6 +417,65 @@ fn insert_mode_page_up_scrolls_message_window() {
     assert!(
         scrolled,
         "PageUp in INSERT mode should scroll the message window away from newest message\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn insert_mode_page_up_to_top_shows_multiple_messages() {
+    // Regression test: when repeated PageUps drove bottom_visible_child_index to 0,
+    // layout_from_top only showed the single first message. This verifies that the
+    // welcome banner AND the next message ("bad0") are both visible at the top.
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+    wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+
+    // Press PageUp until the welcome banner comes back into view.
+    let banner_visible = {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut found = false;
+        while Instant::now() < deadline {
+            h.send_bytes(b"\x1b[5~");
+            thread::sleep(Duration::from_millis(150));
+            let parser = h.snapshot();
+            if grid_contains(parser.screen(), "\u{258C}") {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        banner_visible,
+        "Expected welcome banner to appear after repeated PageUps\n{}",
+        describe(screen)
+    );
+
+    // The banner must be flush with the top of the message window (row 0 is the
+    // win_bar, so the message window starts at row 1). If blank rows appear above
+    // the banner, layout_from_bottom anchored it to the bottom instead of the top.
+    let banner_row = find_row_with(screen, "\u{258C}");
+    assert!(
+        matches!(banner_row, Some(r) if r <= 4),
+        "Welcome banner should be at the top of the message window (row ≤ 4), got {:?}\n{}",
+        banner_row,
+        describe(screen)
+    );
+
+    // Messages after the banner must also be visible. When layout_from_top only
+    // laid out a single child (the bottom_visible_child_index=0 bug), the rows
+    // below the banner were blank and "bad0" was absent.
+    assert!(
+        grid_contains(screen, "bad0"),
+        "PageUp to top should show multiple messages — expected 'bad0' visible alongside the welcome banner\n{}",
         describe(screen)
     );
 }

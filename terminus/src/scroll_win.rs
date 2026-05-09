@@ -535,15 +535,28 @@ where
     fn layout_from_top(&mut self, dimensions: &Dimensions, heights: &[u16]) {
         let mut child_top = dimensions.top;
 
-        let visible_children_count = self.visible_children_count(dimensions, heights);
+        // Count forward from index 0: how many children fit starting at the top.
+        // (visible_children_count counts backward from bottom_visible_child_index,
+        // which breaks when bottom_visible_child_index is 0 or misplaced near the top.)
+        let mut remaining = dimensions.height;
+        let mut count = 0usize;
+        for &h in heights.iter() {
+            if h > remaining {
+                break;
+            }
+            remaining -= h;
+            count += 1;
+        }
+        let count = count.max(1);
+
+        let first_visible_child_index = 0;
+        let last_visible_child_index = count - 1;
+        self.first_visible_child_index = first_visible_child_index;
+        self.bottom_visible_child_index = last_visible_child_index;
 
         // Empty the BTreeSet so we can mutate children
         let mut children: Vec<_> = std::mem::take(&mut self.children).into_iter().collect();
 
-        // Layout only visible children
-        let last_visible_child_index = self.bottom_visible_child_index;
-        let first_visible_child_index = last_visible_child_index + 1 - visible_children_count;
-        self.first_visible_child_index = first_visible_child_index;
         for (layout_child, &child_height) in children
             [first_visible_child_index..=last_visible_child_index]
             .iter_mut()
@@ -1348,6 +1361,51 @@ mod tests {
             top_child.dimensions.as_ref().map(|d| d.top),
             Some(dimensions.top),
             "first message should be flush with top of window"
+        );
+    }
+
+    #[test]
+    fn test_layout_page_up_to_index_zero_shows_multiple_children() {
+        // Given: 10 messages of height 3 in a window of height 10 — page_up will
+        // eventually drive bottom_visible_child_index to 0, after which
+        // layout_from_top must still show all children that fit (not just one).
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for ord in 0..10usize {
+            scroll_win.insert(MockView {
+                ord,
+                height: 3,
+                ..Default::default()
+            });
+        }
+        let dimensions = Dimensions {
+            width: 100,
+            height: 10,
+            top: 0,
+            left: 0,
+        };
+        scroll_win.layout(&dimensions);
+        // Drive page_up until at_top
+        for _ in 0..10 {
+            let (at_top, _, _) = scroll_win.page_up();
+            scroll_win.layout(&dimensions);
+            if at_top {
+                break;
+            }
+        }
+
+        // Then: first visible child must be at top with no blank space
+        let visible: Vec<_> = scroll_win.visible_children(&dimensions).collect();
+        let top_child = visible.last().unwrap();
+        assert_eq!(
+            top_child.dimensions.as_ref().map(|d| d.top),
+            Some(dimensions.top),
+            "first message should be flush with top of window"
+        );
+        // And more than one child must be visible (3 fit in height 10 with height 3 each)
+        assert!(
+            visible.len() > 1,
+            "multiple children should be visible at the top, got {}",
+            visible.len()
         );
     }
 
