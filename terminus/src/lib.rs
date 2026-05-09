@@ -411,7 +411,7 @@ pub trait View<E, C = ()> {
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
-    fn render(&self, frame: ScreenFrame, config: &C);
+    fn render<'a>(&self, frame: ScreenFrame<'a>, config: &C);
 
     /// Handle an event
     fn event(&mut self, event: &mut E);
