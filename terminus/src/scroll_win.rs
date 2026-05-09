@@ -639,7 +639,14 @@ where
 
         let total_children_height: u32 = heights.iter().map(|&h| h as u32).sum();
 
-        if total_children_height < dimensions.height as u32 {
+        let height_to_bottom: u32 = heights[..=self.bottom_visible_child_index]
+            .iter()
+            .map(|&h| h as u32)
+            .sum();
+
+        if total_children_height < dimensions.height as u32
+            || height_to_bottom < dimensions.height as u32
+        {
             self.layout_from_top(dimensions, &heights);
         } else {
             self.layout_from_bottom(dimensions, &heights);
@@ -1307,6 +1314,40 @@ mod tests {
         assert_eq!(
             visible_children[2].dimensions.as_ref().map(|d| d.height),
             Some(10)
+        );
+    }
+
+    #[test]
+    fn test_layout_page_up_near_top() {
+        // Given: 4 messages of height 4 (total 16), window height 10
+        // After two page_ups we're near the top; first message must be at top, no blank space
+        let mut scroll_win = ScrollWin::<(), MockView>::new();
+        for ord in 0..4usize {
+            scroll_win.insert(MockView {
+                ord,
+                height: 4,
+                ..Default::default()
+            });
+        }
+        let dimensions = Dimensions {
+            width: 100,
+            height: 10,
+            top: 1,
+            left: 1,
+        };
+        scroll_win.layout(&dimensions);
+        scroll_win.page_up();
+        scroll_win.layout(&dimensions);
+        scroll_win.page_up();
+        scroll_win.layout(&dimensions);
+
+        // Then: first visible child must be at dimensions.top (no blank space at top)
+        let visible: Vec<_> = scroll_win.visible_children(&dimensions).collect();
+        let top_child = visible.last().unwrap(); // visible_children iterates bottom→top
+        assert_eq!(
+            top_child.dimensions.as_ref().map(|d| d.top),
+            Some(dimensions.top),
+            "first message should be flush with top of window"
         );
     }
 
