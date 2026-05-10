@@ -866,9 +866,8 @@ fn command_mode_via_slash_shows_command_label() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    enter_normal(&h);
-    h.send_bytes(b"/");
-    let found = wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+    enter_command_slash(&h);
+    let found = grid_contains(h.snapshot().screen(), "COMMAND");
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -983,6 +982,44 @@ fn i_in_command_mode_types_into_buffer() {
     assert!(
         !grid_contains(screen, "INSERT"),
         "'i' in COMMAND mode must not switch to INSERT mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn command_mode_restores_insert_input_on_exit() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Type some text in INSERT mode.
+    h.send_bytes(b"hello world");
+    wait_for_screen(&h, "hello world", Duration::from_secs(2));
+
+    // Enter Normal then Command mode — input bar should show the command, not the saved text.
+    enter_command_colon(&h);
+    h.send_bytes(b"foo");
+    wait_for_screen(&h, ":foo", Duration::from_secs(2));
+
+    let mid = h.snapshot();
+    assert!(
+        !grid_contains(mid.screen(), "hello world"),
+        "Saved input should not be visible while in COMMAND mode\n{}",
+        describe(mid.screen())
+    );
+
+    // Esc back to Normal, then 'i' back to Insert — saved text must be restored.
+    h.send_bytes(b"\x1b");
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    h.send_bytes(b"i");
+    let found = wait_for_screen(&h, "hello world", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Input text typed in INSERT mode should be restored after exiting COMMAND mode\n{}",
         describe(screen)
     );
 }
