@@ -54,6 +54,7 @@ use crate::{contact, conversation};
 enum Mode {
     Insert,
     Normal,
+    Command,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +162,7 @@ impl View<UIEvent, Theme> for TitleBar {
         let mode_label = match self.mode {
             Mode::Insert => " INSERT ",
             Mode::Normal => " NORMAL ",
+            Mode::Command => " COMMAND ",
         };
         let mode_charxels = mode_label
             .with_style(Style::Bold)
@@ -1233,8 +1235,7 @@ impl ModTrait for UIMod {
         {
             let mut mode = Mode::Insert;
             let mut command_buffer = String::new();
-            let mut searching = false;
-            let mut search_buffer = String::new();
+            let mut cmd_line = String::new();
             let mut timeout_generation: u64 = 0;
             let normal_commands = build_normal_command_trie();
             let aparte_proxy = aparte.proxy();
@@ -1255,8 +1256,6 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal => {
                         command_buffer.clear();
-                        searching = false;
-                        search_buffer.clear();
                         mode = Mode::Insert;
                         layout.set_focus(INPUT_INDEX);
                         for child in layout.iter_children_mut() {
@@ -1265,67 +1264,59 @@ impl ModTrait for UIMod {
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char(':'),
+                        ..
+                    })) if mode == Mode::Normal => {
+                        mode = Mode::Command;
+                        cmd_line = ":".to_string();
+                        layout.set_focus(INPUT_INDEX);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Command));
+                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char('/'),
                         ..
-                    })) if mode == Mode::Normal && !searching => {
-                        searching = true;
-                        search_buffer.clear();
+                    })) if mode == Mode::Normal => {
+                        mode = Mode::Command;
+                        cmd_line = "/".to_string();
+                        layout.set_focus(INPUT_INDEX);
                         for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate("/".to_string()));
+                            child.event(&mut UIEvent::ModeChange(Mode::Command));
+                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Command => {
+                        mode = Mode::Normal;
+                        cmd_line.clear();
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        if let Some(focused) = layout.focused_child_mut() {
+                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SearchCancel));
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(c),
                         ..
-                    })) if mode == Mode::Normal && searching => {
-                        search_buffer.push(*c);
-                        let display = format!("/{search_buffer}");
+                    })) if mode == Mode::Command => {
+                        cmd_line.push(*c);
                         for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(display.clone()));
+                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Backspace,
                         ..
-                    })) if mode == Mode::Normal && searching => {
-                        search_buffer.pop();
-                        let display = if search_buffer.is_empty() {
-                            "/".to_string()
-                        } else {
-                            format!("/{search_buffer}")
-                        };
+                    })) if mode == Mode::Command => {
+                        cmd_line.pop();
                         for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(display.clone()));
-                        }
-                    }
-                    UIEvent::Core(Event::Key(KeyEvent {
-                        code: KeyCode::Enter,
-                        ..
-                    })) if mode == Mode::Normal && searching => {
-                        searching = false;
-                        let query = search_buffer.clone();
-                        search_buffer.clear();
-                        if !query.is_empty() {
-                            if let Some(focused) = layout.focused_child_mut() {
-                                focused.event(&mut UIEvent::NormalCommand(
-                                    NormalCommand::SearchFirst(query),
-                                ));
-                            }
-                        }
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
-                        }
-                    }
-                    UIEvent::Core(Event::Key(KeyEvent {
-                        code: KeyCode::Esc, ..
-                    })) if mode == Mode::Normal && searching => {
-                        searching = false;
-                        search_buffer.clear();
-                        if let Some(focused) = layout.focused_child_mut() {
-                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SearchCancel));
-                        }
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1402,20 +1393,25 @@ impl ModTrait for UIMod {
                             focused.event(event);
                         }
                     }
-                    // Enter in Normal mode while searching confirms the search query.
+                    // Enter in Command mode executes the typed command.
                     // (Enter is delivered as UIEvent::Validate by on_event, not as a Key event.)
-                    UIEvent::Validate(result) if mode == Mode::Normal && searching => {
-                        searching = false;
-                        let query = std::mem::take(&mut search_buffer);
-                        if !query.is_empty() {
-                            if let Some(focused) = layout.focused_child_mut() {
-                                focused.event(&mut UIEvent::NormalCommand(
-                                    NormalCommand::SearchFirst(query),
-                                ));
-                            }
-                        }
+                    UIEvent::Validate(result) if mode == Mode::Command => {
+                        mode = Mode::Normal;
+                        let cmd = std::mem::take(&mut cmd_line);
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                        if let Some(query) = cmd.strip_prefix('/') {
+                            let query = query.to_string();
+                            if !query.is_empty() {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::NormalCommand(
+                                        NormalCommand::SearchFirst(query),
+                                    ));
+                                }
+                            }
                         }
                         // Provide an empty result so on_event's unwrap doesn't panic.
                         result.borrow_mut().replace((String::new(), false));
@@ -1590,6 +1586,10 @@ impl ModTrait for UIMod {
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 UIEvent::ModeChange(Mode::Normal) => {
                     input.set_cursor_style(CursorStyle::SteadyBlock);
+                }
+                UIEvent::ModeChange(Mode::Command) => {
+                    input.set_show_cursor(true);
+                    input.set_cursor_style(CursorStyle::SteadyBar);
                 }
                 UIEvent::ModeChange(Mode::Insert) => {
                     input.set_show_cursor(true);

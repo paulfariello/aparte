@@ -798,13 +798,17 @@ fn search_N_moves_to_prev_result() {
 }
 
 #[test]
-fn search_i_returns_to_insert_mode() {
+fn command_mode_esc_then_i_returns_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
     enter_normal(&h);
     h.send_bytes(b"/hello");
-    wait_for_screen(&h, "/hello", Duration::from_secs(2));
+    wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+
+    // Esc returns to Normal, then 'i' enters Insert.
+    h.send_bytes(b"\x1b");
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
 
     h.send_bytes(b"i");
     let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
@@ -815,12 +819,162 @@ fn search_i_returns_to_insert_mode() {
 
     assert!(
         found,
-        "'i' should return to INSERT mode while in search context\n{}",
+        "Esc + 'i' should reach INSERT mode from COMMAND mode\n{}",
         describe(screen)
     );
     assert!(
         !grid_contains(screen, "/hello"),
-        "Search query '/hello' should be cleared from win_bar after pressing 'i'\n{}",
+        "Command buffer should be cleared after Esc from COMMAND mode\n{}",
+        describe(screen)
+    );
+}
+
+fn enter_command_colon(h: &Harness) {
+    enter_normal(h);
+    h.send_bytes(b":");
+    wait_for_screen(h, "COMMAND", Duration::from_secs(2));
+}
+
+fn enter_command_slash(h: &Harness) {
+    enter_normal(h);
+    h.send_bytes(b"/");
+    wait_for_screen(h, "COMMAND", Duration::from_secs(2));
+}
+
+#[test]
+fn command_mode_via_colon_shows_command_label() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b":");
+    let found = wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "':' in Normal mode should show COMMAND mode label\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn command_mode_via_slash_shows_command_label() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"/");
+    let found = wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "'/' in Normal mode should show COMMAND mode label\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn command_mode_keystrokes_appear_in_winbar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_command_colon(&h);
+    h.send_bytes(b"hello");
+    let found = wait_for_screen(&h, ":hello", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Keystrokes in COMMAND mode should appear in win_bar as ':hello'\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn command_mode_backspace_removes_last_char() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_command_colon(&h);
+    h.send_bytes(b"hello");
+    wait_for_screen(&h, ":hello", Duration::from_secs(2));
+
+    h.send_bytes(b"\x7f");
+    let found = wait_for_screen(&h, ":hell", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Backspace in COMMAND mode should remove the last character\n{}",
+        describe(screen)
+    );
+    assert!(
+        !grid_contains(screen, ":hello"),
+        "':hello' should be gone after backspace\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn esc_from_command_mode_returns_to_normal() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_command_colon(&h);
+    h.send_bytes(b"\x1b");
+    let found = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Esc from COMMAND mode should return to NORMAL mode\n{}",
+        describe(screen)
+    );
+    assert!(
+        !grid_contains(screen, "COMMAND"),
+        "COMMAND label should disappear after Esc\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn i_in_command_mode_types_into_buffer() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_command_colon(&h);
+    h.send_bytes(b"i");
+    let found = wait_for_screen(&h, ":i", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "'i' in COMMAND mode should type 'i' into the command buffer\n{}",
+        describe(screen)
+    );
+    assert!(
+        !grid_contains(screen, "INSERT"),
+        "'i' in COMMAND mode must not switch to INSERT mode\n{}",
         describe(screen)
     );
 }
