@@ -628,3 +628,199 @@ fn G_scrolls_to_newest_message() {
         describe(screen)
     );
 }
+
+#[test]
+fn search_slash_shows_in_winbar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"/");
+    let found = wait_for_screen(&h, "/", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "'/' should appear in win_bar after pressing / in Normal mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn search_query_shown_while_typing() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"/hello");
+    let found = wait_for_screen(&h, "/hello", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "'/hello' should appear in win_bar while typing a search query\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn search_result_is_highlighted() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+    enter_normal(&h);
+
+    // Search "bad1" — from the bottom anchor (bad29), the nearest backward match
+    // is "bad19" (index 20 in the sorted children list).
+    h.send_bytes(b"/bad1\r");
+    thread::sleep(Duration::from_millis(400));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let highlighted = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    let match_row = find_row_with(screen, "bad19");
+
+    assert!(
+        match_row.is_some(),
+        "'bad19' should be visible on screen after searching for 'bad1'\n{}",
+        describe(screen)
+    );
+    assert!(
+        highlighted.contains(&match_row.unwrap()),
+        "Row containing 'bad19' should have selection background after search\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn search_n_moves_to_next_result() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+    enter_normal(&h);
+
+    // Initial search finds "bad19" (nearest backward match for "bad1" from bottom).
+    h.send_bytes(b"/bad1\r");
+    thread::sleep(Duration::from_millis(400));
+
+    let highlighted_before = {
+        let parser = h.snapshot();
+        rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR)
+    };
+
+    // n searches forward (toward newer messages then wrapping); next match is "bad12".
+    h.send_bytes(b"n");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let highlighted_after = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+
+    assert!(
+        !highlighted_before.is_empty(),
+        "Expected a highlighted search result before pressing 'n'\n{}",
+        describe(screen)
+    );
+    assert!(
+        !highlighted_after.is_empty(),
+        "Expected a highlighted search result after pressing 'n'\n{}",
+        describe(screen)
+    );
+    assert_ne!(
+        highlighted_before,
+        highlighted_after,
+        "'n' should move the highlighted selection to a different message\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn search_N_moves_to_prev_result() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+    enter_normal(&h);
+
+    // Get to a mid-search position: initial → bad19, then n → bad12.
+    h.send_bytes(b"/bad1\r");
+    thread::sleep(Duration::from_millis(300));
+    h.send_bytes(b"n");
+    thread::sleep(Duration::from_millis(200));
+
+    let highlighted_before = {
+        let parser = h.snapshot();
+        rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR)
+    };
+
+    // N goes in the opposite direction; from bad12 the next prev-match is "bad13".
+    h.send_bytes(b"N");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let highlighted_after = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+
+    assert!(
+        !highlighted_before.is_empty(),
+        "Expected a highlighted search result before pressing 'N'\n{}",
+        describe(screen)
+    );
+    assert!(
+        !highlighted_after.is_empty(),
+        "Expected a highlighted search result after pressing 'N'\n{}",
+        describe(screen)
+    );
+    assert_ne!(
+        highlighted_before,
+        highlighted_after,
+        "'N' should move the highlighted selection to a different message than 'n' did\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn search_i_returns_to_insert_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"/hello");
+    wait_for_screen(&h, "/hello", Duration::from_secs(2));
+
+    h.send_bytes(b"i");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "'i' should return to INSERT mode while in search context\n{}",
+        describe(screen)
+    );
+    assert!(
+        !grid_contains(screen, "/hello"),
+        "Search query '/hello' should be cleared from win_bar after pressing 'i'\n{}",
+        describe(screen)
+    );
+}

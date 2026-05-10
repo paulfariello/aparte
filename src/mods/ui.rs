@@ -1402,6 +1402,24 @@ impl ModTrait for UIMod {
                             focused.event(event);
                         }
                     }
+                    // Enter in Normal mode while searching confirms the search query.
+                    // (Enter is delivered as UIEvent::Validate by on_event, not as a Key event.)
+                    UIEvent::Validate(result) if mode == Mode::Normal && searching => {
+                        searching = false;
+                        let query = std::mem::take(&mut search_buffer);
+                        if !query.is_empty() {
+                            if let Some(focused) = layout.focused_child_mut() {
+                                focused.event(&mut UIEvent::NormalCommand(
+                                    NormalCommand::SearchFirst(query),
+                                ));
+                            }
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                        // Provide an empty result so on_event's unwrap doesn't panic.
+                        result.borrow_mut().replace((String::new(), false));
+                    }
                     _ => {
                         for child in layout.iter_children_mut() {
                             child.event(event);
