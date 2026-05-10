@@ -93,6 +93,7 @@ enum UIEvent {
     ModeChange(Mode),
     NormalCommand(NormalCommand),
     CommandBufferUpdate(String),
+    SetInput(String),
     ReduceHighlight(String, u64, u64),
 }
 
@@ -1236,6 +1237,7 @@ impl ModTrait for UIMod {
             let mut mode = Mode::Insert;
             let mut command_buffer = String::new();
             let mut cmd_line = String::new();
+            let mut saved_input = String::new();
             let mut timeout_generation: u64 = 0;
             let normal_commands = build_normal_command_trie();
             let aparte_proxy = aparte.proxy();
@@ -1270,9 +1272,19 @@ impl ModTrait for UIMod {
                         mode = Mode::Command;
                         cmd_line = ":".to_string();
                         layout.set_focus(INPUT_INDEX);
+                        // Save current input content so it can be restored on exit.
+                        let result = Rc::new(RefCell::new(None));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::GetInput(Rc::clone(&result)));
+                        }
+                        saved_input = result
+                            .borrow()
+                            .as_ref()
+                            .map(|(buf, _, _)| buf.clone())
+                            .unwrap_or_default();
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Command));
-                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
+                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1282,9 +1294,19 @@ impl ModTrait for UIMod {
                         mode = Mode::Command;
                         cmd_line = "/".to_string();
                         layout.set_focus(INPUT_INDEX);
+                        // Save current input content so it can be restored on exit.
+                        let result = Rc::new(RefCell::new(None));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::GetInput(Rc::clone(&result)));
+                        }
+                        saved_input = result
+                            .borrow()
+                            .as_ref()
+                            .map(|(buf, _, _)| buf.clone())
+                            .unwrap_or_default();
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Command));
-                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
+                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1292,12 +1314,14 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Command => {
                         mode = Mode::Normal;
                         cmd_line.clear();
+                        let saved = std::mem::take(&mut saved_input);
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         if let Some(focused) = layout.focused_child_mut() {
                             focused.event(&mut UIEvent::NormalCommand(NormalCommand::SearchCancel));
                         }
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::SetInput(saved.clone()));
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                     }
@@ -1307,7 +1331,7 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Command => {
                         cmd_line.push(*c);
                         for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
+                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1316,7 +1340,7 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Command => {
                         cmd_line.pop();
                         for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(cmd_line.clone()));
+                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1398,9 +1422,11 @@ impl ModTrait for UIMod {
                     UIEvent::Validate(result) if mode == Mode::Command => {
                         mode = Mode::Normal;
                         let cmd = std::mem::take(&mut cmd_line);
+                        let saved = std::mem::take(&mut saved_input);
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::SetInput(saved.clone()));
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                         if let Some(query) = cmd.strip_prefix('/') {
@@ -1584,6 +1610,11 @@ impl ModTrait for UIMod {
                     input.cursor = cursor.clone();
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+                UIEvent::SetInput(text) => {
+                    input.cursor =
+                        Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
+                    input.buf = text.clone();
+                }
                 UIEvent::ModeChange(Mode::Normal) => {
                     input.set_cursor_style(CursorStyle::SteadyBlock);
                 }

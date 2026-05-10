@@ -882,7 +882,7 @@ fn command_mode_via_slash_shows_command_label() {
 }
 
 #[test]
-fn command_mode_keystrokes_appear_in_winbar() {
+fn command_mode_keystrokes_appear_in_input_bar() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
@@ -896,7 +896,7 @@ fn command_mode_keystrokes_appear_in_winbar() {
 
     assert!(
         found,
-        "Keystrokes in COMMAND mode should appear in win_bar as ':hello'\n{}",
+        "Keystrokes in COMMAND mode should appear in input bar as ':hello'\n{}",
         describe(screen)
     );
 }
@@ -907,24 +907,32 @@ fn command_mode_backspace_removes_last_char() {
     wait_for_ready(&h);
 
     enter_command_colon(&h);
-    h.send_bytes(b"hello");
-    wait_for_screen(&h, ":hello", Duration::from_secs(2));
+    h.send_bytes(b"hellox");
+    wait_for_screen(&h, ":hellox", Duration::from_secs(2));
 
     h.send_bytes(b"\x7f");
-    let found = wait_for_screen(&h, ":hell", Duration::from_secs(2));
+    // Wait for the unique suffix "hellox" to disappear (":hell" would match prematurely).
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        let parser = h.snapshot();
+        if !grid_contains(parser.screen(), ":hellox") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 
     let parser = h.snapshot();
     let screen = parser.screen();
     h.shutdown();
 
     assert!(
-        found,
-        "Backspace in COMMAND mode should remove the last character\n{}",
+        grid_contains(screen, ":hello"),
+        "':hello' should be visible after backspace removes 'x'\n{}",
         describe(screen)
     );
     assert!(
-        !grid_contains(screen, ":hello"),
-        "':hello' should be gone after backspace\n{}",
+        !grid_contains(screen, ":hellox"),
+        "':hellox' should be gone after backspace\n{}",
         describe(screen)
     );
 }
