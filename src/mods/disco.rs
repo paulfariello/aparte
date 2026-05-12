@@ -81,7 +81,7 @@ impl DiscoMod {
             }
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Cannot get jid disco info: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Ok(IqResponse::Result(None)) | Err(_) => {
                 Err(anyhow!("Cannot get jid disco info: invalid response"))
@@ -115,7 +115,7 @@ impl DiscoMod {
             }
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Cannot get server disco info: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Ok(IqResponse::Result(None)) | Err(_) => {
                 Err(anyhow!("Cannot get server disco info: invalid response"))

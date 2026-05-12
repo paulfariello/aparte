@@ -114,7 +114,8 @@ impl ModTrait for ConversationMod {
                             conversation::Conversation::Channel(channel) => {
                                 // Look for mentions
                                 let mut mention = false;
-                                let body = message.get_last_body();
+                                let body =
+                                    message.get_last_body(aparte.config.preferred_langs_strs());
                                 for word in body.split_word_bounds() {
                                     if channel.nick == word {
                                         mention = true;

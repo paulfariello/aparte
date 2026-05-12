@@ -386,7 +386,7 @@ impl CryptoEngineTrait for MucOmemoEngine {
         let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
         let dek = Aes128Gcm::generate_key(OsRng);
         let cipher = Aes128Gcm::new(&dek);
-        let body = message.get_last_body();
+        let body = message.get_last_body(vec![]);
         let encrypted = cipher
             .encrypt(&nonce, body.as_bytes())
             .map_err(|e| anyhow!("{e}"))?;
@@ -636,7 +636,7 @@ impl CryptoEngineTrait for OmemoEngine {
         let dek = Aes128Gcm::generate_key(OsRng);
 
         let cipher = Aes128Gcm::new(&dek);
-        let body = message.get_last_body();
+        let body = message.get_last_body(vec![]);
         let encrypted = cipher
             .encrypt(&nonce, body.as_bytes())
             .map_err(|e| anyhow!("{e}"))?;
@@ -1283,7 +1283,8 @@ impl OmemoMod {
         {
             Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
             Ok(IqResponse::Error(error)) => {
-                let text = match i18n::get_best(&error.texts, vec![]) {
+                let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
+                {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
@@ -1306,7 +1307,8 @@ impl OmemoMod {
         match aparte.iq(account, Self::get_devices_iq(jid)).await {
             Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
             Ok(IqResponse::Error(error)) => {
-                let text = match i18n::get_best(&error.texts, vec![]) {
+                let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
+                {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
@@ -1351,7 +1353,8 @@ impl OmemoMod {
         {
             Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
             Ok(IqResponse::Error(error)) => {
-                let text = match i18n::get_best(&error.texts, vec![]) {
+                let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
+                {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
@@ -1513,7 +1516,8 @@ impl OmemoMod {
                 log::info!("Bundle for device {device_id} published successfully")
             }
             Ok(IqResponse::Error(error)) => {
-                let text = match i18n::get_best(&error.texts, vec![]) {
+                let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
+                {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
@@ -1552,7 +1556,8 @@ impl OmemoMod {
                 log::info!("Device {device_id} registered successfully in device list")
             }
             Ok(IqResponse::Error(error)) => {
-                let text = match i18n::get_best(&error.texts, vec![]) {
+                let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
+                {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };
@@ -1585,7 +1590,8 @@ impl OmemoMod {
                 Ok(None)
             }
             Ok(IqResponse::Error(error)) => {
-                let text = match i18n::get_best(&error.texts, vec![]) {
+                let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
+                {
                     Some((_, text)) => text.to_string(),
                     None => format!("{:?}", error.defined_condition),
                 };

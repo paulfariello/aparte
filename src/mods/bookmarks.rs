@@ -168,7 +168,7 @@ mod bookmarks_v1 {
             }
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't get bookmarks: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Ok(IqResponse::Result(None)) | Err(_) => {
                 Err(anyhow!("Can't get bookmarks: invalid result"))
@@ -196,7 +196,7 @@ mod bookmarks_v1 {
             Ok(IqResponse::Result(_)) => Ok(()),
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't update bookmarks: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Err(_) => Err(anyhow!("Can't update bookmarks: invalid result")),
         }
@@ -334,7 +334,7 @@ mod bookmarks_v2 {
             }
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't get bookmarks: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Ok(IqResponse::Result(None)) | Err(_) => {
                 Err(anyhow!("Can't get bookmarks: invalid result"))
@@ -396,7 +396,7 @@ mod bookmarks_v2 {
             Ok(IqResponse::Result(_)) => Ok(()),
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't add bookmarks: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Err(_) => Err(anyhow!("Can't add bookmarks: invalid result")),
         }
@@ -451,7 +451,7 @@ mod bookmarks_v2 {
             Ok(IqResponse::Result(_)) => Ok(()),
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't delete bookmarks: {}",
-                i18n::xmpp_err_to_string(&error, vec![]).1
+                i18n::xmpp_err_to_string(&error, aparte.config.preferred_langs_strs()).1
             )),
             Err(_) => Err(anyhow!("Can't delete bookmarks: invalid result")),
         }

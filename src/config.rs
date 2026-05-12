@@ -49,6 +49,7 @@ pub struct Config {
     pub bell: bool,
     pub theme_name: Option<String>,
     pub theme: Theme,
+    pub preferred_langs: Vec<String>,
 }
 
 impl Config {
@@ -59,6 +60,10 @@ impl Config {
             }
         }
         self.theme.clone()
+    }
+
+    pub fn preferred_langs_strs(&self) -> Vec<&str> {
+        self.preferred_langs.iter().map(|s| s.as_str()).collect()
     }
 }
 

@@ -110,9 +110,9 @@ impl VersionedXmppMessage {
         let last = self.history.iter().max().unwrap();
         last.bodies.iter()
     }
-    pub fn get_last_body(&self) -> &str {
+    pub fn get_last_body(&self, preferred_langs: Vec<&str>) -> &str {
         let last = self.history.iter().max().unwrap();
-        last.get_best_body(vec![])
+        last.get_best_body(preferred_langs)
     }
 
     pub fn get_original_timestamp(&self) -> &DateTime<FixedOffset> {
@@ -519,7 +519,7 @@ impl Message {
 
     pub fn body(&self) -> Charxels {
         match self {
-            Message::Xmpp(message) => message.get_last_body().into_charxels(),
+            Message::Xmpp(message) => message.get_last_body(vec![]).into_charxels(),
             Message::Log(LogMessage { body, .. }) => body.clone(),
         }
     }
@@ -829,7 +829,7 @@ impl MessageView {
         });
 
         let timestamp = Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
-        let body = message.get_last_body();
+        let body = message.get_last_body(vec![]);
         let me = body.starts_with("/me");
 
         let foreground = terminus::FgColor(id_to_rgb(&author));
@@ -862,7 +862,7 @@ impl MessageView {
         let padding_len = header.display_width();
         let padding = " ".repeat(padding_len.into());
 
-        let body = message.get_last_body();
+        let body = message.get_last_body(vec![]);
         let mut iter = body.strip_prefix("/me").unwrap_or(body).lines();
 
         if let Some(line) = iter.next() {
@@ -1054,7 +1054,7 @@ impl Searchable for MessageView {
     fn matches(&self, query: &str) -> bool {
         let lower = query.to_lowercase();
         match &self.message {
-            Message::Xmpp(msg) => msg.get_last_body().to_lowercase().contains(&lower),
+            Message::Xmpp(msg) => msg.get_last_body(vec![]).to_lowercase().contains(&lower),
             Message::Log(log_msg) => log_msg.body.to_string().to_lowercase().contains(&lower),
         }
     }

@@ -98,10 +98,11 @@ struct TitleBar {
     connection: Option<String>,
     subjects: HashMap<String, HashMap<String, String>>,
     dimensions: Option<Dimensions>,
+    preferred_langs: Vec<String>,
 }
 
 impl TitleBar {
-    fn new() -> Self {
+    fn new(preferred_langs: Vec<String>) -> Self {
         Self {
             current_jid: None,
             display_name: None,
@@ -110,6 +111,7 @@ impl TitleBar {
             connection: None,
             subjects: HashMap::new(),
             dimensions: None,
+            preferred_langs,
         }
     }
 
@@ -186,7 +188,10 @@ impl View<UIEvent, Theme> for TitleBar {
                 .as_deref()
                 .and_then(|jid| self.subjects.get(jid));
             if let Some(subjects) = subjects {
-                if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
+                if let Some((_lang, subject)) = i18n::get_best(
+                    subjects,
+                    self.preferred_langs.iter().map(|s| s.as_str()).collect(),
+                ) {
                     if let Some(subject) = subject.lines().next() {
                         title.append(" – ");
                         title.append(subject);
@@ -1536,7 +1541,7 @@ impl ModTrait for UIMod {
                     }
                 }
             });
-        let title_bar = TitleBar::new();
+        let title_bar = TitleBar::new(aparte.config.preferred_langs.clone());
         let input = Input::new().with_event(|input, event| {
             if let UIEvent::Core(Event::Key(key)) = event {
                 log::debug!("Input event: {:?}", key);
