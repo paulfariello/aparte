@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use radix_trie::TrieCommon;
 use terminus::cursor::Cursor;
 use xmpp_parsers::jid::BareJid;
 

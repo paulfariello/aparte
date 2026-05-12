@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local as LocalTz};
 use crossterm::{event::KeyEvent, execute, terminal};
 use futures::stream::StreamExt;
+use radix_trie::{Trie, TrieCommon};
 use rand::Rng;
 use secrecy::ExposeSecret;
 use std::cell::{Ref, RefCell, RefMut};
@@ -710,7 +711,7 @@ Examples:
 },
 |aparte, _command| {
     if let Some(cmd) = cmd {
-        let help = aparte.command_parsers.get(&cmd).with_context(|| format!("Unknown command {cmd}"))?.help.to_string();
+        let help = resolve_command_parser(&aparte.command_parsers, &cmd)?.help.to_string();
 
         crate::info!(aparte, "{}", help);
         Ok(())
@@ -747,7 +748,7 @@ macro_rules! error(
 );
 
 pub struct Aparte {
-    pub command_parsers: Rc<HashMap<String, CommandParser>>,
+    pub command_parsers: Rc<Trie<String, CommandParser>>,
     mods: Rc<HashMap<TypeId, RefCell<Mod>>>,
     connections: HashMap<Account, Connection>,
     current_connection: Option<Account>,
@@ -765,6 +766,35 @@ pub struct Aparte {
     record_path: Option<PathBuf>,
     pending_annotations: Arc<Mutex<Vec<String>>>,
     render_notify: Arc<Notify>,
+}
+
+/// Look up a command parser by name, falling back to a unique-prefix match.
+/// `:q` resolves to `:quit` when no other command starts with `q`.
+fn resolve_command_parser<'a>(
+    parsers: &'a Trie<String, CommandParser>,
+    name: &str,
+) -> Result<&'a CommandParser> {
+    if let Some(parser) = parsers.get(name) {
+        return Ok(parser);
+    }
+    if name.is_empty() {
+        anyhow::bail!("Unknown command {name}");
+    }
+    let Some(subtrie) = parsers.get_raw_descendant(name) else {
+        anyhow::bail!("Unknown command {name}");
+    };
+    let mut matches = subtrie.iter();
+    let Some((_, parser)) = matches.next() else {
+        anyhow::bail!("Unknown command {name}");
+    };
+    if matches.next().is_some() {
+        let candidates: Vec<&str> = subtrie.keys().map(String::as_str).collect();
+        anyhow::bail!(
+            "Ambiguous command {name}: matches {}",
+            candidates.join(", ")
+        );
+    }
+    Ok(parser)
 }
 
 impl Aparte {
@@ -803,7 +833,7 @@ impl Aparte {
         let (iq_tx, iq_rx) = mpsc::unbounded_channel();
 
         let mut aparte = Self {
-            command_parsers: Rc::new(HashMap::new()),
+            command_parsers: Rc::new(Trie::new()),
             mods: Rc::new(HashMap::new()),
             connections: HashMap::new(),
             storage: Storage::new(storage_path)?,
@@ -851,22 +881,13 @@ impl Aparte {
         buf: &str,
     ) -> Result<()> {
         let command_name = Command::parse_name(buf)?;
-
-        let parser = self
-            .command_parsers
-            .get(command_name)
-            .with_context(|| format!("Unknown command {command_name}"))?;
-
+        let parser = resolve_command_parser(&self.command_parsers, command_name)?;
         let command = (parser.parse)(account, context, buf)?;
         (parser.exec)(self, command)
     }
 
     pub fn handle_command(&mut self, command: Command) -> Result<()> {
-        let parser = self
-            .command_parsers
-            .get(&command.args[0])
-            .with_context(|| format!("Unknown command {}", command.args[0]))?;
-
+        let parser = resolve_command_parser(&self.command_parsers, &command.args[0])?;
         (parser.exec)(self, command)
     }
 
@@ -1807,5 +1828,78 @@ impl AparteAsync {
     ) {
         let mut crypto_engines = self.crypto_engines.lock().unwrap();
         crypto_engines.insert((account.clone(), recipient.clone()), crypto_engine);
+    }
+}
+
+#[cfg(test)]
+mod tests_command_resolution {
+    use super::*;
+
+    fn fake_parser(name: &'static str) -> CommandParser {
+        fn parse(_: &Option<Account>, _: &str, _: &str) -> Result<Command> {
+            unreachable!()
+        }
+        fn exec(_: &mut Aparte, _: Command) -> Result<()> {
+            unreachable!()
+        }
+        CommandParser {
+            name,
+            help: String::new(),
+            parse,
+            exec,
+            autocompletions: Vec::new(),
+        }
+    }
+
+    fn build_trie(names: &[&'static str]) -> Trie<String, CommandParser> {
+        let mut trie = Trie::new();
+        for name in names {
+            trie.insert(name.to_string(), fake_parser(name));
+        }
+        trie
+    }
+
+    #[test]
+    fn exact_match_wins() {
+        let trie = build_trie(&["quit", "query"]);
+        assert_eq!(resolve_command_parser(&trie, "quit").unwrap().name, "quit");
+    }
+
+    #[test]
+    fn unique_prefix_resolves() {
+        let trie = build_trie(&["quit", "join", "msg"]);
+        assert_eq!(resolve_command_parser(&trie, "q").unwrap().name, "quit");
+        assert_eq!(resolve_command_parser(&trie, "j").unwrap().name, "join");
+        assert_eq!(resolve_command_parser(&trie, "ms").unwrap().name, "msg");
+    }
+
+    fn err_msg(result: Result<&CommandParser>) -> String {
+        match result {
+            Ok(p) => panic!("expected error, got parser {}", p.name),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn ambiguous_prefix_errors_and_lists_candidates() {
+        let trie = build_trie(&["close", "connect", "join"]);
+        let err = err_msg(resolve_command_parser(&trie, "c"));
+        assert!(err.starts_with("Ambiguous command c"), "got: {err}");
+        assert!(err.contains("close"), "got: {err}");
+        assert!(err.contains("connect"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_command_errors() {
+        let trie = build_trie(&["quit"]);
+        let err = err_msg(resolve_command_parser(&trie, "zzz"));
+        assert_eq!(err, "Unknown command zzz");
+    }
+
+    #[test]
+    fn empty_name_is_unknown_not_ambiguous() {
+        let trie = build_trie(&["quit", "join"]);
+        let err = err_msg(resolve_command_parser(&trie, ""));
+        assert_eq!(err, "Unknown command ");
     }
 }
