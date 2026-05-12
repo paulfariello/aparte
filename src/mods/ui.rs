@@ -43,19 +43,12 @@ use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::config::{Config, Theme};
 use crate::conversation::{Channel, Chat, Conversation};
-use crate::core::{Aparte, Event, ModTrait};
+use crate::core::{Aparte, Event, ModTrait, UIMode as Mode};
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::mods::bookmarks::BookmarksMod;
 use crate::mods::messages::MessagesMod;
 use crate::{contact, conversation};
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-enum Mode {
-    Insert,
-    Normal,
-    Command,
-}
 
 #[derive(Clone, Debug)]
 enum NormalCommand {
@@ -231,7 +224,7 @@ impl View<UIEvent, Theme> for TitleBar {
                 );
             }
             UIEvent::ModeChange(mode) => {
-                self.mode = mode.clone();
+                self.mode = *mode;
             }
             _ => {}
         }
@@ -590,6 +583,7 @@ pub struct UIMod {
     root: LinearLayout<UIEvent, Theme>,
     dirty: bool,
     password_command: Option<Command>,
+    current_mode: Mode,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
     _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
     dimensions: Dimensions,
@@ -613,6 +607,7 @@ impl UIMod {
             conversations: HashMap::new(),
             jid_to_name: HashMap::new(),
             password_command: None,
+            current_mode: Mode::Insert,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
             dirty: true,
@@ -1247,6 +1242,7 @@ impl ModTrait for UIMod {
                         code: KeyCode::Esc, ..
                     })) if mode == Mode::Insert => {
                         mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         command_buffer.clear();
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
@@ -1259,6 +1255,7 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Normal => {
                         command_buffer.clear();
                         mode = Mode::Insert;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Insert));
                         layout.set_focus(INPUT_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
@@ -1270,6 +1267,7 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal => {
                         mode = Mode::Command;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Command));
                         layout.set_focus(INPUT_INDEX);
                         // Save current input content so it can be restored on exit.
                         let result = Rc::new(RefCell::new(None));
@@ -1291,6 +1289,7 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal => {
                         mode = Mode::Command;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Command));
                         layout.set_focus(INPUT_INDEX);
                         // Save current input content so it can be restored on exit.
                         let result = Rc::new(RefCell::new(None));
@@ -1311,6 +1310,7 @@ impl ModTrait for UIMod {
                         code: KeyCode::Esc, ..
                     })) if mode == Mode::Command => {
                         mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         let saved = std::mem::take(&mut saved_input);
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         if let Some(focused) = layout.focused_child_mut() {
@@ -1419,6 +1419,7 @@ impl ModTrait for UIMod {
                             .unwrap_or_default();
 
                         mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         let saved = std::mem::take(&mut saved_input);
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
@@ -2040,6 +2041,9 @@ impl ModTrait for UIMod {
                         .event(&mut UIEvent::Core(Event::Close(window.clone())))
                 }
             }
+            Event::UIMode(mode) => {
+                self.current_mode = *mode;
+            }
             Event::Key(key) => {
                 match key {
                     KeyEvent {
@@ -2060,20 +2064,48 @@ impl ModTrait for UIMod {
                                 KeyModifiers::NONE,
                             )));
                         } else {
-                            let window = self.current_window.clone().unwrap();
-                            let account = match self.conversations.get(&window) {
-                                Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
-                                Some(Conversation::Channel(channel)) => {
-                                    Some(channel.account.clone())
+                            match self.current_mode {
+                                Mode::Normal => {}
+                                Mode::Insert => {
+                                    // Nick completion only — skip if the buffer looks like a command.
+                                    if !raw_buf.starts_with(':') {
+                                        let window = self.current_window.clone().unwrap();
+                                        let account = match self.conversations.get(&window) {
+                                            Some(Conversation::Chat(chat)) => {
+                                                Some(chat.account.clone())
+                                            }
+                                            Some(Conversation::Channel(channel)) => {
+                                                Some(channel.account.clone())
+                                            }
+                                            _ => None,
+                                        };
+                                        aparte.schedule(Event::AutoComplete {
+                                            account,
+                                            context: window,
+                                            raw_buf,
+                                            cursor,
+                                        });
+                                    }
                                 }
-                                _ => None,
-                            };
-                            aparte.schedule(Event::AutoComplete {
-                                account,
-                                context: window,
-                                raw_buf,
-                                cursor,
-                            });
+                                Mode::Command => {
+                                    let window = self.current_window.clone().unwrap();
+                                    let account = match self.conversations.get(&window) {
+                                        Some(Conversation::Chat(chat)) => {
+                                            Some(chat.account.clone())
+                                        }
+                                        Some(Conversation::Channel(channel)) => {
+                                            Some(channel.account.clone())
+                                        }
+                                        _ => None,
+                                    };
+                                    aparte.schedule(Event::AutoComplete {
+                                        account,
+                                        context: window,
+                                        raw_buf,
+                                        cursor,
+                                    });
+                                }
+                            }
                         }
                     }
                     KeyEvent {

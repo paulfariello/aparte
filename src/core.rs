@@ -76,6 +76,13 @@ const WELCOME: &str = r#"
 "#;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UIMode {
+    Insert,
+    Normal,
+    Command,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     Start,
@@ -173,6 +180,7 @@ pub enum Event {
     Subject(Account, Jid, HashMap<String, String>),
     Omemo(mods::omemo::OmemoEvent),
     UIRender(bool),
+    UIMode(UIMode),
     CommandTimeout(u64),
     DisplayedMarker {
         account: Account,
