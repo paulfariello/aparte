@@ -1,118 +1,118 @@
 Aparté [![Build Status](https://circleci.com/gh/paulfariello/aparte.svg?style=svg)](https://app.circleci.com/pipelines/github/paulfariello/aparte)
 ======
 
-Simple XMPP console client written in Rust and inspired by [Profanity](http://profanity-im.github.io/).
-
-Demo
-====
+A terminal XMPP client written in Rust. Keyboard-driven with a vim-style modal interface, inspired by [Profanity](http://profanity-im.github.io/).
 
 [![asciicast](https://asciinema.org/a/389329.png)](https://asciinema.org/a/389329)
 
 Features
-========
+--------
 
-  - [x] Channel
-  - [x] Roster
-  - [x] Auto completion
-  - [x] Bookmarks
-  - [x] Consistent color generation
-  - [x] MAM
-  - [x] Omemo (no MUC support currently)
-  - [x] Display image with Sixel support
+**Messaging**
+- Multi-user chat (MUC) and direct messages
+- Message Archive Management (MAM) with lazy history fetch
+- XEP-0333 displayed markers — track read state in MUC
+- XEP-0393 inline message styling — bold, italic, strikethrough
+- Inline image display via Sixel
 
-Install
-=======
+**Privacy**
+- OMEMO end-to-end encryption, including MUC
 
-From sources
-------------
+**Interface**
+- Vim-style modal editing — Normal, Insert, and Command modes
+- Message search with `/`
+- Tab completion for commands, JIDs, and nicks
+- Consistent per-contact color generation
+- Built-in color themes: `profanity`, `catppuccin-mocha`, `catppuccin-latte`, `catppuccin-frappe`
+- Roster and bookmark management
+
+Getting started
+---------------
+
+Aparté starts in **Insert mode** — type and press Enter to send. Press `Escape` to enter **Normal mode** for navigation, or `:` to enter **Command mode**.
+
+Connect to your account:
 
 ```
+:connect me@example.org
+```
+
+Join a room:
+
+```
+:join room@conference.example.org
+```
+
+Switch windows with `Alt+[1-9]` or `:win <name>`.
+
+### Modal interface
+
+| From    | Key        | To / Action                       |
+|---------|------------|-----------------------------------|
+| Insert  | `Escape`   | Normal mode                       |
+| Normal  | `i`        | Insert mode                       |
+| Normal  | `:`        | Command mode                      |
+| Normal  | `/`        | Search mode                       |
+| Normal  | `j` / `↓`  | Select next message               |
+| Normal  | `k` / `↑`  | Select previous message           |
+| Normal  | `gg`       | Scroll to top                     |
+| Normal  | `G`        | Scroll to bottom                  |
+| Normal  | `n` / `N`  | Next / previous search match      |
+| Command | `Escape`   | Normal mode                       |
+| Insert  | `Tab`      | Auto-complete                     |
+
+Commands accept unique prefixes: `:conn` resolves to `:connect` when unambiguous.
+
+Install
+-------
+
+### Cargo
+
+```sh
 cargo install aparte
 ```
 
-From sources with GNU/guix
---------------------------
+### Arch Linux (AUR)
 
+```sh
+paru -S aparte-git
+# or manually:
+git clone https://aur.archlinux.org/aparte-git.git && cd aparte-git && makepkg -si
 ```
+
+### Guix
+
+```sh
+# From the GuixRUs channel (https://git.sr.ht/~whereiseveryone/guixrus):
+guix pull && guix install aparte
+
+# Or build from source:
 git clone https://github.com/paulfariello/aparte --branch develop
-cd aparte
-guix package -f guix.scm
+cd aparte && guix package -f guix.scm
 ```
 
-Package with GuixRUS
+### Windows (WSL)
 
-The [GuixRUs](https://git.sr.ht/~whereiseveryone/guixrus) channel also provides `aparte`.
+Inside a Debian-based WSL environment:
 
-After [subscribing](https://git.sr.ht/~whereiseveryone/guixrus#subscribing) to `GuixRUs` by adding the channel entry to your [channels.scm](https://guix.gnu.org/manual/en/html_node/Using-a-Custom-Guix-Channel.html), run the following two commands:
-
-  ```
-  guix pull
-  guix install aparte
-  ```
-
-Package for Archlinux
----------------------
-
-AUR package is available: `aparte-git`.
-
-```
-git clone https://aur.archlinux.org/aparte-git.git
-cd aparte-git
-makepkg -si
-```
-
-Or with your favorite aur-helper:
-
-```
-paru aparte-git
-```
-
-Windows with WSL
-----------------
-
-Aparté should be available inside the Windows subsystem for Linux.
-The following instruction are made for a Debian based subsystem (debian or ubuntu for example).
-
-First enter the WSL:
-
-```
-PS C:\> debian
-```
-
-Then ensure the required dependencies are installed.
-
-```
-sudo apt update
-sudo apt install libssl-dev pkg-config curl
-```
-
-Rust can be installed with rustup.
-
-```
+```sh
+sudo apt update && sudo apt install libssl-dev pkg-config curl
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
-```
-
-Finally install Aparté.
-
-```
 cargo install --git https://github.com/paulfariello/aparte --branch develop
 ```
 
 Configuration
-=============
+-------------
 
-Aparté can be configured with a configuration file.
-The configuration file should be placed in
-`$XDG_CONFIG_HOME/aparte/config.toml`. If `$XDG_CONFIG_HOME` is not set,
-Aparte will fallback to `$HOME/.config/aparte/config.toml`.
+Config file location: `$XDG_CONFIG_HOME/aparte/config.toml` (falls back to `~/.config/aparte/config.toml`).
 
-The configuration file should look like the following:
-
-```
+```toml
+# Audio bell on mention
 bell = true
 
-[accounts]
+# Built-in themes: profanity, catppuccin-mocha, catppuccin-latte, catppuccin-frappe
+theme_name = "catppuccin-mocha"
 
 [accounts.example]
 jid = "me@example.org/aparte"
