@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use common::{
     describe, find_row_with, grid_contains, row_text, rows_with_bgcolor, wait_for_ready,
-    wait_for_screen, Harness, SELECTION_BGCOLOR,
+    wait_for_screen, Harness, ROWS, SELECTION_BGCOLOR,
 };
 
 /// Send enough unknown commands to push the welcome banner off-screen.
@@ -600,6 +600,84 @@ fn cursor_steady_bar_escape_sent_in_insert_mode() {
     assert!(
         found,
         "SteadyBar escape (ESC[6 q) should have been sent during INSERT mode rendering"
+    );
+}
+
+#[test]
+fn cursor_steady_bar_in_command_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_command_colon(&h);
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+
+    // ESC [ 6 SP q = DECSCUSR 6 = SteadyBar
+    // ESC [ 2 SP q = DECSCUSR 2 = SteadyBlock (emitted on Normal mode entry)
+    let steady_bar: &[u8] = b"\x1b[6 q";
+    let steady_block: &[u8] = b"\x1b[2 q";
+    let bytes = h.bytes.lock().unwrap().clone();
+
+    // Find the last SteadyBlock (emitted during Normal mode), then confirm
+    // SteadyBar appears after it (emitted when entering Command mode).
+    let last_block_pos = bytes
+        .windows(steady_block.len())
+        .enumerate()
+        .filter(|(_, w)| *w == steady_block)
+        .map(|(i, _)| i)
+        .last();
+    let bar_after_block = last_block_pos
+        .map(|pos| {
+            bytes[pos + steady_block.len()..]
+                .windows(steady_bar.len())
+                .any(|w| w == steady_bar)
+        })
+        .unwrap_or(false);
+
+    h.shutdown();
+
+    assert!(
+        !screen.hide_cursor(),
+        "Cursor should be visible in COMMAND mode\n{}",
+        describe(screen)
+    );
+    assert!(
+        bar_after_block,
+        "SteadyBar (ESC[6 q) should be emitted after entering COMMAND mode"
+    );
+}
+
+/// Cursor should sit on the last row (the input bar) and advance with each
+/// typed character in Command mode.
+#[test]
+fn cursor_position_in_command_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_command_colon(&h);
+
+    // Type text after the already-present ':'.
+    h.send_bytes(b"hello");
+    let visible = wait_for_screen(&h, ":hello", Duration::from_secs(2));
+    assert!(visible, "':hello' should appear in the input bar");
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor should be on the last row (input bar)"
+    );
+    assert_eq!(
+        col,
+        ":hello".len() as u16,
+        "Cursor should be at column {} after typing ':hello', got {}",
+        ":hello".len(),
+        col
     );
 }
 

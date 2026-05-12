@@ -4,6 +4,8 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+use unicode_segmentation::UnicodeSegmentation as _;
+
 use crossterm::{
     cursor::{Hide, MoveTo, SetCursorStyle, Show},
     style::{Attribute, SetAttribute},
@@ -492,6 +494,36 @@ impl<'a> ScreenFrame<'a> {
                 }
             }
             self.cursor.left += w;
+        }
+    }
+
+    pub fn highlight_text(&mut self, query: &str, fg: FgColor, bg: BgColor) {
+        let query_graphemes: Vec<String> =
+            query.graphemes(true).map(|g| g.to_lowercase()).collect();
+        let qlen = query_graphemes.len();
+        if qlen == 0 {
+            return;
+        }
+
+        for row in self.dimensions.top..self.dimensions.top + self.dimensions.height {
+            let start = self.dimensions.left;
+            let end = self.dimensions.left + self.dimensions.width;
+            let row_len = (end - start) as usize;
+            if row_len < qlen {
+                continue;
+            }
+            let row_graphemes: Vec<String> = (start..end)
+                .map(|col| self.offscreen[row][col].grapheme.as_str().to_lowercase())
+                .collect();
+            for i in 0..=(row_len - qlen) {
+                if (0..qlen).all(|j| row_graphemes[i + j] == query_graphemes[j]) {
+                    for j in 0..qlen {
+                        let col = start + (i + j) as u16;
+                        self.offscreen[row][col].set_foreground(fg);
+                        self.offscreen[row][col].set_background(bg);
+                    }
+                }
+            }
         }
     }
 

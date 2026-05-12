@@ -33,6 +33,14 @@ fn default_roster_role_fg() -> FgColor {
     FgColor(Color::Named(NamedColor::Yellow))
 }
 
+fn default_search_highlight_fg() -> FgColor {
+    FgColor(Color::Named(NamedColor::Black))
+}
+
+fn default_search_highlight_bg() -> BgColor {
+    BgColor(Color::Named(NamedColor::Yellow))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -91,6 +99,14 @@ pub struct Theme {
     #[serde(serialize_with = "serialize_color")]
     #[serde(deserialize_with = "deserialize_color")]
     pub roster_role_fg: FgColor,
+    #[serde(default = "default_search_highlight_fg")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
+    pub search_highlight_fg: FgColor,
+    #[serde(default = "default_search_highlight_bg")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
+    pub search_highlight_bg: BgColor,
 }
 
 impl Default for Theme {
@@ -126,6 +142,8 @@ fn profanity() -> Theme {
         roster_unavailable_fg: FgColor(Color::Default),
         roster_group_fg: FgColor(Color::Named(NamedColor::Yellow)),
         roster_role_fg: FgColor(Color::Named(NamedColor::Yellow)),
+        search_highlight_fg: FgColor(Color::Named(NamedColor::Black)),
+        search_highlight_bg: BgColor(Color::Named(NamedColor::Yellow)),
     }
 }
 
@@ -194,6 +212,8 @@ fn catppuccin_mocha() -> Theme {
         roster_unavailable_fg: FgColor(overlay_0),
         roster_group_fg: FgColor(mauve),
         roster_role_fg: FgColor(mauve),
+        search_highlight_fg: FgColor(crust),
+        search_highlight_bg: BgColor(yellow),
     }
 }
 
@@ -224,6 +244,8 @@ fn catppuccin_latte() -> Theme {
         roster_unavailable_fg: FgColor(Color::Rgb(156, 160, 176)), // Overlay0
         roster_group_fg: FgColor(Color::Rgb(136, 57, 239)),   // Mauve
         roster_role_fg: FgColor(Color::Rgb(136, 57, 239)),    // Mauve
+        search_highlight_fg: FgColor(Color::Rgb(76, 79, 105)), // Text dark
+        search_highlight_bg: BgColor(Color::Rgb(223, 142, 29)), // Yellow
     }
 }
 
@@ -254,5 +276,7 @@ fn catppuccin_frappe() -> Theme {
         roster_unavailable_fg: FgColor(Color::Rgb(115, 121, 148)), // Overlay0
         roster_group_fg: FgColor(Color::Rgb(202, 158, 230)), // Mauve
         roster_role_fg: FgColor(Color::Rgb(202, 158, 230)), // Mauve
+        search_highlight_fg: FgColor(Color::Rgb(17, 17, 27)), // Crust
+        search_highlight_bg: BgColor(Color::Rgb(229, 200, 144)), // Yellow
     }
 }

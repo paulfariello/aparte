@@ -138,6 +138,14 @@ where
             .map(|LayoutChild { child, .. }| child)
     }
 
+    pub fn children_iter(&self) -> impl Iterator<Item = &I> {
+        self.children.iter().map(|LayoutChild { child, .. }| child)
+    }
+
+    pub fn current_search(&self) -> Option<&str> {
+        self.search_query.as_deref()
+    }
+
     /// Moves selection to the previous (older) child.
     /// Returns `(old_index, new_index, at_top)`.
     pub fn select_prev(&mut self) -> (Option<usize>, Option<usize>, bool) {

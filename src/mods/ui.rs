@@ -633,6 +633,8 @@ impl UIMod {
     fn add_conversation(&mut self, aparte: &mut Aparte, conversation: Conversation) {
         let scheduler = self.get_scheduler();
         let selection_bg = aparte.config.theme.selected_message;
+        let search_highlight_fg = aparte.config.theme.search_highlight_fg;
+        let search_highlight_bg = aparte.config.theme.search_highlight_bg;
         match &conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
@@ -788,6 +790,13 @@ impl UIMod {
                                 }
                                 NormalCommand::SearchFirst(query) => {
                                     let (old, new) = view.set_search(query);
+                                    for child in view.children_iter() {
+                                        child.set_highlight(Some((
+                                            query.clone(),
+                                            search_highlight_fg,
+                                            search_highlight_bg,
+                                        )));
+                                    }
                                     if old != new {
                                         if let Some(i) = old {
                                             if let Some(c) = view.child_at(i) {
@@ -833,6 +842,9 @@ impl UIMod {
                                 }
                                 NormalCommand::SearchCancel => {
                                     view.clear_search();
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
                                 }
                             },
                             UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
@@ -848,6 +860,9 @@ impl UIMod {
                                     if let Some(c) = view.child_at(i) {
                                         c.deselect();
                                     }
+                                }
+                                for child in view.children_iter() {
+                                    child.set_highlight(None);
                                 }
                             }
                             _ => {}
@@ -1020,6 +1035,13 @@ impl UIMod {
                                 }
                                 NormalCommand::SearchFirst(query) => {
                                     let (old, new) = view.set_search(query);
+                                    for child in view.children_iter() {
+                                        child.set_highlight(Some((
+                                            query.clone(),
+                                            search_highlight_fg,
+                                            search_highlight_bg,
+                                        )));
+                                    }
                                     if old != new {
                                         if let Some(i) = old {
                                             if let Some(c) = view.child_at(i) {
@@ -1065,6 +1087,9 @@ impl UIMod {
                                 }
                                 NormalCommand::SearchCancel => {
                                     view.clear_search();
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
                                 }
                             },
                             UIEvent::Core(Event::ChangeWindow(name))
@@ -1092,6 +1117,9 @@ impl UIMod {
                                     if let Some(c) = view.child_at(i) {
                                         c.deselect();
                                     }
+                                }
+                                for child in view.children_iter() {
+                                    child.set_highlight(None);
                                 }
                             }
                             _ => {}
@@ -1661,6 +1689,8 @@ impl ModTrait for UIMod {
                 .with_event({
                     let mut aparte = aparte.proxy();
                     let selection_bg = aparte.config.theme.selected_message;
+                    let search_highlight_fg = aparte.config.theme.search_highlight_fg;
+                    let search_highlight_bg = aparte.config.theme.search_highlight_bg;
                     move |view, event| match event {
                         UIEvent::Core(Event::Message(_, Message::Log(message))) => {
                             view.insert(MessageView::new(
@@ -1759,6 +1789,13 @@ impl ModTrait for UIMod {
                             }
                             NormalCommand::SearchFirst(query) => {
                                 let (old, new) = view.set_search(query);
+                                for child in view.children_iter() {
+                                    child.set_highlight(Some((
+                                        query.clone(),
+                                        search_highlight_fg,
+                                        search_highlight_bg,
+                                    )));
+                                }
                                 if old != new {
                                     if let Some(i) = old {
                                         if let Some(c) = view.child_at(i) {
@@ -1804,6 +1841,9 @@ impl ModTrait for UIMod {
                             }
                             NormalCommand::SearchCancel => {
                                 view.clear_search();
+                                for child in view.children_iter() {
+                                    child.set_highlight(None);
+                                }
                             }
                         },
                         UIEvent::ModeChange(Mode::Insert) => {
@@ -1811,6 +1851,9 @@ impl ModTrait for UIMod {
                                 if let Some(c) = view.child_at(i) {
                                     c.deselect();
                                 }
+                            }
+                            for child in view.children_iter() {
+                                child.set_highlight(None);
                             }
                         }
                         _ => {}

@@ -26,8 +26,8 @@ use std::collections::HashSet;
 use terminus::charxel::{Charxel, Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
 use terminus::{
-    self, BgColor, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    Searchable, Style, View,
+    self, BgColor, Dimensions, FgColor, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, Searchable, Style, View,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
@@ -614,6 +614,7 @@ pub struct MessageView {
     image: Arc<RwLock<Option<SixelImage>>>,
     measure_cache: RefCell<Option<(u16, Vec<Charxels>)>>,
     selected: Cell<Option<BgColor>>,
+    highlight: RefCell<Option<(String, FgColor, BgColor)>>,
 }
 
 impl Eq for MessageView {}
@@ -731,6 +732,7 @@ impl MessageView {
             dimensions: None,
             measure_cache: RefCell::new(None),
             selected: Cell::new(None),
+            highlight: RefCell::new(None),
         }
     }
 
@@ -778,6 +780,7 @@ impl MessageView {
             image,
             measure_cache: RefCell::new(None),
             selected: Cell::new(None),
+            highlight: RefCell::new(None),
         }
     }
 
@@ -914,6 +917,10 @@ impl MessageView {
         self.selected.set(None);
     }
 
+    pub fn set_highlight(&self, data: Option<(String, FgColor, BgColor)>) {
+        *self.highlight.borrow_mut() = data;
+    }
+
     fn render_text(&self, frame: &mut ScreenFrame) {
         let width = frame.width();
         let cache = self.measure_cache.borrow();
@@ -1031,6 +1038,10 @@ impl<E, C> View<E, C> for MessageView {
         #[cfg(not(feature = "image"))]
         self.render_text(&mut frame);
 
+        if let Some((ref query, fg, bg)) = *self.highlight.borrow() {
+            frame.highlight_text(query, fg, bg);
+        }
+
         if let Some(color) = self.selected.get() {
             frame.set_background(color);
         }
@@ -1074,6 +1085,7 @@ mod tests {
                 image: Arc::new(RwLock::new(None)),
                 measure_cache: RefCell::new(None),
                 selected: Cell::new(None),
+                highlight: RefCell::new(None),
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )
