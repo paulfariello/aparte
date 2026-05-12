@@ -384,7 +384,9 @@ fn insert_mode_page_up_scrolls_message_window() {
     let found = wait_for_screen(&h, "bad29", Duration::from_secs(5));
     assert!(found, "Expected bad29 visible before PageUp test");
 
-    // Confirm the app has settled in INSERT mode before sending PageUp.
+    // fill_console leaves the app in Normal mode (commands exit to Normal).
+    // Press 'i' to return to Insert mode before the PageUp test.
+    h.send_bytes(b"i");
     let in_insert = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
     assert!(
         in_insert,

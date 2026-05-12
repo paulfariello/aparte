@@ -52,7 +52,7 @@ const KEY_SIZE: usize = 16;
 const MAC_SIZE: usize = 16;
 
 command_def!(omemo_enable,
-r#"/omemo enable [<jid>]
+r#":omemo enable [<jid>]
 
     jid    jid of the OMEMO enabled contact/channel
 
@@ -60,8 +60,8 @@ Description:
     Enable OMEMO on a given contact/channel
 
 Examples:
-    /omemo enable
-    /omemo enable aparte@conference.fariello.eu
+    :omemo enable
+    :omemo enable aparte@conference.fariello.eu
 "#,
 {
     jid: Option<String>,
@@ -88,13 +88,13 @@ Examples:
 
 command_def!(
     omemo_fingerprint,
-    r#"/omemo fingerprint [<jid>]
+    r#":omemo fingerprint [<jid>]
 
 Description:
     Show OMEMO own or given jid fingerprint
 
 Examples:
-    /omemo fingerprint
+    :omemo fingerprint
 "#,
 {
     jid: Option<String>,
@@ -127,7 +127,7 @@ Examples:
 
 command_def!(
     omemo_debug,
-    r#"/omemo debug
+    r#":omemo debug
 
 Description:
     Show OMEMO debug information for the current conversation.
@@ -135,7 +135,7 @@ Description:
     shows local session state for all known devices.
 
 Examples:
-    /omemo debug
+    :omemo debug
 "#,
     {},
     |aparte, _command| {
@@ -157,7 +157,7 @@ Examples:
 );
 
 command_def!(omemo,
-r#"/omemo enable"#,
+r#":omemo enable"#,
 {
     action: Command = {
         children: {

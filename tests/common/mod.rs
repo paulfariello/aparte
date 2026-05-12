@@ -124,10 +124,28 @@ impl Harness {
     }
 
     pub fn send_command(&self, cmd: &str) {
-        let mut w = self.writer.lock().unwrap();
-        let _ = w.write_all(cmd.as_bytes());
-        let _ = w.write_all(b"\r");
-        let _ = w.flush();
+        // Send bare Esc first, then wait for Normal mode before sending the rest.
+        // This ensures crossterm processes Esc alone (not as an Alt+<x> escape prefix).
+        // When already in Normal mode, wait_for_screen returns immediately; the handlers
+        // for 'i' and ':' use `..` patterns that ignore Alt modifiers, so even if \x1b<char>
+        // is parsed as Alt+<char>, the correct mode transition still fires.
+        self.send_bytes(b"\x1b");
+        wait_for_screen(self, "NORMAL", Duration::from_secs(5));
+        if cmd.starts_with('/') && !cmd.starts_with("/me") {
+            // ':' → Command mode, type without '/', Enter → Normal
+            let mut w = self.writer.lock().unwrap();
+            let _ = w.write_all(b":");
+            let _ = w.write_all(cmd[1..].as_bytes());
+            let _ = w.write_all(b"\r");
+            let _ = w.flush();
+        } else {
+            // 'i' → Insert mode, type verbatim (/me or plain text), Enter
+            let mut w = self.writer.lock().unwrap();
+            let _ = w.write_all(b"i");
+            let _ = w.write_all(cmd.as_bytes());
+            let _ = w.write_all(b"\r");
+            let _ = w.flush();
+        }
     }
 
     pub fn send_bytes(&self, bytes: &[u8]) {
@@ -138,8 +156,15 @@ impl Harness {
 
     pub fn shutdown(mut self) {
         {
+            // Send bare Esc, then wait for crossterm's escape timeout to fire before ':quit'.
             let mut w = self.writer.lock().unwrap();
-            let _ = w.write_all(b"/quit\r");
+            let _ = w.write_all(b"\x1b");
+            let _ = w.flush();
+        }
+        thread::sleep(Duration::from_millis(150));
+        {
+            let mut w = self.writer.lock().unwrap();
+            let _ = w.write_all(b":quit\r");
             let _ = w.flush();
         }
         let deadline = Instant::now() + Duration::from_millis(800);

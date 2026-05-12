@@ -43,7 +43,7 @@ impl CompletionMod {
                 let mut completed_buf = String::new();
                 let mut new_index = 0;
                 let completion = completions[self.current_completion].clone();
-                if raw_buf.starts_with('/') {
+                if raw_buf.starts_with(':') {
                     if let Ok(mut command) = Command::parse_with_cursor(
                         account.clone(),
                         context.to_string(),
@@ -55,7 +55,8 @@ impl CompletionMod {
                         } else {
                             command.args.push(completion);
                         }
-                        completed_buf = command.assemble();
+                        let assembled = command.assemble();
+                        completed_buf = format!(":{}", &assembled[1..]);
                         // TODO handle in place completion, cursor shouldn't move to end of input
                         new_index = completed_buf.len();
                     }
@@ -97,7 +98,7 @@ impl CompletionMod {
         raw_buf: &str,
         cursor: &Cursor,
     ) {
-        if raw_buf.starts_with('/') {
+        if raw_buf.starts_with(':') {
             let mut completions = Vec::new();
             if let Ok(command) = Command::parse_with_cursor(
                 account.clone(),

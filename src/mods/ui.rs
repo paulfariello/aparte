@@ -1236,11 +1236,11 @@ impl ModTrait for UIMod {
         {
             let mut mode = Mode::Insert;
             let mut command_buffer = String::new();
-            let mut cmd_line = String::new();
             let mut saved_input = String::new();
             let mut timeout_generation: u64 = 0;
             let normal_commands = build_normal_command_trie();
-            let aparte_proxy = aparte.proxy();
+            let mut aparte_proxy = aparte.proxy();
+            let mut current_window = String::new();
             self.root = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1270,7 +1270,6 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal => {
                         mode = Mode::Command;
-                        cmd_line = ":".to_string();
                         layout.set_focus(INPUT_INDEX);
                         // Save current input content so it can be restored on exit.
                         let result = Rc::new(RefCell::new(None));
@@ -1284,7 +1283,7 @@ impl ModTrait for UIMod {
                             .unwrap_or_default();
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Command));
-                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
+                            child.event(&mut UIEvent::SetInput(":".to_string()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1292,7 +1291,6 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal => {
                         mode = Mode::Command;
-                        cmd_line = "/".to_string();
                         layout.set_focus(INPUT_INDEX);
                         // Save current input content so it can be restored on exit.
                         let result = Rc::new(RefCell::new(None));
@@ -1306,14 +1304,13 @@ impl ModTrait for UIMod {
                             .unwrap_or_default();
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Command));
-                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
+                            child.event(&mut UIEvent::SetInput("/".to_string()));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Esc, ..
                     })) if mode == Mode::Command => {
                         mode = Mode::Normal;
-                        cmd_line.clear();
                         let saved = std::mem::take(&mut saved_input);
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         if let Some(focused) = layout.focused_child_mut() {
@@ -1325,22 +1322,12 @@ impl ModTrait for UIMod {
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                     }
-                    UIEvent::Core(Event::Key(KeyEvent {
-                        code: KeyCode::Char(c),
-                        ..
-                    })) if mode == Mode::Command => {
-                        cmd_line.push(*c);
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
-                        }
-                    }
-                    UIEvent::Core(Event::Key(KeyEvent {
-                        code: KeyCode::Backspace,
-                        ..
-                    })) if mode == Mode::Command => {
-                        cmd_line.pop();
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::SetInput(cmd_line.clone()));
+                    // All other keys in COMMAND mode go to the focused input widget,
+                    // reusing its editing logic (Ctrl+A/B/E/F/H/W/U/K, arrows, Home/End,
+                    // Delete, history).
+                    UIEvent::Core(Event::Key(_)) if mode == Mode::Command => {
+                        if let Some(focused) = layout.focused_child_mut() {
+                            focused.event(event);
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1420,8 +1407,18 @@ impl ModTrait for UIMod {
                     // Enter in Command mode executes the typed command.
                     // (Enter is delivered as UIEvent::Validate by on_event, not as a Key event.)
                     UIEvent::Validate(result) if mode == Mode::Command => {
+                        // Read the typed command from the input widget (source of truth).
+                        let input_result = Rc::new(RefCell::new(None));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::GetInput(Rc::clone(&input_result)));
+                        }
+                        let cmd = input_result
+                            .borrow()
+                            .as_ref()
+                            .map(|(buf, _, _)| buf.clone())
+                            .unwrap_or_default();
+
                         mode = Mode::Normal;
-                        let cmd = std::mem::take(&mut cmd_line);
                         let saved = std::mem::take(&mut saved_input);
                         layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
@@ -1438,9 +1435,20 @@ impl ModTrait for UIMod {
                                     ));
                                 }
                             }
+                        } else if cmd.starts_with(':') {
+                            aparte_proxy.schedule(Event::RawCommand(
+                                aparte_proxy.current_account(),
+                                current_window.clone(),
+                                cmd,
+                            ));
                         }
-                        // Provide an empty result so on_event's unwrap doesn't panic.
                         result.borrow_mut().replace((String::new(), false));
+                    }
+                    UIEvent::Core(Event::ChangeWindow(name)) => {
+                        current_window = terminus::clean_str(name);
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
                     }
                     _ => {
                         for child in layout.iter_children_mut() {
@@ -2083,16 +2091,6 @@ impl ModTrait for UIMod {
                             let mut command = self.password_command.take().unwrap();
                             command.args.push(raw_buf);
                             aparte.schedule(Event::Command(command));
-                        } else if raw_buf.starts_with('/') {
-                            let window = self.current_window.clone().unwrap();
-                            let account = match self.conversations.get(&window) {
-                                Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
-                                Some(Conversation::Channel(channel)) => {
-                                    Some(channel.account.clone())
-                                }
-                                _ => None,
-                            };
-                            aparte.schedule(Event::RawCommand(account, window, raw_buf));
                         } else if !raw_buf.is_empty() {
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)

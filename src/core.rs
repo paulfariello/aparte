@@ -420,7 +420,7 @@ pub struct Connection {
 }
 
 command_def!(connect,
-r#"/connect <account>
+r#":connect <account>
 
     account       Account to connect to
 
@@ -428,10 +428,10 @@ Description:
     Connect to the given account.
 
 Examples:
-    /connect myaccount
-    /connect account@server.tld
-    /connect account@server.tld/resource
-    /connect account@server.tld:5223
+    :connect myaccount
+    :connect account@server.tld
+    :connect account@server.tld/resource
+    :connect account@server.tld:5223
 "#,
 {
     account_name: String = {
@@ -471,7 +471,7 @@ Examples:
 });
 
 command_def!(win,
-r#"Usage: /win <window>
+r#"Usage: :win <window>
 
     window        Name of the window to switch to
 
@@ -479,8 +479,8 @@ Description:
     Switch to a given window.
 
 Examples:
-    /win console
-    /win contact@server.tld"#,
+    :win console
+    :win contact@server.tld"#,
 {
     window: String = {
         completion: |aparte, _command| {
@@ -503,7 +503,7 @@ Examples:
 });
 
 command_def!(close,
-r#"Usage: /close [<window>]
+r#"Usage: :close [<window>]
 
     window        Name of the window to close
 
@@ -511,8 +511,8 @@ Description:
     Close the current or a given window.
 
 Examples:
-    /close
-    /close contact@server.tld"#,
+    :close
+    :close contact@server.tld"#,
 {
     window: Option<String> = {
         completion: |aparte, _command| {
@@ -535,7 +535,7 @@ Examples:
 });
 
 command_def!(leave,
-r#"Usage: /leave [<window>]
+r#"Usage: :leave [<window>]
 
     window        Name of the channel to leave
 
@@ -543,8 +543,8 @@ Description:
     Close the current or a given channel.
 
 Examples:
-    /leave
-    /leave channel@conversation.server.tld"#,
+    :leave
+    :leave channel@conversation.server.tld"#,
 {
     window: Option<String> = {
         completion: |aparte, _command| {
@@ -582,7 +582,7 @@ Examples:
 });
 
 command_def!(msg,
-r#"/msg <contact> [<message>]
+r#":msg <contact> [<message>]
 
     contact       Contact to send a message to
     message       Optionnal message to be sent
@@ -592,8 +592,8 @@ Description:
     send a message.
 
 Example:
-    /msg contact@server.tld
-    /msg contact@server.tld "Hi there!"
+    :msg contact@server.tld
+    :msg contact@server.tld "Hi there!"
 "#,
 {
     contact: String = {
@@ -623,14 +623,14 @@ Example:
 });
 
 command_def!(join,
-r#"/join <channel>
+r#":join <channel>
 
     channel       Channel JID to join
 Description:
     Open a window and join a given channel.
 
 Example:
-    /join channel@conference.server.tld"#,
+    :join channel@conference.server.tld"#,
 {
     muc: String = {
         completion: |aparte, _command| {
@@ -676,13 +676,13 @@ Example:
 
 command_def!(
     quit,
-    r#"/quit
+    r#":quit
 
 Description:
     Quit Aparté.
 
 Example:
-    /quit"#,
+    :quit"#,
     {},
     |aparte, _command| {
         aparte.schedule(Event::Quit);
@@ -692,7 +692,7 @@ Example:
 );
 
 command_def!(help,
-r#"/help [command]
+r#":help [command]
 
     command       Name of command
 
@@ -700,7 +700,7 @@ Description:
     Print help of a given command.
 
 Examples:
-    /help win"#,
+    :help win"#,
 {
     cmd: Option<String> = {
         completion: |aparte, _command| {
@@ -719,110 +719,6 @@ Examples:
         Ok(())
     }
 });
-
-mod me {
-    use anyhow::{anyhow, Context, Result};
-    use chrono::Local as LocalTz;
-    use std::collections::HashMap;
-    use std::str::FromStr;
-    use uuid::Uuid;
-    use xmpp_parsers::jid::{BareJid, Jid};
-
-    use crate::account::Account;
-    use crate::command::*;
-    use crate::conversation::Conversation;
-    use crate::core::{Aparte, Event};
-    use crate::message::Message;
-    use crate::mods;
-
-    fn parse(account: &Option<Account>, context: &str, buf: &str) -> Result<Command> {
-        Ok(Command {
-            account: account.clone(),
-            context: context.to_string(),
-            args: vec![buf.to_string()],
-            cursor: 0,
-        })
-    }
-
-    fn exec(aparte: &mut Aparte, command: Command) -> Result<()> {
-        let account = command
-            .account
-            .context("Can't use /me in non XMPP window")?;
-        let jid =
-            BareJid::from_str(&command.context).context("Can't use /me in non XMPP window")?;
-        let message = {
-            let conversation = aparte.get_mod::<mods::conversation::ConversationMod>();
-            if let Some(conversation) = conversation.get(&account, &jid) {
-                match conversation {
-                    Conversation::Chat(chat) => {
-                        let account = &chat.account;
-                        let us = account.clone().into();
-                        let from: Jid = us;
-                        let to: Jid = chat.contact.clone().into();
-                        let id = Uuid::new_v4();
-                        let timestamp = LocalTz::now().into();
-                        let mut bodies = HashMap::new();
-                        bodies.insert("".to_string(), command.args[0].clone());
-                        Ok(Message::outgoing_chat(
-                            id.to_string(),
-                            timestamp,
-                            &from,
-                            &to,
-                            bodies,
-                            None,
-                            false,
-                        ))
-                    }
-                    Conversation::Channel(channel) => {
-                        let account = &channel.account;
-                        let us = account
-                            .to_bare()
-                            .with_resource_str(&channel.nick)
-                            .context("Invalid nick")?;
-                        let from: Jid = us.into();
-                        let to: Jid = channel.jid.clone().into();
-                        let id = Uuid::new_v4();
-                        let timestamp = LocalTz::now().into();
-                        let mut bodies = HashMap::new();
-                        bodies.insert("".to_string(), command.args[0].clone());
-                        Ok(Message::outgoing_channel(
-                            id.to_string(),
-                            timestamp,
-                            &from,
-                            &to,
-                            bodies,
-                            None,
-                            false,
-                        ))
-                    }
-                }
-            } else {
-                Err(anyhow!("Unknown context {}", command.context))
-            }
-        }?;
-        aparte.schedule(Event::SendMessage(account, message));
-        Ok(())
-    }
-
-    pub fn new() -> CommandParser {
-        CommandParser {
-            name: "me",
-            help: r#"/me message
-
-    message       Message to be sent
-
-Description:
-    Send a /me message
-
-Examples:
-    /me loves Aparté"#
-                .to_string(),
-            parse,
-            exec,
-            autocompletions: vec![],
-        }
-    }
-}
 
 #[macro_export]
 macro_rules! info(
@@ -1068,7 +964,6 @@ impl Aparte {
         self.add_command(msg::new());
         self.add_command(join::new());
         self.add_command(quit::new());
-        self.add_command(me::new());
 
         let mods = self.mods.clone();
         for (_, r#mod) in mods.iter() {
@@ -1296,7 +1191,7 @@ impl Aparte {
                 self.schedule(Event::RawCommand(
                     None,
                     "console".to_string(),
-                    format!("/connect {}", name),
+                    format!(":connect {}", name),
                 ));
             }
         }

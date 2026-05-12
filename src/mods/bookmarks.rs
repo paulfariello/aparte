@@ -20,7 +20,7 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::mods::disco;
 
 command_def!(bookmark_add,
-r#"/bookmark add <bookmark> <conference> [autojoin=on|off]
+r#":bookmark add <bookmark> <conference> [autojoin=on|off]
 
     bookmark    The bookmark friendly name
     conference  The conference room jid
@@ -31,9 +31,9 @@ Description:
     Add a bookmark
 
 Examples:
-    /bookmark add aparte aparte@conference.fariello.eu
-    /bookmark add aparte aparte@conference.fariello.eu nick=needle
-    /bookmark add aparte aparte@conference.fariello.eu autojoin=on
+    :bookmark add aparte aparte@conference.fariello.eu
+    :bookmark add aparte aparte@conference.fariello.eu nick=needle
+    :bookmark add aparte aparte@conference.fariello.eu autojoin=on
 "#,
 {
     name: String,
@@ -58,7 +58,7 @@ Examples:
 });
 
 command_def!(bookmark_del,
-r#"/bookmark del <bookmark>
+r#":bookmark del <bookmark>
 
     bookmark    The bookmark friendly name
 
@@ -66,7 +66,7 @@ Description:
     Delete a bookmark
 
 Examples:
-    /bookmark del aparte
+    :bookmark del aparte
 "#,
 { conference: BareJid },
 |aparte, _command| {
@@ -77,7 +77,7 @@ Examples:
 );
 
 command_def!(bookmark_edit,
-r#"/bookmark edit <bookmark> [<conference>] [autojoin=on|off]
+r#":bookmark edit <bookmark> [<conference>] [autojoin=on|off]
 
     bookmark    The bookmark friendly name
     conference  The conference room jid
@@ -87,10 +87,10 @@ Description:
     Edit a bookmark
 
 Examples:
-    /bookmark edit aparte autojoin=true
-    /bookmark edit aparte aparte@conference.fariello.eu
-    /bookmark edit aparte nick=needle
-    /bookmark edit aparte aparte@conference.fariello.eu autojoin=false
+    :bookmark edit aparte autojoin=true
+    :bookmark edit aparte aparte@conference.fariello.eu
+    :bookmark edit aparte nick=needle
+    :bookmark edit aparte aparte@conference.fariello.eu autojoin=false
 "#,
 {
     name: String,
@@ -107,7 +107,7 @@ Examples:
 });
 
 command_def!(bookmark,
-r#"/bookmark add|del|edit"#,
+r#":bookmark add|del|edit"#,
 {
     action: Command = {
         children: {

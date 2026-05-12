@@ -24,12 +24,12 @@ impl Command {
     }
 
     pub fn parse_name(buf: &str) -> Result<&str> {
-        if &buf[0..1] != "/" {
-            anyhow::bail!("Missing starting /");
+        if buf.is_empty() || buf.as_bytes()[0] != b':' {
+            anyhow::bail!("Missing starting :");
         }
 
         let buf = &buf[1..];
-        match buf.find(|c: char| !c.is_alphanumeric()) {
+        match buf.find(|c: char| !c.is_alphanumeric() && c != '_') {
             Some(end) => Ok(&buf[..end]),
             None => Ok(buf),
         }
@@ -67,8 +67,8 @@ impl Command {
             let c = chars.next();
             state = match state {
                 Initial => match c {
-                    Some('/') => Delimiter,
-                    _ => anyhow::bail!("Missing starting /"),
+                    Some(':') => Delimiter,
+                    _ => anyhow::bail!("Missing starting :"),
                 },
                 Delimiter => match c {
                     Some(' ') => Delimiter,
@@ -623,7 +623,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_simple_command_parsing() {
-        let command = Command::new(None, "test".to_string(), "/test command".to_string());
+        let command = Command::new(None, "test".to_string(), ":test command".to_string());
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -637,7 +637,7 @@ mod tests_command_parser {
         let command = Command::new(
             None,
             "test".to_string(),
-            "/test command with args".to_string(),
+            ":test command with args".to_string(),
         );
         assert!(command.is_ok());
         let command = command.unwrap();
@@ -654,7 +654,7 @@ mod tests_command_parser {
         let command = Command::new(
             None,
             "test".to_string(),
-            "/test \"command with arg\"".to_string(),
+            ":test \"command with arg\"".to_string(),
         );
         assert!(command.is_ok());
         let command = command.unwrap();
@@ -669,7 +669,7 @@ mod tests_command_parser {
         let command = Command::new(
             None,
             "test".to_string(),
-            "/test 'command with arg'".to_string(),
+            ":test 'command with arg'".to_string(),
         );
         assert!(command.is_ok());
         let command = command.unwrap();
@@ -684,7 +684,7 @@ mod tests_command_parser {
         let command = Command::new(
             None,
             "test".to_string(),
-            "/test 'command with \" arg'".to_string(),
+            ":test 'command with \" arg'".to_string(),
         );
         assert!(command.is_ok());
         let command = command.unwrap();
@@ -699,7 +699,7 @@ mod tests_command_parser {
         let command = Command::new(
             None,
             "test".to_string(),
-            "/test \"command with arg".to_string(),
+            ":test \"command with arg".to_string(),
         );
         assert!(command.is_err());
         assert_eq!(
@@ -713,7 +713,7 @@ mod tests_command_parser {
         let command = Command::parse_with_cursor(
             None,
             "test".to_string(),
-            "/test command with args".to_string(),
+            ":test command with args".to_string(),
             Cursor::new(10),
         );
         assert!(command.is_ok());
@@ -729,7 +729,7 @@ mod tests_command_parser {
     #[test]
     fn test_command_parsing_with_cursor() {
         let command =
-            Command::parse_with_cursor(None, "test".to_string(), "/te".to_string(), Cursor::new(3));
+            Command::parse_with_cursor(None, "test".to_string(), ":te".to_string(), Cursor::new(3));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -742,7 +742,7 @@ mod tests_command_parser {
         let command = Command::parse_with_cursor(
             None,
             "test".to_string(),
-            "/test ".to_string(),
+            ":test ".to_string(),
             Cursor::new(6),
         );
         assert!(command.is_ok());
@@ -755,7 +755,7 @@ mod tests_command_parser {
     #[test]
     fn test_no_command_parsing_with_cursor() {
         let command =
-            Command::parse_with_cursor(None, "test".to_string(), "/".to_string(), Cursor::new(1));
+            Command::parse_with_cursor(None, "test".to_string(), ":".to_string(), Cursor::new(1));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -825,14 +825,14 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_parse_name() {
-        let name = Command::parse_name("/me's best client is Aparté");
+        let name = Command::parse_name(":me's best client is Aparté");
         assert!(name.is_ok());
         assert_eq!("me", name.unwrap());
     }
 
     #[test]
     fn test_command_parse_name_without_args() {
-        let name = Command::parse_name("/close");
+        let name = Command::parse_name(":close");
         assert!(name.is_ok());
         assert_eq!("close", name.unwrap());
     }
