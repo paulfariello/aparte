@@ -770,7 +770,7 @@ pub struct Aparte {
 
 /// Look up a command parser by name, falling back to a unique-prefix match.
 /// `:q` resolves to `:quit` when no other command starts with `q`.
-fn resolve_command_parser<'a>(
+pub(crate) fn resolve_command_parser<'a>(
     parsers: &'a Trie<String, CommandParser>,
     name: &str,
 ) -> Result<&'a CommandParser> {

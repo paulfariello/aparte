@@ -14,7 +14,7 @@ use xmpp_parsers::jid::BareJid;
 use crate::account::Account;
 use crate::command::Command;
 use crate::conversation::Conversation;
-use crate::core::{Aparte, Event, ModTrait};
+use crate::core::{resolve_command_parser, Aparte, Event, ModTrait};
 use crate::mods::conversation::ConversationMod;
 use crate::word::Words;
 
@@ -115,7 +115,7 @@ impl CompletionMod {
                         .collect()
                 } else {
                     let command_parsers = Rc::clone(&aparte.command_parsers);
-                    if let Some(parser) = command_parsers.get(&command.args[0]) {
+                    if let Ok(parser) = resolve_command_parser(&command_parsers, &command.args[0]) {
                         if command.cursor - 1 < parser.autocompletions.len() {
                             if let Some(completion) = &parser.autocompletions[command.cursor - 1] {
                                 completions = completion(aparte, command.clone())
