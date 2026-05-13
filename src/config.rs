@@ -238,7 +238,7 @@ fn catppuccin_mocha() -> Theme {
         search_highlight_fg: FgColor(crust),
         search_highlight_bg: BgColor(yellow),
         date_separator_fg: FgColor(overlay_2),
-        date_separator_bg: BgColor(surface_0),
+        date_separator_bg: BgColor(Color::Default),
     }
 }
 
@@ -272,7 +272,7 @@ fn catppuccin_latte() -> Theme {
         search_highlight_fg: FgColor(Color::Rgb(76, 79, 105)), // Text dark
         search_highlight_bg: BgColor(Color::Rgb(223, 142, 29)), // Yellow
         date_separator_fg: FgColor(Color::Rgb(156, 160, 176)), // Overlay0
-        date_separator_bg: BgColor(Color::Rgb(204, 208, 218)), // Surface0
+        date_separator_bg: BgColor(Color::Default),
     }
 }
 

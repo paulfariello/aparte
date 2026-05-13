@@ -119,6 +119,7 @@ impl FromStr for Color {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "none" | "None" | "default" | "Default" => Ok(Color::Default),
             "Black" | "black" => Ok(Color::Named(NamedColor::Black)),
             "Blue" | "blue" => Ok(Color::Named(NamedColor::Blue)),
             "Cyan" | "cyan" => Ok(Color::Named(NamedColor::Cyan)),
@@ -144,7 +145,26 @@ impl FromStr for Color {
 #[allow(clippy::to_string_trait_impl)]
 impl ToString for Color {
     fn to_string(&self) -> String {
-        todo!()
+        match self {
+            Color::Default => "none".to_string(),
+            Color::Named(NamedColor::Black) => "black".to_string(),
+            Color::Named(NamedColor::Blue) => "blue".to_string(),
+            Color::Named(NamedColor::Cyan) => "cyan".to_string(),
+            Color::Named(NamedColor::Green) => "green".to_string(),
+            Color::Named(NamedColor::LightBlack) => "lightblack".to_string(),
+            Color::Named(NamedColor::LightBlue) => "lightblue".to_string(),
+            Color::Named(NamedColor::LightCyan) => "lightcyan".to_string(),
+            Color::Named(NamedColor::LightGreen) => "lightgreen".to_string(),
+            Color::Named(NamedColor::LightMagenta) => "lightmagenta".to_string(),
+            Color::Named(NamedColor::LightRed) => "lightred".to_string(),
+            Color::Named(NamedColor::LightWhite) => "lightwhite".to_string(),
+            Color::Named(NamedColor::LightYellow) => "lightyellow".to_string(),
+            Color::Named(NamedColor::Magenta) => "magenta".to_string(),
+            Color::Named(NamedColor::Red) => "red".to_string(),
+            Color::Named(NamedColor::White) => "white".to_string(),
+            Color::Named(NamedColor::Yellow) => "yellow".to_string(),
+            Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+        }
     }
 }
 
@@ -320,5 +340,37 @@ mod tests {
 
         // Then
         assert_eq!(rgb, Err("Invalid color teal".to_string()));
+    }
+
+    #[test]
+    fn test_none_color_from_str() {
+        assert_eq!(Color::from_str("none"), Ok(Color::Default));
+        assert_eq!(Color::from_str("None"), Ok(Color::Default));
+        assert_eq!(Color::from_str("default"), Ok(Color::Default));
+        assert_eq!(Color::from_str("Default"), Ok(Color::Default));
+    }
+
+    #[test]
+    fn test_color_to_string_roundtrip() {
+        let colors = [
+            Color::Default,
+            Color::Named(NamedColor::Cyan),
+            Color::Named(NamedColor::LightBlue),
+            Color::Rgb(0x01, 0x22, 0xa3),
+        ];
+        for color in colors {
+            let s = color.to_string();
+            assert_eq!(Color::from_str(&s), Ok(color));
+        }
+    }
+
+    #[test]
+    fn test_rgb_to_string() {
+        assert_eq!(Color::Rgb(0x01, 0x22, 0xa3).to_string(), "#0122a3");
+    }
+
+    #[test]
+    fn test_none_to_string() {
+        assert_eq!(Color::Default.to_string(), "none");
     }
 }
