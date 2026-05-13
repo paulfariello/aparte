@@ -12,6 +12,8 @@ Features
 - Multi-user chat (MUC) and direct messages
 - Message Archive Management (MAM) with lazy history fetch
 - XEP-0333 displayed markers — track read state in MUC
+- XEP-0184 / XEP-0333 delivery status — outgoing 1-on-1 messages show `✓` (delivered) and `✓✓` (read)
+- XEP-0444 message reactions — emoji reactions displayed below messages
 - XEP-0393 inline message styling — bold, italic, strikethrough
 - Inline image display via Sixel
 

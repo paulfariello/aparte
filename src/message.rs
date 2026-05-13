@@ -90,6 +90,14 @@ impl XmppMessageVersion {
     }
 }
 
+#[derive(Debug, Clone, Default, Eq, PartialEq, PartialOrd, Ord)]
+pub enum DeliveryStatus {
+    #[default]
+    None,
+    Delivered,
+    Displayed,
+}
+
 #[derive(Debug, Clone)]
 pub struct VersionedXmppMessage {
     pub id: String,
@@ -105,6 +113,7 @@ pub struct VersionedXmppMessage {
     pub encrypted: bool,
     pub stanza_id: Option<String>,
     pub reactions: HashMap<BareJid, Vec<String>>,
+    pub delivery_status: DeliveryStatus,
 }
 
 impl VersionedXmppMessage {
@@ -402,6 +411,7 @@ impl Message {
             encrypted: false,
             stanza_id: None,
             reactions: HashMap::new(),
+            delivery_status: DeliveryStatus::None,
         })
     }
 
@@ -437,6 +447,7 @@ impl Message {
             encrypted: false,
             stanza_id: None,
             reactions: HashMap::new(),
+            delivery_status: DeliveryStatus::None,
         })
     }
 
@@ -472,6 +483,7 @@ impl Message {
             encrypted: false,
             stanza_id: None,
             reactions: HashMap::new(),
+            delivery_status: DeliveryStatus::None,
         })
     }
 
@@ -507,6 +519,7 @@ impl Message {
             encrypted: false,
             stanza_id: None,
             reactions: HashMap::new(),
+            delivery_status: DeliveryStatus::None,
         })
     }
 
@@ -599,6 +612,11 @@ impl TryFrom<Message> for xmpp_parsers::minidom::Element {
                             .get_last_bodies()
                             .map(|(lang, body)| (XmppParsersLang(lang.clone()), body.clone()))
                             .collect();
+                        let request: xmpp_parsers::minidom::Element =
+                            "<request xmlns='urn:xmpp:receipts'/>"
+                                .parse()
+                                .expect("valid XEP-0184 request");
+                        xmpp_message.payloads.push(request);
                         Ok(xmpp_message.into())
                     }
                     XmppMessageType::Channel => {
@@ -887,6 +905,13 @@ impl MessageView {
             attributes.push_str("🔒 ");
         } else {
             attributes.push_str("🔓 ");
+        }
+        if message.direction == Direction::Outgoing {
+            match message.delivery_status {
+                DeliveryStatus::Delivered => attributes.push_str("✓ "),
+                DeliveryStatus::Displayed => attributes.push_str("✓✓ "),
+                DeliveryStatus::None => {}
+            }
         }
 
         let mut header = format!("{} - {}", timestamp.format("%T"), attributes).into_charxels();

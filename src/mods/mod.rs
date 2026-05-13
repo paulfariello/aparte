@@ -7,6 +7,7 @@ pub mod completion;
 pub mod contact;
 pub mod conversation;
 pub mod correction;
+pub mod delivery;
 pub mod disco;
 pub mod displayed_markers;
 pub mod mam;

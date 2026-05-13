@@ -187,6 +187,11 @@ pub enum Event {
         jid: BareJid,
         id: String,
     },
+    MessageDelivered {
+        account: Account,
+        jid: BareJid,
+        id: String,
+    },
     MucMamComplete {
         account: Account,
         jid: BareJid,
@@ -209,6 +214,7 @@ pub enum Mod {
     Omemo(mods::omemo::OmemoMod),
     DisplayedMarkers(mods::displayed_markers::DisplayedMarkersMod),
     Reactions(mods::reactions::ReactionsMod),
+    Delivery(mods::delivery::DeliveryMod),
 }
 
 macro_rules! from_mod {
@@ -248,6 +254,7 @@ from_mod!(
     mods::displayed_markers::DisplayedMarkersMod
 );
 from_mod!(Reactions, mods::reactions::ReactionsMod);
+from_mod!(Delivery, mods::delivery::DeliveryMod);
 
 pub trait ModTrait: Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
@@ -292,6 +299,7 @@ impl ModTrait for Mod {
             Mod::Omemo(r#mod) => r#mod.init(aparte),
             Mod::DisplayedMarkers(r#mod) => r#mod.init(aparte),
             Mod::Reactions(r#mod) => r#mod.init(aparte),
+            Mod::Delivery(r#mod) => r#mod.init(aparte),
         }
     }
 
@@ -310,6 +318,7 @@ impl ModTrait for Mod {
             Mod::Omemo(r#mod) => r#mod.on_event(aparte, event),
             Mod::DisplayedMarkers(r#mod) => r#mod.on_event(aparte, event),
             Mod::Reactions(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Delivery(r#mod) => r#mod.on_event(aparte, event),
         }
     }
 
@@ -342,6 +351,7 @@ impl ModTrait for Mod {
                 r#mod.can_handle_xmpp_message(aparte, account, message, delay)
             }
             Mod::Reactions(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
+            Mod::Delivery(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
         }
     }
 
@@ -389,6 +399,9 @@ impl ModTrait for Mod {
             Mod::Reactions(r#mod) => {
                 r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
             }
+            Mod::Delivery(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
         }
     }
 }
@@ -409,6 +422,7 @@ impl fmt::Debug for Mod {
             Mod::Omemo(_) => f.write_str("Mod::Omemo"),
             Mod::DisplayedMarkers(_) => f.write_str("Mod::DisplayedMarkers"),
             Mod::Reactions(_) => f.write_str("Mod::Reactions"),
+            Mod::Delivery(_) => f.write_str("Mod::Delivery"),
         }
     }
 }
@@ -429,6 +443,7 @@ impl Display for Mod {
             Mod::Omemo(r#mod) => r#mod.fmt(f),
             Mod::DisplayedMarkers(r#mod) => r#mod.fmt(f),
             Mod::Reactions(r#mod) => r#mod.fmt(f),
+            Mod::Delivery(r#mod) => r#mod.fmt(f),
         }
     }
 }
@@ -889,6 +904,7 @@ impl Aparte {
             mods::displayed_markers::DisplayedMarkersMod::default(),
         ));
         aparte.add_mod(Mod::Reactions(mods::reactions::ReactionsMod::default()));
+        aparte.add_mod(Mod::Delivery(mods::delivery::DeliveryMod));
 
         Ok(aparte)
     }
@@ -991,6 +1007,12 @@ impl Aparte {
                 mods.insert(
                     TypeId::of::<mods::reactions::ReactionsMod>(),
                     RefCell::new(Mod::Reactions(r#mod)),
+                );
+            }
+            Mod::Delivery(r#mod) => {
+                mods.insert(
+                    TypeId::of::<mods::delivery::DeliveryMod>(),
+                    RefCell::new(Mod::Delivery(r#mod)),
                 );
             }
         }

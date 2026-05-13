@@ -1078,6 +1078,17 @@ pub fn groupchat_reaction(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
+/// XEP-0184 delivery receipt: the contact acknowledges receiving a message.
+pub fn delivery_receipt(from: &str, to: &str, received_id: &str) -> XmppStreamElement {
+    let receipt: Element = format!("<received xmlns='urn:xmpp:receipts' id='{received_id}'/>")
+        .parse()
+        .expect("valid XEP-0184 received element");
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(receipt);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
@@ -1325,6 +1336,27 @@ impl XmppFixture {
             count += 1;
         }
         count
+    }
+
+    /// Wait until aparte sends an outgoing message matching `predicate`.
+    /// Returns the first matching message, or `None` on timeout.
+    pub fn recv_outgoing_message_matching(
+        &mut self,
+        predicate: impl Fn(&Message) -> bool,
+        timeout: Duration,
+    ) -> Option<Message> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            while let Ok(msg) = self.outgoing_msg_rx.try_recv() {
+                if predicate(&msg) {
+                    return Some(msg);
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Wait until aparte sends a groupchat `<displayed>` marker to `room_jid`.
