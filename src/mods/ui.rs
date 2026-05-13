@@ -110,7 +110,7 @@ fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: M
         succ.set_show_date_sep(msg_date != succ_date);
     }
 
-    view.insert(msg_view);
+    view.replace(msg_view);
 }
 
 struct TitleBar {

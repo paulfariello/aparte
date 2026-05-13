@@ -129,6 +129,8 @@ async fn run_mock_server(
     muc_with_sid: Vec<String>,
     // Groupchat MAM archive for MUC queries: (stanza_id, from_full_jid, msg_id, body)
     muc_mam_archive: Vec<(String, String, String, String)>,
+    // Chat reactions in MAM: (from, to, referenced_msg_id, emoji)
+    mam_reaction_archive: Vec<(String, String, String, String)>,
     outgoing_msg_tx: mpsc::UnboundedSender<Message>,
 ) {
     // Real XMPP servers echo roster results with from=user_bare_jid, matching
@@ -324,6 +326,16 @@ async fn run_mock_server(
                                                 );
                                                 let _ = stream.send(&result).await;
                                             }
+                                            for (rxn_from, rxn_to, ref_id, emoji) in &mam_reaction_archive {
+                                                let result = mam_result_chat_reaction(
+                                                    qid,
+                                                    rxn_from,
+                                                    rxn_to,
+                                                    ref_id,
+                                                    emoji,
+                                                );
+                                                let _ = stream.send(&result).await;
+                                            }
                                         }
                                     }
                                     let fin = mam_fin_iq(id, &target, true);
@@ -394,6 +406,7 @@ fn start_mock_server(
     mam_query_tx: Option<mpsc::UnboundedSender<()>>,
     muc_with_sid: Vec<String>,
     muc_mam_archive: Vec<(String, String, String, String)>,
+    mam_reaction_archive: Vec<(String, String, String, String)>,
 ) -> (MockServer, u16, mpsc::UnboundedReceiver<Message>) {
     let listener = rt.block_on(async {
         TcpListener::bind("127.0.0.1:0")
@@ -414,6 +427,7 @@ fn start_mock_server(
         mam_query_tx,
         muc_with_sid,
         muc_mam_archive,
+        mam_reaction_archive,
         outgoing_msg_tx,
     ));
     (MockServer { inject_tx }, port, outgoing_msg_rx)
@@ -849,6 +863,44 @@ fn mam_result_message(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
 }
 
+/// A MAM result wrapping a chat reaction message (XEP-0444).
+/// `ref_id` is the id of the original message being reacted to.
+fn mam_result_chat_reaction(
+    queryid: &str,
+    from: &str,
+    to: &str,
+    ref_id: &str,
+    emoji: &str,
+) -> XmppStreamElement {
+    use xmpp_parsers::minidom::Element;
+    let reactions_elem: Element = format!(
+        "<reactions xmlns='urn:xmpp:reactions:0' id='{ref_id}'><reaction>{emoji}</reaction></reactions>"
+    )
+    .parse()
+    .expect("valid reactions element");
+
+    let mut inner = Message::chat(Some(Jid::new(to).unwrap()));
+    inner.from = Some(Jid::new(from).unwrap());
+    inner.payloads.push(reactions_elem);
+
+    let result = mam::Result_ {
+        id: format!("rxn-{ref_id}"),
+        queryid: if queryid.is_empty() {
+            None
+        } else {
+            Some(mam::QueryId(queryid.to_string()))
+        },
+        forwarded: Forwarded {
+            delay: None,
+            message: inner,
+        },
+    };
+
+    let mut outer = Message::new_with_type(MessageType::Normal, Some(Jid::new(to).unwrap()));
+    outer.payloads.push(result.into());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
+}
+
 fn mam_fin_iq(req_id: &str, from_jid: &str, complete: bool) -> XmppStreamElement {
     let fin = mam::Fin {
         complete,
@@ -979,6 +1031,53 @@ pub fn chat_message_with_delay(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
+/// A chat reaction message (XEP-0444). `referenced_id` is the id of the
+/// original message being reacted to. `emojis` is the full set of emojis the
+/// sender is expressing (empty slice clears all reactions from this sender).
+pub fn chat_reaction(
+    from: &str,
+    to: &str,
+    referenced_id: &str,
+    emojis: &[&str],
+) -> XmppStreamElement {
+    let emojis_xml: String = emojis
+        .iter()
+        .map(|e| format!("<reaction>{e}</reaction>"))
+        .collect();
+    let reactions_elem: Element = format!(
+        "<reactions xmlns='urn:xmpp:reactions:0' id='{referenced_id}'>{emojis_xml}</reactions>"
+    )
+    .parse()
+    .expect("valid reactions element");
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(reactions_elem);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+/// A groupchat reaction message (XEP-0444). In MUC context `referenced_id`
+/// should be the stanza-id of the target message.
+pub fn groupchat_reaction(
+    from: &str,
+    to: &str,
+    referenced_id: &str,
+    emojis: &[&str],
+) -> XmppStreamElement {
+    let emojis_xml: String = emojis
+        .iter()
+        .map(|e| format!("<reaction>{e}</reaction>"))
+        .collect();
+    let reactions_elem: Element = format!(
+        "<reactions xmlns='urn:xmpp:reactions:0' id='{referenced_id}'>{emojis_xml}</reactions>"
+    )
+    .parse()
+    .expect("valid reactions element");
+    let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(reactions_elem);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 // ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
@@ -993,11 +1092,11 @@ pub struct XmppFixture {
 
 impl XmppFixture {
     pub fn new(roster: &[&str]) -> Self {
-        Self::new_impl(roster, false, vec![], None, vec![], vec![]).0
+        Self::new_impl(roster, false, vec![], None, vec![], vec![], vec![]).0
     }
 
     pub fn new_with_disco(roster: &[&str]) -> Self {
-        Self::new_impl(roster, true, vec![], None, vec![], vec![]).0
+        Self::new_impl(roster, true, vec![], None, vec![], vec![], vec![]).0
     }
 
     pub fn new_with_mam(roster: &[&str], archive: &[(&str, &str, &str, &str)]) -> Self {
@@ -1005,7 +1104,35 @@ impl XmppFixture {
             .iter()
             .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
             .collect();
-        Self::new_impl(roster, true, mam_archive, None, vec![], vec![]).0
+        Self::new_impl(roster, true, mam_archive, None, vec![], vec![], vec![]).0
+    }
+
+    /// Create a fixture with a MAM archive that includes both a chat message and a
+    /// reaction to it. `msg_archive` entries: (from, to, msg_id, body).
+    /// `rxn_archive` entries: (from, to, referenced_msg_id, emoji).
+    pub fn new_with_mam_and_reaction(
+        roster: &[&str],
+        msg_archive: &[(&str, &str, &str, &str)],
+        rxn_archive: &[(&str, &str, &str, &str)],
+    ) -> Self {
+        let mam_archive = msg_archive
+            .iter()
+            .map(|(f, t, i, b)| (f.to_string(), t.to_string(), i.to_string(), b.to_string()))
+            .collect();
+        let mam_reaction_archive = rxn_archive
+            .iter()
+            .map(|(f, t, i, e)| (f.to_string(), t.to_string(), i.to_string(), e.to_string()))
+            .collect();
+        Self::new_impl(
+            roster,
+            true,
+            mam_archive,
+            None,
+            vec![],
+            vec![],
+            mam_reaction_archive,
+        )
+        .0
     }
 
     /// Create fixture with OMEMO-aware mock server (empty contact devices).
@@ -1017,7 +1144,7 @@ impl XmppFixture {
             bundle_tx,
             stanza_tx,
         };
-        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![]);
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
         (
             fixture,
             OmemoCapture {
@@ -1043,7 +1170,7 @@ impl XmppFixture {
             stanza_tx,
         };
         let roster = [contact_jid];
-        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![], vec![]);
+        let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
         (
             fixture,
             OmemoCapture {
@@ -1058,7 +1185,7 @@ impl XmppFixture {
     /// `<displayed>` marker handling in MUC contexts.
     pub fn new_with_muc_sid(roster: &[&str], muc_jids: &[&str]) -> Self {
         let muc_with_sid = muc_jids.iter().map(|s| s.to_string()).collect();
-        Self::new_impl(roster, true, vec![], None, muc_with_sid, vec![]).0
+        Self::new_impl(roster, true, vec![], None, muc_with_sid, vec![], vec![]).0
     }
 
     /// Create a fixture with XEP-0359 MUC support and a pre-populated groupchat MAM archive.
@@ -1080,7 +1207,16 @@ impl XmppFixture {
                 )
             })
             .collect();
-        Self::new_impl(roster, true, vec![], None, muc_with_sid, muc_mam_archive).0
+        Self::new_impl(
+            roster,
+            true,
+            vec![],
+            None,
+            muc_with_sid,
+            muc_mam_archive,
+            vec![],
+        )
+        .0
     }
 
     /// Create a fixture with a groupchat MAM archive but WITHOUT XEP-0359 support
@@ -1103,7 +1239,7 @@ impl XmppFixture {
             .collect();
         // respond_to_disco=true so the mock sends an empty disco result (no SID),
         // which causes JidDisco to fire and confirm that XEP-0359 is unsupported.
-        Self::new_impl(roster, true, vec![], None, vec![], muc_mam_archive).0
+        Self::new_impl(roster, true, vec![], None, vec![], muc_mam_archive, vec![]).0
     }
 
     fn new_impl(
@@ -1113,6 +1249,7 @@ impl XmppFixture {
         omemo_cfg: Option<OmemoMockConfig>,
         muc_with_sid: Vec<String>,
         muc_mam_archive: Vec<(String, String, String, String)>,
+        mam_reaction_archive: Vec<(String, String, String, String)>,
     ) -> (Self, ()) {
         let rt = Runtime::new().unwrap();
         let (mam_query_tx, mam_query_rx) = mpsc::unbounded_channel::<()>();
@@ -1126,6 +1263,7 @@ impl XmppFixture {
             Some(mam_query_tx),
             muc_with_sid,
             muc_mam_archive,
+            mam_reaction_archive,
         );
         let config = format!(
             "[accounts.test]\n\

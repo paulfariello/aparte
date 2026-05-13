@@ -42,6 +42,15 @@ impl MessagesMod {
         self.get(account, msg_id)
     }
 
+    pub fn get_by_stanza_id_mut<'a>(
+        &'a mut self,
+        account: &Option<Account>,
+        stanza_id: &str,
+    ) -> Option<&'a mut Message> {
+        let msg_id = self.stanza_id_index.get(account)?.get(stanza_id)?.clone();
+        self.get_mut(account, &msg_id)
+    }
+
     pub fn handle_message(&mut self, account: &Option<Account>, message: &Message) {
         let messages = self.messages.entry(account.clone()).or_default();
         messages.insert(message.id().to_string(), message.clone());

@@ -12,4 +12,5 @@ pub mod displayed_markers;
 pub mod mam;
 pub mod messages;
 pub mod omemo;
+pub mod reactions;
 pub mod ui;

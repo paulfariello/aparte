@@ -231,6 +231,24 @@ where
         }
     }
 
+    /// Insert or replace an item. If an element with the same Ord key already
+    /// exists it is removed first so the new element (which may carry updated
+    /// content, e.g. reactions or a correction) replaces it.
+    pub fn replace(&mut self, item: I) {
+        let new_lc = LayoutChild {
+            child: item,
+            dimensions: None,
+        };
+        let stick_to_bottom = self.bottom_visible_child_index + 1 == self.children.len();
+        // Remove the old element if present (same Ord key = same timestamp+id).
+        let was_present = self.children.remove(&new_lc);
+        let inserted = self.children.insert(new_lc);
+        // Only bump the scroll index when this is a genuinely new element.
+        if inserted && !was_present && stick_to_bottom {
+            self.bottom_visible_child_index += 1;
+        }
+    }
+
     /// PageUp the window.
     /// Returns `(at_top, old_selected, new_selected)`.
     /// If a message was selected and scrolled off the bottom of the new viewport,

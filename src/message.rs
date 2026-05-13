@@ -104,6 +104,7 @@ pub struct VersionedXmppMessage {
     pub delayed: bool,
     pub encrypted: bool,
     pub stanza_id: Option<String>,
+    pub reactions: HashMap<BareJid, Vec<String>>,
 }
 
 impl VersionedXmppMessage {
@@ -157,6 +158,14 @@ impl VersionedXmppMessage {
 
     pub fn has_multiple_version(&self) -> bool {
         self.history.len() > 1
+    }
+
+    pub fn update_reactions(&mut self, from: BareJid, emojis: Vec<String>) {
+        if emojis.is_empty() {
+            self.reactions.remove(&from);
+        } else {
+            self.reactions.insert(from, emojis);
+        }
     }
 }
 
@@ -392,6 +401,7 @@ impl Message {
             delayed: false,
             encrypted: false,
             stanza_id: None,
+            reactions: HashMap::new(),
         })
     }
 
@@ -426,6 +436,7 @@ impl Message {
             delayed: false,
             encrypted: false,
             stanza_id: None,
+            reactions: HashMap::new(),
         })
     }
 
@@ -460,6 +471,7 @@ impl Message {
             delayed: false,
             encrypted: false,
             stanza_id: None,
+            reactions: HashMap::new(),
         })
     }
 
@@ -494,6 +506,7 @@ impl Message {
             delayed: false,
             encrypted: false,
             stanza_id: None,
+            reactions: HashMap::new(),
         })
     }
 
@@ -903,6 +916,23 @@ impl MessageView {
         for line in iter {
             header.append(format!("\n{}", padding));
             header.append(parse_message_line(&terminus::clean_str(line)));
+        }
+
+        if !message.reactions.is_empty() {
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for emojis in message.reactions.values() {
+                for emoji in emojis {
+                    *counts.entry(emoji.as_str()).or_insert(0) += 1;
+                }
+            }
+            let mut sorted: Vec<(&str, usize)> = counts.into_iter().collect();
+            sorted.sort_by_key(|(e, _)| *e);
+            let reaction_str: String = sorted
+                .iter()
+                .map(|(e, n)| format!("{} {}", e, n))
+                .collect::<Vec<_>>()
+                .join("  ");
+            header.append(format!("\n{}[{}]", padding, reaction_str));
         }
 
         Self::format_text(header, max_width)

@@ -208,6 +208,7 @@ pub enum Mod {
     Correction(mods::correction::CorrectionMod),
     Omemo(mods::omemo::OmemoMod),
     DisplayedMarkers(mods::displayed_markers::DisplayedMarkersMod),
+    Reactions(mods::reactions::ReactionsMod),
 }
 
 macro_rules! from_mod {
@@ -246,6 +247,7 @@ from_mod!(
     DisplayedMarkers,
     mods::displayed_markers::DisplayedMarkersMod
 );
+from_mod!(Reactions, mods::reactions::ReactionsMod);
 
 pub trait ModTrait: Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
@@ -289,6 +291,7 @@ impl ModTrait for Mod {
             Mod::Correction(r#mod) => r#mod.init(aparte),
             Mod::Omemo(r#mod) => r#mod.init(aparte),
             Mod::DisplayedMarkers(r#mod) => r#mod.init(aparte),
+            Mod::Reactions(r#mod) => r#mod.init(aparte),
         }
     }
 
@@ -306,6 +309,7 @@ impl ModTrait for Mod {
             Mod::Correction(r#mod) => r#mod.on_event(aparte, event),
             Mod::Omemo(r#mod) => r#mod.on_event(aparte, event),
             Mod::DisplayedMarkers(r#mod) => r#mod.on_event(aparte, event),
+            Mod::Reactions(r#mod) => r#mod.on_event(aparte, event),
         }
     }
 
@@ -337,6 +341,7 @@ impl ModTrait for Mod {
             Mod::DisplayedMarkers(r#mod) => {
                 r#mod.can_handle_xmpp_message(aparte, account, message, delay)
             }
+            Mod::Reactions(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
         }
     }
 
@@ -381,6 +386,9 @@ impl ModTrait for Mod {
             Mod::DisplayedMarkers(r#mod) => {
                 r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
             }
+            Mod::Reactions(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+            }
         }
     }
 }
@@ -400,6 +408,7 @@ impl fmt::Debug for Mod {
             Mod::Correction(_) => f.write_str("Mod::Correction"),
             Mod::Omemo(_) => f.write_str("Mod::Omemo"),
             Mod::DisplayedMarkers(_) => f.write_str("Mod::DisplayedMarkers"),
+            Mod::Reactions(_) => f.write_str("Mod::Reactions"),
         }
     }
 }
@@ -419,6 +428,7 @@ impl Display for Mod {
             Mod::Correction(r#mod) => r#mod.fmt(f),
             Mod::Omemo(r#mod) => r#mod.fmt(f),
             Mod::DisplayedMarkers(r#mod) => r#mod.fmt(f),
+            Mod::Reactions(r#mod) => r#mod.fmt(f),
         }
     }
 }
@@ -878,6 +888,7 @@ impl Aparte {
         aparte.add_mod(Mod::DisplayedMarkers(
             mods::displayed_markers::DisplayedMarkersMod::default(),
         ));
+        aparte.add_mod(Mod::Reactions(mods::reactions::ReactionsMod::default()));
 
         Ok(aparte)
     }
@@ -974,6 +985,12 @@ impl Aparte {
                 mods.insert(
                     TypeId::of::<mods::displayed_markers::DisplayedMarkersMod>(),
                     RefCell::new(Mod::DisplayedMarkers(r#mod)),
+                );
+            }
+            Mod::Reactions(r#mod) => {
+                mods.insert(
+                    TypeId::of::<mods::reactions::ReactionsMod>(),
+                    RefCell::new(Mod::Reactions(r#mod)),
                 );
             }
         }
