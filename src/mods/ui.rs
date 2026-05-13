@@ -889,7 +889,8 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::ModeChange(Mode::Insert) => {
+                            UIEvent::ModeChange(Mode::Insert)
+                            | UIEvent::ModeChange(Mode::Command) => {
                                 if let Some(i) = view.clear_selection() {
                                     if let Some(c) = view.child_at(i) {
                                         c.deselect();
@@ -1152,7 +1153,8 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::ModeChange(Mode::Insert) => {
+                            UIEvent::ModeChange(Mode::Insert)
+                            | UIEvent::ModeChange(Mode::Command) => {
                                 if let Some(i) = view.clear_selection() {
                                     if let Some(c) = view.child_at(i) {
                                         c.deselect();
@@ -1886,7 +1888,7 @@ impl ModTrait for UIMod {
                                 }
                             }
                         },
-                        UIEvent::ModeChange(Mode::Insert) => {
+                        UIEvent::ModeChange(Mode::Insert) | UIEvent::ModeChange(Mode::Command) => {
                             if let Some(i) = view.clear_selection() {
                                 if let Some(c) = view.child_at(i) {
                                     c.deselect();

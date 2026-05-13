@@ -681,6 +681,63 @@ fn cursor_position_in_command_mode() {
     );
 }
 
+/// When a message is selected in NORMAL mode and the user enters COMMAND mode
+/// via ':', the cursor must move to the input bar (last row), not stay on the
+/// selected message row.  The scroll_win renders selected children with cursor
+/// priority 2, which beats the input widget's priority 1 — the fix is to clear
+/// the selection on ModeChange(Command).
+#[test]
+fn cursor_position_in_command_mode_after_message_selection() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+
+    // Enter NORMAL mode.
+    enter_normal(&h);
+
+    // Press 'k' to explicitly select the last visible message (select_prev with
+    // no prior selection lands on bottom_visible_child_index).
+    h.send_bytes(b"k");
+    let selected = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    assert!(selected, "Should still be in NORMAL mode after 'k'");
+    // Give the selection highlight a moment to render.
+    thread::sleep(Duration::from_millis(200));
+
+    // Sanity-check: at least one message row is highlighted.
+    let parser = h.snapshot();
+    let selected_rows = rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR);
+    assert!(
+        !selected_rows.is_empty(),
+        "Expected a selected message row after pressing 'k' in NORMAL mode\n{}",
+        describe(parser.screen())
+    );
+    let selection_row = *selected_rows.last().unwrap();
+
+    // Now enter COMMAND mode via ':'.
+    h.send_bytes(b":");
+    let found = wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+    assert!(found, "COMMAND mode indicator should appear");
+
+    let parser = h.snapshot();
+    let (row, _col) = parser.screen().cursor_position();
+
+    h.shutdown();
+
+    assert_ne!(
+        row, selection_row,
+        "Cursor must not sit on the selected message row ({}) in COMMAND mode",
+        selection_row
+    );
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor must be on the input bar (row {}) after entering COMMAND mode from NORMAL with a selected message, got row {}",
+        ROWS - 1,
+        row
+    );
+}
+
 #[test]
 #[allow(non_snake_case)]
 fn G_scrolls_to_newest_message() {
