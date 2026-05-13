@@ -90,6 +90,29 @@ enum UIEvent {
     ReduceHighlight(String, u64, u64),
 }
 
+fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: MessageView) {
+    let pred_date = view
+        .predecessor(&msg_view)
+        .map(|p| p.message.timestamp().with_timezone(&LocalTz).date_naive());
+    let msg_date = msg_view
+        .message
+        .timestamp()
+        .with_timezone(&LocalTz)
+        .date_naive();
+    msg_view.set_show_date_sep(pred_date.is_some_and(|d| d != msg_date));
+
+    if let Some(succ) = view.successor(&msg_view) {
+        let succ_date = succ
+            .message
+            .timestamp()
+            .with_timezone(&LocalTz)
+            .date_naive();
+        succ.set_show_date_sep(msg_date != succ_date);
+    }
+
+    view.insert(msg_view);
+}
+
 struct TitleBar {
     current_jid: Option<String>,
     display_name: Option<String>,
@@ -653,20 +676,26 @@ impl UIMod {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == chat_for_event.contact {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            insert_message(
+                                                view,
+                                                MessageView::new(
+                                                    &mut aparte,
+                                                    Message::Xmpp(message.clone()),
+                                                ),
+                                            );
                                             mam_requested = false;
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == chat_for_event.contact {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            insert_message(
+                                                view,
+                                                MessageView::new(
+                                                    &mut aparte,
+                                                    Message::Xmpp(message.clone()),
+                                                ),
+                                            );
                                             mam_requested = false;
                                         }
                                     }
@@ -898,20 +927,26 @@ impl UIMod {
                                     // TODO check to == us
                                     Direction::Incoming => {
                                         if message.from == channel_for_event.jid {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            insert_message(
+                                                view,
+                                                MessageView::new(
+                                                    &mut aparte,
+                                                    Message::Xmpp(message.clone()),
+                                                ),
+                                            );
                                             mam_requested = false;
                                         }
                                     }
                                     Direction::Outgoing => {
                                         // TODO check from == us
                                         if message.to == channel_for_event.jid {
-                                            view.insert(MessageView::new(
-                                                &mut aparte,
-                                                Message::Xmpp(message.clone()),
-                                            ));
+                                            insert_message(
+                                                view,
+                                                MessageView::new(
+                                                    &mut aparte,
+                                                    Message::Xmpp(message.clone()),
+                                                ),
+                                            );
                                             mam_requested = false;
                                         }
                                     }
@@ -1698,10 +1733,10 @@ impl ModTrait for UIMod {
                     let search_highlight_bg = aparte.config.theme.search_highlight_bg;
                     move |view, event| match event {
                         UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                            view.insert(MessageView::new(
-                                &mut aparte,
-                                Message::Log(message.clone()),
-                            ));
+                            insert_message(
+                                view,
+                                MessageView::new(&mut aparte, Message::Log(message.clone())),
+                            );
                         }
                         UIEvent::Core(Event::Key(KeyEvent {
                             code: KeyCode::PageUp,

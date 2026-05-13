@@ -24,7 +24,7 @@ async-trait = "0.1.41" # same as libsignal
 backtrace = "^0.3"
 base64 = "0.21.7"
 bytes = "^0.5"
-chrono = "^0.4"
+chrono = { version = "^0.4", features = ["unstable-locales"] }
 clap = { version = "4.0.32", features = ["derive"] }
 derive-error = "0.0.4"
 diesel = { version = "^2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "r2d2"] }
@@ -80,6 +80,10 @@ required-features = ["insecure-xmpp"]
 
 [[test]]
 name = "displayed_markers"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "date_separator"
 required-features = ["insecure-xmpp"]
 
 [dev-dependencies]

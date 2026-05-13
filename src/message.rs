@@ -15,8 +15,9 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use anyhow::Result;
+use chrono::format::Locale;
 use chrono::offset::{Local, TimeZone};
-use chrono::{DateTime, FixedOffset, Local as LocalTz};
+use chrono::{DateTime, FixedOffset, Local as LocalTz, NaiveDate};
 #[cfg(feature = "image")]
 use image::io::Reader as ImageReader;
 #[cfg(feature = "image")]
@@ -615,6 +616,10 @@ pub struct MessageView {
     measure_cache: RefCell<Option<(u16, Vec<Charxels>)>>,
     selected: Cell<Option<BgColor>>,
     highlight: RefCell<Option<(String, FgColor, BgColor)>>,
+    show_date_sep: Cell<bool>,
+    date_sep_fg: FgColor,
+    date_sep_bg: BgColor,
+    preferred_langs: Vec<String>,
 }
 
 impl Eq for MessageView {}
@@ -724,15 +729,37 @@ fn parse_message_line(line: &str) -> Charxels {
     result
 }
 
+fn langs_to_locale(langs: &[String]) -> Locale {
+    for lang in langs {
+        let posix = lang.replace('-', "_");
+        if let Ok(locale) = posix.parse::<Locale>() {
+            return locale;
+        }
+        if let Some(lang_only) = lang.split('-').next() {
+            for country in &["US", "GB", "FR", "DE", "BR", "ES", "IT", "RU", "JP", "CN"] {
+                if let Ok(locale) = format!("{}_{}", lang_only, country).parse::<Locale>() {
+                    return locale;
+                }
+            }
+        }
+    }
+    Locale::POSIX
+}
+
 impl MessageView {
     #[cfg(not(feature = "image"))]
-    pub fn new(_aparte: &mut AparteAsync, message: Message) -> Self {
+    pub fn new(aparte: &mut AparteAsync, message: Message) -> Self {
+        let theme = aparte.config.get_theme();
         MessageView {
             message,
             dimensions: None,
             measure_cache: RefCell::new(None),
             selected: Cell::new(None),
             highlight: RefCell::new(None),
+            show_date_sep: Cell::new(false),
+            date_sep_fg: theme.date_separator_fg,
+            date_sep_bg: theme.date_separator_bg,
+            preferred_langs: aparte.config.preferred_langs.clone(),
         }
     }
 
@@ -774,6 +801,7 @@ impl MessageView {
                 .unwrap_or(Arc::new(RwLock::new(None))),
             Message::Log(_) => Arc::new(RwLock::new(None)),
         };
+        let theme = aparte.config.get_theme();
         MessageView {
             message,
             dimensions: None,
@@ -781,6 +809,10 @@ impl MessageView {
             measure_cache: RefCell::new(None),
             selected: Cell::new(None),
             highlight: RefCell::new(None),
+            show_date_sep: Cell::new(false),
+            date_sep_fg: theme.date_separator_fg,
+            date_sep_bg: theme.date_separator_bg,
+            preferred_langs: aparte.config.preferred_langs.clone(),
         }
     }
 
@@ -877,10 +909,23 @@ impl MessageView {
     }
 
     fn format(&self, max_width: Option<u16>) -> Vec<Charxels> {
-        match &self.message {
+        let mut lines = match &self.message {
             Message::Log(message) => Self::format_log(message, max_width),
             Message::Xmpp(message) => Self::format_xmpp_text(message, max_width),
+        };
+        if self.show_date_sep.get() {
+            let width = max_width.unwrap_or(80);
+            let date = self.message.timestamp().with_timezone(&Local).date_naive();
+            let sep = Self::format_date_separator(
+                date,
+                width,
+                self.date_sep_fg,
+                self.date_sep_bg,
+                &self.preferred_langs,
+            );
+            lines.insert(0, sep);
         }
+        lines
     }
 
     fn format_text(text: impl IntoCharxels, max_width: Option<u16>) -> Vec<Charxels> {
@@ -919,6 +964,29 @@ impl MessageView {
 
     pub fn set_highlight(&self, data: Option<(String, FgColor, BgColor)>) {
         *self.highlight.borrow_mut() = data;
+    }
+
+    pub fn set_show_date_sep(&self, show: bool) {
+        self.show_date_sep.set(show);
+        *self.measure_cache.borrow_mut() = None;
+    }
+
+    fn format_date_separator(
+        date: NaiveDate,
+        width: u16,
+        fg: FgColor,
+        bg: BgColor,
+        preferred_langs: &[String],
+    ) -> Charxels {
+        let locale = langs_to_locale(preferred_langs);
+        let label = date.format_localized(" %Y-%m-%d, %A ", locale).to_string();
+        let label_len = label.chars().count() as u16;
+        let line_width = width.saturating_sub(label_len);
+        let left = "─".repeat((line_width / 2) as usize);
+        let right = "─".repeat((line_width - line_width / 2) as usize);
+        format!("{}{}{}", left, label, right)
+            .with_foreground(fg)
+            .with_background(bg)
     }
 
     fn render_text(&self, frame: &mut ScreenFrame) {
@@ -1086,6 +1154,10 @@ mod tests {
                 measure_cache: RefCell::new(None),
                 selected: Cell::new(None),
                 highlight: RefCell::new(None),
+                show_date_sep: Cell::new(false),
+                date_sep_fg: FgColor(terminus::Color::Default),
+                date_sep_bg: BgColor(terminus::Color::Default),
+                preferred_langs: vec![],
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )

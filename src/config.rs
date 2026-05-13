@@ -41,6 +41,14 @@ fn default_search_highlight_bg() -> BgColor {
     BgColor(Color::Named(NamedColor::Yellow))
 }
 
+fn default_date_separator_fg() -> FgColor {
+    FgColor(Color::Named(NamedColor::Cyan))
+}
+
+fn default_date_separator_bg() -> BgColor {
+    BgColor(Color::Default)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -112,6 +120,14 @@ pub struct Theme {
     #[serde(serialize_with = "serialize_color")]
     #[serde(deserialize_with = "deserialize_color")]
     pub search_highlight_bg: BgColor,
+    #[serde(default = "default_date_separator_fg")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
+    pub date_separator_fg: FgColor,
+    #[serde(default = "default_date_separator_bg")]
+    #[serde(serialize_with = "serialize_color")]
+    #[serde(deserialize_with = "deserialize_color")]
+    pub date_separator_bg: BgColor,
 }
 
 impl Default for Theme {
@@ -149,6 +165,8 @@ fn profanity() -> Theme {
         roster_role_fg: FgColor(Color::Named(NamedColor::Yellow)),
         search_highlight_fg: FgColor(Color::Named(NamedColor::Black)),
         search_highlight_bg: BgColor(Color::Named(NamedColor::Yellow)),
+        date_separator_fg: FgColor(Color::Named(NamedColor::Cyan)),
+        date_separator_bg: BgColor(Color::Default),
     }
 }
 
@@ -219,6 +237,8 @@ fn catppuccin_mocha() -> Theme {
         roster_role_fg: FgColor(mauve),
         search_highlight_fg: FgColor(crust),
         search_highlight_bg: BgColor(yellow),
+        date_separator_fg: FgColor(overlay_2),
+        date_separator_bg: BgColor(surface_0),
     }
 }
 
@@ -251,6 +271,8 @@ fn catppuccin_latte() -> Theme {
         roster_role_fg: FgColor(Color::Rgb(136, 57, 239)),    // Mauve
         search_highlight_fg: FgColor(Color::Rgb(76, 79, 105)), // Text dark
         search_highlight_bg: BgColor(Color::Rgb(223, 142, 29)), // Yellow
+        date_separator_fg: FgColor(Color::Rgb(156, 160, 176)), // Overlay0
+        date_separator_bg: BgColor(Color::Rgb(204, 208, 218)), // Surface0
     }
 }
 
@@ -283,5 +305,7 @@ fn catppuccin_frappe() -> Theme {
         roster_role_fg: FgColor(Color::Rgb(202, 158, 230)), // Mauve
         search_highlight_fg: FgColor(Color::Rgb(17, 17, 27)), // Crust
         search_highlight_bg: BgColor(Color::Rgb(229, 200, 144)), // Yellow
+        date_separator_fg: FgColor(Color::Rgb(115, 121, 148)), // Overlay0
+        date_separator_bg: BgColor(Color::Rgb(65, 69, 89)), // Surface0
     }
 }

@@ -142,6 +142,24 @@ where
         self.children.iter().map(|LayoutChild { child, .. }| child)
     }
 
+    pub fn predecessor(&self, item: &I) -> Option<&I> {
+        let mut prev: Option<&I> = None;
+        for LayoutChild { child, .. } in &self.children {
+            if child >= item {
+                break;
+            }
+            prev = Some(child);
+        }
+        prev
+    }
+
+    pub fn successor(&self, item: &I) -> Option<&I> {
+        self.children
+            .iter()
+            .map(|LayoutChild { child, .. }| child)
+            .find(|child| *child > item)
+    }
+
     pub fn current_search(&self) -> Option<&str> {
         self.search_query.as_deref()
     }
