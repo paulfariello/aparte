@@ -2252,16 +2252,16 @@ impl ModTrait for UIMod {
                         let (raw_buf, password) = result.as_ref().unwrap();
                         let raw_buf = raw_buf.clone();
 
-                        let looks_like_slash_cmd = !password
+                        let looks_like_cmd = !password
                             && !raw_buf.is_empty()
-                            && raw_buf.starts_with('/')
-                            && !raw_buf.starts_with("/me ");
+                            && ((raw_buf.starts_with('/') && !raw_buf.starts_with("/me "))
+                                || raw_buf.starts_with(':'));
 
                         if *password {
                             let mut command = self.password_command.take().unwrap();
                             command.args.push(raw_buf);
                             aparte.schedule(Event::Command(command));
-                        } else if looks_like_slash_cmd && !self.slash_warned {
+                        } else if looks_like_cmd && !self.slash_warned {
                             self.slash_warned = true;
                             aparte.schedule(Event::ShowPopup(vec![
                                 format!(
@@ -2269,7 +2269,8 @@ impl ModTrait for UIMod {
                                     raw_buf
                                 ),
                                 String::new(),
-                                "Only /me is supported as an inline command.".to_string(),
+                                "Commands are entered in normal mode (Esc, then :command)."
+                                    .to_string(),
                                 "Press Enter again to send as plain text, or ESC to edit."
                                     .to_string(),
                             ]));
