@@ -631,6 +631,8 @@ pub struct UIMod {
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
     _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
     dimensions: Dimensions,
+    /// Set after the first Enter press on a /command input. The next Enter send is allowed.
+    slash_warned: bool,
 }
 
 impl UIMod {
@@ -655,6 +657,7 @@ impl UIMod {
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
             dirty: true,
+            slash_warned: false,
             dimensions: Dimensions {
                 top: 1,
                 left: 1,
@@ -2248,11 +2251,31 @@ impl ModTrait for UIMod {
                         let result = result.borrow_mut();
                         let (raw_buf, password) = result.as_ref().unwrap();
                         let raw_buf = raw_buf.clone();
+
+                        let looks_like_slash_cmd = !password
+                            && !raw_buf.is_empty()
+                            && raw_buf.starts_with('/')
+                            && !raw_buf.starts_with("/me ");
+
                         if *password {
                             let mut command = self.password_command.take().unwrap();
                             command.args.push(raw_buf);
                             aparte.schedule(Event::Command(command));
+                        } else if looks_like_slash_cmd && !self.slash_warned {
+                            self.slash_warned = true;
+                            aparte.schedule(Event::ShowPopup(vec![
+                                format!(
+                                    "\"{}\" looks like a command but is not recognized.",
+                                    raw_buf
+                                ),
+                                String::new(),
+                                "Only /me is supported as an inline command.".to_string(),
+                                "Press Enter again to send as plain text, or ESC to edit."
+                                    .to_string(),
+                            ]));
                         } else if !raw_buf.is_empty() {
+                            self.slash_warned = false;
+                            aparte.schedule(Event::ClosePopup);
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
@@ -2328,6 +2351,11 @@ impl ModTrait for UIMod {
                         }
                     }
                     _ => {
+                        // Reset the slash-command warning only when the popup is closed
+                        // (while the popup is visible, keys are absorbed by its content).
+                        if !self.root.is_visible() {
+                            self.slash_warned = false;
+                        }
                         aparte.schedule(Event::ResetCompletion);
                         self.root.event(&mut UIEvent::Core(Event::Key(*key)));
                     }
