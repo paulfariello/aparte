@@ -181,6 +181,8 @@ pub enum Event {
     Omemo(mods::omemo::OmemoEvent),
     UIRender(bool),
     UIMode(UIMode),
+    ShowPopup(Vec<String>),
+    ClosePopup,
     CommandTimeout(u64),
     DisplayedMarker {
         account: Account,

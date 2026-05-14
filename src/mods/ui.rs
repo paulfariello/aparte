@@ -28,8 +28,10 @@ use terminus::{
     cursor::Cursor,
     frame_layout::FrameLayout,
     input::Input,
+    label::Label,
     linear_layout::{LinearLayout, Orientation},
     list_view::ListView,
+    popup::PopupLayer,
     scroll_win::ScrollWin,
     CursorStyle, Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
     RequestedDimension, RequestedDimensions, View,
@@ -89,6 +91,8 @@ enum UIEvent {
     CommandBufferUpdate(String),
     SetInput(String),
     ReduceHighlight(String, u64, u64),
+    ShowPopup(Vec<String>),
+    ClosePopup,
 }
 
 fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: MessageView) {
@@ -620,7 +624,7 @@ pub struct UIMod {
     unread_windows: HashMap<String, VecDeque<(DateTime<FixedOffset>, bool)>>,
     conversations: HashMap<String, Conversation>,
     jid_to_name: HashMap<BareJid, String>,
-    root: LinearLayout<UIEvent, Theme>,
+    root: PopupLayer<UIEvent, Theme>,
     dirty: bool,
     password_command: Option<Command>,
     current_mode: Mode,
@@ -640,7 +644,7 @@ impl UIMod {
 
         Self {
             render_buffer: screen,
-            root: LinearLayout::new(Orientation::Vertical),
+            root: PopupLayer::new(LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)),
             windows: Vec::new(),
             unread_windows: HashMap::new(),
             current_window: None,
@@ -1310,6 +1314,7 @@ impl ModTrait for UIMod {
         const FRAME_LAYOUT_INDEX: usize = 1;
         const INPUT_INDEX: usize = 3;
 
+        let layout;
         {
             let mut mode = Mode::Insert;
             let mut command_buffer = String::new();
@@ -1318,7 +1323,7 @@ impl ModTrait for UIMod {
             let normal_commands = build_normal_command_trie();
             let mut aparte_proxy = aparte.proxy();
             let mut current_window = String::new();
-            self.root = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
+            layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Esc, ..
@@ -1721,11 +1726,38 @@ impl ModTrait for UIMod {
             }
         });
 
-        self.root.push(win_bar, 0);
-        self.root.push(frame, 1);
-        self.root.push(title_bar, 0);
-        self.root.push(input, 0);
-        self.root.set_focus(INPUT_INDEX);
+        let mut layout = layout;
+        layout.push(win_bar, 0);
+        layout.push(frame, 1);
+        layout.push(title_bar, 0);
+        layout.push(input, 0);
+        layout.set_focus(INPUT_INDEX);
+
+        self.root = PopupLayer::new(layout).with_event(|popup, event| match event {
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Esc, ..
+            })) if popup.is_visible() => {
+                popup.hide();
+            }
+            UIEvent::Core(Event::Key(_)) if popup.is_visible() => {
+                if let Some(content) = popup.content_mut() {
+                    content.event(event);
+                }
+            }
+            UIEvent::ShowPopup(lines) => {
+                let mut content = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical);
+                for line in lines.iter() {
+                    content.push(Label::new(line.clone()), 1);
+                }
+                popup.show(Box::new(content));
+            }
+            UIEvent::ClosePopup => {
+                popup.hide();
+            }
+            _ => {
+                popup.background_mut().event(event);
+            }
+        });
 
         let mut console = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal).with_event(
             |layout, event| {
@@ -2368,6 +2400,12 @@ impl ModTrait for UIMod {
             }
             Event::UIRender(_) => {
                 log::debug!("Force render");
+            }
+            Event::ShowPopup(lines) => {
+                self.root.event(&mut UIEvent::ShowPopup(lines.clone()));
+            }
+            Event::ClosePopup => {
+                self.root.event(&mut UIEvent::ClosePopup);
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
