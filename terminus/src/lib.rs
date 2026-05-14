@@ -26,6 +26,7 @@ pub mod scroll_win;
 
 pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 
+pub use charxel::ContinuationCell;
 pub use color::{
     deserialize_color, serialize_color, BgColor, Color, ColorTuple, FgColor, NamedColor,
 };

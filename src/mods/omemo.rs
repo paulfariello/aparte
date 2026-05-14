@@ -174,6 +174,10 @@ pub enum OmemoEvent {
         account: Account,
         jid: BareJid,
     },
+    Enabled {
+        account: Account,
+        jid: BareJid,
+    },
     ShowFingerprints {
         account: Account,
         jid: Option<BareJid>,
@@ -1149,6 +1153,10 @@ impl OmemoMod {
                 contact,
                 Box::new(OmemoEngine::new(account, signal_store.clone(), contact)),
             );
+            aparte.schedule(Event::Omemo(OmemoEvent::Enabled {
+                account: account.clone(),
+                jid: contact.clone(),
+            }));
         }
 
         Ok(())
@@ -1174,6 +1182,10 @@ impl OmemoMod {
                     nick_to_jid,
                 )),
             );
+            aparte.schedule(Event::Omemo(OmemoEvent::Enabled {
+                account: account.clone(),
+                jid: room.clone(),
+            }));
         }
 
         Ok(())
@@ -1204,6 +1216,10 @@ impl OmemoMod {
 
         aparte.storage.add_omemo_muc_room(account, room)?;
         aparte.add_crypto_engine(account, room, Box::new(muc_engine));
+        aparte.schedule(Event::Omemo(OmemoEvent::Enabled {
+            account: account.clone(),
+            jid: room.clone(),
+        }));
 
         Ok(())
     }
@@ -1265,6 +1281,10 @@ impl OmemoMod {
         log::info!("Update {jid}'s OMEMO device list cache");
 
         aparte.add_crypto_engine(account, jid, Box::new(omemo_engine));
+        aparte.schedule(Event::Omemo(OmemoEvent::Enabled {
+            account: account.clone(),
+            jid: jid.clone(),
+        }));
 
         Ok(())
     }
@@ -1881,6 +1901,7 @@ impl ModTrait for OmemoMod {
                         }
                     }
                 }
+                OmemoEvent::Enabled { .. } => {}
                 OmemoEvent::ShowFingerprints { account, jid } => {
                     let account = account.clone();
 

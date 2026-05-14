@@ -2,7 +2,7 @@ mod common;
 
 use std::convert::TryFrom;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio_xmpp::xmlstream::XmppStreamElement;
 use xmpp_parsers::{
@@ -14,6 +14,7 @@ use xmpp_parsers::{
 
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{muc_join_presence_with_jid, room_subject_message, XmppFixture};
+use common::{describe, row_text, ROWS};
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
 
@@ -223,5 +224,138 @@ fn omemo_muc_outgoing_encrypted() {
     assert_eq!(
         plaintext, "hello encrypted muc",
         "decrypted MUC message body mismatch"
+    );
+}
+
+/// After `/omemo enable`, the title bar (row ROWS-2) shows 🔒 for that conversation.
+#[test]
+fn omemo_enabled_shows_lock_in_titlebar() {
+    let contact_jid = "contact@localhost";
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    // Wait for aparte to publish its own bundle — confirms configure() has run.
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    // Open the chat window with the contact, then enable OMEMO.
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+
+    // Poll the title-bar row (ROWS-2) until 🔒 appears, up to 10 seconds.
+    // start_session() is async so the OmemoEvent::Enabled fires after
+    // the bundle fetch completes, not immediately.
+    let title_row = ROWS - 2;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = false;
+    while Instant::now() < deadline {
+        let parser = fixture.snapshot();
+        if row_text(parser.screen(), title_row).contains("🔒") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    if !found {
+        let parser = fixture.snapshot();
+        eprintln!("{}", describe(parser.screen()));
+    }
+    assert!(found, "🔒 not shown in title bar after /omemo enable");
+}
+
+/// 🔒 must persist in the title bar after entering COMMAND mode (`:` key).
+/// COMMAND mode uses a 9-char label vs the 8-char INSERT/NORMAL labels, which
+/// shifts the title one column right.  A stale wide-char continuation in the
+/// reference screen used to cause a false match so 🔒 was never re-emitted.
+#[test]
+fn omemo_lock_persists_in_command_mode() {
+    let contact_jid = "contact@localhost";
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+
+    let title_row = ROWS - 2;
+
+    // Wait for 🔒 in INSERT mode.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = false;
+    while Instant::now() < deadline {
+        if row_text(fixture.snapshot().screen(), title_row).contains("🔒") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    assert!(found, "🔒 not shown in INSERT mode — prerequisite failed");
+
+    // Press ':' → COMMAND mode (mode label expands from 8 to 9 chars, shifting
+    // every subsequent column right by one, including the 🔒 position).
+    fixture.send_bytes(b"\x1b");
+    let normal_shown = fixture.wait_for("NORMAL", Duration::from_secs(3));
+    assert!(normal_shown, "did not enter NORMAL mode before ':'");
+    fixture.send_bytes(b":");
+    let cmd_shown = fixture.wait_for("COMMAND", Duration::from_secs(3));
+    assert!(cmd_shown, "did not enter COMMAND mode");
+
+    let parser = fixture.snapshot();
+    let bar = row_text(parser.screen(), title_row);
+    assert!(
+        bar.contains("🔒"),
+        "🔒 disappeared from title bar after entering COMMAND mode; got: {:?}\n{}",
+        bar,
+        describe(parser.screen())
+    );
+}
+
+/// 🔒 must persist in the title bar after switching to NORMAL mode (Escape).
+#[test]
+fn omemo_lock_persists_in_normal_mode() {
+    let contact_jid = "contact@localhost";
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+
+    let title_row = ROWS - 2;
+
+    // Wait for 🔒 to appear in the title bar while still in INSERT mode.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = false;
+    while Instant::now() < deadline {
+        if row_text(fixture.snapshot().screen(), title_row).contains("🔒") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    assert!(found, "🔒 not shown in INSERT mode — prerequisite failed");
+
+    // Press Escape → NORMAL mode.
+    fixture.send_bytes(b"\x1b");
+    // Wait until the title bar shows NORMAL.
+    let normal_shown = fixture.wait_for("NORMAL", Duration::from_secs(3));
+    assert!(normal_shown, "did not enter NORMAL mode");
+
+    // 🔒 must still be visible in the title bar.
+    let parser = fixture.snapshot();
+    let bar = row_text(parser.screen(), title_row);
+    assert!(
+        bar.contains("🔒"),
+        "🔒 disappeared from title bar after entering NORMAL mode; got: {:?}\n{}",
+        bar,
+        describe(parser.screen())
     );
 }

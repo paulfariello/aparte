@@ -13,7 +13,7 @@ use crossterm::{
 };
 
 use crate::{
-    charxel::{Charxel, Grapheme, IntoCharxels},
+    charxel::{Charxel, ContinuationCell, Grapheme, IntoCharxels},
     BgColor, CursorPos, CursorStyle, Dimensions, FgColor, Style,
 };
 
@@ -256,16 +256,12 @@ impl OffscreenRenderBuffer {
                 if row < height && col < width {
                     self[row as u16][col as u16] = charxel.clone();
                 }
-                // For wide chars, mark right-half cells with the same charxel so
-                // that when this char is later replaced by a narrower one, the
-                // right-half cell is known to differ from any normal buffer content
-                // and gets explicitly rewritten (clearing the terminal's right half).
                 for extra in 1..w {
                     let right_left = left + extra;
                     let right_row = diff.pos.top as usize + right_left / width;
                     let right_col = right_left % width;
                     if right_row < height && right_col < width {
-                        self[right_row as u16][right_col as u16] = charxel.clone();
+                        self[right_row as u16][right_col as u16] = Charxel::from(ContinuationCell);
                     }
                 }
                 col_offset += w;
@@ -469,6 +465,7 @@ impl<'a> ScreenFrame<'a> {
                     foreground: charxel.foreground,
                     background: charxel.background,
                     styles: charxel.styles.clone(),
+                    continuation: false,
                 };
                 for _ in 0..spaces {
                     if self.cursor.left >= self.dimensions.width {
@@ -494,7 +491,8 @@ impl<'a> ScreenFrame<'a> {
             for k in 1..w {
                 let col = self.dimensions.left + self.cursor.left + k;
                 if col < self.dimensions.left + self.dimensions.width {
-                    self.offscreen[self.dimensions.top + self.cursor.top][col] = Charxel::default();
+                    self.offscreen[self.dimensions.top + self.cursor.top][col] =
+                        Charxel::from(ContinuationCell);
                 }
             }
             self.cursor.left += w;
@@ -567,6 +565,49 @@ impl<'a> ScreenFrame<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::charxel::ContinuationCell;
+
+    /// ContinuationCell must produce a Charxel distinct from the default blank.
+    #[test]
+    fn continuation_cell_is_distinct_from_default() {
+        assert_ne!(Charxel::from(ContinuationCell), Charxel::default());
+    }
+
+    /// When a wide char is replaced by default-coloured blanks, the position
+    /// previously covered by its right half must appear in the diff so the
+    /// terminal can clear it explicitly.
+    #[test]
+    fn compute_diff_clears_continuation_replaced_by_default() {
+        // Reference: 🔒 at col 0, continuation sentinel at col 1.
+        let mut reference = OffscreenRenderBuffer::default();
+        reference.set_size((4u16, 1u16).into());
+        reference[0][0] = Charxel::new(Grapheme::from("🔒"));
+        reference[0][1] = Charxel::from(ContinuationCell);
+
+        // New render: all Charxel::default() (🔒 was removed, no explicit colour).
+        let mut current = OffscreenRenderBuffer::default();
+        current.set_size((4u16, 1u16).into());
+
+        let diffs = current.compute_diff(&reference.lines);
+
+        let diffed_cols: Vec<u16> = diffs
+            .iter()
+            .flat_map(|d| {
+                let mut off = 0u16;
+                d.charxels.iter().map(move |cx| {
+                    let col = d.pos.left + off;
+                    off += cx.display_width().max(1);
+                    col
+                })
+            })
+            .collect();
+
+        assert!(
+            diffed_cols.contains(&1),
+            "continuation col 1 not in diff; diffs: {:?}",
+            diffs
+        );
+    }
 
     #[test]
     fn compute_diff_pushes_last_open_diff() {

@@ -10,7 +10,7 @@ use crossterm::{execute, terminal};
 use futures::task::{Context, Poll};
 use futures::Stream;
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::panic;
@@ -48,6 +48,7 @@ use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::mods::bookmarks::BookmarksMod;
 use crate::mods::messages::MessagesMod;
+use crate::mods::omemo::OmemoEvent;
 use crate::{contact, conversation};
 
 #[derive(Clone, Debug)]
@@ -122,6 +123,7 @@ struct TitleBar {
     subjects: HashMap<String, HashMap<String, String>>,
     dimensions: Option<Dimensions>,
     preferred_langs: Vec<String>,
+    encrypted_jids: HashSet<String>,
 }
 
 impl TitleBar {
@@ -135,6 +137,7 @@ impl TitleBar {
             subjects: HashMap::new(),
             dimensions: None,
             preferred_langs,
+            encrypted_jids: HashSet::new(),
         }
     }
 
@@ -204,7 +207,13 @@ impl View<UIEvent, Theme> for TitleBar {
         }
 
         if let Some(display) = &self.display_name {
-            let mut title = format!(" {}", display).into_charxels();
+            let is_encrypted = self
+                .current_jid
+                .as_deref()
+                .map(|jid| self.encrypted_jids.contains(jid))
+                .unwrap_or(false);
+            let prefix = if is_encrypted { " 🔒 " } else { " " };
+            let mut title = format!("{}{}", prefix, display).into_charxels();
 
             let subjects = self
                 .current_jid
@@ -253,6 +262,9 @@ impl View<UIEvent, Theme> for TitleBar {
             }
             UIEvent::ModeChange(mode) => {
                 self.mode = *mode;
+            }
+            UIEvent::Core(Event::Omemo(OmemoEvent::Enabled { jid, .. })) => {
+                self.encrypted_jids.insert(jid.to_string());
             }
             _ => {}
         }

@@ -36,12 +36,24 @@ impl Grapheme {
     }
 }
 
+/// Sentinel placed in right-half cells of wide characters in the offscreen
+/// buffer.  Being distinct from every real content cell (via the
+/// `continuation` flag included in `PartialEq`), it guarantees that
+/// `compute_diff` always emits a diff when real content arrives at a position
+/// previously covered by a wide-char's right half — including when a wide
+/// char shifts one column (e.g. INSERT → COMMAND mode widens the label).
+pub struct ContinuationCell;
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Charxel {
     pub grapheme: Grapheme,
     pub foreground: FgColor,
     pub background: BgColor,
     pub styles: HashSet<Style>,
+    /// True only for cells created via `From<ContinuationCell>`.
+    /// Included in `PartialEq` so any real cell always differs from a
+    /// continuation sentinel regardless of grapheme or colour.
+    pub(crate) continuation: bool,
 }
 
 impl Charxel {
@@ -50,6 +62,10 @@ impl Charxel {
             grapheme,
             ..Default::default()
         }
+    }
+
+    pub fn is_continuation(&self) -> bool {
+        self.continuation
     }
 
     pub fn set_color(&mut self, color: ColorTuple) {
@@ -79,6 +95,15 @@ impl Charxel {
 
     pub fn display_width(&self) -> u16 {
         unicode_display_width::width(&self.grapheme.0) as u16
+    }
+}
+
+impl From<ContinuationCell> for Charxel {
+    fn from(_: ContinuationCell) -> Self {
+        Charxel {
+            continuation: true,
+            ..Default::default()
+        }
     }
 }
 
