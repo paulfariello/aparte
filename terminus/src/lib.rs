@@ -19,10 +19,12 @@ pub mod color;
 pub mod cursor;
 pub mod frame_layout;
 pub mod input;
+pub mod label;
 pub mod linear_layout;
 pub mod list_view;
 pub mod rendering;
 pub mod scroll_win;
+pub mod stories;
 
 pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 
