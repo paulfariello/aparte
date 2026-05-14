@@ -1160,3 +1160,114 @@ fn command_mode_restores_insert_input_on_exit() {
         describe(screen)
     );
 }
+
+// The title bar (second-to-last row) must show exactly the active mode label.
+// Regression test for a rendering bug where incremental diffing could leave a
+// stray character from a previous mode at column 0 of the title bar.
+#[test]
+fn title_bar_mode_label_is_stable_across_transitions() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Title bar = row ROWS - 2 (WinBar:0, Frame:1..21, TitleBar:22, Input:23).
+    let title_row = ROWS - 2;
+
+    // -- INSERT (startup) --
+    {
+        let parser = h.snapshot();
+        let screen = parser.screen();
+        let bar = row_text(screen, title_row);
+        assert!(
+            bar.contains("INSERT"),
+            "Title bar must show INSERT at startup; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+    }
+
+    // INSERT → NORMAL
+    h.send_bytes(b"\x1b");
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    {
+        let parser = h.snapshot();
+        let screen = parser.screen();
+        let bar = row_text(screen, title_row);
+        assert!(
+            bar.contains("NORMAL"),
+            "Title bar must show NORMAL after Esc; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+        assert!(
+            !bar.contains("INSERT"),
+            "Stray INSERT in title bar after switching to NORMAL; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+    }
+
+    // NORMAL → COMMAND
+    h.send_bytes(b":");
+    wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+    {
+        let parser = h.snapshot();
+        let screen = parser.screen();
+        let bar = row_text(screen, title_row);
+        assert!(
+            bar.contains("COMMAND"),
+            "Title bar must show COMMAND after ':'; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+        assert!(
+            !bar.contains("NORMAL"),
+            "Stray NORMAL in title bar after switching to COMMAND; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+    }
+
+    // COMMAND → NORMAL (Esc)
+    h.send_bytes(b"\x1b");
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    {
+        let parser = h.snapshot();
+        let screen = parser.screen();
+        let bar = row_text(screen, title_row);
+        assert!(
+            bar.contains("NORMAL"),
+            "Title bar must show NORMAL after Esc from COMMAND; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+        assert!(
+            !bar.contains("COMMAND"),
+            "Stray COMMAND in title bar after returning to NORMAL; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+    }
+
+    // NORMAL → INSERT
+    h.send_bytes(b"i");
+    wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    {
+        let parser = h.snapshot();
+        let screen = parser.screen();
+        let bar = row_text(screen, title_row);
+        assert!(
+            bar.contains("INSERT"),
+            "Title bar must show INSERT after 'i'; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+        assert!(
+            !bar.contains("NORMAL"),
+            "Stray NORMAL in title bar after returning to INSERT; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+    }
+
+    h.shutdown();
+}

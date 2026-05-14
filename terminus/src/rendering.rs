@@ -225,6 +225,10 @@ impl OffscreenRenderBuffer {
             }
         }
 
+        if let Some(diff) = current_diff {
+            diffs.push(diff);
+        }
+
         diffs
     }
 
@@ -557,5 +561,43 @@ impl<'a> ScreenFrame<'a> {
 
     pub fn height(&self) -> u16 {
         self.dimensions.height
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_diff_pushes_last_open_diff() {
+        // 2 rows × 3 cols; reference has all 'A', current has all 'A'
+        // except the very last cell which is 'B'.
+        // The loop in compute_diff ends with an open diff on that cell but
+        // never pushes it — so without the fix this test fails.
+        let mut reference = OffscreenRenderBuffer::default();
+        reference.set_size((3u16, 2u16).into());
+        for row in 0..2u16 {
+            for col in 0..3u16 {
+                reference[row][col].grapheme = Grapheme::from("A");
+            }
+        }
+
+        let mut current = OffscreenRenderBuffer::default();
+        current.set_size((3u16, 2u16).into());
+        for row in 0..2u16 {
+            for col in 0..3u16 {
+                current[row][col].grapheme = Grapheme::from("A");
+            }
+        }
+        // Only the last cell differs.
+        current[1][2].grapheme = Grapheme::from("B");
+
+        let diffs = current.compute_diff(&reference.lines);
+
+        assert_eq!(diffs.len(), 1, "last open diff must be pushed");
+        assert_eq!(diffs[0].pos.top, 1);
+        assert_eq!(diffs[0].pos.left, 2);
+        assert_eq!(diffs[0].charxels.len(), 1);
+        assert_eq!(diffs[0].charxels[0].grapheme, Grapheme::from("B"));
     }
 }

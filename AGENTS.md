@@ -49,6 +49,10 @@ Use `/plan` (or `EnterPlanMode`) to design the approach before touching code. Id
 - Rendering belongs in the `ui` mod and `terminus`; business logic does not.
 - Storage changes require a Diesel migration.
 
+### Document new features
+
+Every new feature must be documented in `README.md`. Update the relevant section or add a new one describing what the feature does and how to use it.
+
 ### Before every commit
 
 ```sh
@@ -70,3 +74,20 @@ Install pre-commit hooks once:
 ```sh
 pre-commit install
 ```
+
+## Debug
+
+### Screen recording
+
+Aparté can record a session for post-mortem rendering debugging. Pass `--record <path>` on the CLI and it writes raw PTY bytes and reference-screen snapshots to `<path>`:
+
+```sh
+cargo run -- --record /tmp/aparte-session.rec [other args]
+```
+
+The recording is handled by `src/tee_writer.rs` (`TeeWriter`). `dump_buffer` writes the internal `reference_screen` state to the events file so you can see exactly what the renderer believed the terminal looked like at any point.
+
+To reproduce a rendering glitch deterministically:
+1. Run with `--record`, trigger the glitch, quit.
+2. Inspect the recorded bytes with a vt100 parser (e.g. `cat /tmp/aparte-session.rec | vt100_player`) or replay them into a test harness.
+3. Once you can reproduce the glitch, write a red integration test in `tests/ui_mode.rs` using the PTY harness in `tests/common/mod.rs`.
