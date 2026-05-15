@@ -126,16 +126,16 @@ Examples:
 );
 
 command_def!(
-    omemo_debug,
-    r#":omemo debug
+    omemo_status,
+    r#":omemo status
 
 Description:
-    Show OMEMO debug information for the current conversation.
+    Show OMEMO status information for the current conversation.
     Fetches the device list and own bundle from the server and
     shows local session state for all known devices.
 
 Examples:
-    :omemo debug
+    :omemo status
 "#,
     {},
     |aparte, _command| {
@@ -150,7 +150,7 @@ Examples:
                     ui.get_conversation(&window).map(|c| c.get_jid().clone())
                 })
             });
-            aparte.schedule(Event::Omemo(OmemoEvent::Debug { account, context }));
+            aparte.schedule(Event::Omemo(OmemoEvent::Status { account, context }));
         }
         Ok(())
     }
@@ -163,7 +163,7 @@ r#":omemo enable"#,
         children: {
             "enable": omemo_enable,
             "fingerprint": omemo_fingerprint,
-            "debug": omemo_debug,
+            "status": omemo_status,
         }
     },
 });
@@ -182,7 +182,7 @@ pub enum OmemoEvent {
         account: Account,
         jid: Option<BareJid>,
     },
-    Debug {
+    Status {
         account: Account,
         context: Option<BareJid>,
     },
@@ -1074,7 +1074,6 @@ impl OmemoMod {
         let identity = own_device.identity.context("Missing identity")?;
         let identity_key_pair = IdentityKeyPair::try_from(identity.as_ref())?;
         let fp = fingerprint(identity_key_pair.public_key());
-        lines.push(format!("=== OMEMO debug: {account} ==="));
         lines.push(format!("Own device ID : {device_id}"));
         lines.push(format!("Own fingerprint: {fp}"));
 
@@ -1141,7 +1140,7 @@ impl OmemoMod {
         }
 
         aparte.schedule(Event::ShowPopup {
-            title: Some("OMEMO Debug".to_string()),
+            title: Some(format!("OMEMO Status: {account}")),
             lines,
         });
         Ok(())
@@ -1915,7 +1914,7 @@ impl ModTrait for OmemoMod {
                         crate::error!(aparte, e, "Cannot get own OMEMO fingerprint");
                     }
                 }
-                OmemoEvent::Debug { account, context } => match self.signal_stores.get(account) {
+                OmemoEvent::Status { account, context } => match self.signal_stores.get(account) {
                     None => crate::info!(aparte, "OMEMO not configured for {account}"),
                     Some(signal_store) => {
                         let mut async_aparte = aparte.proxy();
