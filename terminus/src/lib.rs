@@ -33,6 +33,7 @@ pub use charxel::ContinuationCell;
 pub use color::{
     deserialize_color, serialize_color, BgColor, Color, ColorTuple, FgColor, NamedColor,
 };
+pub use popup::PopupColors;
 pub use scroll_win::Searchable;
 
 fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {

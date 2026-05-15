@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use terminus::{
     deserialize_color, serialize_color, BgColor, Color, ColorTuple, FgColor, NamedColor,
+    PopupColors,
 };
 
 use crate::account::ConnectionInfo;
@@ -47,6 +48,13 @@ fn default_date_separator_fg() -> FgColor {
 
 fn default_date_separator_bg() -> BgColor {
     BgColor(Color::Default)
+}
+
+fn default_popup() -> ColorTuple {
+    ColorTuple::new(
+        Color::Named(NamedColor::Black),
+        Color::Named(NamedColor::White),
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -128,6 +136,14 @@ pub struct Theme {
     #[serde(serialize_with = "serialize_color")]
     #[serde(deserialize_with = "deserialize_color")]
     pub date_separator_bg: BgColor,
+    #[serde(default = "default_popup")]
+    pub popup: ColorTuple,
+}
+
+impl PopupColors for Theme {
+    fn popup_colors(&self) -> ColorTuple {
+        self.popup.clone()
+    }
 }
 
 impl Default for Theme {
@@ -167,6 +183,10 @@ fn profanity() -> Theme {
         search_highlight_bg: BgColor(Color::Named(NamedColor::Yellow)),
         date_separator_fg: FgColor(Color::Named(NamedColor::Cyan)),
         date_separator_bg: BgColor(Color::Default),
+        popup: ColorTuple::new(
+            Color::Named(NamedColor::Black),
+            Color::Named(NamedColor::White),
+        ),
     }
 }
 
@@ -239,6 +259,7 @@ fn catppuccin_mocha() -> Theme {
         search_highlight_bg: BgColor(yellow),
         date_separator_fg: FgColor(overlay_2),
         date_separator_bg: BgColor(Color::Default),
+        popup: ColorTuple::new(overlay_0, text),
     }
 }
 
@@ -273,6 +294,10 @@ fn catppuccin_latte() -> Theme {
         search_highlight_bg: BgColor(Color::Rgb(223, 142, 29)), // Yellow
         date_separator_fg: FgColor(Color::Rgb(156, 160, 176)), // Overlay0
         date_separator_bg: BgColor(Color::Default),
+        popup: ColorTuple::new(
+            Color::Rgb(172, 176, 190), // Surface2
+            Color::Rgb(76, 79, 105),   // Text
+        ),
     }
 }
 
@@ -307,5 +332,9 @@ fn catppuccin_frappe() -> Theme {
         search_highlight_bg: BgColor(Color::Rgb(229, 200, 144)), // Yellow
         date_separator_fg: FgColor(Color::Rgb(115, 121, 148)), // Overlay0
         date_separator_bg: BgColor(Color::Rgb(65, 69, 89)), // Surface0
+        popup: ColorTuple::new(
+            Color::Rgb(81, 87, 109),   // Surface1
+            Color::Rgb(198, 208, 245), // Text
+        ),
     }
 }

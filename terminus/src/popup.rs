@@ -7,9 +7,19 @@ use std::rc::Rc;
 use crate::charxel::{Charxel, Grapheme};
 use crate::rendering::{OffscreenRenderBuffer, ScreenFrame};
 use crate::{
-    Dimensions, EventHandler, MeasureSpec, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    View,
+    Color, ColorTuple, Dimensions, EventHandler, MeasureSpec, MeasureSpecs, RequestedDimension,
+    RequestedDimensions, View,
 };
+
+pub trait PopupColors {
+    fn popup_colors(&self) -> ColorTuple;
+}
+
+impl PopupColors for () {
+    fn popup_colors(&self) -> ColorTuple {
+        ColorTuple::new(Color::Default, Color::Default)
+    }
+}
 
 /// A compositor view that renders a background view and optionally overlays a
 /// centered, bordered popup on top.
@@ -129,7 +139,7 @@ impl<E, C> PopupLayer<E, C> {
     }
 }
 
-fn draw_border(buf: &mut OffscreenRenderBuffer, dims: &Dimensions) {
+fn draw_border(buf: &mut OffscreenRenderBuffer, dims: &Dimensions, color: &ColorTuple) {
     if dims.width < 2 || dims.height < 2 {
         return;
     }
@@ -139,26 +149,36 @@ fn draw_border(buf: &mut OffscreenRenderBuffer, dims: &Dimensions) {
     let right = dims.left + dims.width - 1;
     let bot = dims.top + dims.height - 1;
 
-    buf[top][left].grapheme = Grapheme::from("┌");
-    buf[top][right].grapheme = Grapheme::from("┐");
-    buf[bot][left].grapheme = Grapheme::from("└");
-    buf[bot][right].grapheme = Grapheme::from("┘");
+    for (row, col, grapheme) in [
+        (top, left, "┌"),
+        (top, right, "┐"),
+        (bot, left, "└"),
+        (bot, right, "┘"),
+    ] {
+        buf[row][col].grapheme = Grapheme::from(grapheme);
+        buf[row][col].set_color(color.clone());
+    }
 
     for col in left + 1..right {
         buf[top][col].grapheme = Grapheme::from("─");
+        buf[top][col].set_color(color.clone());
         buf[bot][col].grapheme = Grapheme::from("─");
+        buf[bot][col].set_color(color.clone());
     }
 
     for row in top + 1..bot {
         buf[row][left].grapheme = Grapheme::from("│");
+        buf[row][left].set_color(color.clone());
         buf[row][right].grapheme = Grapheme::from("│");
+        buf[row][right].set_color(color.clone());
         for col in left + 1..right {
             buf[row][col] = Charxel::default();
+            buf[row][col].set_background(color.bg);
         }
     }
 }
 
-impl<E, C> View<E, C> for PopupLayer<E, C> {
+impl<E, C: PopupColors> View<E, C> for PopupLayer<E, C> {
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         self.background.measure(measure_specs)
     }
@@ -180,7 +200,7 @@ impl<E, C> View<E, C> for PopupLayer<E, C> {
             .render(ScreenFrame::new(&mut *buf, parent_dims), config);
 
         if let (Some(content), Some(outer)) = (&self.content, &self.content_dims) {
-            draw_border(&mut *buf, outer);
+            draw_border(&mut *buf, outer, &config.popup_colors());
             if outer.width >= 2 && outer.height >= 2 {
                 let inner = Dimensions {
                     top: outer.top + 1,
@@ -209,6 +229,7 @@ impl<E, C> View<E, C> for PopupLayer<E, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::{BgColor, FgColor, NamedColor};
     use crate::label::Label;
     use crate::linear_layout::{LinearLayout, Orientation};
     use crate::rendering::ScreenSize;
@@ -410,6 +431,48 @@ mod tests {
         assert_eq!(
             outer.width, 18,
             "popup width should match the longest line + 2 border cols"
+        );
+    }
+
+    struct ThemedConfig;
+
+    impl PopupColors for ThemedConfig {
+        fn popup_colors(&self) -> ColorTuple {
+            ColorTuple::new(
+                Color::Named(NamedColor::Blue),
+                Color::Named(NamedColor::White),
+            )
+        }
+    }
+
+    #[test]
+    fn popup_border_cells_have_theme_colors() {
+        let mut popup: PopupLayer<(), ThemedConfig> = PopupLayer::new(Label::new("background"));
+        popup.show(Box::new(Label::new("hello")));
+
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: W,
+            height: H,
+        };
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size(ScreenSize::from((W, H)));
+        popup.layout(&dims);
+        let frame = ScreenFrame::new(&mut buf, &dims);
+        popup.render(frame, &ThemedConfig);
+
+        // Border top-left corner is at row 3, col 16 (see popup_content_is_centered)
+        let corner = &buf[3][16];
+        assert_eq!(
+            corner.background,
+            BgColor(Color::Named(NamedColor::Blue)),
+            "border corner should have popup background color"
+        );
+        assert_eq!(
+            corner.foreground,
+            FgColor(Color::Named(NamedColor::White)),
+            "border corner should have popup foreground color"
         );
     }
 }
