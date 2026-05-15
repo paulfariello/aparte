@@ -181,7 +181,10 @@ pub enum Event {
     Omemo(mods::omemo::OmemoEvent),
     UIRender(bool),
     UIMode(UIMode),
-    ShowPopup(Vec<String>),
+    ShowPopup {
+        title: Option<String>,
+        lines: Vec<String>,
+    },
     ClosePopup,
     CommandTimeout(u64),
     DisplayedMarker {

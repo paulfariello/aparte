@@ -91,7 +91,10 @@ enum UIEvent {
     CommandBufferUpdate(String),
     SetInput(String),
     ReduceHighlight(String, u64, u64),
-    ShowPopup(Vec<String>),
+    ShowPopup {
+        title: Option<String>,
+        lines: Vec<String>,
+    },
     ClosePopup,
 }
 
@@ -1747,12 +1750,12 @@ impl ModTrait for UIMod {
                     content.event(event);
                 }
             }
-            UIEvent::ShowPopup(lines) => {
+            UIEvent::ShowPopup { title, lines } => {
                 let mut content = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical);
                 for line in lines.iter() {
                     content.push(Label::new(line.clone()), 1);
                 }
-                popup.show(Box::new(content));
+                popup.show(Box::new(content), title.clone());
             }
             UIEvent::ClosePopup => {
                 popup.hide();
@@ -2263,17 +2266,20 @@ impl ModTrait for UIMod {
                             aparte.schedule(Event::Command(command));
                         } else if looks_like_cmd && !self.slash_warned {
                             self.slash_warned = true;
-                            aparte.schedule(Event::ShowPopup(vec![
-                                format!(
-                                    "\"{}\" looks like a command but is not recognized.",
-                                    raw_buf
-                                ),
-                                String::new(),
-                                "Commands are entered in normal mode (Esc, then :command)."
-                                    .to_string(),
-                                "Press Enter again to send as plain text, or ESC to edit."
-                                    .to_string(),
-                            ]));
+                            aparte.schedule(Event::ShowPopup {
+                                title: None,
+                                lines: vec![
+                                    format!(
+                                        "\"{}\" looks like a command but is not recognized.",
+                                        raw_buf
+                                    ),
+                                    String::new(),
+                                    "Commands are entered in normal mode (Esc, then :command)."
+                                        .to_string(),
+                                    "Press Enter again to send as plain text, or ESC to edit."
+                                        .to_string(),
+                                ],
+                            });
                         } else if !raw_buf.is_empty() {
                             self.slash_warned = false;
                             aparte.schedule(Event::ClosePopup);
@@ -2430,8 +2436,11 @@ impl ModTrait for UIMod {
             Event::UIRender(_) => {
                 log::debug!("Force render");
             }
-            Event::ShowPopup(lines) => {
-                self.root.event(&mut UIEvent::ShowPopup(lines.clone()));
+            Event::ShowPopup { title, lines } => {
+                self.root.event(&mut UIEvent::ShowPopup {
+                    title: title.clone(),
+                    lines: lines.clone(),
+                });
             }
             Event::ClosePopup => {
                 self.root.event(&mut UIEvent::ClosePopup);

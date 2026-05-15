@@ -31,6 +31,7 @@ impl PopupColors for () {
 pub struct PopupLayer<E, C = ()> {
     background: Box<dyn View<E, C>>,
     content: Option<Box<dyn View<E, C>>>,
+    title: Option<String>,
     /// Outer dimensions of the drawn box (border included), in absolute buffer
     /// coordinates.  `None` when popup is hidden or parent is too small.
     content_dims: Option<Dimensions>,
@@ -45,16 +46,18 @@ impl<E, C> PopupLayer<E, C> {
         Self {
             background: Box::new(background),
             content: None,
+            title: None,
             content_dims: None,
             dimensions: None,
             event_handler: None,
         }
     }
 
-    /// Show `content` as a centered popup overlay, laying it out immediately
-    /// if the parent dimensions are already known.
-    pub fn show(&mut self, content: Box<dyn View<E, C>>) {
+    /// Show `content` as a centered popup overlay with an optional title in
+    /// the top border.  Lays out immediately if parent dimensions are known.
+    pub fn show(&mut self, content: Box<dyn View<E, C>>, title: Option<String>) {
         self.content = Some(content);
+        self.title = title;
         if let Some(dims) = self.dimensions.clone() {
             self.layout_content(&dims);
         }
@@ -62,6 +65,7 @@ impl<E, C> PopupLayer<E, C> {
 
     pub fn hide(&mut self) {
         self.content = None;
+        self.title = None;
         self.content_dims = None;
     }
 
@@ -139,7 +143,12 @@ impl<E, C> PopupLayer<E, C> {
     }
 }
 
-fn draw_border(buf: &mut OffscreenRenderBuffer, dims: &Dimensions, color: &ColorTuple) {
+fn draw_border(
+    buf: &mut OffscreenRenderBuffer,
+    dims: &Dimensions,
+    color: &ColorTuple,
+    title: Option<&str>,
+) {
     if dims.width < 2 || dims.height < 2 {
         return;
     }
@@ -159,9 +168,26 @@ fn draw_border(buf: &mut OffscreenRenderBuffer, dims: &Dimensions, color: &Color
         buf[row][col].set_color(color.clone());
     }
 
-    for col in left + 1..right {
-        buf[top][col].grapheme = Grapheme::from("─");
+    // Top border: render "─ Title ─...─" if title fits, otherwise plain "─...─".
+    let inner_w = (right - left).saturating_sub(1) as usize;
+    let title_graphemes: Vec<String> = title
+        .and_then(|t| {
+            if t.chars().count() + 4 <= inner_w {
+                Some(format!("─ {} ─", t))
+            } else {
+                None
+            }
+        })
+        .map(|s| s.chars().map(|c| c.to_string()).collect())
+        .unwrap_or_default();
+
+    for (i, col) in (left + 1..right).enumerate() {
+        let g: &str = title_graphemes.get(i).map(String::as_str).unwrap_or("─");
+        buf[top][col].grapheme = Grapheme::from(g);
         buf[top][col].set_color(color.clone());
+    }
+
+    for col in left + 1..right {
         buf[bot][col].grapheme = Grapheme::from("─");
         buf[bot][col].set_color(color.clone());
     }
@@ -200,7 +226,12 @@ impl<E, C: PopupColors> View<E, C> for PopupLayer<E, C> {
             .render(ScreenFrame::new(&mut *buf, parent_dims), config);
 
         if let (Some(content), Some(outer)) = (&self.content, &self.content_dims) {
-            draw_border(&mut *buf, outer, &config.popup_colors());
+            draw_border(
+                &mut *buf,
+                outer,
+                &config.popup_colors(),
+                self.title.as_deref(),
+            );
             if outer.width >= 2 && outer.height >= 2 {
                 let inner = Dimensions {
                     top: outer.top + 1,
@@ -234,6 +265,7 @@ mod tests {
     use crate::linear_layout::{LinearLayout, Orientation};
     use crate::rendering::ScreenSize;
     use crate::stories::{render_view_into, row_text};
+    use crate::Color;
 
     const W: u16 = 40;
     const H: u16 = 10;
@@ -289,14 +321,14 @@ mod tests {
             height: H,
         };
         popup.layout(&dims);
-        popup.show(Box::new(Label::new("hello")));
+        popup.show(Box::new(Label::new("hello")), None);
         assert!(popup.content_dims.is_some());
     }
 
     #[test]
     fn popup_content_is_centered() {
         let mut popup = make_popup();
-        popup.show(Box::new(Label::new("hello")));
+        popup.show(Box::new(Label::new("hello")), None);
         let buf = render(&mut popup, W, H);
 
         // With W=40, H=10, Label("hello") = Absolute(5) x Absolute(1):
@@ -319,7 +351,7 @@ mod tests {
     #[test]
     fn popup_hide_removes_content() {
         let mut popup = make_popup();
-        popup.show(Box::new(Label::new("hidden text")));
+        popup.show(Box::new(Label::new("hidden text")), None);
         popup.hide();
         let buf = render(&mut popup, W, H);
 
@@ -338,7 +370,7 @@ mod tests {
     fn popup_is_visible_tracks_state() {
         let mut popup = make_popup();
         assert!(!popup.is_visible());
-        popup.show(Box::new(Label::new("x")));
+        popup.show(Box::new(Label::new("x")), None);
         assert!(popup.is_visible());
         popup.hide();
         assert!(!popup.is_visible());
@@ -382,7 +414,7 @@ mod tests {
     fn popup_default_event_routes_to_content_when_visible() {
         let bg = Counter::new();
         let mut popup: PopupLayer<u32, ()> = PopupLayer::new(bg);
-        popup.show(Box::new(Counter::new()));
+        popup.show(Box::new(Counter::new()), None);
         let mut ev = 0u32;
         popup.event(&mut ev);
         assert_eq!(ev, 1, "event should reach content when popup is visible");
@@ -395,7 +427,7 @@ mod tests {
         content.push(Label::new("line one"), 1);
         content.push(Label::new("line two"), 1);
         content.push(Label::new("line three"), 1);
-        popup.show(Box::new(content));
+        popup.show(Box::new(content), None);
         let dims = Dimensions {
             top: 0,
             left: 0,
@@ -417,7 +449,7 @@ mod tests {
         let mut content = LinearLayout::new(Orientation::Vertical);
         content.push(Label::new("short"), 1);
         content.push(Label::new("much longer line"), 1);
-        popup.show(Box::new(content));
+        popup.show(Box::new(content), None);
         let dims = Dimensions {
             top: 0,
             left: 0,
@@ -448,7 +480,7 @@ mod tests {
     #[test]
     fn popup_border_cells_have_theme_colors() {
         let mut popup: PopupLayer<(), ThemedConfig> = PopupLayer::new(Label::new("background"));
-        popup.show(Box::new(Label::new("hello")));
+        popup.show(Box::new(Label::new("hello")), None);
 
         let dims = Dimensions {
             top: 0,
@@ -474,5 +506,63 @@ mod tests {
             FgColor(Color::Named(NamedColor::White)),
             "border corner should have popup foreground color"
         );
+    }
+
+    #[test]
+    fn popup_title_appears_in_top_border() {
+        // W=40, H=10, Label("hello") → outer_w=7, outer_h=3
+        // outer_top=3, outer_left=16
+        // Top border inner runs col 17..22 (left+1..right).
+        // "─ hi ─" is 6 chars, inner_w = right-left-1 = 5, 2+2+4=6 > 5 so title should be skipped...
+        // Use a wider popup. Label("much longer line") → inner_w=16, outer_w=18
+        // outer_left = (40-18)/2 = 11, outer_right = 28
+        // Top border inner: col 12..28
+        // "─ hi ─" = 6 chars ≤ 16 → fits
+        let mut popup = make_popup();
+        let mut content = LinearLayout::new(Orientation::Vertical);
+        content.push(Label::new("much longer line"), 1);
+        popup.show(Box::new(content), Some("hi".to_string()));
+        let buf = render(&mut popup, W, H);
+
+        // The top border row should contain the title text "hi"
+        let top_border = row_text(&buf, 3, W);
+        assert!(
+            top_border.contains("hi"),
+            "expected title 'hi' in top border row, got: {top_border:?}"
+        );
+        // And still have the corner glyphs
+        assert!(
+            top_border.contains('┌'),
+            "expected top-left corner in border row, got: {top_border:?}"
+        );
+    }
+
+    #[test]
+    fn popup_title_too_long_falls_back_to_plain_border() {
+        // inner_w for Label("hello") = 5; "─ " + title + " ─" needs title.len()+4 ≤ 5
+        // So any title with len ≥ 2 won't fit.
+        let mut popup = make_popup();
+        popup.show(Box::new(Label::new("hello")), Some("toolong".to_string()));
+        let buf = render(&mut popup, W, H);
+
+        // Top border should not contain "toolong" — only box-drawing chars
+        let top_border = row_text(&buf, 3, W);
+        assert!(
+            !top_border.contains("toolong"),
+            "title that doesn't fit should not appear in border, got: {top_border:?}"
+        );
+        assert!(
+            top_border.contains('┌'),
+            "corner should still be present, got: {top_border:?}"
+        );
+    }
+
+    #[test]
+    fn popup_hide_clears_title() {
+        let mut popup = make_popup();
+        popup.show(Box::new(Label::new("hello")), Some("Title".to_string()));
+        assert_eq!(popup.title, Some("Title".to_string()));
+        popup.hide();
+        assert_eq!(popup.title, None);
     }
 }

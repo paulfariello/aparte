@@ -1140,7 +1140,10 @@ impl OmemoMod {
             }
         }
 
-        aparte.schedule(Event::ShowPopup(lines));
+        aparte.schedule(Event::ShowPopup {
+            title: Some("OMEMO Debug".to_string()),
+            lines,
+        });
         Ok(())
     }
 
