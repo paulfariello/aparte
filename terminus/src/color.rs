@@ -203,7 +203,7 @@ where
     ser::Serialize::serialize(&color, serializer)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct ColorTuple {
     #[serde(serialize_with = "serialize_color")]
     #[serde(deserialize_with = "deserialize_color")]
@@ -211,15 +211,6 @@ pub struct ColorTuple {
     #[serde(serialize_with = "serialize_color")]
     #[serde(deserialize_with = "deserialize_color")]
     pub fg: FgColor,
-}
-
-impl ColorTuple {
-    pub fn new(bg: Color, fg: Color) -> Self {
-        Self {
-            bg: BgColor(bg),
-            fg: FgColor(fg),
-        }
-    }
 }
 
 impl ConfigColor for FgColor {

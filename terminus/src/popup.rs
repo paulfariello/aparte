@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::charxel::{Charxel, Grapheme};
 use crate::rendering::{OffscreenRenderBuffer, ScreenFrame};
 use crate::{
-    Color, ColorTuple, Dimensions, EventHandler, MeasureSpec, MeasureSpecs, RequestedDimension,
+    ColorTuple, Dimensions, EventHandler, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, View,
 };
 
@@ -17,7 +17,7 @@ pub trait PopupColors {
 
 impl PopupColors for () {
     fn popup_colors(&self) -> ColorTuple {
-        ColorTuple::new(Color::Default, Color::Default)
+        ColorTuple::default()
     }
 }
 
@@ -438,10 +438,10 @@ mod tests {
 
     impl PopupColors for ThemedConfig {
         fn popup_colors(&self) -> ColorTuple {
-            ColorTuple::new(
-                Color::Named(NamedColor::Blue),
-                Color::Named(NamedColor::White),
-            )
+            ColorTuple {
+                bg: BgColor(Color::Named(NamedColor::Blue)),
+                fg: FgColor(Color::Named(NamedColor::White)),
+            }
         }
     }
 

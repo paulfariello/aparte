@@ -51,10 +51,10 @@ fn default_date_separator_bg() -> BgColor {
 }
 
 fn default_popup() -> ColorTuple {
-    ColorTuple::new(
-        Color::Named(NamedColor::Black),
-        Color::Named(NamedColor::White),
-    )
+    ColorTuple {
+        bg: BgColor(Color::Named(NamedColor::Black)),
+        fg: FgColor(Color::Named(NamedColor::White)),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -154,26 +154,26 @@ impl Default for Theme {
 
 fn profanity() -> Theme {
     Theme {
-        title_bar: ColorTuple::new(
-            Color::Named(NamedColor::Blue),
-            Color::Named(NamedColor::Black),
-        ),
-        win_bar: ColorTuple::new(
-            Color::Named(NamedColor::Blue),
-            Color::Named(NamedColor::Black),
-        ),
-        title_bar_mode: ColorTuple::new(
-            Color::Named(NamedColor::Blue),
-            Color::Named(NamedColor::Black),
-        ),
-        roster: ColorTuple::new(
-            Color::Named(NamedColor::Blue),
-            Color::Named(NamedColor::Black),
-        ),
-        occupants: ColorTuple::new(
-            Color::Named(NamedColor::Blue),
-            Color::Named(NamedColor::Black),
-        ),
+        title_bar: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
+        win_bar: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
+        title_bar_mode: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
+        roster: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
+        occupants: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
         selected_message: BgColor(Color::Rgb(49, 50, 68)),
         roster_available_fg: FgColor(Color::Named(NamedColor::Green)),
         roster_unavailable_fg: FgColor(Color::Default),
@@ -183,10 +183,10 @@ fn profanity() -> Theme {
         search_highlight_bg: BgColor(Color::Named(NamedColor::Yellow)),
         date_separator_fg: FgColor(Color::Named(NamedColor::Cyan)),
         date_separator_bg: BgColor(Color::Default),
-        popup: ColorTuple::new(
-            Color::Named(NamedColor::Black),
-            Color::Named(NamedColor::White),
-        ),
+        popup: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Black)),
+            fg: FgColor(Color::Named(NamedColor::White)),
+        },
     }
 }
 
@@ -245,11 +245,26 @@ fn catppuccin_mocha() -> Theme {
     let crust = Color::Rgb(17, 17, 27);
 
     Theme {
-        win_bar: ColorTuple::new(surface_0, lavender),
-        title_bar: ColorTuple::new(surface_0, lavender),
-        title_bar_mode: ColorTuple::new(lavender, base),
-        roster: ColorTuple::new(mantle, text),
-        occupants: ColorTuple::new(mantle, text),
+        win_bar: ColorTuple {
+            bg: BgColor(surface_0),
+            fg: FgColor(lavender),
+        },
+        title_bar: ColorTuple {
+            bg: BgColor(surface_0),
+            fg: FgColor(lavender),
+        },
+        title_bar_mode: ColorTuple {
+            bg: BgColor(lavender),
+            fg: FgColor(base),
+        },
+        roster: ColorTuple {
+            bg: BgColor(mantle),
+            fg: FgColor(text),
+        },
+        occupants: ColorTuple {
+            bg: BgColor(mantle),
+            fg: FgColor(text),
+        },
         selected_message: BgColor(surface_1),
         roster_available_fg: FgColor(green),
         roster_unavailable_fg: FgColor(overlay_0),
@@ -259,32 +274,35 @@ fn catppuccin_mocha() -> Theme {
         search_highlight_bg: BgColor(yellow),
         date_separator_fg: FgColor(overlay_2),
         date_separator_bg: BgColor(Color::Default),
-        popup: ColorTuple::new(overlay_0, text),
+        popup: ColorTuple {
+            fg: FgColor(lavender),
+            ..ColorTuple::default()
+        },
     }
 }
 
 fn catppuccin_latte() -> Theme {
     Theme {
-        title_bar: ColorTuple::new(
-            Color::Rgb(239, 241, 245), // Base
-            Color::Rgb(76, 79, 105),   // Text
-        ),
-        win_bar: ColorTuple::new(
-            Color::Rgb(204, 208, 218), // Surface0
-            Color::Rgb(76, 79, 105),   // Text
-        ),
-        title_bar_mode: ColorTuple::new(
-            Color::Rgb(204, 208, 218), // Surface0
-            Color::Rgb(76, 79, 105),   // Text
-        ),
-        roster: ColorTuple::new(
-            Color::Rgb(230, 233, 239), // Mantle
-            Color::Rgb(76, 79, 105),   // Text
-        ),
-        occupants: ColorTuple::new(
-            Color::Rgb(230, 233, 239), // Mantle
-            Color::Rgb(76, 79, 105),   // Text
-        ),
+        title_bar: ColorTuple {
+            bg: BgColor(Color::Rgb(239, 241, 245)), // Base
+            fg: FgColor(Color::Rgb(76, 79, 105)),   // Text
+        },
+        win_bar: ColorTuple {
+            bg: BgColor(Color::Rgb(204, 208, 218)), // Surface0
+            fg: FgColor(Color::Rgb(76, 79, 105)),   // Text
+        },
+        title_bar_mode: ColorTuple {
+            bg: BgColor(Color::Rgb(204, 208, 218)), // Surface0
+            fg: FgColor(Color::Rgb(76, 79, 105)),   // Text
+        },
+        roster: ColorTuple {
+            bg: BgColor(Color::Rgb(230, 233, 239)), // Mantle
+            fg: FgColor(Color::Rgb(76, 79, 105)),   // Text
+        },
+        occupants: ColorTuple {
+            bg: BgColor(Color::Rgb(230, 233, 239)), // Mantle
+            fg: FgColor(Color::Rgb(76, 79, 105)),   // Text
+        },
         selected_message: BgColor(Color::Rgb(172, 176, 190)), // Surface2
         roster_available_fg: FgColor(Color::Rgb(64, 160, 43)), // Green
         roster_unavailable_fg: FgColor(Color::Rgb(156, 160, 176)), // Overlay0
@@ -294,35 +312,35 @@ fn catppuccin_latte() -> Theme {
         search_highlight_bg: BgColor(Color::Rgb(223, 142, 29)), // Yellow
         date_separator_fg: FgColor(Color::Rgb(156, 160, 176)), // Overlay0
         date_separator_bg: BgColor(Color::Default),
-        popup: ColorTuple::new(
-            Color::Rgb(172, 176, 190), // Surface2
-            Color::Rgb(76, 79, 105),   // Text
-        ),
+        popup: ColorTuple {
+            bg: BgColor(Color::Rgb(172, 176, 190)), // Surface2
+            fg: FgColor(Color::Rgb(76, 79, 105)),   // Text
+        },
     }
 }
 
 fn catppuccin_frappe() -> Theme {
     Theme {
-        title_bar: ColorTuple::new(
-            Color::Rgb(48, 52, 70),    // Base
-            Color::Rgb(198, 208, 245), // Text
-        ),
-        win_bar: ColorTuple::new(
-            Color::Rgb(65, 69, 89),    // Surface0
-            Color::Rgb(198, 208, 245), // Text
-        ),
-        title_bar_mode: ColorTuple::new(
-            Color::Rgb(65, 69, 89),    // Surface0
-            Color::Rgb(198, 208, 245), // Text
-        ),
-        roster: ColorTuple::new(
-            Color::Rgb(41, 44, 60),    // Mantle
-            Color::Rgb(198, 208, 245), // Text
-        ),
-        occupants: ColorTuple::new(
-            Color::Rgb(41, 44, 60),    // Mantle
-            Color::Rgb(198, 208, 245), // Text
-        ),
+        title_bar: ColorTuple {
+            bg: BgColor(Color::Rgb(48, 52, 70)),    // Base
+            fg: FgColor(Color::Rgb(198, 208, 245)), // Text
+        },
+        win_bar: ColorTuple {
+            bg: BgColor(Color::Rgb(65, 69, 89)),    // Surface0
+            fg: FgColor(Color::Rgb(198, 208, 245)), // Text
+        },
+        title_bar_mode: ColorTuple {
+            bg: BgColor(Color::Rgb(65, 69, 89)),    // Surface0
+            fg: FgColor(Color::Rgb(198, 208, 245)), // Text
+        },
+        roster: ColorTuple {
+            bg: BgColor(Color::Rgb(41, 44, 60)),    // Mantle
+            fg: FgColor(Color::Rgb(198, 208, 245)), // Text
+        },
+        occupants: ColorTuple {
+            bg: BgColor(Color::Rgb(41, 44, 60)),    // Mantle
+            fg: FgColor(Color::Rgb(198, 208, 245)), // Text
+        },
         selected_message: BgColor(Color::Rgb(81, 87, 109)), // Surface1
         roster_available_fg: FgColor(Color::Rgb(166, 209, 137)), // Green
         roster_unavailable_fg: FgColor(Color::Rgb(115, 121, 148)), // Overlay0
@@ -332,9 +350,9 @@ fn catppuccin_frappe() -> Theme {
         search_highlight_bg: BgColor(Color::Rgb(229, 200, 144)), // Yellow
         date_separator_fg: FgColor(Color::Rgb(115, 121, 148)), // Overlay0
         date_separator_bg: BgColor(Color::Rgb(65, 69, 89)), // Surface0
-        popup: ColorTuple::new(
-            Color::Rgb(81, 87, 109),   // Surface1
-            Color::Rgb(198, 208, 245), // Text
-        ),
+        popup: ColorTuple {
+            bg: BgColor(Color::Rgb(81, 87, 109)),   // Surface1
+            fg: FgColor(Color::Rgb(198, 208, 245)), // Text
+        },
     }
 }
