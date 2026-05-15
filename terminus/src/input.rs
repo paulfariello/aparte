@@ -45,6 +45,7 @@ impl<E> Default for Input<E> {
 }
 
 impl<E> Input<E> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             buf: String::new(),
@@ -70,6 +71,7 @@ impl<E> Input<E> {
         self.cursor_style = style;
     }
 
+    #[must_use]
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
         F: FnMut(&mut Self, &mut E) + 'static,
@@ -206,6 +208,9 @@ impl<E> Input<E> {
         self.end();
     }
 
+    /// # Panics
+    ///
+    /// Panics if `history_index == history.len()` and `tmp_buf` is `None`.
     pub fn next(&mut self) {
         if self.history_index == self.history.len() {
             return;
@@ -244,56 +249,55 @@ impl<E, C> View<E, C> for Input<E> {
         );
 
         self.width.set(frame.dimensions.width as usize);
-        match self.password {
-            true => {
-                let prompt = "password: ";
-                frame.write(prompt);
-                frame.set_cursor_with_priority(
-                    CursorPos {
-                        top: frame.dimensions.top,
-                        left: frame.dimensions.left + prompt.len() as u16,
-                    },
-                    1,
-                );
-            }
-            false => {
-                // Max displayable size is view width less 1 for cursor
-                let max_size = (frame.dimensions.width - 1) as usize;
+        if self.password {
+            let prompt = "password: ";
+            frame.write(prompt);
+            frame.set_cursor_with_priority(
+                CursorPos {
+                    top: frame.dimensions.top,
+                    #[allow(clippy::cast_possible_truncation)]
+                    left: frame.dimensions.left + prompt.len() as u16,
+                },
+                1,
+            );
+        } else {
+            // Max displayable size is view width less 1 for cursor
+            let max_size = (frame.dimensions.width - 1) as usize;
 
-                // cursor must always be inside the view
-                if self.cursor < self.view {
-                    if self.cursor < max_size {
-                        self.view.set(0);
-                    } else {
-                        self.view
-                            .update(&self.cursor - (frame.dimensions.width as usize - 1));
-                    }
-                } else if self.cursor > &self.view + (frame.dimensions.width as usize - 1) {
+            // cursor must always be inside the view
+            if self.cursor < self.view {
+                if self.cursor < max_size {
+                    self.view.set(0);
+                } else {
                     self.view
                         .update(&self.cursor - (frame.dimensions.width as usize - 1));
                 }
-                assert!(self.cursor >= self.view);
-                assert!(self.cursor <= &self.view + (max_size + 1));
-
-                let start_index = self.view.index(&self.buf);
-                let end_index = (&self.view + max_size).index(&self.buf);
-                let buf = &self.buf[start_index..end_index];
-
-                frame.write(buf);
-
-                let cursor_byte_index = self.cursor.index(&self.buf);
-                let cursor_col: u16 = self.buf[start_index..cursor_byte_index]
-                    .graphemes(true)
-                    .map(|g| unicode_display_width::width(g) as u16)
-                    .sum();
-                frame.set_cursor_with_priority(
-                    CursorPos {
-                        top: frame.dimensions.top,
-                        left: frame.dimensions.left + cursor_col,
-                    },
-                    1,
-                );
+            } else if self.cursor > &self.view + (frame.dimensions.width as usize - 1) {
+                self.view
+                    .update(&self.cursor - (frame.dimensions.width as usize - 1));
             }
+            assert!(self.cursor >= self.view);
+            assert!(self.cursor <= &self.view + (max_size + 1));
+
+            let start_index = self.view.index(&self.buf);
+            let end_index = (&self.view + max_size).index(&self.buf);
+            let buf = &self.buf[start_index..end_index];
+
+            frame.write(buf);
+
+            let cursor_byte_index = self.cursor.index(&self.buf);
+            #[allow(clippy::cast_possible_truncation)]
+            let cursor_col: u16 = self.buf[start_index..cursor_byte_index]
+                .graphemes(true)
+                .map(|g| unicode_display_width::width(g) as u16)
+                .sum();
+            frame.set_cursor_with_priority(
+                CursorPos {
+                    top: frame.dimensions.top,
+                    left: frame.dimensions.left + cursor_col,
+                },
+                1,
+            );
         }
         frame.set_cursor_style(self.cursor_style);
         frame.set_cursor_visible(self.show_cursor);

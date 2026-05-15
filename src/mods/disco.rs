@@ -58,8 +58,7 @@ impl DiscoMod {
     pub fn has_jid_feature(&self, account: &Account, jid: &Jid, feature: &str) -> bool {
         self.jid_features
             .get(&(account.clone(), jid.clone()))
-            .map(|features| features.iter().any(|f| f == feature))
-            .unwrap_or(false)
+            .is_some_and(|features| features.iter().any(|f| f == feature))
     }
 
     async fn get_jid_disco(aparte: &mut AparteAsync, account: &Account, jid: &Jid) -> Result<()> {

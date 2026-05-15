@@ -21,7 +21,7 @@ const CHAT_MARKERS_NS: &str = "urn:xmpp:chat-markers:0";
 
 #[derive(Default)]
 pub struct DisplayedMarkersMod {
-    /// Pending markers for MUC windows: (account, muc_bare_jid) → stanza_id.
+    /// Pending markers for MUC windows: (account, `muc_bare_jid`) → `stanza_id`.
     ///
     /// An entry is added when MAM catchup finishes but either the MUC window
     /// is not currently focused or XEP-0359 disco isn't known yet.
@@ -87,13 +87,12 @@ impl ModTrait for DisplayedMarkersMod {
         _delay: &Option<Delay>,
         _archive: bool,
     ) {
-        let from = match message
+        let Some(from) = message
             .from
             .as_ref()
             .and_then(|j| j.clone().try_into_full().ok())
-        {
-            Some(f) => f,
-            None => return,
+        else {
+            return;
         };
 
         match message.type_ {

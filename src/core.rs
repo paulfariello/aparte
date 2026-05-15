@@ -68,12 +68,12 @@ use crate::{contact, conversation};
 // Rendering tick at ~60fps
 const UI_TICK_MS: u64 = 16u64;
 
-const WELCOME: &str = r#"
+const WELCOME: &str = r"
 ▌ ▌   ▜               ▐      ▞▀▖         ▐   ▞
 ▌▖▌▞▀▖▐ ▞▀▖▞▀▖▛▚▀▖▞▀▖ ▜▀ ▞▀▖ ▙▄▌▛▀▖▝▀▖▙▀▖▜▀ ▞▀▖
 ▙▚▌▛▀ ▐ ▌ ▖▌ ▌▌▐ ▌▛▀  ▐ ▖▌ ▌ ▌ ▌▙▄▘▞▀▌▌  ▐ ▖▛▀
 ▘ ▘▝▀▘ ▘▝▀ ▝▀ ▘▝ ▘▝▀▘  ▀ ▝▀  ▘ ▘▌  ▝▀▘▘   ▀ ▝▀▘
-"#;
+";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +261,7 @@ from_mod!(
 from_mod!(Reactions, mods::reactions::ReactionsMod);
 from_mod!(Delivery, mods::delivery::DeliveryMod);
 
+#[allow(clippy::ref_option)]
 pub trait ModTrait: Display {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()>;
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event);
@@ -370,42 +371,42 @@ impl ModTrait for Mod {
     ) {
         match self {
             Mod::Completion(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Carbons(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Contact(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Conversation(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Disco(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Bookmarks(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::UI(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay, archive),
             Mod::Mam(r#mod) => r#mod.handle_xmpp_message(aparte, account, message, delay, archive),
             Mod::Messages(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Correction(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Omemo(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::DisplayedMarkers(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Reactions(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
             Mod::Delivery(r#mod) => {
-                r#mod.handle_xmpp_message(aparte, account, message, delay, archive)
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
         }
     }
@@ -459,7 +460,7 @@ pub struct Connection {
 }
 
 command_def!(connect,
-r#":connect <account>
+r":connect <account>
 
     account       Account to connect to
 
@@ -471,7 +472,7 @@ Examples:
     :connect account@server.tld
     :connect account@server.tld/resource
     :connect account@server.tld:5223
-"#,
+",
 {
     account_name: String = {
         completion: |aparte, _command| {
@@ -510,7 +511,7 @@ Examples:
 });
 
 command_def!(win,
-r#"Usage: :win <window>
+r"Usage: :win <window>
 
     window        Name of the window to switch to
 
@@ -519,7 +520,7 @@ Description:
 
 Examples:
     :win console
-    :win contact@server.tld"#,
+    :win contact@server.tld",
 {
     window: String = {
         completion: |aparte, _command| {
@@ -542,7 +543,7 @@ Examples:
 });
 
 command_def!(close,
-r#"Usage: :close [<window>]
+r"Usage: :close [<window>]
 
     window        Name of the window to close
 
@@ -551,7 +552,7 @@ Description:
 
 Examples:
     :close
-    :close contact@server.tld"#,
+    :close contact@server.tld",
 {
     window: Option<String> = {
         completion: |aparte, _command| {
@@ -574,7 +575,7 @@ Examples:
 });
 
 command_def!(leave,
-r#"Usage: :leave [<window>]
+r"Usage: :leave [<window>]
 
     window        Name of the channel to leave
 
@@ -583,7 +584,7 @@ Description:
 
 Examples:
     :leave
-    :leave channel@conversation.server.tld"#,
+    :leave channel@conversation.server.tld",
 {
     window: Option<String> = {
         completion: |aparte, _command| {
@@ -649,7 +650,7 @@ Example:
     aparte.schedule(Event::Chat { account: account.clone(), contact: jid.to_bare() });
     if let Some(body) = message {
         let mut bodies = HashMap::new();
-        bodies.insert("".to_string(), body);
+        bodies.insert(String::new(), body);
         let id = Uuid::new_v4().to_string();
         let from: Jid = account.clone().into();
         let timestamp = LocalTz::now();
@@ -662,66 +663,63 @@ Example:
 });
 
 command_def!(join,
-r#":join <channel>
+r":join <channel>
 
     channel       Channel JID to join
 Description:
     Open a window and join a given channel.
 
 Example:
-    :join channel@conference.server.tld"#,
+    :join channel@conference.server.tld",
 {
     muc: String = {
         completion: |aparte, _command| {
             let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
-            bookmarks.bookmarks_by_name.keys().cloned().chain(bookmarks.bookmarks_by_jid.keys().map(|a| a.to_string())).collect()
+            bookmarks.bookmarks_by_name.keys().cloned().chain(bookmarks.bookmarks_by_jid.keys().map(std::string::ToString::to_string)).collect()
         }
     },
 },
 |aparte, _command| {
     let account = aparte.current_account().context("No connection found")?;
-    match Jid::from_str(&muc) {
-        Ok(jid) => {
-            aparte.schedule(Event::Join {
-                account,
-                channel: jid,
-                user_request: true
-            });
-            Ok(())
-        },
-        Err(_) => {
-            let jid = {
-                let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
-                match bookmarks.get_by_name(&muc) {
-                    Some(bookmark) => {
-                        match bookmark.nick {
-                            Some(nick) => Jid::from(bookmark.jid.with_resource_str(&nick).context("Invalid nick")?),
-                            None => Jid::from(bookmark.jid.clone()),
-                        }
-                    },
-                    None => Jid::from_str(&muc)?
-                }
-            };
+    if let Ok(jid) = Jid::from_str(&muc) {
+        aparte.schedule(Event::Join {
+            account,
+            channel: jid,
+            user_request: true
+        });
+        Ok(())
+    } else {
+        let jid = {
+            let bookmarks = aparte.get_mod::<mods::bookmarks::BookmarksMod>();
+            match bookmarks.get_by_name(&muc) {
+                Some(bookmark) => {
+                    match bookmark.nick {
+                        Some(nick) => Jid::from(bookmark.jid.with_resource_str(&nick).context("Invalid nick")?),
+                        None => Jid::from(bookmark.jid.clone()),
+                    }
+                },
+                None => Jid::from_str(&muc)?
+            }
+        };
 
-            aparte.schedule(Event::Join {
-                account,
-                channel: jid,
-                user_request: true
-            });
-            Ok(())
-        }
+        aparte.schedule(Event::Join {
+            account,
+            channel: jid,
+            user_request: true
+        });
+        Ok(())
     }
 });
 
 command_def!(
     quit,
-    r#":quit
+    r":quit
 
 Description:
     Quit Aparté.
 
 Example:
-    :quit"#,
+    :quit",
     {},
     |aparte, _command| {
         aparte.schedule(Event::Quit);
@@ -731,7 +729,7 @@ Example:
 );
 
 command_def!(help,
-r#":help [command]
+r":help [command]
 
     command       Name of command
 
@@ -739,22 +737,22 @@ Description:
     Print help of a given command.
 
 Examples:
-    :help win"#,
+    :help win",
 {
     cmd: Option<String> = {
         completion: |aparte, _command| {
-            aparte.command_parsers.iter().map(|c| c.0.to_string()).collect()
+            aparte.command_parsers.iter().map(|c| c.0.clone()).collect()
         }
     }
 },
 |aparte, _command| {
     if let Some(cmd) = cmd {
-        let help = resolve_command_parser(&aparte.command_parsers, &cmd)?.help.to_string();
+        let help = resolve_command_parser(&aparte.command_parsers, &cmd)?.help.clone();
 
         crate::info!(aparte, "{}", help);
         Ok(())
     } else {
-        crate::info!(aparte, "Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.to_string()).collect::<Vec<String>>().join(", "));
+        crate::info!(aparte, "Available commands: {}", aparte.command_parsers.iter().map(|c| c.0.clone()).collect::<Vec<String>>().join(", "));
         Ok(())
     }
 });
@@ -836,6 +834,7 @@ pub(crate) fn resolve_command_parser<'a>(
 }
 
 impl Aparte {
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         config_path: PathBuf,
         storage_path: PathBuf,
@@ -848,19 +847,19 @@ impl Aparte {
             .create(true)
             .truncate(false)
             .open(&config_path)
-            .with_context(|| format!("Cannot read config file {:?}", config_path))?;
+            .with_context(|| format!("Cannot read config file {}", config_path.display()))?;
 
         let mut config_str = String::new();
         config_file
             .read_to_string(&mut config_str)
-            .with_context(|| format!("Cannot read config file {}", config_str))?;
+            .with_context(|| format!("Cannot read config file {config_str}"))?;
 
         let config: Config = match config_str.len() {
-            0 => Default::default(),
+            0 => Config::default(),
             _ => match toml::from_str(&config_str) {
                 Err(err) => {
                     log::error!("Malformed config file: {}", err);
-                    Default::default()
+                    Config::default()
                 }
                 Ok(config) => config,
             },
@@ -914,6 +913,7 @@ impl Aparte {
         Ok(aparte)
     }
 
+    #[allow(clippy::ref_option)]
     pub fn handle_raw_command(
         &mut self,
         account: &Option<Account>,
@@ -1046,6 +1046,7 @@ impl Aparte {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn run(mut self) {
         let rt = TokioRuntime::new().unwrap();
 
@@ -1071,20 +1072,17 @@ impl Aparte {
             };
             async move {
                 loop {
-                    match input_event_stream.next().await {
-                        Some(event) => {
-                            log::trace!("Got input event {:?} at {:?}", event, Instant::now());
-                            if let Err(err) = tx.send(event) {
-                                log::error!("Cannot send event to internal channel: {}", err);
-                                break;
-                            }
-                        }
-                        None => {
-                            if let Err(err) = tx.send(Event::Quit) {
-                                log::error!("Cannot send Quit event to internal channel: {}", err);
-                            }
+                    if let Some(event) = input_event_stream.next().await {
+                        log::trace!("Got input event {:?} at {:?}", event, Instant::now());
+                        if let Err(err) = tx.send(event) {
+                            log::error!("Cannot send event to internal channel: {}", err);
                             break;
                         }
+                    } else {
+                        if let Err(err) = tx.send(Event::Quit) {
+                            log::error!("Cannot send Quit event to internal channel: {}", err);
+                        }
+                        break;
                     }
                 }
             }
@@ -1185,7 +1183,7 @@ impl Aparte {
                             for event in priority_events {
                                 if let Event::ChangeWindow(ref name) = event {
                                     if let Ok(mut q) = self.pending_annotations.lock() {
-                                        q.push(format!("WINDOW_CHANGE:{}", name));
+                                        q.push(format!("WINDOW_CHANGE:{name}"));
                                     }
                                 }
                                 if self.handle_event(event).is_err() {
@@ -1213,28 +1211,22 @@ impl Aparte {
                             log::trace!("Event loop, delayed handling of {} events", last_events.len());
                         },
                     },
-                    account_and_stanza = send_rx.recv() => match account_and_stanza {
-                        Some((account, stanza)) => {
+                    account_and_stanza = send_rx.recv() => if let Some((account, stanza)) = account_and_stanza {
+                        self.send_stanza(account, stanza);
+                        // Drain remaining ready stanzas in batch
+                        while let Ok((account, stanza)) = send_rx.try_recv() {
                             self.send_stanza(account, stanza);
-                            // Drain remaining ready stanzas in batch
-                            while let Ok((account, stanza)) = send_rx.try_recv() {
-                                self.send_stanza(account, stanza);
-                            }
                         }
-                        None => {
-                            log::error!("Broken send channel");
-                            break;
-                        }
+                    } else {
+                        log::error!("Broken send channel");
+                        break;
                     },
                     Some((account, envelope)) = iq_rx.recv() => {
-                        match self.connections.get(&account) {
-                            Some(conn) => {
-                                if let Err(e) = conn.iq_sink.send(envelope) {
-                                    log::warn!("Cannot route IQ to connection: {e}");
-                                }
+                        if let Some(conn) = self.connections.get(&account) {
+                            if let Err(e) = conn.iq_sink.send(envelope) {
+                                log::warn!("Cannot route IQ to connection: {e}");
                             }
-                            None => log::warn!("No connection for IQ from {account}"),
-                        }
+                        } else { log::warn!("No connection for IQ from {account}") }
                     }
                 };
 
@@ -1264,12 +1256,13 @@ impl Aparte {
                 self.schedule(Event::RawCommand(
                     None,
                     "console".to_string(),
-                    format!(":connect {}", name),
+                    format!(":connect {name}"),
                 ));
             }
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn send_stanza(&mut self, account: Account, stanza: Element) {
         let mut raw = Vec::<u8>::new();
         stanza.write_to(&mut raw).unwrap();
@@ -1286,6 +1279,7 @@ impl Aparte {
         }
     }
 
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub fn connect(&mut self, connection_info: &ConnectionInfo, password: Password) {
         let account: Account = match Jid::from_str(&connection_info.jid).map(Jid::try_into_full) {
             Ok(Ok(full_jid)) => full_jid,
@@ -1406,7 +1400,7 @@ impl Aparte {
                                     event_tx.send(Event::AuthError(account.clone(), format!("{e}")))
                                 {
                                     log::error!("Cannot send event to internal channel: {}", err);
-                                };
+                                }
                                 break;
                             }
                             tokio_xmpp::Event::Disconnected(e) => {
@@ -1414,7 +1408,7 @@ impl Aparte {
                                     event_tx.send(Event::Disconnected(account.clone(), format!("{e}")))
                                 {
                                     log::error!("Cannot send event to internal channel: {}", err);
-                                };
+                                }
                             }
                             tokio_xmpp::Event::Online {
                                 bound_jid: jid,
@@ -1450,6 +1444,7 @@ impl Aparte {
         });
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn handle_event(&mut self, event: Event) -> Result<(), ()> {
         if self.read_password.load(Relaxed) && matches!(event, Event::Key(..)) {
             log::trace!(
@@ -1510,7 +1505,7 @@ impl Aparte {
                 match encryption {
                     Some(Ok(encrypted_message)) => self.send(&account, encrypted_message),
                     Some(Err(e)) => {
-                        log::error!("Cannot encrypt message (TODO print error in UI): {e}")
+                        log::error!("Cannot encrypt message (TODO print error in UI): {e}");
                     }
                     None => self.send(&account, message),
                 }
@@ -1519,7 +1514,7 @@ impl Aparte {
                 self.connect(&account, password);
             }
             Event::Connected(account, _) => {
-                self.log(format!("Connected as {}", account));
+                self.log(format!("Connected as {account}"));
                 let mut presence = Presence::new(PresenceType::None);
                 presence.show = Some(PresenceShow::Chat);
 
@@ -1533,10 +1528,10 @@ impl Aparte {
                 self.send(&account, presence);
             }
             Event::Disconnected(account, err) => {
-                self.log(format!("Connection lost for {}: {}", account, err));
+                self.log(format!("Connection lost for {account}: {err}"));
             }
             Event::AuthError(account, err) => {
-                self.log(format!("Authentication error for {}: {}", account, err));
+                self.log(format!("Authentication error for {account}: {err}"));
             }
             Event::Stanza(account, stanza) => {
                 self.handle_stanza(account, stanza);
@@ -1569,7 +1564,7 @@ impl Aparte {
                 self.send(&account, presence);
 
                 // Successful join
-                self.log(format!("Joined {}", channel));
+                self.log(format!("Joined {channel}"));
                 self.schedule(Event::Joined {
                     account: account.clone(),
                     channel: to,
@@ -1615,6 +1610,7 @@ impl Aparte {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn handle_xmpp_message(
         &mut self,
         account: Account,
@@ -1760,7 +1756,7 @@ impl Aparte {
             Err(_e) => {
                 log::error!("Cannot convert to element");
             }
-        };
+        }
     }
 
     pub fn schedule(&mut self, event: Event) {
@@ -1775,8 +1771,9 @@ impl Aparte {
         self.schedule(Event::Message(None, message));
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn error<T: Display>(&mut self, message: T, err: anyhow::Error) {
-        let message = Message::log(format!("{}: {:#}", message, err));
+        let message = Message::log(format!("{message}: {err:#}"));
         self.schedule(Event::Message(None, message));
     }
 
@@ -1858,13 +1855,15 @@ impl AparteAsync {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn log<T: ToString>(&mut self, message: T) {
         let message = Message::log(message.to_string());
         self.schedule(Event::Message(None, message));
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn error<T: Display>(&mut self, message: T, err: anyhow::Error) {
-        let message = Message::log(format!("{}: {:#}", message, err));
+        let message = Message::log(format!("{message}: {err:#}"));
         self.schedule(Event::Message(None, message));
     }
 

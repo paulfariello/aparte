@@ -20,7 +20,7 @@ use crate::core::{Aparte, Event, ModTrait};
 use crate::mods::disco;
 
 command_def!(bookmark_add,
-r#":bookmark add <bookmark> <conference> [autojoin=on|off]
+r":bookmark add <bookmark> <conference> [autojoin=on|off]
 
     bookmark    The bookmark friendly name
     conference  The conference room jid
@@ -34,7 +34,7 @@ Examples:
     :bookmark add aparte aparte@conference.fariello.eu
     :bookmark add aparte aparte@conference.fariello.eu nick=needle
     :bookmark add aparte aparte@conference.fariello.eu autojoin=on
-"#,
+",
 {
     name: String,
     conference: BareJid,
@@ -53,12 +53,12 @@ Examples:
         extensions: None,
     };
     let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
-    bookmarks.add(aparte, &account, bookmark.clone());
+    bookmarks.add(aparte, &account, &bookmark);
     Ok(())
 });
 
 command_def!(bookmark_del,
-r#":bookmark del <bookmark>
+r":bookmark del <bookmark>
 
     bookmark    The bookmark friendly name
 
@@ -67,7 +67,7 @@ Description:
 
 Examples:
     :bookmark del aparte
-"#,
+",
 { conference: BareJid },
 |aparte, _command| {
     let account = aparte.current_account().context("No connection found")?;
@@ -77,7 +77,7 @@ Examples:
 );
 
 command_def!(bookmark_edit,
-r#":bookmark edit <bookmark> [<conference>] [autojoin=on|off]
+r":bookmark edit <bookmark> [<conference>] [autojoin=on|off]
 
     bookmark    The bookmark friendly name
     conference  The conference room jid
@@ -91,7 +91,7 @@ Examples:
     :bookmark edit aparte aparte@conference.fariello.eu
     :bookmark edit aparte nick=needle
     :bookmark edit aparte aparte@conference.fariello.eu autojoin=false
-"#,
+",
 {
     name: String,
     nick: Named<String>,
@@ -101,13 +101,13 @@ Examples:
 |aparte, _command| {
     let account = aparte.current_account().context("No connection found")?;
     let mut bookmarks = aparte.get_mod_mut::<BookmarksMod>();
-    bookmarks.edit(aparte, &account, name.clone(), conference, nick, autojoin).with_context(|| format!("Unknown bookmark {name}"))?;
+    bookmarks.edit(aparte, &account, &name, conference, nick, autojoin).with_context(|| format!("Unknown bookmark {name}"))?;
 
     Ok(())
 });
 
 command_def!(bookmark,
-r#":bookmark add|del|edit"#,
+r":bookmark add|del|edit",
 {
     action: Command = {
         children: {
@@ -256,7 +256,7 @@ mod bookmarks_v1 {
                         let bookmark = contact::Bookmark {
                             jid: conf.jid.clone(),
                             name: conf.name.clone(),
-                            nick: conf.nick.as_ref().map(|n| n.to_string()),
+                            nick: conf.nick.as_ref().map(std::string::ToString::to_string),
                             password: conf.password.clone(),
                             autojoin: conf.autojoin,
                             extensions: None,
@@ -447,7 +447,7 @@ mod bookmarks_v2 {
         account: &Account,
         bookmark: BareJid,
     ) -> Result<()> {
-        match aparte.iq(account, delete_iq(bookmark)).await {
+        match aparte.iq(account, delete_iq(&bookmark)).await {
             Ok(IqResponse::Result(_)) => Ok(()),
             Ok(IqResponse::Error(error)) => Err(anyhow!(
                 "Can't delete bookmarks: {}",
@@ -457,7 +457,7 @@ mod bookmarks_v2 {
         }
     }
 
-    fn delete_iq(conference: BareJid) -> Iq {
+    fn delete_iq(conference: &BareJid) -> Iq {
         let item = Item {
             id: Some(ItemId(conference.to_string())),
             payload: None,
@@ -482,7 +482,7 @@ mod bookmarks_v2 {
                             let bookmark = contact::Bookmark {
                                 jid: bare_jid.clone(),
                                 name: conf.name.clone(),
-                                nick: conf.nick.as_ref().map(|n| n.to_string()),
+                                nick: conf.nick.as_ref().map(std::string::ToString::to_string),
                                 password: conf.password.clone(),
                                 autojoin: conf.autojoin,
                                 extensions: None,
@@ -514,7 +514,7 @@ mod bookmarks_v2 {
                             let bookmark = contact::Bookmark {
                                 jid: bare_jid.clone(),
                                 name: conf.name.clone(),
-                                nick: conf.nick.as_ref().map(|n| n.to_string()),
+                                nick: conf.nick.as_ref().map(std::string::ToString::to_string),
                                 password: conf.password.clone(),
                                 autojoin: conf.autojoin,
                                 extensions: None,
@@ -572,7 +572,7 @@ mod bookmarks_v1_event {
                         let bookmark = contact::Bookmark {
                             jid: conf.jid.clone(),
                             name: conf.name.clone(),
-                            nick: conf.nick.as_ref().map(|n| n.to_string()),
+                            nick: conf.nick.as_ref().map(std::string::ToString::to_string),
                             password: conf.password.clone(),
                             autojoin: conf.autojoin,
                             extensions: None,
@@ -626,7 +626,7 @@ impl BookmarksMod {
         Ok(())
     }
 
-    fn add(&mut self, aparte: &Aparte, account: &Account, bookmark: contact::Bookmark) {
+    fn add(&mut self, aparte: &Aparte, account: &Account, bookmark: &contact::Bookmark) {
         self.bookmarks.push(bookmark.clone());
 
         Aparte::spawn({
@@ -657,14 +657,14 @@ impl BookmarksMod {
         &mut self,
         aparte: &Aparte,
         account: &Account,
-        name: String,
+        name: &str,
         jid: Option<BareJid>,
         nick: Option<String>,
         autojoin: Option<bool>,
     ) -> Result<()> {
         let index = self
             .bookmarks_by_name
-            .get(&name)
+            .get(name)
             .context("Unknown bookmark")?;
         let bookmark = self.bookmarks.get_mut(*index).unwrap();
         if let Some(jid) = jid {
@@ -697,7 +697,7 @@ impl BookmarksMod {
                 };
 
                 if let Err(err) = ret {
-                    crate::error!(aparte, err, "Can't edit bookmark")
+                    crate::error!(aparte, err, "Can't edit bookmark");
                 }
             }
         });
@@ -734,7 +734,7 @@ impl BookmarksMod {
                 match ret {
                     Err(err) => crate::error!(aparte, err, "Can't delete bookmark"),
                     Ok(()) => aparte.schedule(Event::DeletedBookmark(bookmark.jid)),
-                };
+                }
             }
         });
 
@@ -757,6 +757,7 @@ impl BookmarksMod {
             .collect();
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn handle_bookmarks(
         &mut self,
         aparte: &mut Aparte,
@@ -775,10 +776,10 @@ impl BookmarksMod {
             .cloned()
             .collect();
 
-        self.bookmarks = bookmarks.to_owned();
+        self.bookmarks = bookmarks.to_vec();
         self.update_indexes();
 
-        for bookmark in added.iter() {
+        for bookmark in &added {
             aparte.schedule(Event::Bookmark(account.clone(), bookmark.clone()));
             if bookmark.autojoin {
                 let jid = match &bookmark.nick {
@@ -794,7 +795,7 @@ impl BookmarksMod {
             }
         }
 
-        for bookmark in removed.iter() {
+        for bookmark in &removed {
             aparte.schedule(Event::DeletedBookmark(bookmark.jid.clone()));
             // TODO leave channel?
         }

@@ -10,6 +10,7 @@ use terminus::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn id_to_rgb(identifier: &str) -> Color {
     // Follow xep 0392 for color generation
     let mut hasher = Sha1::new();
@@ -41,6 +42,7 @@ impl Rainbow {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn get_color(&mut self) -> (u8, u8, u8) {
         let i = self.frequency * self.shift / self.spread;
         let red = i.sin() * 127.00 + 128.00;

@@ -60,8 +60,7 @@ impl ModTrait for DeliveryMod {
         let from_self = message
             .from
             .as_ref()
-            .map(|j| j.to_bare() == account.to_bare())
-            .unwrap_or(false);
+            .is_some_and(|j| j.to_bare() == account.to_bare());
         if from_self {
             return 0.0;
         }
@@ -84,13 +83,12 @@ impl ModTrait for DeliveryMod {
         _delay: &Option<Delay>,
         _archive: bool,
     ) {
-        let from = match message
+        let Some(from) = message
             .from
             .as_ref()
             .and_then(|j| j.clone().try_into_full().ok())
-        {
-            Some(f) => f,
-            None => return,
+        else {
+            return;
         };
         for p in &message.payloads {
             if let Ok(received) = receipts::Received::try_from(p.clone()) {

@@ -69,6 +69,7 @@ impl ModTrait for ConversationMod {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Chat { account, contact } => {
@@ -128,8 +129,7 @@ impl ModTrait for ConversationMod {
                             .history
                             .iter()
                             .max()
-                            .map(|v| v.timestamp)
-                            .unwrap_or_else(|| chrono::Local::now().into());
+                            .map_or_else(|| chrono::Local::now().into(), |v| v.timestamp);
                         aparte.schedule(Event::Notification {
                             conversation: conversation.clone(),
                             important,

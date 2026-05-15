@@ -135,8 +135,7 @@ impl VersionedXmppMessage {
         let id = message
             .id
             .as_ref()
-            .map(|id| id.0.clone())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .map_or_else(|| Uuid::new_v4().to_string(), |id| id.0.clone());
         let bodies: HashMap<String, String> = message
             .bodies
             .iter()
@@ -153,9 +152,7 @@ impl VersionedXmppMessage {
             .payloads
             .iter()
             .find_map(|payload| Delay::try_from(payload.clone()).ok());
-        let timestamp = delay
-            .map(|delay| delay.stamp.0)
-            .unwrap_or(LocalTz::now().into());
+        let timestamp = delay.map_or(LocalTz::now().into(), |delay| delay.stamp.0);
 
         self.history.push(XmppMessageVersion {
             id,
@@ -203,6 +200,7 @@ pub enum Message {
     Log(LogMessage),
 }
 
+#[allow(clippy::ref_option)]
 impl Message {
     pub fn from_xmpp(
         account: &Account,
@@ -213,8 +211,7 @@ impl Message {
         let id = message
             .id
             .as_ref()
-            .map(|id| id.0.clone())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .map_or_else(|| Uuid::new_v4().to_string(), |id| id.0.clone());
         if let Some(from) = message.from.clone() {
             let bodies: HashMap<String, String> = message
                 .bodies
@@ -248,9 +245,7 @@ impl Message {
                     .find_map(|payload| Delay::try_from(payload.clone()).ok()),
             };
             let delayed = delay.is_some();
-            let timestamp = delay
-                .map(|delay| delay.stamp.0)
-                .unwrap_or(LocalTz::now().into());
+            let timestamp = delay.map_or(LocalTz::now().into(), |delay| delay.stamp.0);
             let to = match message.to.clone() {
                 Some(to) => to,
                 None => account.clone().into(),
@@ -349,8 +344,8 @@ impl Message {
         account: &Account,
         message: &XmppParsersMessage,
     ) -> Result<Direction, String> {
-        let from: Option<BareJid> = message.from.as_ref().map(|f| f.to_bare());
-        let to: Option<BareJid> = message.to.as_ref().map(|f| f.to_bare());
+        let from: Option<BareJid> = message.from.as_ref().map(xmpp_parsers::jid::Jid::to_bare);
+        let to: Option<BareJid> = message.to.as_ref().map(xmpp_parsers::jid::Jid::to_bare);
         let bare_account: BareJid = account.to_bare();
 
         match (from.as_ref(), to.as_ref()) {
@@ -536,8 +531,7 @@ impl Message {
             Message::Log(_) => None,
             Message::Xmpp(message) => match message.direction {
                 Direction::Outgoing => match message.type_ {
-                    XmppMessageType::Chat => Some(message.to.clone()),
-                    XmppMessageType::Channel => Some(message.to.clone()),
+                    XmppMessageType::Chat | XmppMessageType::Channel => Some(message.to.clone()),
                 },
                 Direction::Incoming => None,
             },
@@ -568,7 +562,7 @@ impl Message {
 
 impl hash::Hash for Message {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.id().hash(state)
+        self.id().hash(state);
     }
 }
 
@@ -675,7 +669,7 @@ impl Ord for MessageView {
 
 impl Hash for MessageView {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.message.hash(state)
+        self.message.hash(state);
     }
 }
 
@@ -768,7 +762,7 @@ fn langs_to_locale(langs: &[String]) -> Locale {
         }
         if let Some(lang_only) = lang.split('-').next() {
             for country in &["US", "GB", "FR", "DE", "BR", "ES", "IT", "RU", "JP", "CN"] {
-                if let Ok(locale) = format!("{}_{}", lang_only, country).parse::<Locale>() {
+                if let Ok(locale) = format!("{lang_only}_{country}").parse::<Locale>() {
                     return locale;
                 }
             }
@@ -877,7 +871,7 @@ impl MessageView {
         for line in message.body.lines() {
             let mut formatted_line = prefixed_line.clone();
             formatted_line.append(line.clone());
-            lines.append(&mut Self::format_text(formatted_line, max_width))
+            lines.append(&mut Self::format_text(formatted_line, max_width));
         }
         lines
     }
@@ -897,7 +891,7 @@ impl MessageView {
 
         let foreground = terminus::FgColor(id_to_rgb(&author));
 
-        let mut attributes = "".to_string();
+        let mut attributes = String::new();
         if message.has_multiple_version() {
             attributes.push_str("✎ ");
         }
@@ -916,9 +910,10 @@ impl MessageView {
 
         let mut header = format!("{} - {}", timestamp.format("%T"), attributes).into_charxels();
 
-        let author = match me {
-            true => format!("* {} ", author).with_foreground(foreground),
-            false => format!("{}: ", author).with_foreground(foreground),
+        let author = if me {
+            format!("* {author} ").with_foreground(foreground)
+        } else {
+            format!("{author}: ").with_foreground(foreground)
         };
 
         header.append(author);
@@ -939,7 +934,7 @@ impl MessageView {
             header.append(parse_message_line(&terminus::clean_str(line)));
         }
         for line in iter {
-            header.append(format!("\n{}", padding));
+            header.append(format!("\n{padding}"));
             header.append(parse_message_line(&terminus::clean_str(line)));
         }
 
@@ -954,10 +949,10 @@ impl MessageView {
             sorted.sort_by_key(|(e, _)| *e);
             let reaction_str: String = sorted
                 .iter()
-                .map(|(e, n)| format!("{} {}", e, n))
+                .map(|(e, n)| format!("{e} {n}"))
                 .collect::<Vec<_>>()
                 .join("  ");
-            header.append(format!("\n{}[{}]", padding, reaction_str));
+            header.append(format!("\n{padding}[{reaction_str}]"));
         }
 
         Self::format_text(header, max_width)
@@ -1026,6 +1021,7 @@ impl MessageView {
         *self.measure_cache.borrow_mut() = None;
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn format_date_separator(
         date: NaiveDate,
         width: u16,
@@ -1039,11 +1035,12 @@ impl MessageView {
         let line_width = width.saturating_sub(label_len);
         let left = "─".repeat((line_width / 2) as usize);
         let right = "─".repeat((line_width - line_width / 2) as usize);
-        format!("{}{}{}", left, label, right)
+        format!("{left}{label}{right}")
             .with_foreground(fg)
             .with_background(bg)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn render_text(&self, frame: &mut ScreenFrame) {
         let width = frame.width();
         let cache = self.measure_cache.borrow();
@@ -1079,12 +1076,15 @@ impl MessageView {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn measure_text(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         match measure_specs.width {
             MeasureSpec::Unspecified => RequestedDimensions {
                 height: RequestedDimension::Absolute(1),
                 width: RequestedDimension::Absolute(
-                    self.format(None).first().map_or(0, |l| l.display_width()),
+                    self.format(None)
+                        .first()
+                        .map_or(0, terminus::charxel::Charxels::display_width),
                 ),
             },
             MeasureSpec::AtMost(at_most_width) => {
@@ -1098,7 +1098,7 @@ impl MessageView {
                     width: RequestedDimension::Absolute(cmp::min(
                         formatted
                             .iter()
-                            .map(|line| line.display_width())
+                            .map(terminus::charxel::Charxels::display_width)
                             .max()
                             .unwrap_or(0),
                         at_most_width,

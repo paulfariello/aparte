@@ -45,7 +45,7 @@ fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
         Word,
     }
 
-    use WordParserState::*;
+    use WordParserState::{Init, Separator, Space, Word};
 
     let mut state = Init;
     let mut count = 0;
@@ -82,11 +82,13 @@ fn next_word<T: Iterator<Item = char>>(iter: T) -> usize {
     count
 }
 
+#[must_use]
 pub fn is_clean_str(string: &str) -> bool {
     !string.chars().any(|c| c == '\x1b')
 }
 
 /// Remove all terminal specific chars sequences
+#[must_use]
 pub fn clean_str(string: &str) -> String {
     let mut output = String::new();
     let mut iter = string.chars();
@@ -99,9 +101,8 @@ pub fn clean_str(string: &str) -> String {
                         '[' => {
                             for c in iter.by_ref() {
                                 match c {
-                                    '\x30'..='\x3f' => {}     // parameter bytes
-                                    '\x20'..='\x2f' => {}     // intermediate bytes
-                                    '\x40'..='\x7e' => break, // final byte
+                                    '\x30'..='\x3f' | '\x20'..='\x2f' => {} // parameter/intermediate bytes
+                                    '\x40'..='\x7e' => break,               // final byte
                                     _ => output.push(c),
                                 }
                             }
@@ -118,6 +119,7 @@ pub fn clean_str(string: &str) -> String {
 }
 
 /// Truncate the string to max visible chars. Optionnaly appending the (already clean) 'append' string.
+#[must_use]
 pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&str>) -> String {
     let mut iter = string.graphemes(true);
     let mut remaining = max;
@@ -139,10 +141,8 @@ pub fn term_string_visible_truncate(string: &str, max: usize, append: Option<&st
                             let chars = grapheme.chars().collect::<Vec<_>>();
                             if chars.len() == 1 {
                                 match chars[0] {
-                                    '\x30'..='\x3f' => {}     // parameter bytes
-                                    '\x20'..='\x2f' => {}     // intermediate bytes
-                                    '\x40'..='\x7e' => break, // final byte
-                                    _ => break,
+                                    '\x30'..='\x3f' | '\x20'..='\x2f' => {} // parameter/intermediate bytes
+                                    _ => break,                             // final byte or other
                                 }
                             } else {
                                 remaining -= 1;
@@ -297,20 +297,25 @@ pub struct Dimensions {
 
 impl Dimensions {
     fn reconcile_dimension(
-        measure_spec: &MeasureSpec,
-        requested_dimension: &RequestedDimension,
+        measure_spec: MeasureSpec,
+        requested_dimension: RequestedDimension,
     ) -> u16 {
         match (measure_spec, requested_dimension) {
             (MeasureSpec::Unspecified, RequestedDimension::ExpandMax) => panic!(
                 "Cannot resolve unspecified measure spec with expand max requested dimension"
             ),
-            (MeasureSpec::Unspecified, RequestedDimension::Absolute(dimension)) => *dimension,
-            (MeasureSpec::AtMost(dimension), RequestedDimension::ExpandMax) => *dimension,
+            (MeasureSpec::Unspecified, RequestedDimension::Absolute(dimension))
+            | (MeasureSpec::AtMost(dimension), RequestedDimension::ExpandMax) => dimension,
             (MeasureSpec::AtMost(at_most), RequestedDimension::Absolute(requested)) => {
-                cmp::min(*at_most, *requested)
+                cmp::min(at_most, requested)
             }
         }
     }
+
+    /// # Panics
+    ///
+    /// Panics if `measure_spec` is `Unspecified` and `requested_dimension` is `ExpandMax`.
+    #[must_use]
     pub fn reconcile(
         measure_specs: &MeasureSpecs,
         requested_dimensions: &RequestedDimensions,
@@ -320,8 +325,8 @@ impl Dimensions {
         Self {
             top,
             left,
-            width: Self::reconcile_dimension(&measure_specs.width, &requested_dimensions.width),
-            height: Self::reconcile_dimension(&measure_specs.height, &requested_dimensions.height),
+            width: Self::reconcile_dimension(measure_specs.width, requested_dimensions.width),
+            height: Self::reconcile_dimension(measure_specs.height, requested_dimensions.height),
         }
     }
 }
@@ -372,7 +377,7 @@ impl PartialEq for Style {
 
 impl Hash for Style {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state)
+        std::mem::discriminant(self).hash(state);
     }
 }
 
@@ -416,7 +421,7 @@ pub trait View<E, C = ()> {
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
-    fn render<'a>(&self, frame: ScreenFrame<'a>, config: &C);
+    fn render(&self, frame: ScreenFrame<'_>, config: &C);
 
     /// Handle an event
     fn event(&mut self, event: &mut E);

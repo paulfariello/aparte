@@ -37,7 +37,7 @@ impl Ord for Occupant {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.nick
             .to_lowercase()
-            .cmp(&other.nick.to_string().to_lowercase())
+            .cmp(&other.nick.clone().to_lowercase())
     }
 }
 

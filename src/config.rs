@@ -79,7 +79,10 @@ impl Config {
     }
 
     pub fn preferred_langs_strs(&self) -> Vec<&str> {
-        self.preferred_langs.iter().map(|s| s.as_str()).collect()
+        self.preferred_langs
+            .iter()
+            .map(std::string::String::as_str)
+            .collect()
     }
 }
 

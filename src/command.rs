@@ -17,10 +17,10 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn new(account: Option<Account>, context: String, buf: String) -> Result<Self> {
-        let cursor = Cursor::from_index(&buf, buf.graphemes(true).count() - 1)
+    pub fn new(account: Option<Account>, context: String, buf: &str) -> Result<Self> {
+        let cursor = Cursor::from_index(buf, buf.graphemes(true).count() - 1)
             .map_err(|_| anyhow!("Invalid index"))?;
-        Command::parse_with_cursor(account, context, buf, cursor)
+        Command::parse_with_cursor(account, context, buf, &cursor)
     }
 
     pub fn parse_name(buf: &str) -> Result<&str> {
@@ -35,11 +35,12 @@ impl Command {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn parse_with_cursor(
         account: Option<Account>,
         context: String,
-        buf: String,
-        cursor: Cursor,
+        buf: &str,
+        cursor: &Cursor,
     ) -> Result<Self> {
         enum State {
             Initial,
@@ -52,10 +53,13 @@ impl Command {
             DoublyQuotedEscaped,
         }
 
-        use State::*;
+        use State::{
+            Delimiter, DoublyQuoted, DoublyQuotedEscaped, Initial, SimplyQuoted,
+            SimplyQuotedEscaped, Unquoted, UnquotedEscaped,
+        };
 
         let mut string_cursor = cursor
-            .try_index(&buf)
+            .try_index(buf)
             .map_err(|_| anyhow!("Invalid index"))?;
         let mut tokens: Vec<String> = Vec::new();
         let mut token = String::new();
@@ -144,7 +148,7 @@ impl Command {
 
             if string_cursor == 0 {
                 if token_cursor.is_none() {
-                    token_cursor = c.map(|_| tokens.len())
+                    token_cursor = c.map(|_| tokens.len());
                 }
             } else {
                 string_cursor -= 1;
@@ -158,18 +162,18 @@ impl Command {
             };
         }
 
-        if !tokens.is_empty() {
+        if tokens.is_empty() {
             Ok(Command {
                 account,
                 context,
-                args: tokens,
+                args: vec![String::new()],
                 cursor: token_cursor.unwrap(),
             })
         } else {
             Ok(Command {
                 account,
                 context,
-                args: vec!["".to_string()],
+                args: tokens,
                 cursor: token_cursor.unwrap(),
             })
         }
@@ -206,7 +210,7 @@ impl Command {
                     Some(_) => unreachable!(),
                 },
                 c => c.to_string(),
-            })
+            });
         }
 
         if quote == Some(' ') {
@@ -214,7 +218,7 @@ impl Command {
         }
 
         if let Some(q) = quote {
-            format!("{}{}{}", q, escaped, q)
+            format!("{q}{escaped}{q}")
         } else {
             escaped
         }
@@ -224,10 +228,10 @@ impl Command {
         let mut command = String::new();
         let mut first = true;
         for arg in args {
-            if !first {
-                command.push(' ');
-            } else {
+            if first {
                 first = false;
+            } else {
+                command.push(' ');
             }
             command.push_str(&Command::escape(arg));
         }
@@ -469,8 +473,9 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
+            #[allow(clippy::unnecessary_wraps, clippy::ref_option)]
             fn parse(account: &Option<Account>, context: &str, buf: &str) -> ::anyhow::Result<Command> {
-                Command::new(account.clone(), context.to_string(), buf.to_string())
+                Command::new(account.clone(), context.to_string(), buf)
             }
 
             fn exec(aparte: &mut Aparte, command: Command) -> ::anyhow::Result<()> {
@@ -504,10 +509,12 @@ macro_rules! command_def (
                 return help.join("\n");
             }
 
+            #[allow(clippy::unnecessary_wraps, clippy::ref_option)]
             fn parse(account: &Option<Account>, context: &str, buf: &str) -> ::anyhow::Result<Command> {
-                Command::new(account.clone(), context.to_string(), buf.to_string())
+                Command::new(account.clone(), context.to_string(), buf)
             }
 
+            #[allow(clippy::unnecessary_wraps)]
             fn exec($aparte: &mut Aparte, mut $command: Command) -> ::anyhow::Result<()> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;
@@ -623,7 +630,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_simple_command_parsing() {
-        let command = Command::new(None, "test".to_string(), ":test command".to_string());
+        let command = Command::new(None, "test".to_string(), ":test command");
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -634,11 +641,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_multiple_args_command_parsing() {
-        let command = Command::new(
-            None,
-            "test".to_string(),
-            ":test command with args".to_string(),
-        );
+        let command = Command::new(None, "test".to_string(), ":test command with args");
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 4);
@@ -651,11 +654,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_doubly_quoted_arg_command_parsing() {
-        let command = Command::new(
-            None,
-            "test".to_string(),
-            ":test \"command with arg\"".to_string(),
-        );
+        let command = Command::new(None, "test".to_string(), ":test \"command with arg\"");
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -666,11 +665,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_simply_quoted_arg_command_parsing() {
-        let command = Command::new(
-            None,
-            "test".to_string(),
-            ":test 'command with arg'".to_string(),
-        );
+        let command = Command::new(None, "test".to_string(), ":test 'command with arg'");
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -681,11 +676,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_mixed_quote_arg_command_parsing() {
-        let command = Command::new(
-            None,
-            "test".to_string(),
-            ":test 'command with \" arg'".to_string(),
-        );
+        let command = Command::new(None, "test".to_string(), ":test 'command with \" arg'");
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 2);
@@ -696,11 +687,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_missing_closing_quote() {
-        let command = Command::new(
-            None,
-            "test".to_string(),
-            ":test \"command with arg".to_string(),
-        );
+        let command = Command::new(None, "test".to_string(), ":test \"command with arg");
         assert!(command.is_err());
         assert_eq!(
             format!("{}", command.err().unwrap()),
@@ -713,8 +700,8 @@ mod tests_command_parser {
         let command = Command::parse_with_cursor(
             None,
             "test".to_string(),
-            ":test command with args".to_string(),
-            Cursor::new(10),
+            ":test command with args",
+            &Cursor::new(10),
         );
         assert!(command.is_ok());
         let command = command.unwrap();
@@ -728,8 +715,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_parsing_with_cursor() {
-        let command =
-            Command::parse_with_cursor(None, "test".to_string(), ":te".to_string(), Cursor::new(3));
+        let command = Command::parse_with_cursor(None, "test".to_string(), ":te", &Cursor::new(3));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -739,12 +725,8 @@ mod tests_command_parser {
 
     #[test]
     fn test_command_end_with_space_parsing_with_cursor() {
-        let command = Command::parse_with_cursor(
-            None,
-            "test".to_string(),
-            ":test ".to_string(),
-            Cursor::new(6),
-        );
+        let command =
+            Command::parse_with_cursor(None, "test".to_string(), ":test ", &Cursor::new(6));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);
@@ -754,8 +736,7 @@ mod tests_command_parser {
 
     #[test]
     fn test_no_command_parsing_with_cursor() {
-        let command =
-            Command::parse_with_cursor(None, "test".to_string(), ":".to_string(), Cursor::new(1));
+        let command = Command::parse_with_cursor(None, "test".to_string(), ":", &Cursor::new(1));
         assert!(command.is_ok());
         let command = command.unwrap();
         assert_eq!(command.args.len(), 1);

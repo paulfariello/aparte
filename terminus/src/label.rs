@@ -51,6 +51,7 @@ impl Hash for Label {
 impl<E, C> View<E, C> for Label {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
+            #[allow(clippy::cast_possible_truncation)]
             width: RequestedDimension::Absolute(display_width(&self.text) as u16),
             height: RequestedDimension::Absolute(1),
         }
@@ -58,7 +59,7 @@ impl<E, C> View<E, C> for Label {
 
     fn layout(&mut self, _dimensions: &Dimensions) {}
 
-    fn render<'a>(&self, mut frame: ScreenFrame<'a>, _config: &C) {
+    fn render(&self, mut frame: ScreenFrame<'_>, _config: &C) {
         frame.write_at((0u16, 0u16), self.text.as_str());
     }
 

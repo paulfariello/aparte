@@ -20,12 +20,13 @@ use crate::word::Words;
 
 #[derive(Default)]
 pub struct CompletionMod {
-    /// List of possible completions for current raw_buf
+    /// List of possible completions for current `raw_buf`
     completions: Option<Vec<String>>,
     /// Index of currently displayed completion
     current_completion: usize,
 }
 
+#[allow(clippy::ref_option)]
 impl CompletionMod {
     pub fn autocomplete(
         &mut self,
@@ -33,10 +34,10 @@ impl CompletionMod {
         account: &Option<Account>,
         context: &str,
         raw_buf: &str,
-        cursor: Cursor,
+        cursor: &Cursor,
     ) {
         if self.completions.is_none() {
-            self.build_completions(aparte, account, context, raw_buf, &cursor);
+            self.build_completions(aparte, account, context, raw_buf, cursor);
         }
 
         if let Some(completions) = &self.completions {
@@ -48,8 +49,8 @@ impl CompletionMod {
                     if let Ok(mut command) = Command::parse_with_cursor(
                         account.clone(),
                         context.to_string(),
-                        raw_buf.to_string(),
-                        cursor.clone(),
+                        raw_buf,
+                        cursor,
                     ) {
                         if command.cursor < command.args.len() {
                             command.args[command.cursor] = completion;
@@ -101,24 +102,17 @@ impl CompletionMod {
     ) {
         if raw_buf.starts_with(':') {
             let mut completions = Vec::new();
-            if let Ok(command) = Command::parse_with_cursor(
-                account.clone(),
-                context.to_string(),
-                raw_buf.to_string(),
-                cursor.clone(),
-            ) {
+            if let Ok(command) =
+                Command::parse_with_cursor(account.clone(), context.to_string(), raw_buf, cursor)
+            {
                 if command.cursor == 0 {
-                    completions = aparte
-                        .command_parsers
-                        .iter()
-                        .map(|c| c.0.to_string())
-                        .collect()
+                    completions = aparte.command_parsers.iter().map(|c| c.0.clone()).collect();
                 } else {
                     let command_parsers = Rc::clone(&aparte.command_parsers);
                     if let Ok(parser) = resolve_command_parser(&command_parsers, &command.args[0]) {
                         if command.cursor - 1 < parser.autocompletions.len() {
                             if let Some(completion) = &parser.autocompletions[command.cursor - 1] {
-                                completions = completion(aparte, command.clone())
+                                completions = completion(aparte, command.clone());
                             }
                         }
                     }
@@ -193,7 +187,7 @@ impl ModTrait for CompletionMod {
                 context,
                 raw_buf,
                 cursor,
-            } => self.autocomplete(aparte, account, context, raw_buf, cursor.clone()),
+            } => self.autocomplete(aparte, account, context, raw_buf, cursor),
             Event::ResetCompletion => self.reset_completion(),
             _ => {}
         }

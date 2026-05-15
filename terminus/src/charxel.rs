@@ -31,6 +31,7 @@ impl From<&str> for Grapheme {
 }
 
 impl Grapheme {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -57,6 +58,7 @@ pub struct Charxel {
 }
 
 impl Charxel {
+    #[must_use]
     pub fn new(grapheme: Grapheme) -> Self {
         Self {
             grapheme,
@@ -64,11 +66,12 @@ impl Charxel {
         }
     }
 
+    #[must_use]
     pub fn is_continuation(&self) -> bool {
         self.continuation
     }
 
-    pub fn set_color(&mut self, color: ColorTuple) {
+    pub fn set_color(&mut self, color: &ColorTuple) {
         self.background = color.bg;
         self.foreground = color.fg;
     }
@@ -82,7 +85,7 @@ impl Charxel {
     }
 
     pub fn set_styles(&mut self, styles: &[Style]) {
-        self.styles = HashSet::from_iter(styles.iter().cloned());
+        self.styles = styles.iter().copied().collect();
     }
 
     pub fn add_style(&mut self, style: Style) {
@@ -93,6 +96,8 @@ impl Charxel {
         self.grapheme = Grapheme(grapheme);
     }
 
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
     pub fn display_width(&self) -> u16 {
         unicode_display_width::width(&self.grapheme.0) as u16
     }
@@ -111,10 +116,12 @@ impl From<ContinuationCell> for Charxel {
 pub struct Charxels(Vec<Charxel>);
 
 impl Charxels {
+    #[must_use]
     pub fn lines(&self) -> Lines<'_, impl FnMut(&Charxel) -> bool> {
         Lines(self.0.split(|charxel: &Charxel| charxel.grapheme.0 == "\n"))
     }
 
+    #[must_use]
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         self.0
@@ -123,6 +130,7 @@ impl Charxels {
             .join("")
     }
 
+    #[must_use]
     pub fn split_word_bounds(&self) -> WordBounds<'_, impl Iterator<Item = &'_ Charxel>> {
         let whole_string = self.to_string();
 
@@ -135,22 +143,27 @@ impl Charxels {
         }
     }
 
+    #[must_use]
     pub fn display_width(&self) -> u16 {
-        self.0.iter().map(|c| c.display_width()).sum()
+        self.0.iter().map(Charxel::display_width).sum()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     pub fn push(&mut self, charxel: Charxel) {
-        self.0.push(charxel)
+        self.0.push(charxel);
     }
 
     pub fn append(&mut self, other: impl IntoCharxels) {
-        self.0.append(&mut other.into_charxels().0)
+        self.0.append(&mut other.into_charxels().0);
     }
 
+    /// # Panics
+    ///
+    /// Panics if `len` is less than the display width of `end`.
     pub fn truncate(&mut self, len: u16, end: impl IntoCharxels) {
         let end = end.into_charxels();
         assert!(len >= end.display_width());
@@ -214,7 +227,7 @@ where
     type Item = Charxels;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|charxels| charxels.into_charxels())
+        self.0.next().map(IntoCharxels::into_charxels)
     }
 }
 
@@ -237,7 +250,7 @@ pub trait IntoCharxels: Sized {
 
     fn with_color(self, color: &ColorTuple) -> Charxels {
         let mut charxels = self.into_charxels();
-        for charxel in charxels.0.iter_mut() {
+        for charxel in &mut charxels.0 {
             charxel.set_background(color.bg);
             charxel.set_foreground(color.fg);
         }
@@ -246,7 +259,7 @@ pub trait IntoCharxels: Sized {
 
     fn with_background(self, background: BgColor) -> Charxels {
         let mut charxels = self.into_charxels();
-        for charxel in charxels.0.iter_mut() {
+        for charxel in &mut charxels.0 {
             charxel.set_background(background);
         }
         charxels
@@ -254,7 +267,7 @@ pub trait IntoCharxels: Sized {
 
     fn with_foreground(self, foreground: FgColor) -> Charxels {
         let mut charxels = self.into_charxels();
-        for charxel in charxels.0.iter_mut() {
+        for charxel in &mut charxels.0 {
             charxel.set_foreground(foreground);
         }
         charxels
@@ -262,7 +275,7 @@ pub trait IntoCharxels: Sized {
 
     fn with_styles(self, styles: &[Style]) -> Charxels {
         let mut charxels = self.into_charxels();
-        for charxel in charxels.0.iter_mut() {
+        for charxel in &mut charxels.0 {
             charxel.set_styles(styles);
         }
         charxels
@@ -270,7 +283,7 @@ pub trait IntoCharxels: Sized {
 
     fn with_style(self, style: Style) -> Charxels {
         let mut charxels = self.into_charxels();
-        for charxel in charxels.0.iter_mut() {
+        for charxel in &mut charxels.0 {
             charxel.add_style(style);
         }
         charxels

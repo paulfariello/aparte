@@ -107,7 +107,7 @@ impl ModTrait for ReactionsMod {
             Some(jid) => jid.to_bare(),
             None => return,
         };
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if let Ok(reactions) = Reactions::try_from(payload.clone()) {
                 self.apply_reactions(aparte, account, from.clone(), reactions);
             }

@@ -52,7 +52,7 @@ const KEY_SIZE: usize = 16;
 const MAC_SIZE: usize = 16;
 
 command_def!(omemo_enable,
-r#":omemo enable [<jid>]
+r":omemo enable [<jid>]
 
     jid    jid of the OMEMO enabled contact/channel
 
@@ -62,7 +62,7 @@ Description:
 Examples:
     :omemo enable
     :omemo enable aparte@conference.fariello.eu
-"#,
+",
 {
     jid: Option<String>,
 },
@@ -88,14 +88,14 @@ Examples:
 
 command_def!(
     omemo_fingerprint,
-    r#":omemo fingerprint [<jid>]
+    r":omemo fingerprint [<jid>]
 
 Description:
     Show OMEMO own or given jid fingerprint
 
 Examples:
     :omemo fingerprint
-"#,
+",
 {
     jid: Option<String>,
 },
@@ -127,7 +127,7 @@ Examples:
 
 command_def!(
     omemo_status,
-    r#":omemo status
+    r":omemo status
 
 Description:
     Show OMEMO status information for the current conversation.
@@ -136,7 +136,7 @@ Description:
 
 Examples:
     :omemo status
-"#,
+",
     {},
     |aparte, _command| {
         let current = {
@@ -157,7 +157,7 @@ Examples:
 );
 
 command_def!(omemo,
-r#":omemo enable"#,
+r":omemo enable",
 {
     action: Command = {
         children: {
@@ -253,7 +253,7 @@ impl OmemoEngine {
             )),
             signed_pre_key_id,
             signed_pre_key,
-            signed_pre_key_signature.to_vec(),
+            signed_pre_key_signature.clone(),
             identity_key,
         )?;
 
@@ -313,8 +313,7 @@ fn sync_bundle_for(aparte: &Aparte, account: &Account) -> Result<()> {
         .into_iter()
         .map(|pre_key| match (pre_key.id(), pre_key.public_key()) {
             (Ok(id), Ok(public_key)) => Ok((u32::from(id), public_key)),
-            (Err(e), _) => Err(e),
-            (_, Err(e)) => Err(e),
+            (Err(e), _) | (_, Err(e)) => Err(e),
         })
         .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
 
@@ -368,6 +367,11 @@ impl CryptoEngineTrait for MucOmemoEngine {
         ns::LEGACY_OMEMO
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     fn encrypt(
         &mut self,
         aparte: &Aparte,
@@ -617,6 +621,7 @@ impl CryptoEngineTrait for OmemoEngine {
         ns::LEGACY_OMEMO
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn encrypt(
         &mut self,
         aparte: &Aparte,
@@ -846,7 +851,7 @@ fn fingerprint(pub_key: &PublicKey) -> String {
             .map(|byte| format!("{byte:02x}"))
             .chunks(4)
             .into_iter()
-            .map(|word| word.collect::<String>()),
+            .map(std::iter::Iterator::collect::<String>),
         String::from(" "),
     )
     .collect()
@@ -900,8 +905,7 @@ impl OmemoMod {
             .into_iter()
             .map(|pre_key| match (pre_key.id(), pre_key.public_key()) {
                 (Ok(id), Ok(public_key)) => Ok((u32::from(id), public_key)),
-                (Err(e), _) => Err(e),
-                (_, Err(e)) => Err(e),
+                (Err(e), _) | (_, Err(e)) => Err(e),
             })
             .collect::<std::result::Result<Vec<(_, _)>, _>>()?;
 
@@ -975,7 +979,7 @@ impl OmemoMod {
             .private_key()
             .calculate_signature(&signed_pre_key.public_key.serialize(), &mut thread_rng())?;
 
-        for (i, pre_key) in pre_keys.iter() {
+        for (i, pre_key) in &pre_keys {
             signal_storage
                 .save_pre_key(
                     libsignal_protocol::PreKeyId::from(*i),
@@ -1012,6 +1016,7 @@ impl OmemoMod {
         Ok(own_device)
     }
 
+    #[allow(clippy::ref_option)]
     fn show_fingerprints(
         &self,
         aparte: &mut Aparte,
@@ -1042,9 +1047,10 @@ impl OmemoMod {
                 .collect(),
         };
 
-        match jid {
-            Some(jid) => crate::info!(aparte, "OMEMO fingerprint for {jid}:"),
-            None => crate::info!(aparte, "OMEMO own fingerprint:"),
+        if let Some(jid) = jid {
+            crate::info!(aparte, "OMEMO fingerprint for {jid}:")
+        } else {
+            crate::info!(aparte, "OMEMO own fingerprint:")
         }
         for identity in identities {
             crate::info!(aparte, "🛡 {}", fingerprint(&identity));
@@ -1094,7 +1100,7 @@ impl OmemoMod {
         // Own bundle on server
         match Self::get_bundle(aparte, account, &account.to_bare(), device_id).await {
             Ok(Some(bundle)) => {
-                let n = bundle.prekeys.as_ref().map(|p| p.keys.len()).unwrap_or(0);
+                let n = bundle.prekeys.as_ref().map_or(0, |p| p.keys.len());
                 lines.push(format!("✓ Bundle published ({n} prekeys)"));
             }
             Ok(None) => lines.push("✗ No bundle found on server".to_string()),
@@ -1152,7 +1158,7 @@ impl OmemoMod {
             .get(account)
             .context("Missing signal store")?;
 
-        for contact in aparte.storage.get_all_omemo_contacts(account)?.iter() {
+        for contact in &aparte.storage.get_all_omemo_contacts(account)? {
             aparte.add_crypto_engine(
                 account,
                 contact,
@@ -1173,7 +1179,7 @@ impl OmemoMod {
             .get(account)
             .context("Missing signal store")?;
 
-        for room in aparte.storage.get_omemo_muc_rooms(account)?.iter() {
+        for room in &aparte.storage.get_omemo_muc_rooms(account)? {
             let nick_to_jid: NickToJid = Arc::new(std::sync::RwLock::new(HashMap::new()));
             self.muc_occupant_maps
                 .insert((account.clone(), room.clone()), Arc::clone(&nick_to_jid));
@@ -1310,7 +1316,7 @@ impl OmemoMod {
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
-                    Some((_, text)) => text.to_string(),
+                    Some((_, text)) => text.clone(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
@@ -1334,7 +1340,7 @@ impl OmemoMod {
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
-                    Some((_, text)) => text.to_string(),
+                    Some((_, text)) => text.clone(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
@@ -1380,7 +1386,7 @@ impl OmemoMod {
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
-                    Some((_, text)) => text.to_string(),
+                    Some((_, text)) => text.clone(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
@@ -1395,20 +1401,22 @@ impl OmemoMod {
                                 .clone()
                                 .ok_or(anyhow!("Missing pubsub payload"))?;
                             let list = legacy_omemo::DeviceList::try_from(payload)?;
-                            match list.devices.iter().find(|device| device.id == device_id) {
-                                None => {
-                                    Self::register_device(
-                                        aparte,
-                                        account,
-                                        device_id,
-                                        Some(list.clone()),
-                                    )
-                                    .await
-                                }
-                                Some(_) => {
-                                    log::info!("Device already registered");
-                                    Ok(())
-                                }
+                            if list
+                                .devices
+                                .iter()
+                                .find(|device| device.id == device_id)
+                                .is_none()
+                            {
+                                Self::register_device(
+                                    aparte,
+                                    account,
+                                    device_id,
+                                    Some(list.clone()),
+                                )
+                                .await
+                            } else {
+                                log::info!("Device already registered");
+                                Ok(())
                             }
                         }
                         None => Self::register_device(aparte, account, device_id, None).await,
@@ -1420,7 +1428,7 @@ impl OmemoMod {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
     async fn ensure_device_bundle_is_published(
         aparte: &mut AparteAsync,
         account: &Account,
@@ -1531,19 +1539,19 @@ impl OmemoMod {
                     identity_key_pair,
                     signed_pre_key_id,
                     signed_pre_key_pub,
-                    signed_pre_key_signature,
+                    &signed_pre_key_signature,
                     pre_keys,
                 ),
             )
             .await
         {
             Ok(IqResponse::Result(_)) => {
-                log::info!("Bundle for device {device_id} published successfully")
+                log::info!("Bundle for device {device_id} published successfully");
             }
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
-                    Some((_, text)) => text.to_string(),
+                    Some((_, text)) => text.clone(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 log::error!(
@@ -1578,12 +1586,12 @@ impl OmemoMod {
             .await
         {
             Ok(IqResponse::Result(_)) => {
-                log::info!("Device {device_id} registered successfully in device list")
+                log::info!("Device {device_id} registered successfully in device list");
             }
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
-                    Some((_, text)) => text.to_string(),
+                    Some((_, text)) => text.clone(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 log::error!(
@@ -1617,7 +1625,7 @@ impl OmemoMod {
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
-                    Some((_, text)) => text.to_string(),
+                    Some((_, text)) => text.clone(),
                     None => format!("{:?}", error.defined_condition),
                 };
                 Err(anyhow!("Iq error {}: {text}", error.type_))
@@ -1701,7 +1709,7 @@ impl OmemoMod {
         identity_key_pair: IdentityKeyPair,
         signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
-        signed_pre_key_signature: Vec<u8>,
+        signed_pre_key_signature: &[u8],
         pre_keys: Vec<(u32, PublicKey)>,
     ) -> Iq {
         let bundle = legacy_omemo::Bundle {
@@ -1756,6 +1764,7 @@ impl ModTrait for OmemoMod {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(account, _jid) => {
@@ -1787,8 +1796,7 @@ impl ModTrait for OmemoMod {
                         && aparte
                             .storage
                             .get_omemo_contact_devices(account, real_jid)
-                            .map(|d| d.is_empty())
-                            .unwrap_or(true)
+                            .map_or(true, |d| d.is_empty())
                     {
                         if let Some(signal_store) = self.signal_stores.get(account).cloned() {
                             let mut async_aparte = aparte.proxy();

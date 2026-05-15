@@ -94,6 +94,7 @@ impl<E, I, C> ScrollWin<E, I, C>
 where
     I: View<E, C> + Hash + Eq + Ord,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             children: BTreeSet::new(),
@@ -110,6 +111,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
         F: FnMut(&mut Self, &mut E) + 'static,
@@ -118,11 +120,13 @@ where
         self
     }
 
+    #[must_use]
     pub fn with_layout(mut self, layouts: LayoutParams) -> Self {
         self.layouts = layouts;
         self
     }
 
+    #[must_use]
     pub fn first(&self) -> Option<&I> {
         self.children
             .iter()
@@ -131,6 +135,7 @@ where
     }
 
     /// Returns a reference to the child at the given sorted index (O(n)).
+    #[must_use]
     pub fn child_at(&self, index: usize) -> Option<&I> {
         self.children
             .iter()
@@ -160,6 +165,7 @@ where
             .find(|child| *child > item)
     }
 
+    #[must_use]
     pub fn current_search(&self) -> Option<&str> {
         self.search_query.as_deref()
     }
@@ -201,6 +207,7 @@ where
         self.selected_child_index.take()
     }
 
+    #[must_use]
     pub fn has_selection(&self) -> bool {
         self.selected_child_index.is_some()
     }
@@ -249,10 +256,14 @@ where
         }
     }
 
-    /// PageUp the window.
+    /// `PageUp` the window.
     /// Returns `(at_top, old_selected, new_selected)`.
     /// If a message was selected and scrolled off the bottom of the new viewport,
     /// the selection is clamped to the last visible message.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimensions have not been set yet.
     pub fn page_up(&mut self) -> (bool, Option<usize>, Option<usize>) {
         log::debug!("Page up");
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
@@ -263,13 +274,13 @@ where
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height as u32,
-                    RequestedDimension::Absolute(child_height) => child_height as u32,
+                    RequestedDimension::ExpandMax => u32::from(dimensions.height),
+                    RequestedDimension::Absolute(child_height) => u32::from(child_height),
                 },
             )
             .sum();
 
-        if total_children_height < dimensions.height as u32 {
+        if total_children_height < u32::from(dimensions.height) {
             // All children fits in the current dimensions
             // don't bother to page up
             let sel = self.selected_child_index;
@@ -322,13 +333,12 @@ where
             self.selected_child_index = None;
             return (old, None);
         }
-        let dimensions = match &self.dimensions {
-            Some(d) => d.clone(),
-            None => {
-                self.bottom_visible_child_index = 0;
-                self.selected_child_index = Some(0);
-                return (old, Some(0));
-            }
+        let dimensions = if let Some(d) = &self.dimensions {
+            d.clone()
+        } else {
+            self.bottom_visible_child_index = 0;
+            self.selected_child_index = Some(0);
+            return (old, Some(0));
         };
         let measure_specs = MeasureSpecs::from(&dimensions);
         let mut accumulated: u32 = 0;
@@ -336,12 +346,12 @@ where
 
         for (i, LayoutChild { child, .. }) in self.children.iter().enumerate() {
             let h = match child.measure(&measure_specs).height {
-                RequestedDimension::ExpandMax => dimensions.height as u32,
-                RequestedDimension::Absolute(h) => h as u32,
+                RequestedDimension::ExpandMax => u32::from(dimensions.height),
+                RequestedDimension::Absolute(h) => u32::from(h),
             };
             accumulated += h;
             bottom = i;
-            if accumulated >= dimensions.height as u32 {
+            if accumulated >= u32::from(dimensions.height) {
                 break;
             }
         }
@@ -355,21 +365,25 @@ where
     /// Returns `(old_selected, new_selected)` indices.
     pub fn scroll_to_bottom(&mut self) -> (Option<usize>, Option<usize>) {
         let old = self.selected_child_index;
-        if !self.children.is_empty() {
+        if self.children.is_empty() {
+            self.selected_child_index = None;
+            (old, None)
+        } else {
             let last = self.children.len() - 1;
             self.bottom_visible_child_index = last;
             self.selected_child_index = Some(last);
             (old, Some(last))
-        } else {
-            self.selected_child_index = None;
-            (old, None)
         }
     }
 
-    /// PageDown the window.
+    /// `PageDown` the window.
     /// Returns `(old_selected, new_selected)`.
     /// If a message was selected and scrolled off the top of the new viewport,
     /// the selection is clamped to the first visible message.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimensions have not been set yet.
     pub fn page_down(&mut self) -> (Option<usize>, Option<usize>) {
         log::debug!("Page down");
         let dimensions = self.dimensions.as_ref().expect(MISSING_DIMENSIONS);
@@ -380,10 +394,10 @@ where
             .iter()
             .map(
                 |LayoutChild { child, .. }| match child.measure(&measure_specs).height {
-                    RequestedDimension::ExpandMax => dimensions.height as u32,
+                    RequestedDimension::ExpandMax => u32::from(dimensions.height),
                     RequestedDimension::Absolute(child_height) => {
                         log::debug!("Child height: {}", child_height);
-                        child_height as u32
+                        u32::from(child_height)
                     }
                 },
             )
@@ -391,7 +405,7 @@ where
 
         let old_selected = self.selected_child_index;
 
-        if total_children_height < dimensions.height as u32 {
+        if total_children_height < u32::from(dimensions.height) {
             // All children fits in the current dimensions
             // don't bother to page down
             return (old_selected, old_selected);
@@ -471,7 +485,7 @@ where
         self.bottom_visible_child_index + 1 - count.max(1)
     }
 
-    /// Count visible children from bottom using pre-measured heights (no measure() calls).
+    /// Count visible children from bottom using pre-measured heights (no `measure()` calls).
     fn visible_children_count(&self, dimensions: &Dimensions, heights: &[u16]) -> usize {
         let mut remaining_height = dimensions.height;
         let bottom = self.bottom_visible_child_index;
@@ -571,7 +585,7 @@ where
         }
 
         // Insert back all children in the BTreeSet
-        for child in children.into_iter() {
+        for child in children {
             self.children.insert(child);
         }
     }
@@ -584,7 +598,7 @@ where
         // which breaks when bottom_visible_child_index is 0 or misplaced near the top.)
         let mut remaining = dimensions.height;
         let mut count = 0usize;
-        for &h in heights.iter() {
+        for &h in heights {
             if h > remaining {
                 break;
             }
@@ -624,7 +638,7 @@ where
         }
 
         // Insert back all children in the BTreeSet
-        for child in children.into_iter() {
+        for child in children {
             self.children.insert(child);
         }
     }
@@ -694,15 +708,15 @@ where
             )
             .collect();
 
-        let total_children_height: u32 = heights.iter().map(|&h| h as u32).sum();
+        let total_children_height: u32 = heights.iter().map(|&h| u32::from(h)).sum();
 
         let height_to_bottom: u32 = heights[..=self.bottom_visible_child_index]
             .iter()
-            .map(|&h| h as u32)
+            .map(|&h| u32::from(h))
             .sum();
 
-        if total_children_height < dimensions.height as u32
-            || height_to_bottom < dimensions.height as u32
+        if total_children_height < u32::from(dimensions.height)
+            || height_to_bottom < u32::from(dimensions.height)
         {
             self.layout_from_top(dimensions, &heights);
         } else {
@@ -787,9 +801,8 @@ where
     }
 
     pub fn search_next(&mut self) -> (Option<usize>, Option<usize>) {
-        let query = match self.search_query.clone() {
-            Some(q) => q,
-            None => return (self.selected_child_index, self.selected_child_index),
+        let Some(query) = self.search_query.clone() else {
+            return (self.selected_child_index, self.selected_child_index);
         };
         let len = self.children.len();
         if len == 0 {
@@ -805,9 +818,8 @@ where
     }
 
     pub fn search_prev(&mut self) -> (Option<usize>, Option<usize>) {
-        let query = match self.search_query.clone() {
-            Some(q) => q,
-            None => return (self.selected_child_index, self.selected_child_index),
+        let Some(query) = self.search_query.clone() else {
+            return (self.selected_child_index, self.selected_child_index);
         };
         let len = self.children.len();
         if len == 0 {

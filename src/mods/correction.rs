@@ -63,6 +63,7 @@ impl CorrectionMod {
         }
     }
 
+    #[allow(clippy::ref_option)]
     fn handle_original_message(
         &mut self,
         aparte: &mut Aparte,
@@ -87,7 +88,6 @@ impl CorrectionMod {
             .waiting_corrections
             .remove(&message.id.as_ref().unwrap().0) // id is not None (guaranteed by caller)
             .unwrap_or_default()
-            .into_iter()
         {
             let correction = Event::RawMessage {
                 account: account.clone(),
@@ -115,7 +115,7 @@ impl ModTrait for CorrectionMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if Replace::try_from(payload.clone()).is_ok() {
                 return 1f64;
             }
@@ -144,7 +144,7 @@ impl ModTrait for CorrectionMod {
             }
         }
 
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if let Ok(replace) = Replace::try_from(payload.clone()) {
                 self.handle_replace(aparte, account, message, replace, archive);
             }
@@ -159,7 +159,7 @@ impl ModTrait for CorrectionMod {
             archive,
         } = event
         {
-            for payload in message.payloads.iter() {
+            for payload in &message.payloads {
                 if let Ok(replace) = Replace::try_from(payload.clone()) {
                     self.handle_replace(aparte, account, message, replace, *archive);
                 }

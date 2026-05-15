@@ -24,12 +24,13 @@ pub struct CarbonsMod {
 }
 
 impl CarbonsMod {
-    fn enable(&self) -> Element {
+    fn enable() -> Element {
         let id = Uuid::new_v4().hyphenated().to_string();
         let iq = Iq::from_set(id, carbons::Enable);
         iq.into()
     }
 
+    #[allow(clippy::unused_self)]
     fn handle_carbon(
         &mut self,
         aparte: &mut Aparte,
@@ -61,7 +62,7 @@ impl ModTrait for CarbonsMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if carbons::Received::try_from(payload.clone()).is_ok()
                 || carbons::Sent::try_from(payload.clone()).is_ok()
             {
@@ -79,7 +80,7 @@ impl ModTrait for CarbonsMod {
         _delay: &Option<Delay>,
         archive: bool,
     ) {
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
                 // XEP-0280: clients SHOULD ignore carbon copies of groupchat messages
                 if received.forwarded.message.type_ != MessageType::Groupchat {
@@ -95,8 +96,7 @@ impl ModTrait for CarbonsMod {
                     .message
                     .id
                     .as_ref()
-                    .map(|id| self.sent_ids.contains(&id.0))
-                    .unwrap_or(false);
+                    .is_some_and(|id| self.sent_ids.contains(&id.0));
                 if !already_sent {
                     self.handle_carbon(aparte, account, sent.forwarded, archive);
                 }
@@ -107,7 +107,7 @@ impl ModTrait for CarbonsMod {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Connected(account, _jid) => {
-                aparte.send(account, self.enable());
+                aparte.send(account, Self::enable());
             }
             Event::SendMessage(_, message) => {
                 self.sent_ids.insert(message.id().to_string());

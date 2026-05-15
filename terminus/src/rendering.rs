@@ -174,15 +174,14 @@ impl OffscreenRenderBuffer {
     }
 
     pub fn dump_text(&self) -> String {
+        use std::fmt::Write as _;
         let mut out = String::new();
         for (row, line) in self.lines.iter().enumerate() {
-            out.push_str(&format!("ROW {:03}:", row));
+            let _ = write!(out, "ROW {row:03}:");
             for charxel in &line.charxels {
-                out.push_str(&format!(
-                    " [{} w={}]",
-                    charxel.grapheme,
-                    charxel.display_width()
-                ));
+                let grapheme = &charxel.grapheme;
+                let w = charxel.display_width();
+                let _ = write!(out, " [{grapheme} w={w}]");
             }
             out.push('\n');
         }
@@ -216,7 +215,9 @@ impl OffscreenRenderBuffer {
             } else {
                 let diff = ContinuousDiff {
                     pos: CursorPos {
+                        #[allow(clippy::cast_possible_truncation)]
                         top: (i / (self.size.width as usize)) as u16,
+                        #[allow(clippy::cast_possible_truncation)]
                         left: (i % (self.size.width as usize)) as u16,
                     },
                     charxels: vec![charxel.clone()],
@@ -232,6 +233,7 @@ impl OffscreenRenderBuffer {
         diffs
     }
 
+    #[allow(clippy::unused_self)]
     fn render_diff<W>(&self, screen: &mut W, diffs: &Vec<ContinuousDiff>)
     where
         W: std::io::Write,
@@ -243,12 +245,13 @@ impl OffscreenRenderBuffer {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn apply_diff(&mut self, diffs: Vec<ContinuousDiff>) {
         let width = self.size.width as usize;
         let height = self.size.height as usize;
         for diff in diffs {
             let mut col_offset = 0usize;
-            for charxel in diff.charxels.into_iter() {
+            for charxel in diff.charxels {
                 let left = diff.pos.left as usize + col_offset;
                 let w = charxel.display_width() as usize;
                 let row = diff.pos.top as usize + left / width;
@@ -269,6 +272,7 @@ impl OffscreenRenderBuffer {
         }
     }
 
+    #[allow(clippy::similar_names)]
     fn render_chunk<W>(screen: &mut W, chunk: &Vec<Charxel>)
     where
         W: std::io::Write,
@@ -283,7 +287,7 @@ impl OffscreenRenderBuffer {
                 current_bg = None;
                 current_fg = None;
                 for style in &charxel.styles {
-                    let _ = write!(screen, "{}", style);
+                    let _ = write!(screen, "{style}");
                 }
                 current_styles = Some(charxel.styles.clone());
             }
@@ -299,6 +303,7 @@ impl OffscreenRenderBuffer {
         }
     }
 
+    #[allow(clippy::similar_names)]
     fn render_line<W>(screen: &mut W, line: &[Charxel])
     where
         W: std::io::Write,
@@ -322,7 +327,7 @@ impl OffscreenRenderBuffer {
                 current_bg = None;
                 current_fg = None;
                 for style in &charxel.styles {
-                    let _ = write!(screen, "{}", style);
+                    let _ = write!(screen, "{style}");
                 }
                 current_styles = Some(charxel.styles.clone());
             }
@@ -343,11 +348,11 @@ impl OffscreenRenderBuffer {
         W: std::io::Write,
     {
         log::trace!("Full render");
-        let _ = write!(screen, "{}", Hide);
+        let _ = write!(screen, "{Hide}");
         let _ = write!(screen, "{}", MoveTo(0, 0));
         let _ = write!(screen, "{}", Clear(ClearType::All));
 
-        for line in self.lines.iter() {
+        for line in &self.lines {
             Self::render_line(screen, &line.charxels);
         }
     }
@@ -390,7 +395,7 @@ impl OffscreenRenderBuffer {
             if self.show_cursor {
                 self.render_cursor(screen);
             } else {
-                let _ = write!(screen, "{}", Hide);
+                let _ = write!(screen, "{Hide}");
             }
             reference_screen.cursor = self.cursor;
             reference_screen.cursor_style = self.cursor_style;
@@ -439,10 +444,10 @@ impl<'a> ScreenFrame<'a> {
         }
     }
 
-    pub fn set_styles(&mut self, styles: Vec<Style>) {
+    pub fn set_styles(&mut self, styles: &[Style]) {
         for i in self.dimensions.top..self.dimensions.top + self.dimensions.height {
             for j in self.dimensions.left..self.dimensions.left + self.dimensions.width {
-                self.offscreen[i][j].set_styles(&styles);
+                self.offscreen[i][j].set_styles(styles);
             }
         }
     }
@@ -500,8 +505,7 @@ impl<'a> ScreenFrame<'a> {
     }
 
     pub fn highlight_text(&mut self, query: &str, fg: FgColor, bg: BgColor) {
-        let query_graphemes: Vec<String> =
-            query.graphemes(true).map(|g| g.to_lowercase()).collect();
+        let query_graphemes: Vec<String> = query.graphemes(true).map(str::to_lowercase).collect();
         let qlen = query_graphemes.len();
         if qlen == 0 {
             return;
@@ -520,6 +524,7 @@ impl<'a> ScreenFrame<'a> {
             for i in 0..=(row_len - qlen) {
                 if (0..qlen).all(|j| row_graphemes[i + j] == query_graphemes[j]) {
                     for j in 0..qlen {
+                        #[allow(clippy::cast_possible_truncation)]
                         let col = start + (i + j) as u16;
                         self.offscreen[row][col].set_foreground(fg);
                         self.offscreen[row][col].set_background(bg);
@@ -534,29 +539,31 @@ impl<'a> ScreenFrame<'a> {
         CP: Into<CursorPos>,
     {
         self.cursor = at.into();
-        self.write(str.into_charxels())
+        self.write(str.into_charxels());
     }
 
     pub fn set_cursor(&mut self, position: CursorPos) {
-        self.offscreen.set_cursor(position)
+        self.offscreen.set_cursor(position);
     }
 
     pub fn set_cursor_with_priority(&mut self, position: CursorPos, priority: u8) {
-        self.offscreen.set_cursor_with_priority(position, priority)
+        self.offscreen.set_cursor_with_priority(position, priority);
     }
 
     pub fn set_cursor_style(&mut self, style: CursorStyle) {
-        self.offscreen.set_cursor_style(style)
+        self.offscreen.set_cursor_style(style);
     }
 
     pub fn set_cursor_visible(&mut self, visible: bool) {
-        self.offscreen.set_cursor_visible(visible)
+        self.offscreen.set_cursor_visible(visible);
     }
 
+    #[must_use]
     pub fn width(&self) -> u16 {
         self.dimensions.width
     }
 
+    #[must_use]
     pub fn height(&self) -> u16 {
         self.dimensions.height
     }

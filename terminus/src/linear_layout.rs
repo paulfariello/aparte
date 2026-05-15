@@ -40,6 +40,7 @@ pub struct LinearLayout<E, C = ()> {
 }
 
 impl<E, C> LinearLayout<E, C> {
+    #[must_use]
     pub fn new(orientation: Orientation) -> Self {
         Self {
             orientation,
@@ -76,6 +77,7 @@ impl<E, C> LinearLayout<E, C> {
         });
     }
 
+    #[must_use]
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
         F: FnMut(&mut Self, &mut E) + 'static,
@@ -84,6 +86,7 @@ impl<E, C> LinearLayout<E, C> {
         self
     }
 
+    #[must_use]
     pub fn with_layouts(mut self, layouts: LayoutParams) -> Self {
         self.layouts = layouts;
         self
@@ -128,14 +131,14 @@ impl<E, C> LinearLayout<E, C> {
             match requested_dimensions.height {
                 RequestedDimension::ExpandMax => match_height_weight_total += child.weight,
                 RequestedDimension::Absolute(requested_height) => min_height += requested_height,
-            };
+            }
 
             match requested_dimensions.width {
                 RequestedDimension::ExpandMax => width = dimensions.width,
                 RequestedDimension::Absolute(requested_width) => {
-                    width = std::cmp::max(width, requested_width)
+                    width = std::cmp::max(width, requested_width);
                 }
-            };
+            }
         }
 
         // Compute remaining free sizes
@@ -202,14 +205,14 @@ impl<E, C> LinearLayout<E, C> {
             match requested_dimensions.height {
                 RequestedDimension::ExpandMax => height = dimensions.height,
                 RequestedDimension::Absolute(requested_width) => {
-                    height = std::cmp::max(height, requested_width)
+                    height = std::cmp::max(height, requested_width);
                 }
-            };
+            }
 
             match requested_dimensions.width {
                 RequestedDimension::ExpandMax => match_width_weight_total += child.weight,
                 RequestedDimension::Absolute(requested_width) => min_width += requested_width,
-            };
+            }
         }
 
         // Compute remaining free sizes
@@ -300,7 +303,7 @@ impl<E, C> View<E, C> for LinearLayout<E, C> {
     fn render(&self, frame: ScreenFrame, config: &C) {
         log::debug!("rendering {}", std::any::type_name::<Self>());
         let ScreenFrame { offscreen, .. } = frame;
-        for LayoutChild { child, dimensions } in self.children.iter() {
+        for LayoutChild { child, dimensions } in &self.children {
             let child_frame = ScreenFrame::new(offscreen, dimensions.as_ref().unwrap());
             child.view.render(child_frame, config);
         }

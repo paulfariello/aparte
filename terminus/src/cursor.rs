@@ -21,10 +21,14 @@ impl std::error::Error for InvalidIndex {}
 pub struct Cursor(Cell<usize>);
 
 impl Cursor {
+    #[must_use]
     pub fn new(value: usize) -> Self {
         Self(Cell::new(value))
     }
 
+    /// # Errors
+    ///
+    /// Returns `InvalidIndex` if the index is out of bounds.
     pub fn from_index(input: &str, index: usize) -> Result<Self, InvalidIndex> {
         let mut value = 0;
         for (indice, grapheme) in input.grapheme_indices(true) {
@@ -48,6 +52,9 @@ impl Cursor {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `InvalidIndex` if the cursor position is out of bounds.
     pub fn try_index(&self, input: &str) -> Result<usize, InvalidIndex> {
         match input.grapheme_indices(true).nth(self.0.get()) {
             Some((indice, _)) => Ok(indice),
@@ -66,11 +73,12 @@ impl Cursor {
     }
 
     pub fn set(&self, value: usize) {
-        self.0.set(value)
+        self.0.set(value);
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn update(&self, other: Self) {
-        self.0.set(other.get())
+        self.0.set(other.get());
     }
 }
 
@@ -84,7 +92,7 @@ impl std::ops::Add<usize> for &Cursor {
 
 impl std::ops::AddAssign<usize> for Cursor {
     fn add_assign(&mut self, other: usize) {
-        self.set(self.get() + other)
+        self.set(self.get() + other);
     }
 }
 
@@ -98,7 +106,7 @@ impl std::ops::Sub<usize> for &Cursor {
 
 impl std::ops::SubAssign<usize> for Cursor {
     fn sub_assign(&mut self, other: usize) {
-        self.set(self.get() - other)
+        self.set(self.get() - other);
     }
 }
 
@@ -112,7 +120,7 @@ impl std::ops::Add for &Cursor {
 
 impl std::ops::AddAssign for Cursor {
     fn add_assign(&mut self, other: Self) {
-        self.set(self.get() + other.get())
+        self.set(self.get() + other.get());
     }
 }
 
@@ -126,7 +134,7 @@ impl std::ops::Sub for &Cursor {
 
 impl std::ops::SubAssign for Cursor {
     fn sub_assign(&mut self, other: Self) {
-        self.set(self.get() - other.get())
+        self.set(self.get() - other.get());
     }
 }
 

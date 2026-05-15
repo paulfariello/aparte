@@ -32,6 +32,7 @@ pub struct Storage {
 }
 
 impl Storage {
+    #[allow(clippy::unnecessary_debug_formatting)]
     pub fn new(path: PathBuf) -> Result<Self> {
         let path = path
             .into_os_string()
@@ -211,6 +212,7 @@ impl Storage {
         )?)
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn get_omemo_local_registration_id(&self, account: &Account) -> Result<u32> {
         log::debug!("Get local registration id");
         self.get_omemo_own_device(account)?
@@ -224,6 +226,7 @@ impl Storage {
         address: &libsignal_protocol::ProtocolAddress,
         identity: &libsignal_protocol::IdentityKey,
     ) -> Result<bool> {
+        use schema::omemo_identity;
         log::debug!("Save {address}'s identity");
         // The return value represents whether an existing identity was replaced (`Ok(true)`). If it is
         // new or hasn't changed, the return value should be `Ok(false)`.
@@ -232,8 +235,6 @@ impl Storage {
         } else {
             false
         };
-
-        use schema::omemo_identity;
         let mut conn = self
             .pool
             .get()
@@ -242,7 +243,7 @@ impl Storage {
             .values((
                 omemo_identity::account.eq(account.to_string()),
                 omemo_identity::user_id.eq(address.name()),
-                omemo_identity::device_id.eq(u32::from(address.device_id()) as i64),
+                omemo_identity::device_id.eq(i64::from(u32::from(address.device_id()))),
                 omemo_identity::identity.eq(identity.serialize().to_vec()),
             ))
             .on_conflict((
@@ -276,8 +277,8 @@ impl Storage {
         account: &Account,
         address: &libsignal_protocol::ProtocolAddress,
     ) -> Result<Option<libsignal_protocol::IdentityKey>> {
-        log::debug!("Get {address}'s identity");
         use schema::omemo_identity;
+        log::debug!("Get {address}'s identity");
         let mut conn = self
             .pool
             .get()
@@ -286,7 +287,7 @@ impl Storage {
         Ok(omemo_identity::table
             .filter(omemo_identity::account.eq(account.to_string()))
             .filter(omemo_identity::user_id.eq(address.name()))
-            .filter(omemo_identity::device_id.eq(u32::from(address.device_id()) as i64))
+            .filter(omemo_identity::device_id.eq(i64::from(u32::from(address.device_id()))))
             .first(&mut conn)
             .optional()?
             .map(|identity: OmemoIdentity| {
@@ -300,8 +301,8 @@ impl Storage {
         account: &Account,
         address: &libsignal_protocol::ProtocolAddress,
     ) -> Result<Option<libsignal_protocol::SessionRecord>> {
-        log::debug!("Load session for {address}");
         use schema::omemo_session;
+        log::debug!("Load session for {address}");
         let mut conn = self
             .pool
             .get()
@@ -310,7 +311,7 @@ impl Storage {
         Ok(omemo_session::table
             .filter(omemo_session::account.eq(account.to_string()))
             .filter(omemo_session::user_id.eq(address.name()))
-            .filter(omemo_session::device_id.eq(u32::from(address.device_id()) as i64))
+            .filter(omemo_session::device_id.eq(i64::from(u32::from(address.device_id()))))
             .first(&mut conn)
             .optional()?
             .map(|session: OmemoSession| {
@@ -325,8 +326,8 @@ impl Storage {
         address: &libsignal_protocol::ProtocolAddress,
         session: &libsignal_protocol::SessionRecord,
     ) -> Result<()> {
-        log::debug!("Store session for {address}");
         use schema::omemo_session;
+        log::debug!("Store session for {address}");
         let mut conn = self
             .pool
             .get()
@@ -335,8 +336,8 @@ impl Storage {
             .values((
                 omemo_session::account.eq(account.to_string()),
                 omemo_session::user_id.eq(address.name()),
-                omemo_session::device_id.eq(u32::from(address.device_id()) as i64),
-                omemo_session::session.eq(session.serialize()?.to_vec()),
+                omemo_session::device_id.eq(i64::from(u32::from(address.device_id()))),
+                omemo_session::session.eq(session.serialize()?.clone()),
             ))
             .on_conflict((
                 omemo_session::account,
@@ -344,7 +345,7 @@ impl Storage {
                 omemo_session::device_id,
             ))
             .do_update()
-            .set(omemo_session::session.eq(session.serialize()?.to_vec()))
+            .set(omemo_session::session.eq(session.serialize()?.clone()))
             .execute(&mut conn)
             .map_err(signal_storage_display_error())?;
 
@@ -356,8 +357,8 @@ impl Storage {
         account: &Account,
         pre_key_id: libsignal_protocol::PreKeyId,
     ) -> Result<libsignal_protocol::PreKeyRecord> {
-        log::debug!("Get pre key {pre_key_id}");
         use schema::omemo_pre_key;
+        log::debug!("Get pre key {pre_key_id}");
         let mut conn = self
             .pool
             .get()
@@ -365,7 +366,7 @@ impl Storage {
 
         Ok(omemo_pre_key::table
             .filter(omemo_pre_key::account.eq(account.to_string()))
-            .filter(omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64))
+            .filter(omemo_pre_key::pre_key_id.eq(i64::from(u32::from(pre_key_id))))
             .first(&mut conn)
             .optional()?
             .ok_or_else(signal_storage_empty_error("PreKey not found"))
@@ -378,8 +379,8 @@ impl Storage {
         &self,
         account: &Account,
     ) -> Result<Vec<libsignal_protocol::PreKeyRecord>> {
-        log::debug!("Get all pre key");
         use schema::omemo_pre_key;
+        log::debug!("Get all pre key");
         let mut conn = self
             .pool
             .get()
@@ -401,8 +402,8 @@ impl Storage {
         pre_key_id: libsignal_protocol::PreKeyId,
         pre_key: &libsignal_protocol::PreKeyRecord,
     ) -> Result<()> {
-        log::debug!("Save pre key {pre_key_id}");
         use schema::omemo_pre_key;
+        log::debug!("Save pre key {pre_key_id}");
         let mut conn = self
             .pool
             .get()
@@ -410,12 +411,12 @@ impl Storage {
         diesel::insert_into(omemo_pre_key::table)
             .values((
                 omemo_pre_key::account.eq(account.to_string()),
-                omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64),
-                omemo_pre_key::pre_key.eq(pre_key.serialize()?.to_vec()),
+                omemo_pre_key::pre_key_id.eq(i64::from(u32::from(pre_key_id))),
+                omemo_pre_key::pre_key.eq(pre_key.serialize()?.clone()),
             ))
             .on_conflict((omemo_pre_key::account, omemo_pre_key::pre_key_id))
             .do_update()
-            .set(omemo_pre_key::pre_key.eq(pre_key.serialize()?.to_vec()))
+            .set(omemo_pre_key::pre_key.eq(pre_key.serialize()?.clone()))
             .execute(&mut conn)
             .map_err(signal_storage_display_error())?;
 
@@ -427,8 +428,8 @@ impl Storage {
         account: &Account,
         pre_key_id: libsignal_protocol::PreKeyId,
     ) -> Result<()> {
-        log::debug!("Remove pre key {pre_key_id}");
         use schema::omemo_pre_key;
+        log::debug!("Remove pre key {pre_key_id}");
         let mut conn = self
             .pool
             .get()
@@ -437,7 +438,7 @@ impl Storage {
         diesel::delete(
             omemo_pre_key::table
                 .filter(omemo_pre_key::account.eq(account.to_string()))
-                .filter(omemo_pre_key::pre_key_id.eq(u32::from(pre_key_id) as i64)),
+                .filter(omemo_pre_key::pre_key_id.eq(i64::from(u32::from(pre_key_id)))),
         )
         .execute(&mut conn)
         .map_err(signal_storage_display_error())?;
@@ -450,8 +451,8 @@ impl Storage {
         account: &Account,
         signed_pre_key_id: libsignal_protocol::SignedPreKeyId,
     ) -> Result<libsignal_protocol::SignedPreKeyRecord> {
-        log::debug!("Get signed pre key {signed_pre_key_id}");
         use schema::omemo_signed_pre_key;
+        log::debug!("Get signed pre key {signed_pre_key_id}");
         let mut conn = self
             .pool
             .get()
@@ -459,7 +460,9 @@ impl Storage {
 
         Ok(omemo_signed_pre_key::table
             .filter(omemo_signed_pre_key::account.eq(account.to_string()))
-            .filter(omemo_signed_pre_key::signed_pre_key_id.eq(u32::from(signed_pre_key_id) as i64))
+            .filter(
+                omemo_signed_pre_key::signed_pre_key_id.eq(i64::from(u32::from(signed_pre_key_id))),
+            )
             .first(&mut conn)
             .optional()
             .map_err(signal_storage_display_error())?
@@ -475,8 +478,8 @@ impl Storage {
         signed_pre_key_id: libsignal_protocol::SignedPreKeyId,
         signed_pre_key: &libsignal_protocol::SignedPreKeyRecord,
     ) -> Result<()> {
-        log::debug!("Save signed pre key {signed_pre_key_id}");
         use schema::omemo_signed_pre_key;
+        log::debug!("Save signed pre key {signed_pre_key_id}");
         let mut conn = self
             .pool
             .get()
@@ -484,15 +487,15 @@ impl Storage {
         diesel::insert_into(omemo_signed_pre_key::table)
             .values((
                 omemo_signed_pre_key::account.eq(account.to_string()),
-                omemo_signed_pre_key::signed_pre_key_id.eq(u32::from(signed_pre_key_id) as i64),
-                omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.to_vec()),
+                omemo_signed_pre_key::signed_pre_key_id.eq(i64::from(u32::from(signed_pre_key_id))),
+                omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.clone()),
             ))
             .on_conflict((
                 omemo_signed_pre_key::account,
                 omemo_signed_pre_key::signed_pre_key_id,
             ))
             .do_update()
-            .set(omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.to_vec()))
+            .set(omemo_signed_pre_key::signed_pre_key.eq(signed_pre_key.serialize()?.clone()))
             .execute(&mut conn)
             .map_err(signal_storage_display_error())?;
 
@@ -506,8 +509,8 @@ impl Storage {
         distribution_id: uuid::Uuid,
         sender_key: &libsignal_protocol::SenderKeyRecord,
     ) -> Result<()> {
-        log::debug!("Store sender key {sender}");
         use schema::omemo_sender_key;
+        log::debug!("Store sender key {sender}");
         let mut conn = self
             .pool
             .get()
@@ -516,9 +519,9 @@ impl Storage {
             .values((
                 omemo_sender_key::account.eq(account.to_string()),
                 omemo_sender_key::sender_id.eq(sender.name()),
-                omemo_sender_key::device_id.eq(u32::from(sender.device_id()) as i64),
+                omemo_sender_key::device_id.eq(i64::from(u32::from(sender.device_id()))),
                 omemo_sender_key::distribution_id.eq(distribution_id.as_bytes().to_vec()),
-                omemo_sender_key::sender_key.eq(sender_key.serialize()?.to_vec()),
+                omemo_sender_key::sender_key.eq(sender_key.serialize()?.clone()),
             ))
             .on_conflict((
                 omemo_sender_key::account,
@@ -527,7 +530,7 @@ impl Storage {
                 omemo_sender_key::distribution_id,
             ))
             .do_update()
-            .set(omemo_sender_key::sender_key.eq(sender_key.serialize()?.to_vec()))
+            .set(omemo_sender_key::sender_key.eq(sender_key.serialize()?.clone()))
             .execute(&mut conn)
             .map_err(signal_storage_display_error())?;
 
@@ -540,8 +543,8 @@ impl Storage {
         sender: &libsignal_protocol::ProtocolAddress,
         distribution_id: uuid::Uuid,
     ) -> Result<Option<libsignal_protocol::SenderKeyRecord>> {
-        log::debug!("Load sender key {sender}");
         use schema::omemo_sender_key;
+        log::debug!("Load sender key {sender}");
         let mut conn = self
             .pool
             .get()
@@ -550,7 +553,7 @@ impl Storage {
         Ok(omemo_sender_key::table
             .filter(omemo_sender_key::account.eq(account.to_string()))
             .filter(omemo_sender_key::sender_id.eq(sender.name()))
-            .filter(omemo_sender_key::device_id.eq(u32::from(sender.device_id()) as i64))
+            .filter(omemo_sender_key::device_id.eq(i64::from(u32::from(sender.device_id()))))
             .filter(omemo_sender_key::distribution_id.eq(distribution_id.as_bytes().to_vec()))
             .first(&mut conn)
             .optional()
@@ -580,7 +583,7 @@ where
     move |e: T| {
         libsignal_protocol::error::SignalProtocolError::ApplicationCallbackError(
             "Storage Error",
-            Box::new(UnwindSafeResultError(format!("{}", e))),
+            Box::new(UnwindSafeResultError(format!("{e}"))),
         )
     }
 }

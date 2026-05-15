@@ -63,7 +63,7 @@ impl Screen {
 
     pub fn dump_buffer(&mut self, content: &str, frame: u64) {
         if let Screen::Recording(tee) = self {
-            let _ = writeln!(tee.events_file, "--- BUFFER_DUMP frame {} ---", frame);
+            let _ = writeln!(tee.events_file, "--- BUFFER_DUMP frame {frame} ---");
             let _ = tee.events_file.write_all(content.as_bytes());
         }
     }

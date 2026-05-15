@@ -69,6 +69,7 @@ impl<E, C> PopupLayer<E, C> {
         self.content_dims = None;
     }
 
+    #[must_use]
     pub fn is_visible(&self) -> bool {
         self.content.is_some()
     }
@@ -81,6 +82,7 @@ impl<E, C> PopupLayer<E, C> {
         self.content.as_mut()
     }
 
+    #[must_use]
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
         F: FnMut(&mut Self, &mut E) + 'static,
@@ -165,7 +167,7 @@ fn draw_border(
         (bot, right, "┘"),
     ] {
         buf[row][col].grapheme = Grapheme::from(grapheme);
-        buf[row][col].set_color(color.clone());
+        buf[row][col].set_color(color);
     }
 
     // Top border: render "─ Title ─...─" if title fits, otherwise plain "─...─".
@@ -173,7 +175,7 @@ fn draw_border(
     let title_graphemes: Vec<String> = title
         .and_then(|t| {
             if t.chars().count() + 4 <= inner_w {
-                Some(format!("─ {} ─", t))
+                Some(format!("─ {t} ─"))
             } else {
                 None
             }
@@ -182,21 +184,21 @@ fn draw_border(
         .unwrap_or_default();
 
     for (i, col) in (left + 1..right).enumerate() {
-        let g: &str = title_graphemes.get(i).map(String::as_str).unwrap_or("─");
+        let g: &str = title_graphemes.get(i).map_or("─", String::as_str);
         buf[top][col].grapheme = Grapheme::from(g);
-        buf[top][col].set_color(color.clone());
+        buf[top][col].set_color(color);
     }
 
     for col in left + 1..right {
         buf[bot][col].grapheme = Grapheme::from("─");
-        buf[bot][col].set_color(color.clone());
+        buf[bot][col].set_color(color);
     }
 
     for row in top + 1..bot {
         buf[row][left].grapheme = Grapheme::from("│");
-        buf[row][left].set_color(color.clone());
+        buf[row][left].set_color(color);
         buf[row][right].grapheme = Grapheme::from("│");
-        buf[row][right].set_color(color.clone());
+        buf[row][right].set_color(color);
         for col in left + 1..right {
             buf[row][col] = Charxel::default();
             buf[row][col].set_background(color.bg);
@@ -215,7 +217,7 @@ impl<E, C: PopupColors> View<E, C> for PopupLayer<E, C> {
         self.layout_content(dimensions);
     }
 
-    fn render<'a>(&self, frame: ScreenFrame<'a>, config: &C) {
+    fn render(&self, frame: ScreenFrame<'_>, config: &C) {
         // Extract the buffer reference and parent dimensions from the frame.
         // We use reborrows (&mut *buf) so the mutable reference is not consumed
         // and can be reused for the popup overlay.
@@ -395,7 +397,7 @@ mod tests {
             }
         }
         fn layout(&mut self, _: &Dimensions) {}
-        fn render<'a>(&self, _: ScreenFrame<'a>, _: &()) {}
+        fn render(&self, _: ScreenFrame<'_>, _: &()) {}
         fn event(&mut self, event: &mut u32) {
             self.count += 1;
             *event += 1;

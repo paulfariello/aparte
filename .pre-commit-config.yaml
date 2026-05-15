@@ -7,10 +7,11 @@ repos:
         entry: env RUSTFLAGS="-D warnings" cargo check
         args: ['--all']
     -   id: clippy
+        args: ['--', '-W', 'clippy::pedantic']
     -   id: cargo-check
         name: cargo-check --features image
         entry: env RUSTFLAGS="-D warnings" cargo check
         args: ['--all', '--features', 'image']
     -   id: clippy
         name: clippy --features image
-        args: ['--features', 'image']
+        args: ['--features', 'image', '--', '-W', 'clippy::pedantic']

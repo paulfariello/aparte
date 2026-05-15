@@ -33,7 +33,7 @@ impl Query {
     pub fn start(&self) -> (String, Iq) {
         // Start with before set to empty string in order to force xmpp_parser to generate a
         // <before/> element and to ensure we get last page first
-        self.query(Some("".to_string()))
+        self.query(Some(String::new()))
     }
 
     pub fn cont(&self, before: String) -> (String, Iq) {
@@ -182,7 +182,7 @@ impl ModTrait for MamMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if mam::Result_::try_from(payload.clone()).is_ok() {
                 return 1f64;
             }
@@ -198,7 +198,7 @@ impl ModTrait for MamMod {
         _delay: &Option<Delay>,
         _archive: bool,
     ) {
-        for payload in message.payloads.iter() {
+        for payload in &message.payloads {
             if let Ok(result) = mam::Result_::try_from(payload.clone()) {
                 self.handle_result(aparte, account, result);
             }

@@ -203,7 +203,7 @@ impl View<UIEvent, Theme> for TitleBar {
         }
 
         if let Some(connection) = &self.connection {
-            let connection = format!(" {} |", connection)
+            let connection = format!(" {connection} |")
                 .into_charxels()
                 .with_color(&config.title_bar);
             let connection_width = connection.display_width();
@@ -217,10 +217,9 @@ impl View<UIEvent, Theme> for TitleBar {
             let is_encrypted = self
                 .current_jid
                 .as_deref()
-                .map(|jid| self.encrypted_jids.contains(jid))
-                .unwrap_or(false);
+                .is_some_and(|jid| self.encrypted_jids.contains(jid));
             let prefix = if is_encrypted { " 🔒 " } else { " " };
-            let mut title = format!("{}{}", prefix, display).into_charxels();
+            let mut title = format!("{prefix}{display}").into_charxels();
 
             let subjects = self
                 .current_jid
@@ -229,7 +228,10 @@ impl View<UIEvent, Theme> for TitleBar {
             if let Some(subjects) = subjects {
                 if let Some((_lang, subject)) = i18n::get_best(
                     subjects,
-                    self.preferred_langs.iter().map(|s| s.as_str()).collect(),
+                    self.preferred_langs
+                        .iter()
+                        .map(std::string::String::as_str)
+                        .collect(),
                 ) {
                     if let Some(subject) = subject.lines().next() {
                         title.append(" – ");
@@ -369,7 +371,7 @@ impl View<UIEvent, Theme> for WinBar {
             for (window, state) in sorted {
                 // Ensure at all time that we can close hl and add remaining info
                 let remaining_charxels = if remaining > 0 {
-                    format!("+{}", remaining).into_charxels()
+                    format!("+{remaining}").into_charxels()
                 } else {
                     Charxels::default()
                 };
@@ -398,10 +400,9 @@ impl View<UIEvent, Theme> for WinBar {
                     // We are sure that previous hl has let us enough space for remaining info
                     frame.write(&remaining_charxels);
                     break;
-                } else {
-                    frame.write(&highlighted);
-                    frame_space -= highlighted.display_width();
                 }
+                frame.write(&highlighted);
+                frame_space -= highlighted.display_width();
 
                 first = false;
                 remaining -= 1;
@@ -445,7 +446,7 @@ impl View<UIEvent, Theme> for WinBar {
                 self.reduce_highlight(window, *total, *important);
             }
             UIEvent::CommandBufferUpdate(buf) => {
-                self.command_buffer = buf.clone();
+                self.command_buffer.clone_from(buf);
             }
             _ => {}
         }
@@ -471,7 +472,7 @@ impl Hash for RosterItem {
             Self::Contact(contact) => contact.jid.hash(state),
             Self::Bookmark(bookmark) => bookmark.jid.hash(state),
             Self::Window(window) => window.hash(state),
-        };
+        }
     }
 }
 
@@ -670,6 +671,7 @@ impl UIMod {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub fn event_stream(&self) -> EventStream {
         EventStream::default()
     }
@@ -680,12 +682,13 @@ impl UIMod {
         }
     }
 
-    fn add_conversation(&mut self, aparte: &mut Aparte, conversation: Conversation) {
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    fn add_conversation(&mut self, aparte: &mut Aparte, conversation: &Conversation) {
         let scheduler = self.get_scheduler();
         let selection_bg = aparte.config.theme.selected_message;
         let search_highlight_fg = aparte.config.theme.search_highlight_fg;
         let search_highlight_bg = aparte.config.theme.search_highlight_bg;
-        match &conversation {
+        match conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
                 let chatwin = ScrollWin::<UIEvent, MessageView, Theme>::new().with_event({
@@ -747,7 +750,7 @@ impl UIMod {
                                     scheduler.schedule(Event::LoadChatHistory {
                                         account: chat_for_event.account.clone(),
                                         contact: chat_for_event.contact.clone(),
-                                        from: from.cloned(),
+                                        from: from.copied(),
                                     });
                                 }
                             }
@@ -790,7 +793,7 @@ impl UIMod {
                                         scheduler.schedule(Event::LoadChatHistory {
                                             account: chat_for_event.account.clone(),
                                             contact: chat_for_event.contact.clone(),
-                                            from: from.cloned(),
+                                            from: from.copied(),
                                         });
                                     }
                                 }
@@ -826,7 +829,7 @@ impl UIMod {
                                         scheduler.schedule(Event::LoadChatHistory {
                                             account: chat_for_event.account.clone(),
                                             contact: chat_for_event.contact.clone(),
-                                            from: from.cloned(),
+                                            from: from.copied(),
                                         });
                                     }
                                 }
@@ -911,8 +914,7 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::ModeChange(Mode::Insert)
-                            | UIEvent::ModeChange(Mode::Command) => {
+                            UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
                                 if let Some(i) = view.clear_selection() {
                                     if let Some(c) = view.child_at(i) {
                                         c.deselect();
@@ -999,7 +1001,7 @@ impl UIMod {
                                     scheduler.schedule(Event::LoadChannelHistory {
                                         account: channel_for_event.account.clone(),
                                         jid: channel_for_event.jid.clone(),
-                                        from: from.cloned(),
+                                        from: from.copied(),
                                     });
                                 }
                             }
@@ -1042,7 +1044,7 @@ impl UIMod {
                                         scheduler.schedule(Event::LoadChannelHistory {
                                             account: channel_for_event.account.clone(),
                                             jid: channel_for_event.jid.clone(),
-                                            from: from.cloned(),
+                                            from: from.copied(),
                                         });
                                     }
                                 }
@@ -1078,7 +1080,7 @@ impl UIMod {
                                         scheduler.schedule(Event::LoadChannelHistory {
                                             account: channel_for_event.account.clone(),
                                             jid: channel_for_event.jid.clone(),
-                                            from: from.cloned(),
+                                            from: from.copied(),
                                         });
                                     }
                                 }
@@ -1175,8 +1177,7 @@ impl UIMod {
                                     }
                                 }
                             }
-                            UIEvent::ModeChange(Mode::Insert)
-                            | UIEvent::ModeChange(Mode::Command) => {
+                            UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
                                 if let Some(i) = view.clear_selection() {
                                     if let Some(c) = view.child_at(i) {
                                         c.deselect();
@@ -1312,13 +1313,14 @@ impl UIMod {
 }
 
 impl ModTrait for UIMod {
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        let (width, height) = crossterm::terminal::size().unwrap();
-        log::debug!("Init UI on screen ({width}×{height})");
-
         // Indices into the root LinearLayout's children (push order below).
         const FRAME_LAYOUT_INDEX: usize = 1;
         const INPUT_INDEX: usize = 3;
+
+        let (width, height) = crossterm::terminal::size().unwrap();
+        log::debug!("Init UI on screen ({width}×{height})");
 
         let layout;
         {
@@ -1445,7 +1447,7 @@ impl ModTrait for UIMod {
                             let gen = timeout_generation;
                             let mut aparte_for_task = aparte_proxy.clone();
                             tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                                 aparte_for_task.schedule(Event::CommandTimeout(gen));
                             });
                             let buf = command_buffer.clone();
@@ -1557,20 +1559,20 @@ impl ModTrait for UIMod {
         let frame =
             FrameLayout::<UIEvent, String, Theme>::new().with_event(|frame, event| match event {
                 UIEvent::Core(Event::ChangeWindow(name)) => {
-                    frame.set_current(name.to_string());
+                    frame.set_current(name.clone());
                     for child in frame.iter_children_mut() {
                         child.event(event);
                     }
                 }
                 UIEvent::AddWindow(jid, display_name, view) => {
                     let view = view.take().unwrap();
-                    frame.insert_boxed(jid.to_string(), view);
+                    frame.insert_boxed(jid.clone(), view);
 
                     // propagate AddWindow with jid only to each subview
                     // required at least for console view
                     for child in frame.iter_children_mut() {
                         child.event(&mut UIEvent::AddWindow(
-                            jid.to_string(),
+                            jid.clone(),
                             display_name.clone(),
                             None,
                         ));
@@ -1586,10 +1588,12 @@ impl ModTrait for UIMod {
                     }
                 }
                 // Interaction events → current window only
-                UIEvent::Core(Event::Key(_))
-                | UIEvent::Core(Event::Completed(_, _))
-                | UIEvent::Core(Event::ResetCompletion)
-                | UIEvent::Core(Event::ReadPassword(_)) => {
+                UIEvent::Core(
+                    Event::Key(_)
+                    | Event::Completed(_, _)
+                    | Event::ResetCompletion
+                    | Event::ReadPassword(_),
+                ) => {
                     if let Some(current) = frame.get_current_mut() {
                         current.event(event);
                     }
@@ -1609,29 +1613,45 @@ impl ModTrait for UIMod {
             match event {
                 UIEvent::Core(Event::Key(KeyEvent {
                     code: KeyCode::Char(c),
-                    modifiers: KeyModifiers::NONE,
+                    modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                     ..
                 })) => input.key(*c),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char(c),
-                    modifiers: KeyModifiers::SHIFT,
-                    ..
-                })) => input.key(*c),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Backspace,
-                    ..
-                })) => input.backspace(),
+                UIEvent::Core(Event::Key(
+                    KeyEvent {
+                        code: KeyCode::Backspace,
+                        ..
+                    }
+                    | KeyEvent {
+                        code: KeyCode::Char('h'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    },
+                )) => input.backspace(),
                 UIEvent::Core(Event::Key(KeyEvent {
                     code: KeyCode::Delete,
                     ..
                 })) => input.delete(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Home,
-                    ..
-                })) => input.home(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::End, ..
-                })) => input.end(),
+                UIEvent::Core(Event::Key(
+                    KeyEvent {
+                        code: KeyCode::Home,
+                        ..
+                    }
+                    | KeyEvent {
+                        code: KeyCode::Char('a'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    },
+                )) => input.home(),
+                UIEvent::Core(Event::Key(
+                    KeyEvent {
+                        code: KeyCode::End, ..
+                    }
+                    | KeyEvent {
+                        code: KeyCode::Char('e'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    },
+                )) => input.end(),
                 UIEvent::Core(Event::Key(KeyEvent {
                     code: KeyCode::Up, ..
                 })) => input.previous(),
@@ -1639,41 +1659,30 @@ impl ModTrait for UIMod {
                     code: KeyCode::Down,
                     ..
                 })) => input.next(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Left,
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                })) => input.left(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    modifiers: KeyModifiers::NONE,
-                    ..
-                })) => input.right(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('a'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.home(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('b'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.left(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('e'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.end(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('f'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.right(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('h'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.backspace(),
+                UIEvent::Core(Event::Key(
+                    KeyEvent {
+                        code: KeyCode::Left,
+                        modifiers: KeyModifiers::NONE,
+                        ..
+                    }
+                    | KeyEvent {
+                        code: KeyCode::Char('b'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    },
+                )) => input.left(),
+                UIEvent::Core(Event::Key(
+                    KeyEvent {
+                        code: KeyCode::Right,
+                        modifiers: KeyModifiers::NONE,
+                        ..
+                    }
+                    | KeyEvent {
+                        code: KeyCode::Char('f'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    },
+                )) => input.right(),
                 UIEvent::Core(Event::Key(KeyEvent {
                     code: KeyCode::Char('w'),
                     modifiers: KeyModifiers::CONTROL,
@@ -1708,23 +1717,19 @@ impl ModTrait for UIMod {
                     result.replace((input.buf.clone(), input.cursor.clone(), input.password));
                 }
                 UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                    input.buf = raw_buf.clone();
-                    input.cursor = cursor.clone();
+                    input.buf.clone_from(raw_buf);
+                    input.cursor.clone_from(cursor);
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 UIEvent::SetInput(text) => {
                     input.cursor =
                         Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
-                    input.buf = text.clone();
+                    input.buf.clone_from(text);
                 }
                 UIEvent::ModeChange(Mode::Normal) => {
                     input.set_cursor_style(CursorStyle::SteadyBlock);
                 }
-                UIEvent::ModeChange(Mode::Command) => {
-                    input.set_show_cursor(true);
-                    input.set_cursor_style(CursorStyle::SteadyBar);
-                }
-                UIEvent::ModeChange(Mode::Insert) => {
+                UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
                     input.set_show_cursor(true);
                     input.set_cursor_style(CursorStyle::SteadyBar);
                 }
@@ -1767,7 +1772,7 @@ impl ModTrait for UIMod {
 
         let mut console = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal).with_event(
             |layout, event| {
-                for LayoutChild { child, .. } in layout.children.iter_mut() {
+                for LayoutChild { child, .. } in &mut layout.children {
                     child.view.event(event);
                 }
             },
@@ -1938,7 +1943,7 @@ impl ModTrait for UIMod {
                                 }
                             }
                         },
-                        UIEvent::ModeChange(Mode::Insert) | UIEvent::ModeChange(Mode::Command) => {
+                        UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
                             if let Some(i) = view.clear_selection() {
                                 if let Some(c) = view.child_at(i) {
                                     c.deselect();
@@ -1967,15 +1972,14 @@ impl ModTrait for UIMod {
                     view.add_group(contact::Group(String::from("Contacts")));
                     view.add_group(contact::Group(String::from("Bookmarks")));
                 }
-                UIEvent::Core(Event::Contact(_, contact))
-                | UIEvent::Core(Event::ContactUpdate(_, contact)) => {
-                    if !contact.groups.is_empty() {
+                UIEvent::Core(Event::Contact(_, contact) | Event::ContactUpdate(_, contact)) => {
+                    if contact.groups.is_empty() {
+                        let group = contact::Group(String::from("Contacts"));
+                        view.insert(RosterItem::Contact(contact.clone()), Some(group));
+                    } else {
                         for group in &contact.groups {
                             view.insert(RosterItem::Contact(contact.clone()), Some(group.clone()));
                         }
-                    } else {
-                        let group = contact::Group(String::from("Contacts"));
-                        view.insert(RosterItem::Contact(contact.clone()), Some(group));
                     }
                 }
                 UIEvent::Core(Event::Bookmark(_, bookmark)) => {
@@ -2033,6 +2037,7 @@ impl ModTrait for UIMod {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         let before = Instant::now();
 
@@ -2086,11 +2091,11 @@ impl ModTrait for UIMod {
                                 },
                             };
 
-                            self.add_conversation(aparte, conversation);
+                            self.add_conversation(aparte, &conversation);
                         }
                     }
                     Message::Log(_message) => {}
-                };
+                }
 
                 self.root.event(&mut UIEvent::Core(Event::Message(
                     account.clone(),
@@ -2103,7 +2108,7 @@ impl ModTrait for UIMod {
                 if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
-                        Conversation::Chat(Chat {
+                        &Conversation::Chat(Chat {
                             account: account.clone(),
                             contact: contact.clone(),
                         }),
@@ -2134,7 +2139,7 @@ impl ModTrait for UIMod {
                 };
                 let win_name = bare.to_string();
                 if !self.windows.contains(&win_name) {
-                    self.add_conversation(aparte, Conversation::Channel(ch));
+                    self.add_conversation(aparte, &Conversation::Channel(ch));
                 }
                 if *user_request {
                     self.change_window(&win_name);
@@ -2173,7 +2178,7 @@ impl ModTrait for UIMod {
                         }
                     }
                     self.root
-                        .event(&mut UIEvent::Core(Event::Close(window.clone())))
+                        .event(&mut UIEvent::Core(Event::Close(window.clone())));
                 }
             }
             Event::UIMode(mode) => {
@@ -2295,7 +2300,7 @@ impl ModTrait for UIMod {
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let mut bodies = HashMap::new();
-                                            bodies.insert("".to_string(), raw_buf);
+                                            bodies.insert(String::new(), raw_buf);
                                             let message = Message::outgoing_chat(
                                                 id.to_string(),
                                                 timestamp,
@@ -2321,7 +2326,7 @@ impl ModTrait for UIMod {
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let mut bodies = HashMap::new();
-                                            bodies.insert("".to_string(), raw_buf);
+                                            bodies.insert(String::new(), raw_buf);
                                             let message = Message::outgoing_channel(
                                                 id.to_string(),
                                                 timestamp,
@@ -2495,7 +2500,7 @@ impl Stream for EventStream {
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Poll::Ready(Some(Err(_))) | Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(Err(_)) | None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
     }

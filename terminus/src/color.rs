@@ -30,6 +30,7 @@ pub enum NamedColor {
 }
 
 impl NamedColor {
+    #[must_use]
     fn to_crossterm(self) -> CColor {
         match self {
             NamedColor::Black => CColor::Black,
@@ -51,10 +52,16 @@ impl NamedColor {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the formatter fails to write.
     pub fn write_fg(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", SetForegroundColor(self.to_crossterm()))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the formatter fails to write.
     pub fn write_bg(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", SetBackgroundColor(self.to_crossterm()))
     }
@@ -68,6 +75,7 @@ pub enum Color {
     Default,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn parse_rgb_str(s: &str) -> Result<Color, String> {
     enum State {
         Initial,
@@ -104,13 +112,13 @@ fn parse_rgb_str(s: &str) -> Result<Color, String> {
                 (State::Blue(red, green, Some(nibble)), digit @ ('0'..='9' | 'a'..='f')) => Ok(
                     State::Rgb(red, green, nibble + digit.to_digit(16).unwrap() as u8),
                 ),
-                _ => Err(format!("Invalid rgb string {}", s)),
+                _ => Err(format!("Invalid rgb string {s}")),
             }?;
     }
 
     match state {
         State::Rgb(r, g, b) => Ok(Color::Rgb(r, g, b)),
-        _ => Err(format!("Invalid rgb string {}", s)),
+        _ => Err(format!("Invalid rgb string {s}")),
     }
 }
 
@@ -137,7 +145,7 @@ impl FromStr for Color {
             "White" | "white" => Ok(Color::Named(NamedColor::White)),
             "Yellow" | "yellow" => Ok(Color::Named(NamedColor::Yellow)),
             _ if s.starts_with('#') => parse_rgb_str(s),
-            _ => Err(format!("Invalid color {}", s)),
+            _ => Err(format!("Invalid color {s}")),
         }
     }
 }
@@ -163,12 +171,12 @@ impl ToString for Color {
             Color::Named(NamedColor::Red) => "red".to_string(),
             Color::Named(NamedColor::White) => "white".to_string(),
             Color::Named(NamedColor::Yellow) => "yellow".to_string(),
-            Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         }
     }
 }
 
-/// ConfigColor is just a Fg or Bg color that isn't strongly typed in the config
+/// `ConfigColor` is just a Fg or Bg color that isn't strongly typed in the config
 pub trait ConfigColor
 where
     Self: Sized,
@@ -176,6 +184,10 @@ where
     type Err;
 
     fn to_string(&self) -> String;
+
+    /// # Errors
+    ///
+    /// Returns an error if the string is not a valid color.
     fn from_str(string: &str) -> Result<Self, Self::Err>;
 }
 
@@ -184,6 +196,9 @@ pub struct FgColor(pub Color);
 #[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub struct BgColor(pub Color);
 
+/// # Errors
+///
+/// Returns an error if the deserialized string is not a valid color.
 pub fn deserialize_color<'de, C, D>(deserializer: D) -> Result<C, D::Error>
 where
     D: Deserializer<'de>,
@@ -194,6 +209,9 @@ where
     C::from_str(s).map_err(de::Error::custom)
 }
 
+/// # Errors
+///
+/// Returns an error if the serializer fails.
 pub fn serialize_color<C, S>(color: &C, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,

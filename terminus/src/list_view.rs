@@ -63,6 +63,7 @@ where
     V: CharxelDisplay<C> + Hash + Eq,
     C: Default + Clone,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             items: LinkedHashMap::new(),
@@ -78,6 +79,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
         F: FnMut(&mut Self, &mut E) + 'static,
@@ -86,11 +88,13 @@ where
         self
     }
 
+    #[must_use]
     pub fn with_layout(mut self, layout: LayoutParams) -> Self {
         self.layouts = layout;
         self
     }
 
+    #[must_use]
     pub fn with_none_group(mut self) -> Self {
         if let Entry::Vacant(vacant) = self.items.entry(None) {
             vacant.insert(HashSet::new());
@@ -98,11 +102,14 @@ where
         self
     }
 
+    #[must_use]
     pub fn with_unique_item(mut self) -> Self {
         self.unique = true;
         self
     }
 
+    #[must_use]
+    #[allow(clippy::redundant_closure_for_method_calls)]
     pub fn with_sort_item(mut self) -> Self
     where
         V: Ord,
@@ -111,6 +118,7 @@ where
         self
     }
 
+    #[must_use]
     pub fn with_sort_item_by<F>(mut self, compare: F) -> Self
     where
         F: Fn(&V, &V) -> cmp::Ordering + 'static,
@@ -119,6 +127,8 @@ where
         self
     }
 
+    #[must_use]
+    #[allow(clippy::redundant_closure_for_method_calls)]
     pub fn with_sort_group(mut self) -> Self
     where
         G: Ord,
@@ -127,6 +137,7 @@ where
         self
     }
 
+    #[must_use]
     pub fn with_sort_group_by<F>(mut self, compare: F) -> Self
     where
         F: FnMut(&G, &G) -> cmp::Ordering + 'static,
@@ -143,7 +154,7 @@ where
 
     pub fn insert(&mut self, item: V, group: Option<G>) {
         if self.unique {
-            for (_, items) in self.items.iter_mut() {
+            for (_, items) in &mut self.items {
                 items.remove(&item);
             }
         }
@@ -159,6 +170,10 @@ where
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `NonExistentGroup` if the group does not exist.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), NonExistentGroup> {
         match self.items.entry(group) {
             Entry::Vacant(_) => Err(NonExistentGroup),
@@ -192,7 +207,9 @@ where
                         .iter()
                         .map(|group| group.colored_fmt(&C::default()).display_width())
                         .chain(items.iter().map(move |item| {
-                            item.colored_fmt(&config).display_width() + indent.len() as u16
+                            #[allow(clippy::cast_possible_truncation)]
+                            let indent_w = indent.len() as u16;
+                            item.colored_fmt(&config).display_width() + indent_w
                         }))
                 })
                 .max()
@@ -200,6 +217,7 @@ where
             LayoutParam::Absolute(_) => 0, // We don't care,
         };
 
+        #[allow(clippy::cast_possible_truncation)]
         let max_height = match self.layouts.height {
             LayoutParam::MatchParent | LayoutParam::WrapContent => self
                 .items
@@ -211,9 +229,10 @@ where
 
         RequestedDimensions {
             width: RequestedDimension::Absolute(match (self.layouts.width, measure_specs.width) {
-                (LayoutParam::MatchParent, MeasureSpec::Unspecified) => max_width,
+                (LayoutParam::MatchParent | LayoutParam::WrapContent, MeasureSpec::Unspecified) => {
+                    max_width
+                }
                 (LayoutParam::MatchParent, MeasureSpec::AtMost(at_most_width)) => at_most_width,
-                (LayoutParam::WrapContent, MeasureSpec::Unspecified) => max_width,
                 (LayoutParam::WrapContent, MeasureSpec::AtMost(at_most_width)) => {
                     std::cmp::min(max_width, at_most_width)
                 }
@@ -224,11 +243,13 @@ where
             }),
             height: RequestedDimension::Absolute(
                 match (self.layouts.height, measure_specs.height) {
-                    (LayoutParam::MatchParent, MeasureSpec::Unspecified) => max_height,
+                    (
+                        LayoutParam::MatchParent | LayoutParam::WrapContent,
+                        MeasureSpec::Unspecified,
+                    ) => max_height,
                     (LayoutParam::MatchParent, MeasureSpec::AtMost(at_most_height)) => {
                         at_most_height
                     }
-                    (LayoutParam::WrapContent, MeasureSpec::Unspecified) => max_height,
                     (LayoutParam::WrapContent, MeasureSpec::AtMost(at_most_height)) => {
                         std::cmp::min(max_height, at_most_height)
                     }

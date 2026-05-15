@@ -38,6 +38,7 @@ impl<E, K, C> FrameLayout<E, K, C>
 where
     K: Hash + Eq + Clone,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             children: HashMap::new(),
@@ -51,6 +52,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn with_event<F>(mut self, event_handler: F) -> Self
     where
         F: FnMut(&mut Self, &mut E) + 'static,
@@ -59,6 +61,7 @@ where
         self
     }
 
+    #[must_use]
     pub fn with_layout(mut self, layout: LayoutParams) -> Self {
         self.layouts = layout;
         self
@@ -146,7 +149,7 @@ where
         self.dimensions.replace(dimensions.clone());
 
         if let Some(child) = self.get_current_mut() {
-            child.layout(dimensions)
+            child.layout(dimensions);
         }
     }
 

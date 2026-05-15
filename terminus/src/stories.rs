@@ -54,11 +54,13 @@ pub struct Story {
 
 impl Story {
     /// Build a fresh view for this story.
+    #[must_use]
     pub fn build(&self) -> Box<dyn View<(), ()>> {
         (self.build_fn)()
     }
 
     /// Render this story to a new offscreen buffer.
+    #[must_use]
     pub fn render(&self, width: u16, height: u16) -> OffscreenRenderBuffer {
         let mut view = self.build();
         render_to_buffer(view.as_mut(), width, height)
@@ -104,6 +106,7 @@ fn build_nested_layout() -> Box<dyn View<(), ()>> {
 }
 
 /// All stories in display order.
+#[must_use]
 pub fn all_stories() -> Vec<Story> {
     vec![
         Story {

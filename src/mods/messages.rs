@@ -20,6 +20,7 @@ pub struct MessagesMod {
     sent_muc_ids: HashSet<String>,
 }
 
+#[allow(clippy::ref_option)]
 impl MessagesMod {
     pub fn get<'a>(&'a self, account: &Option<Account>, id: &String) -> Option<&'a Message> {
         self.messages.get(account)?.get(id)
@@ -64,6 +65,7 @@ impl MessagesMod {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn handle_headline_message(
         &mut self,
         aparte: &mut Aparte,
@@ -146,8 +148,7 @@ impl ModTrait for MessagesMod {
                         && message
                             .id
                             .as_ref()
-                            .map(|id| self.sent_muc_ids.contains(&id.0))
-                            .unwrap_or(false);
+                            .is_some_and(|id| self.sent_muc_ids.contains(&id.0));
                     if !is_own_echo {
                         if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
                             aparte.schedule(Event::Message(Some(account.clone()), message));
@@ -172,11 +173,10 @@ impl ModTrait for MessagesMod {
                 }
             }
             XmppParsersMessageType::Headline => {
-                self.handle_headline_message(aparte, account, message, delay)
+                self.handle_headline_message(aparte, account, message, delay);
             }
-            XmppParsersMessageType::Error => {}
-            XmppParsersMessageType::Normal => {}
-        };
+            XmppParsersMessageType::Error | XmppParsersMessageType::Normal => {}
+        }
     }
 
     fn on_event(&mut self, _aparte: &mut Aparte, event: &Event) {
