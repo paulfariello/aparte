@@ -210,6 +210,7 @@ impl<E, C> View<E, C> for PopupLayer<E, C> {
 mod tests {
     use super::*;
     use crate::label::Label;
+    use crate::linear_layout::{LinearLayout, Orientation};
     use crate::rendering::ScreenSize;
     use crate::stories::{render_view_into, row_text};
 
@@ -277,21 +278,20 @@ mod tests {
         popup.show(Box::new(Label::new("hello")));
         let buf = render(&mut popup, W, H);
 
-        // With W=40, H=10:
-        // max_inner_w = 30, max_inner_h = 7 (Label is ExpandMax)
-        // outer_w = 32, outer_h = 9
-        // outer_top = (10 - 9) / 2 = 0, outer_left = (40 - 32) / 2 = 4
-        // inner: row=1, col=5, "hello" starts at col 5
-        let top_border_row = row_text(&buf, 0, W);
+        // With W=40, H=10, Label("hello") = Absolute(5) x Absolute(1):
+        // inner_w=5, inner_h=1, outer_w=7, outer_h=3
+        // outer_top = (10 - 3) / 2 = 3, outer_left = (40 - 7) / 2 = 16
+        // border at row 3, content at row 4
+        let top_border_row = row_text(&buf, 3, W);
         assert!(
             top_border_row.contains('┌'),
-            "expected top-left corner in row 0, got: {top_border_row:?}"
+            "expected top-left corner in row 3, got: {top_border_row:?}"
         );
 
-        let content_row = row_text(&buf, 1, W);
+        let content_row = row_text(&buf, 4, W);
         assert!(
             content_row.contains("hello"),
-            "expected popup content 'hello' in row 1, got: {content_row:?}"
+            "expected popup content 'hello' in row 4, got: {content_row:?}"
         );
     }
 
@@ -365,5 +365,51 @@ mod tests {
         let mut ev = 0u32;
         popup.event(&mut ev);
         assert_eq!(ev, 1, "event should reach content when popup is visible");
+    }
+
+    #[test]
+    fn popup_height_equals_content_lines_plus_border() {
+        let mut popup = make_popup();
+        let mut content = LinearLayout::new(Orientation::Vertical);
+        content.push(Label::new("line one"), 1);
+        content.push(Label::new("line two"), 1);
+        content.push(Label::new("line three"), 1);
+        popup.show(Box::new(content));
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: W,
+            height: H,
+        };
+        popup.layout(&dims);
+
+        let outer = popup.content_dims.unwrap();
+        assert_eq!(
+            outer.height, 5,
+            "popup should be exactly 3 content lines + 2 border rows"
+        );
+    }
+
+    #[test]
+    fn popup_width_equals_longest_line_plus_border() {
+        let mut popup = make_popup();
+        let mut content = LinearLayout::new(Orientation::Vertical);
+        content.push(Label::new("short"), 1);
+        content.push(Label::new("much longer line"), 1);
+        popup.show(Box::new(content));
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: W,
+            height: H,
+        };
+        popup.layout(&dims);
+
+        // "much longer line" is 16 chars + 2 border = 18
+        let outer = popup.content_dims.unwrap();
+        assert_eq!(
+            outer.width, 18,
+            "popup width should match the longest line + 2 border cols"
+        );
     }
 }

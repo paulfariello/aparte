@@ -168,12 +168,11 @@ mod tests {
     #[test]
     fn story_vertical_layout_places_bottom_label() {
         let buf = render(build_vertical_layout, W, H);
-        // Each half has H/2 = 5 rows; bottom section starts at row 5.
-        let bot = row_text(&buf, H / 2, W);
+        // Labels report Absolute(1) height, so "Bottom section" is at row 1.
+        let bot = row_text(&buf, 1, W);
         assert!(
             bot.contains("Bottom section"),
-            "expected 'Bottom section' in row {}, got: {bot:?}",
-            H / 2
+            "expected 'Bottom section' in row 1, got: {bot:?}"
         );
     }
 
@@ -189,7 +188,8 @@ mod tests {
     fn story_nested_layout_places_four_quadrants() {
         let buf = render(build_nested_layout, W, H);
         let top_row = row_text(&buf, 0, W);
-        let bot_row = row_text(&buf, H / 2, W);
+        // Labels report Absolute(1) height, so each inner LinearLayout is 1 row tall.
+        let bot_row = row_text(&buf, 1, W);
         assert!(
             top_row.contains("TL"),
             "expected TL in top row: {top_row:?}"

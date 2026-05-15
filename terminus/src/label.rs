@@ -3,6 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::hash::{Hash, Hasher};
 
+use unicode_display_width::width as display_width;
+
 use crate::{Dimensions, MeasureSpecs, RequestedDimension, RequestedDimensions, ScreenFrame, View};
 
 /// A single-row text label.
@@ -49,8 +51,8 @@ impl Hash for Label {
 impl<E, C> View<E, C> for Label {
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
-            width: RequestedDimension::ExpandMax,
-            height: RequestedDimension::ExpandMax,
+            width: RequestedDimension::Absolute(display_width(&self.text) as u16),
+            height: RequestedDimension::Absolute(1),
         }
     }
 
@@ -94,9 +96,16 @@ mod tests {
     }
 
     #[test]
-    fn label_measures_expand_max() {
+    fn label_measures_absolute_height_one() {
         let label = Label::new("test");
         let dims = <Label as View<(), ()>>::measure(&label, &MeasureSpecs::default());
-        assert_eq!(dims.height, RequestedDimension::ExpandMax);
+        assert_eq!(dims.height, RequestedDimension::Absolute(1));
+    }
+
+    #[test]
+    fn label_measures_absolute_width() {
+        let label = Label::new("hello");
+        let dims = <Label as View<(), ()>>::measure(&label, &MeasureSpecs::default());
+        assert_eq!(dims.width, RequestedDimension::Absolute(5));
     }
 }
