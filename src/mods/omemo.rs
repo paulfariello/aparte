@@ -1060,6 +1060,8 @@ impl OmemoMod {
         context: Option<&BareJid>,
         muc_map: Option<NickToJid>,
     ) -> Result<()> {
+        let mut lines: Vec<String> = Vec::new();
+
         // Own device
         let own_device = signal_store
             .storage
@@ -1072,37 +1074,37 @@ impl OmemoMod {
         let identity = own_device.identity.context("Missing identity")?;
         let identity_key_pair = IdentityKeyPair::try_from(identity.as_ref())?;
         let fp = fingerprint(identity_key_pair.public_key());
-        crate::info!(aparte, "=== OMEMO debug: {account} ===");
-        crate::info!(aparte, "Own device ID : {device_id}");
-        crate::info!(aparte, "Own fingerprint: {fp}");
+        lines.push(format!("=== OMEMO debug: {account} ==="));
+        lines.push(format!("Own device ID : {device_id}"));
+        lines.push(format!("Own fingerprint: {fp}"));
 
         // Server device list
         match Self::get_device_list(aparte, account, &account.to_bare()).await {
             Ok(list) => {
                 let ids: Vec<String> = list.devices.iter().map(|d| d.id.to_string()).collect();
-                crate::info!(aparte, "Server device list: [{}]", ids.join(", "));
+                lines.push(format!("Server device list: [{}]", ids.join(", ")));
                 if list.devices.iter().any(|d| d.id == device_id) {
-                    crate::info!(aparte, "✓ Own device is in server list");
+                    lines.push("✓ Own device is in server list".to_string());
                 } else {
-                    crate::info!(aparte, "✗ Own device is NOT in server list");
+                    lines.push("✗ Own device is NOT in server list".to_string());
                 }
             }
-            Err(e) => crate::info!(aparte, "Failed to fetch server device list: {e}"),
+            Err(e) => lines.push(format!("Failed to fetch server device list: {e}")),
         }
 
         // Own bundle on server
         match Self::get_bundle(aparte, account, &account.to_bare(), device_id).await {
             Ok(Some(bundle)) => {
                 let n = bundle.prekeys.as_ref().map(|p| p.keys.len()).unwrap_or(0);
-                crate::info!(aparte, "✓ Bundle published ({n} prekeys)");
+                lines.push(format!("✓ Bundle published ({n} prekeys)"));
             }
-            Ok(None) => crate::info!(aparte, "✗ No bundle found on server"),
-            Err(e) => crate::info!(aparte, "Failed to fetch bundle: {e}"),
+            Ok(None) => lines.push("✗ No bundle found on server".to_string()),
+            Err(e) => lines.push(format!("Failed to fetch bundle: {e}")),
         }
 
         // Session state for the current conversation
         if let Some(ctx) = context {
-            crate::info!(aparte, "--- Sessions for {ctx} ---");
+            lines.push(format!("--- Sessions for {ctx} ---"));
             let member_jids: Vec<BareJid> = match &muc_map {
                 Some(map) => map
                     .read()
@@ -1114,7 +1116,7 @@ impl OmemoMod {
             };
 
             if member_jids.is_empty() {
-                crate::info!(aparte, "No members with known real JIDs");
+                lines.push("No members with known real JIDs".to_string());
             }
 
             for member_jid in &member_jids {
@@ -1122,7 +1124,7 @@ impl OmemoMod {
                     .storage
                     .get_omemo_contact_devices(account, member_jid)?;
                 if devices.is_empty() {
-                    crate::info!(aparte, "{member_jid}: no devices in local storage");
+                    lines.push(format!("{member_jid}: no devices in local storage"));
                 } else {
                     for device in &devices {
                         let dev_id: u32 = device.id.try_into().unwrap_or(0);
@@ -1132,12 +1134,13 @@ impl OmemoMod {
                             .load_omemo_session(account, &addr)?
                             .is_some();
                         let icon = if has_session { "✓" } else { "✗" };
-                        crate::info!(aparte, "{member_jid} device {dev_id}: {icon} session");
+                        lines.push(format!("{member_jid} device {dev_id}: {icon} session"));
                     }
                 }
             }
         }
 
+        aparte.schedule(Event::ShowPopup(lines));
         Ok(())
     }
 
