@@ -31,7 +31,7 @@ use terminus::{
     label::Label,
     linear_layout::{LinearLayout, Orientation},
     list_view::ListView,
-    popup::PopupLayer,
+    root::Root,
     scroll_win::ScrollWin,
     CursorStyle, Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
     RequestedDimension, RequestedDimensions, View,
@@ -628,7 +628,7 @@ pub struct UIMod {
     unread_windows: HashMap<String, VecDeque<(DateTime<FixedOffset>, bool)>>,
     conversations: HashMap<String, Conversation>,
     jid_to_name: HashMap<BareJid, String>,
-    root: PopupLayer<UIEvent, Theme>,
+    root: Root<UIEvent, Theme>,
     dirty: bool,
     password_command: Option<Command>,
     current_mode: Mode,
@@ -650,7 +650,7 @@ impl UIMod {
 
         Self {
             render_buffer: screen,
-            root: PopupLayer::new(LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)),
+            root: Root::new(LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)),
             windows: Vec::new(),
             unread_windows: HashMap::new(),
             current_window: None,
@@ -1744,14 +1744,14 @@ impl ModTrait for UIMod {
         layout.push(input, 0);
         layout.set_focus(INPUT_INDEX);
 
-        self.root = PopupLayer::new(layout).with_event(|popup, event| match event {
+        self.root = Root::new(layout).with_event(|root, event| match event {
             UIEvent::Core(Event::Key(KeyEvent {
                 code: KeyCode::Esc, ..
-            })) if popup.is_visible() => {
-                popup.hide();
+            })) if root.is_visible() => {
+                root.hide();
             }
-            UIEvent::Core(Event::Key(_)) if popup.is_visible() => {
-                if let Some(content) = popup.content_mut() {
+            UIEvent::Core(Event::Key(_)) if root.is_visible() => {
+                if let Some(content) = root.content_mut() {
                     content.event(event);
                 }
             }
@@ -1760,13 +1760,13 @@ impl ModTrait for UIMod {
                 for line in lines.iter() {
                     content.push(Label::new(line.clone()), 1);
                 }
-                popup.show(Box::new(content), title.clone());
+                root.show(Box::new(content), title.clone());
             }
             UIEvent::ClosePopup => {
-                popup.hide();
+                root.hide();
             }
             _ => {
-                popup.background_mut().event(event);
+                root.background_mut().event(event);
             }
         });
 

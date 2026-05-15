@@ -1,15 +1,9 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use crate::charxel::{Charxel, Grapheme};
 use crate::rendering::{OffscreenRenderBuffer, ScreenFrame};
-use crate::{
-    ColorTuple, Dimensions, EventHandler, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, View,
-};
+use crate::{ColorTuple, Dimensions, MeasureSpec, MeasureSpecs, RequestedDimension, View};
 
 pub trait PopupColors {
     fn popup_colors(&self) -> ColorTuple;
@@ -21,46 +15,29 @@ impl PopupColors for () {
     }
 }
 
-/// A compositor view that renders a background view and optionally overlays a
-/// centered, bordered popup on top.
-///
-/// When the popup is hidden (`content` is `None`) all events are forwarded to
-/// the background view.  When it is visible, keyboard events are captured by
-/// the popup content.  An explicit `with_event` closure overrides all default
-/// routing.
-pub struct PopupLayer<E, C = ()> {
-    background: Box<dyn View<E, C>>,
-    content: Option<Box<dyn View<E, C>>>,
-    title: Option<String>,
-    /// Outer dimensions of the drawn box (border included), in absolute buffer
-    /// coordinates.  `None` when popup is hidden or parent is too small.
-    content_dims: Option<Dimensions>,
-    /// Parent dimensions stored from the last `layout()` call so that `show()`
-    /// can immediately compute content dimensions.
-    dimensions: Option<Dimensions>,
-    event_handler: Option<EventHandler<Self, E>>,
+/// Popup overlay: centered, bordered content drawn on top of another view.
+pub struct Popup<E, C = ()> {
+    pub(crate) content: Option<Box<dyn View<E, C>>>,
+    pub(crate) title: Option<String>,
+    /// Outer box dimensions (border included), in absolute buffer coordinates.
+    /// `None` when hidden or parent is too small.
+    pub(crate) content_dims: Option<Dimensions>,
 }
 
-impl<E, C> PopupLayer<E, C> {
-    pub fn new(background: impl View<E, C> + 'static) -> Self {
+impl<E, C> Default for Popup<E, C> {
+    fn default() -> Self {
         Self {
-            background: Box::new(background),
             content: None,
             title: None,
             content_dims: None,
-            dimensions: None,
-            event_handler: None,
         }
     }
+}
 
-    /// Show `content` as a centered popup overlay with an optional title in
-    /// the top border.  Lays out immediately if parent dimensions are known.
+impl<E, C> Popup<E, C> {
     pub fn show(&mut self, content: Box<dyn View<E, C>>, title: Option<String>) {
         self.content = Some(content);
         self.title = title;
-        if let Some(dims) = self.dimensions.clone() {
-            self.layout_content(&dims);
-        }
     }
 
     pub fn hide(&mut self) {
@@ -74,24 +51,13 @@ impl<E, C> PopupLayer<E, C> {
         self.content.is_some()
     }
 
-    pub fn background_mut(&mut self) -> &mut dyn View<E, C> {
-        self.background.as_mut()
-    }
-
     pub fn content_mut(&mut self) -> Option<&mut Box<dyn View<E, C>>> {
         self.content.as_mut()
     }
 
-    #[must_use]
-    pub fn with_event<F>(mut self, event_handler: F) -> Self
-    where
-        F: FnMut(&mut Self, &mut E) + 'static,
-    {
-        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
-        self
-    }
-
-    fn layout_content(&mut self, parent: &Dimensions) {
+    /// Compute and store the popup's box dimensions given the parent area.
+    /// Must be called after `show()` and whenever the parent is laid out.
+    pub fn layout(&mut self, parent: &Dimensions) {
         if self.content.is_none() {
             self.content_dims = None;
             return;
@@ -142,6 +108,24 @@ impl<E, C> PopupLayer<E, C> {
             width: outer_w,
             height: outer_h,
         });
+    }
+}
+
+impl<E, C: PopupColors> Popup<E, C> {
+    /// Draw the popup border and content onto `buf`. No-op when hidden.
+    pub fn render(&self, buf: &mut OffscreenRenderBuffer, config: &C) {
+        if let (Some(content), Some(outer)) = (&self.content, &self.content_dims) {
+            draw_border(buf, outer, &config.popup_colors(), self.title.as_deref());
+            if outer.width >= 2 && outer.height >= 2 {
+                let inner = Dimensions {
+                    top: outer.top + 1,
+                    left: outer.left + 1,
+                    width: outer.width - 2,
+                    height: outer.height - 2,
+                };
+                content.render(ScreenFrame::new(buf, &inner), config);
+            }
+        }
     }
 }
 
@@ -203,368 +187,5 @@ fn draw_border(
             buf[row][col] = Charxel::default();
             buf[row][col].set_background(color.bg);
         }
-    }
-}
-
-impl<E, C: PopupColors> View<E, C> for PopupLayer<E, C> {
-    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
-        self.background.measure(measure_specs)
-    }
-
-    fn layout(&mut self, dimensions: &Dimensions) {
-        self.dimensions = Some(dimensions.clone());
-        self.background.layout(dimensions);
-        self.layout_content(dimensions);
-    }
-
-    fn render(&self, frame: ScreenFrame<'_>, config: &C) {
-        // Extract the buffer reference and parent dimensions from the frame.
-        // We use reborrows (&mut *buf) so the mutable reference is not consumed
-        // and can be reused for the popup overlay.
-        let parent_dims = frame.dimensions;
-        let buf = frame.offscreen;
-
-        self.background
-            .render(ScreenFrame::new(&mut *buf, parent_dims), config);
-
-        if let (Some(content), Some(outer)) = (&self.content, &self.content_dims) {
-            draw_border(
-                &mut *buf,
-                outer,
-                &config.popup_colors(),
-                self.title.as_deref(),
-            );
-            if outer.width >= 2 && outer.height >= 2 {
-                let inner = Dimensions {
-                    top: outer.top + 1,
-                    left: outer.left + 1,
-                    width: outer.width - 2,
-                    height: outer.height - 2,
-                };
-                content.render(ScreenFrame::new(&mut *buf, &inner), config);
-            }
-        }
-    }
-
-    fn event(&mut self, event: &mut E) {
-        if let Some(handler) = &self.event_handler {
-            let handler = Rc::clone(handler);
-            let handler = &mut *handler.borrow_mut();
-            handler(self, event);
-        } else if let Some(content) = &mut self.content {
-            content.event(event);
-        } else {
-            self.background.event(event);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::color::{BgColor, FgColor, NamedColor};
-    use crate::label::Label;
-    use crate::linear_layout::{LinearLayout, Orientation};
-    use crate::rendering::ScreenSize;
-    use crate::stories::{render_view_into, row_text};
-    use crate::Color;
-
-    const W: u16 = 40;
-    const H: u16 = 10;
-
-    fn make_popup() -> PopupLayer<(), ()> {
-        PopupLayer::new(Label::new("background"))
-    }
-
-    fn render(view: &mut dyn View<(), ()>, w: u16, h: u16) -> OffscreenRenderBuffer {
-        let dims = Dimensions {
-            top: 0,
-            left: 0,
-            width: w,
-            height: h,
-        };
-        let mut buf = OffscreenRenderBuffer::default();
-        buf.set_size(ScreenSize::from((w, h)));
-        render_view_into(&mut buf, view, &dims);
-        buf
-    }
-
-    #[test]
-    fn popup_renders_background_when_hidden() {
-        let mut popup = make_popup();
-        let buf = render(&mut popup, W, H);
-        let text = row_text(&buf, 0, W);
-        assert!(
-            text.contains("background"),
-            "expected 'background' text in row 0, got: {text:?}"
-        );
-    }
-
-    #[test]
-    fn popup_content_dims_none_when_hidden() {
-        let mut popup = make_popup();
-        let dims = Dimensions {
-            top: 0,
-            left: 0,
-            width: W,
-            height: H,
-        };
-        popup.layout(&dims);
-        assert!(popup.content_dims.is_none());
-    }
-
-    #[test]
-    fn popup_show_sets_content_dims() {
-        let mut popup = make_popup();
-        let dims = Dimensions {
-            top: 0,
-            left: 0,
-            width: W,
-            height: H,
-        };
-        popup.layout(&dims);
-        popup.show(Box::new(Label::new("hello")), None);
-        assert!(popup.content_dims.is_some());
-    }
-
-    #[test]
-    fn popup_content_is_centered() {
-        let mut popup = make_popup();
-        popup.show(Box::new(Label::new("hello")), None);
-        let buf = render(&mut popup, W, H);
-
-        // With W=40, H=10, Label("hello") = Absolute(5) x Absolute(1):
-        // inner_w=5, inner_h=1, outer_w=7, outer_h=3
-        // outer_top = (10 - 3) / 2 = 3, outer_left = (40 - 7) / 2 = 16
-        // border at row 3, content at row 4
-        let top_border_row = row_text(&buf, 3, W);
-        assert!(
-            top_border_row.contains('┌'),
-            "expected top-left corner in row 3, got: {top_border_row:?}"
-        );
-
-        let content_row = row_text(&buf, 4, W);
-        assert!(
-            content_row.contains("hello"),
-            "expected popup content 'hello' in row 4, got: {content_row:?}"
-        );
-    }
-
-    #[test]
-    fn popup_hide_removes_content() {
-        let mut popup = make_popup();
-        popup.show(Box::new(Label::new("hidden text")), None);
-        popup.hide();
-        let buf = render(&mut popup, W, H);
-
-        let row0 = row_text(&buf, 0, W);
-        assert!(
-            !row0.contains("hidden text"),
-            "popup content should not appear after hide: {row0:?}"
-        );
-        assert!(
-            row0.contains("background"),
-            "background should be visible after hide: {row0:?}"
-        );
-    }
-
-    #[test]
-    fn popup_is_visible_tracks_state() {
-        let mut popup = make_popup();
-        assert!(!popup.is_visible());
-        popup.show(Box::new(Label::new("x")), None);
-        assert!(popup.is_visible());
-        popup.hide();
-        assert!(!popup.is_visible());
-    }
-
-    /// A view that counts how many events it receives.
-    struct Counter {
-        count: u32,
-    }
-
-    impl Counter {
-        fn new() -> Self {
-            Self { count: 0 }
-        }
-    }
-
-    impl View<u32, ()> for Counter {
-        fn measure(&self, _: &MeasureSpecs) -> RequestedDimensions {
-            RequestedDimensions {
-                width: RequestedDimension::ExpandMax,
-                height: RequestedDimension::ExpandMax,
-            }
-        }
-        fn layout(&mut self, _: &Dimensions) {}
-        fn render(&self, _: ScreenFrame<'_>, _: &()) {}
-        fn event(&mut self, event: &mut u32) {
-            self.count += 1;
-            *event += 1;
-        }
-    }
-
-    #[test]
-    fn popup_default_event_routes_to_background_when_hidden() {
-        let mut popup: PopupLayer<u32, ()> = PopupLayer::new(Counter::new());
-        let mut ev = 0u32;
-        popup.event(&mut ev);
-        assert_eq!(ev, 1, "event should reach background when popup is hidden");
-    }
-
-    #[test]
-    fn popup_default_event_routes_to_content_when_visible() {
-        let bg = Counter::new();
-        let mut popup: PopupLayer<u32, ()> = PopupLayer::new(bg);
-        popup.show(Box::new(Counter::new()), None);
-        let mut ev = 0u32;
-        popup.event(&mut ev);
-        assert_eq!(ev, 1, "event should reach content when popup is visible");
-    }
-
-    #[test]
-    fn popup_height_equals_content_lines_plus_border() {
-        let mut popup = make_popup();
-        let mut content = LinearLayout::new(Orientation::Vertical);
-        content.push(Label::new("line one"), 1);
-        content.push(Label::new("line two"), 1);
-        content.push(Label::new("line three"), 1);
-        popup.show(Box::new(content), None);
-        let dims = Dimensions {
-            top: 0,
-            left: 0,
-            width: W,
-            height: H,
-        };
-        popup.layout(&dims);
-
-        let outer = popup.content_dims.unwrap();
-        assert_eq!(
-            outer.height, 5,
-            "popup should be exactly 3 content lines + 2 border rows"
-        );
-    }
-
-    #[test]
-    fn popup_width_equals_longest_line_plus_border() {
-        let mut popup = make_popup();
-        let mut content = LinearLayout::new(Orientation::Vertical);
-        content.push(Label::new("short"), 1);
-        content.push(Label::new("much longer line"), 1);
-        popup.show(Box::new(content), None);
-        let dims = Dimensions {
-            top: 0,
-            left: 0,
-            width: W,
-            height: H,
-        };
-        popup.layout(&dims);
-
-        // "much longer line" is 16 chars + 2 border = 18
-        let outer = popup.content_dims.unwrap();
-        assert_eq!(
-            outer.width, 18,
-            "popup width should match the longest line + 2 border cols"
-        );
-    }
-
-    struct ThemedConfig;
-
-    impl PopupColors for ThemedConfig {
-        fn popup_colors(&self) -> ColorTuple {
-            ColorTuple {
-                bg: BgColor(Color::Named(NamedColor::Blue)),
-                fg: FgColor(Color::Named(NamedColor::White)),
-            }
-        }
-    }
-
-    #[test]
-    fn popup_border_cells_have_theme_colors() {
-        let mut popup: PopupLayer<(), ThemedConfig> = PopupLayer::new(Label::new("background"));
-        popup.show(Box::new(Label::new("hello")), None);
-
-        let dims = Dimensions {
-            top: 0,
-            left: 0,
-            width: W,
-            height: H,
-        };
-        let mut buf = OffscreenRenderBuffer::default();
-        buf.set_size(ScreenSize::from((W, H)));
-        popup.layout(&dims);
-        let frame = ScreenFrame::new(&mut buf, &dims);
-        popup.render(frame, &ThemedConfig);
-
-        // Border top-left corner is at row 3, col 16 (see popup_content_is_centered)
-        let corner = &buf[3][16];
-        assert_eq!(
-            corner.background,
-            BgColor(Color::Named(NamedColor::Blue)),
-            "border corner should have popup background color"
-        );
-        assert_eq!(
-            corner.foreground,
-            FgColor(Color::Named(NamedColor::White)),
-            "border corner should have popup foreground color"
-        );
-    }
-
-    #[test]
-    fn popup_title_appears_in_top_border() {
-        // W=40, H=10, Label("hello") → outer_w=7, outer_h=3
-        // outer_top=3, outer_left=16
-        // Top border inner runs col 17..22 (left+1..right).
-        // "─ hi ─" is 6 chars, inner_w = right-left-1 = 5, 2+2+4=6 > 5 so title should be skipped...
-        // Use a wider popup. Label("much longer line") → inner_w=16, outer_w=18
-        // outer_left = (40-18)/2 = 11, outer_right = 28
-        // Top border inner: col 12..28
-        // "─ hi ─" = 6 chars ≤ 16 → fits
-        let mut popup = make_popup();
-        let mut content = LinearLayout::new(Orientation::Vertical);
-        content.push(Label::new("much longer line"), 1);
-        popup.show(Box::new(content), Some("hi".to_string()));
-        let buf = render(&mut popup, W, H);
-
-        // The top border row should contain the title text "hi"
-        let top_border = row_text(&buf, 3, W);
-        assert!(
-            top_border.contains("hi"),
-            "expected title 'hi' in top border row, got: {top_border:?}"
-        );
-        // And still have the corner glyphs
-        assert!(
-            top_border.contains('┌'),
-            "expected top-left corner in border row, got: {top_border:?}"
-        );
-    }
-
-    #[test]
-    fn popup_title_too_long_falls_back_to_plain_border() {
-        // inner_w for Label("hello") = 5; "─ " + title + " ─" needs title.len()+4 ≤ 5
-        // So any title with len ≥ 2 won't fit.
-        let mut popup = make_popup();
-        popup.show(Box::new(Label::new("hello")), Some("toolong".to_string()));
-        let buf = render(&mut popup, W, H);
-
-        // Top border should not contain "toolong" — only box-drawing chars
-        let top_border = row_text(&buf, 3, W);
-        assert!(
-            !top_border.contains("toolong"),
-            "title that doesn't fit should not appear in border, got: {top_border:?}"
-        );
-        assert!(
-            top_border.contains('┌'),
-            "corner should still be present, got: {top_border:?}"
-        );
-    }
-
-    #[test]
-    fn popup_hide_clears_title() {
-        let mut popup = make_popup();
-        popup.show(Box::new(Label::new("hello")), Some("Title".to_string()));
-        assert_eq!(popup.title, Some("Title".to_string()));
-        popup.hide();
-        assert_eq!(popup.title, None);
     }
 }

@@ -24,6 +24,7 @@ pub mod linear_layout;
 pub mod list_view;
 pub mod popup;
 pub mod rendering;
+pub mod root;
 pub mod scroll_win;
 pub mod stories;
 
