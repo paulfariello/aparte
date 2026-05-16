@@ -94,6 +94,10 @@ required-features = ["insecure-xmpp"]
 name = "delivery"
 required-features = ["insecure-xmpp"]
 
+[[test]]
+name = "message_store"
+required-features = ["insecure-xmpp"]
+
 [dev-dependencies]
 mockall = "^0.9"
 rstest = "0.22"

@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -10,10 +11,12 @@ use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppPa
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
-use crate::message::{Message, VersionedXmppMessage};
+use crate::message::{Message, VersionedXmppMessage, XmppMessageType};
 
 #[derive(Default)]
-pub struct MessageStoreMod;
+pub struct MessageStoreMod {
+    sent_muc_ids: HashSet<String>,
+}
 
 fn has_omemo_payload(message: &XmppParsersMessage) -> bool {
     message.payloads.iter().any(|p| {
@@ -65,6 +68,13 @@ impl ModTrait for MessageStoreMod {
         let Some(id) = message.id.as_ref().map(|id| id.0.as_str()) else {
             return;
         };
+        // MUC echoes of our own sent messages: already displayed via Event::SendMessage.
+        if !archive
+            && message.type_ == XmppParsersMessageType::Groupchat
+            && self.sent_muc_ids.contains(id)
+        {
+            return;
+        }
         match aparte.storage.get_message_cleartext(account, id) {
             Ok(Some(body)) => {
                 let mut msg = message.clone();
@@ -87,8 +97,18 @@ impl ModTrait for MessageStoreMod {
     /// Guarded by !archive to avoid re-saving messages reconstructed from the
     /// store (the read path emits Event::Message with archive=true).
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
-        if let Event::Message(Some(account), Message::Xmpp(xmpp)) = event {
-            save_if_encrypted(aparte, account, xmpp);
+        match event {
+            Event::SendMessage(_, message) => {
+                if let Message::Xmpp(xmpp) = message {
+                    if xmpp.type_ == XmppMessageType::Channel {
+                        self.sent_muc_ids.insert(message.id().to_string());
+                    }
+                }
+            }
+            Event::Message(Some(account), Message::Xmpp(xmpp)) => {
+                save_if_encrypted(aparte, account, xmpp);
+            }
+            _ => {}
         }
     }
 }

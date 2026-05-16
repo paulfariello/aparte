@@ -1031,6 +1031,47 @@ pub fn chat_message_with_delay(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
+/// An OMEMO-encrypted chat message with no body and an optional `<delay>` timestamp.
+/// The `encrypted_elem` should be an `<encrypted>` OMEMO element built from
+/// `legacy_omemo::Encrypted`. Pass `delay_stamp=None` to omit the delay (the
+/// receiver will use the current clock as the timestamp).
+pub fn omemo_encrypted_chat_message(
+    from: &str,
+    to: &str,
+    id: &str,
+    encrypted_elem: xmpp_parsers::minidom::Element,
+    delay_stamp: Option<&str>,
+) -> XmppStreamElement {
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    msg.payloads.push(encrypted_elem);
+    if let Some(stamp) = delay_stamp {
+        let delay_elem: Element = format!("<delay xmlns='urn:xmpp:delay' stamp='{stamp}'/>")
+            .parse()
+            .expect("valid delay element");
+        msg.payloads.push(delay_elem);
+    }
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
+/// An OMEMO-encrypted groupchat message with no body (the server echo of a sent MUC OMEMO message).
+/// `payloads` are copied verbatim from the sent stanza's payloads (the OMEMO `<encrypted>` element).
+pub fn omemo_encrypted_groupchat_echo(
+    from_full: &str,
+    to: &str,
+    id: &str,
+    payloads: Vec<xmpp_parsers::minidom::Element>,
+) -> XmppStreamElement {
+    let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from_full).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    for p in payloads {
+        msg.payloads.push(p);
+    }
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 /// A chat reaction message (XEP-0444). `referenced_id` is the id of the
 /// original message being reacted to. `emojis` is the full set of emojis the
 /// sender is expressing (empty slice clears all reactions from this sender).
