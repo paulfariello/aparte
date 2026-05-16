@@ -28,7 +28,6 @@ use terminus::{
     cursor::Cursor,
     frame_layout::FrameLayout,
     input::Input,
-    label::Label,
     linear_layout::{LinearLayout, Orientation},
     list_view::ListView,
     root::Root,
@@ -74,6 +73,48 @@ fn build_normal_command_trie() -> Trie<String, NormalCommand> {
     trie.insert("n".to_string(), NormalCommand::SearchNext);
     trie.insert("N".to_string(), NormalCommand::SearchPrev);
     trie
+}
+
+/// A single line in the popup, keyed by insertion index so duplicates are preserved.
+#[derive(Debug, Clone)]
+struct PopupLine {
+    index: usize,
+    text: String,
+}
+
+impl PartialEq for PopupLine {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+impl Eq for PopupLine {}
+impl PartialOrd for PopupLine {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for PopupLine {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.index.cmp(&other.index)
+    }
+}
+impl Hash for PopupLine {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+    }
+}
+impl<E, C> View<E, C> for PopupLine {
+    fn measure(&self, _: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            width: RequestedDimension::Absolute(self.text.as_str().into_charxels().display_width()),
+            height: RequestedDimension::Absolute(1),
+        }
+    }
+    fn layout(&mut self, _: &Dimensions) {}
+    fn render(&self, mut frame: ScreenFrame<'_>, _: &C) {
+        frame.write_at((0u16, 0u16), &self.text);
+    }
+    fn event(&mut self, _: &mut E) {}
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -632,6 +673,7 @@ pub struct UIMod {
     dirty: bool,
     password_command: Option<Command>,
     current_mode: Mode,
+    popup_saved_mode: Option<Mode>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
     _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
     dimensions: Dimensions,
@@ -658,6 +700,7 @@ impl UIMod {
             jid_to_name: HashMap::new(),
             password_command: None,
             current_mode: Mode::Insert,
+            popup_saved_mode: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
             dirty: true,
@@ -1546,6 +1589,32 @@ impl ModTrait for UIMod {
                             child.event(event);
                         }
                     }
+                    UIEvent::ModeChange(new_mode) => match *new_mode {
+                        Mode::Normal => {
+                            mode = Mode::Normal;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                            command_buffer.clear();
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            }
+                        }
+                        Mode::Insert => {
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            layout.set_focus(INPUT_INDEX);
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
+                        }
+                        Mode::Command => {
+                            for child in layout.iter_children_mut() {
+                                child.event(event);
+                            }
+                        }
+                    },
                     _ => {
                         for child in layout.iter_children_mut() {
                             child.event(event);
@@ -1745,22 +1814,42 @@ impl ModTrait for UIMod {
         layout.set_focus(INPUT_INDEX);
 
         self.root = Root::new(layout).with_event(|root, event| match event {
-            UIEvent::Core(Event::Key(KeyEvent {
-                code: KeyCode::Esc, ..
-            })) if root.is_visible() => {
-                root.hide();
-            }
             UIEvent::Core(Event::Key(_)) if root.is_visible() => {
                 if let Some(content) = root.content_mut() {
                     content.event(event);
                 }
             }
             UIEvent::ShowPopup { title, lines } => {
-                let mut content = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical);
-                for line in lines.iter() {
-                    content.push(Label::new(line.clone()), 1);
+                let mut scroll_win = ScrollWin::<UIEvent, PopupLine, Theme>::new()
+                    .with_layout(LayoutParams {
+                        width: LayoutParam::WrapContent,
+                        height: LayoutParam::WrapContent,
+                    })
+                    .with_event(|view, event| match event {
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp,
+                            ..
+                        })) => {
+                            view.page_up();
+                        }
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageDown,
+                            ..
+                        })) => {
+                            view.page_down();
+                        }
+                        _ => {}
+                    });
+                for (i, line) in lines.iter().enumerate() {
+                    scroll_win.insert(PopupLine {
+                        index: i,
+                        text: line.clone(),
+                    });
                 }
-                root.show(Box::new(content), title.clone());
+                // Start at the top: reset to index 0, then clear auto-selection.
+                scroll_win.scroll_to_top();
+                scroll_win.clear_selection();
+                root.show(Box::new(scroll_win), title.clone());
             }
             UIEvent::ClosePopup => {
                 root.hide();
@@ -2362,6 +2451,14 @@ impl ModTrait for UIMod {
                             self.change_window(&next);
                         }
                     }
+                    KeyEvent {
+                        code: KeyCode::Esc, ..
+                    } if self.root.is_visible() => {
+                        self.root.event(&mut UIEvent::ClosePopup);
+                        if let Some(saved) = self.popup_saved_mode.take() {
+                            self.root.event(&mut UIEvent::ModeChange(saved));
+                        }
+                    }
                     _ => {
                         // Reset the slash-command warning only when the popup is closed
                         // (while the popup is visible, keys are absorbed by its content).
@@ -2442,13 +2539,18 @@ impl ModTrait for UIMod {
                 log::debug!("Force render");
             }
             Event::ShowPopup { title, lines } => {
+                self.popup_saved_mode = Some(self.current_mode);
                 self.root.event(&mut UIEvent::ShowPopup {
                     title: title.clone(),
                     lines: lines.clone(),
                 });
+                self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
             }
             Event::ClosePopup => {
                 self.root.event(&mut UIEvent::ClosePopup);
+                if let Some(saved) = self.popup_saved_mode.take() {
+                    self.root.event(&mut UIEvent::ModeChange(saved));
+                }
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
