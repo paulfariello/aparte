@@ -1374,6 +1374,7 @@ impl ModTrait for UIMod {
             let normal_commands = build_normal_command_trie();
             let mut aparte_proxy = aparte.proxy();
             let mut current_window = String::new();
+            let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
             layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1526,6 +1527,17 @@ impl ModTrait for UIMod {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                             }
                         }
+                    }
+                    // Ctrl+L forces a full clean repaint in any mode.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('l'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) => {
+                        render_buffer_for_ctrl_l
+                            .read()
+                            .unwrap()
+                            .request_full_render();
                     }
                     // Scroll keys reach the message window in any mode.
                     UIEvent::Core(Event::Key(KeyEvent {

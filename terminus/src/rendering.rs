@@ -47,6 +47,7 @@ pub struct OffscreenRenderBuffer {
     cursor_style: CursorStyle,
     show_cursor: bool,
     do_bell: AtomicBool,
+    force_full_render: AtomicBool,
 }
 
 impl Default for OffscreenRenderBuffer {
@@ -59,6 +60,7 @@ impl Default for OffscreenRenderBuffer {
             cursor_style: CursorStyle::SteadyBar,
             show_cursor: false,
             do_bell: AtomicBool::new(false),
+            force_full_render: AtomicBool::new(false),
         }
     }
 }
@@ -73,6 +75,7 @@ impl Clone for OffscreenRenderBuffer {
             cursor_style: self.cursor_style,
             show_cursor: self.show_cursor,
             do_bell: AtomicBool::new(self.do_bell.load(std::sync::atomic::Ordering::Relaxed)),
+            force_full_render: AtomicBool::new(false),
         }
     }
 
@@ -171,6 +174,11 @@ impl OffscreenRenderBuffer {
 
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.show_cursor = visible;
+    }
+
+    pub fn request_full_render(&self) {
+        self.force_full_render
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn dump_text(&self) -> String {
@@ -376,7 +384,10 @@ impl OffscreenRenderBuffer {
         W: std::io::Write,
     {
         let mut cursor_moved = false;
-        if self.size != reference_screen.size {
+        let force = self
+            .force_full_render
+            .swap(false, std::sync::atomic::Ordering::Relaxed);
+        if force || self.size != reference_screen.size {
             self.full_render(screen);
             reference_screen.clone_from(self);
             cursor_moved = true;

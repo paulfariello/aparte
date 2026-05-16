@@ -62,6 +62,7 @@ Switch windows with `Alt+[1-9]` or `:win <name>`.
 | Normal  | `n` / `N`  | Next / previous search match      |
 | Command | `Escape`   | Normal mode                       |
 | Insert  | `Tab`      | Auto-complete                     |
+| Any     | `Ctrl+L`   | Force full screen repaint         |
 
 Commands accept unique prefixes: `:conn` resolves to `:connect` when unambiguous.
 
