@@ -220,6 +220,7 @@ pub enum Mod {
     DisplayedMarkers(mods::displayed_markers::DisplayedMarkersMod),
     Reactions(mods::reactions::ReactionsMod),
     Delivery(mods::delivery::DeliveryMod),
+    MessageStore(mods::message_store::MessageStoreMod),
 }
 
 macro_rules! from_mod {
@@ -260,6 +261,7 @@ from_mod!(
 );
 from_mod!(Reactions, mods::reactions::ReactionsMod);
 from_mod!(Delivery, mods::delivery::DeliveryMod);
+from_mod!(MessageStore, mods::message_store::MessageStoreMod);
 
 #[allow(clippy::ref_option)]
 pub trait ModTrait: Display {
@@ -306,6 +308,7 @@ impl ModTrait for Mod {
             Mod::DisplayedMarkers(r#mod) => r#mod.init(aparte),
             Mod::Reactions(r#mod) => r#mod.init(aparte),
             Mod::Delivery(r#mod) => r#mod.init(aparte),
+            Mod::MessageStore(r#mod) => r#mod.init(aparte),
         }
     }
 
@@ -325,6 +328,7 @@ impl ModTrait for Mod {
             Mod::DisplayedMarkers(r#mod) => r#mod.on_event(aparte, event),
             Mod::Reactions(r#mod) => r#mod.on_event(aparte, event),
             Mod::Delivery(r#mod) => r#mod.on_event(aparte, event),
+            Mod::MessageStore(r#mod) => r#mod.on_event(aparte, event),
         }
     }
 
@@ -358,6 +362,9 @@ impl ModTrait for Mod {
             }
             Mod::Reactions(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
             Mod::Delivery(r#mod) => r#mod.can_handle_xmpp_message(aparte, account, message, delay),
+            Mod::MessageStore(r#mod) => {
+                r#mod.can_handle_xmpp_message(aparte, account, message, delay)
+            }
         }
     }
 
@@ -408,6 +415,9 @@ impl ModTrait for Mod {
             Mod::Delivery(r#mod) => {
                 r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
             }
+            Mod::MessageStore(r#mod) => {
+                r#mod.handle_xmpp_message(aparte, account, message, delay, archive);
+            }
         }
     }
 }
@@ -429,6 +439,7 @@ impl fmt::Debug for Mod {
             Mod::DisplayedMarkers(_) => f.write_str("Mod::DisplayedMarkers"),
             Mod::Reactions(_) => f.write_str("Mod::Reactions"),
             Mod::Delivery(_) => f.write_str("Mod::Delivery"),
+            Mod::MessageStore(_) => f.write_str("Mod::MessageStore"),
         }
     }
 }
@@ -450,6 +461,7 @@ impl Display for Mod {
             Mod::DisplayedMarkers(r#mod) => r#mod.fmt(f),
             Mod::Reactions(r#mod) => r#mod.fmt(f),
             Mod::Delivery(r#mod) => r#mod.fmt(f),
+            Mod::MessageStore(r#mod) => r#mod.fmt(f),
         }
     }
 }
@@ -909,6 +921,9 @@ impl Aparte {
         ));
         aparte.add_mod(Mod::Reactions(mods::reactions::ReactionsMod::default()));
         aparte.add_mod(Mod::Delivery(mods::delivery::DeliveryMod));
+        aparte.add_mod(Mod::MessageStore(
+            mods::message_store::MessageStoreMod::default(),
+        ));
 
         Ok(aparte)
     }
@@ -1018,6 +1033,12 @@ impl Aparte {
                 mods.insert(
                     TypeId::of::<mods::delivery::DeliveryMod>(),
                     RefCell::new(Mod::Delivery(r#mod)),
+                );
+            }
+            Mod::MessageStore(r#mod) => {
+                mods.insert(
+                    TypeId::of::<mods::message_store::MessageStoreMod>(),
+                    RefCell::new(Mod::MessageStore(r#mod)),
                 );
             }
         }

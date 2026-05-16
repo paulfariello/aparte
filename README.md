@@ -19,6 +19,7 @@ Features
 
 **Privacy**
 - OMEMO end-to-end encryption, including MUC
+- Decrypted messages are persisted locally so they remain readable after restarts, even though the OMEMO ratchet prevents re-decryption
 
 **Interface**
 - Vim-style modal editing — Normal, Insert, and Command modes

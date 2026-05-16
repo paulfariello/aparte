@@ -563,6 +563,48 @@ impl Storage {
             })
             .transpose()?)
     }
+
+    pub fn save_message_cleartext(
+        &mut self,
+        account: &Account,
+        message_id: &str,
+        body: &str,
+        from_jid: &str,
+        timestamp: &str,
+        encrypted: bool,
+    ) -> Result<()> {
+        use schema::messages_cleartext;
+        let mut conn = self.pool.get()?;
+        diesel::insert_into(messages_cleartext::table)
+            .values((
+                messages_cleartext::account.eq(account.to_string()),
+                messages_cleartext::message_id.eq(message_id),
+                messages_cleartext::body.eq(body),
+                messages_cleartext::from_jid.eq(from_jid),
+                messages_cleartext::timestamp.eq(timestamp),
+                messages_cleartext::encrypted.eq(encrypted),
+            ))
+            .on_conflict((messages_cleartext::account, messages_cleartext::message_id))
+            .do_update()
+            .set(messages_cleartext::body.eq(body))
+            .execute(&mut conn)?;
+        Ok(())
+    }
+
+    pub fn get_message_cleartext(
+        &self,
+        account: &Account,
+        message_id: &str,
+    ) -> Result<Option<String>> {
+        use schema::messages_cleartext;
+        let mut conn = self.pool.get()?;
+        Ok(messages_cleartext::table
+            .filter(messages_cleartext::account.eq(account.to_string()))
+            .filter(messages_cleartext::message_id.eq(message_id))
+            .select(messages_cleartext::body)
+            .first(&mut conn)
+            .optional()?)
+    }
 }
 
 fn signal_storage_error<T>(

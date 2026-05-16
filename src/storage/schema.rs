@@ -74,7 +74,19 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    messages_cleartext (account, message_id) {
+        account -> Text,
+        message_id -> Text,
+        from_jid -> Text,
+        body -> Text,
+        timestamp -> Text,
+        encrypted -> Bool,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
+    messages_cleartext,
     omemo_contact_device,
     omemo_identity,
     omemo_muc_room,

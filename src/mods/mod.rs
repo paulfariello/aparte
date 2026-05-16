@@ -11,6 +11,7 @@ pub mod delivery;
 pub mod disco;
 pub mod displayed_markers;
 pub mod mam;
+pub mod message_store;
 pub mod messages;
 pub mod omemo;
 pub mod reactions;

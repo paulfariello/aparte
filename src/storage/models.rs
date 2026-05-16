@@ -85,3 +85,14 @@ pub struct OmemoMucRoom {
     pub account: String,
     pub room: String,
 }
+
+#[allow(dead_code)]
+#[derive(Queryable, Debug)]
+pub struct MessageCleartext {
+    pub account: String,
+    pub message_id: String,
+    pub from_jid: String,
+    pub body: String,
+    pub timestamp: String,
+    pub encrypted: bool,
+}
