@@ -10,6 +10,8 @@
 //!      is replayed with a failing decryption (pre-key consumed).
 //!   2. A sent OMEMO MUC message whose server echo arrives encrypted (decryption
 //!      fails — no key for our own device) is not displayed a second time.
+//!   3. A sent OMEMO 1:1 message is stored at send time and restored when MAM
+//!      replays the encrypted stanza (simulating history fetch after restart).
 
 mod common;
 
@@ -23,8 +25,8 @@ use xmpp_parsers::{
 
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{
-    muc_join_presence_with_jid, omemo_encrypted_chat_message, omemo_encrypted_groupchat_echo,
-    room_subject_message, XmppFixture,
+    muc_join_presence_with_jid, omemo_encrypted_chat_message, omemo_encrypted_chat_replay,
+    omemo_encrypted_groupchat_echo, room_subject_message, XmppFixture,
 };
 use common::{describe, row_text, ROWS};
 
@@ -214,6 +216,65 @@ fn message_store_muc_omemo_echo_not_duplicated() {
         1,
         "MUC OMEMO message appeared {count} times; expected once \
          (MessageStoreMod::sent_muc_ids must suppress the echo)\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Sent OMEMO 1:1 messages are saved to the cleartext store when sent, and restored
+/// from the store when MAM replays the encrypted stanza (decryption fails because
+/// the ratchet advanced after restart).
+///
+/// The replay is injected with a past `<delay>` timestamp so the BTreeSet sees two
+/// distinct entries (original at T=now, restore at T=2020) → both visible in the UI.
+#[test]
+fn message_store_sent_omemo_restored_on_mam_replay() {
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(CONTACT_JID, contact.device_id, contact.bundle.clone());
+
+    let (_aparte_device_id, _aparte_bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {CONTACT_JID}"));
+    fixture.send_command(&format!("/omemo enable {CONTACT_JID}"));
+    thread::sleep(Duration::from_secs(3));
+
+    // ── Step 1: send an OMEMO message and capture the encrypted stanza ───────
+    fixture.send_command("mstore-sent-k7p4");
+
+    let sent = capture
+        .recv_message_matching(message_has_omemo, Duration::from_secs(5))
+        .expect("no OMEMO stanza from sent chat message");
+    let msg_id = sent.id.as_ref().expect("sent stanza has no id").0.clone();
+
+    assert!(
+        fixture.wait_for("mstore-sent-k7p4", Duration::from_secs(5)),
+        "sent OMEMO message was not displayed in UI"
+    );
+
+    // ── Step 2: inject a MAM replay ──────────────────────────────────────────
+    // Same encrypted payloads, from=our JID, past timestamp so the BTreeSet
+    // produces a second distinct entry (timestamp 2020 ≠ original send time).
+    // Decryption is impossible (pre-key consumed), so MessageStoreMod must look
+    // up the cleartext saved at send time and re-emit Event::Message.
+    fixture.inject(omemo_encrypted_chat_replay(
+        "user@localhost",
+        CONTACT_JID,
+        &msg_id,
+        sent.payloads.clone(),
+        Some("2020-06-01T12:00:00Z"),
+    ));
+
+    thread::sleep(Duration::from_millis(800));
+
+    let parser = fixture.snapshot();
+    let count = (0..ROWS)
+        .filter(|&r| row_text(parser.screen(), r).contains("mstore-sent-k7p4"))
+        .count();
+    assert!(
+        count >= 2,
+        "expected sent OMEMO cleartext to appear at least twice (original + MAM restore), \
+         got {count}\n{}",
         describe(parser.screen()),
     );
 }

@@ -1072,6 +1072,31 @@ pub fn omemo_encrypted_groupchat_echo(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
+/// An OMEMO-encrypted chat message with no body, built from verbatim payloads.
+/// Used to simulate a MAM replay of a sent 1:1 OMEMO message where the `from`
+/// JID is our own account JID (aparte identifies it as an outgoing message).
+pub fn omemo_encrypted_chat_replay(
+    from: &str,
+    to: &str,
+    id: &str,
+    payloads: Vec<xmpp_parsers::minidom::Element>,
+    delay_stamp: Option<&str>,
+) -> XmppStreamElement {
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.id = Some(Id(id.to_string()));
+    for p in payloads {
+        msg.payloads.push(p);
+    }
+    if let Some(stamp) = delay_stamp {
+        let delay_elem: Element = format!("<delay xmlns='urn:xmpp:delay' stamp='{stamp}'/>")
+            .parse()
+            .expect("valid delay element");
+        msg.payloads.push(delay_elem);
+    }
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 /// A chat reaction message (XEP-0444). `referenced_id` is the id of the
 /// original message being reacted to. `emojis` is the full set of emojis the
 /// sender is expressing (empty slice clears all reactions from this sender).

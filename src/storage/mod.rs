@@ -575,9 +575,12 @@ impl Storage {
     ) -> Result<()> {
         use schema::messages_cleartext;
         let mut conn = self.pool.get()?;
+        // Use the bare JID as the account key so cleartext is found across sessions
+        // even when the resource changes (e.g. random resource on reconnect).
+        let bare = account.to_bare().to_string();
         diesel::insert_into(messages_cleartext::table)
             .values((
-                messages_cleartext::account.eq(account.to_string()),
+                messages_cleartext::account.eq(&bare),
                 messages_cleartext::message_id.eq(message_id),
                 messages_cleartext::body.eq(body),
                 messages_cleartext::from_jid.eq(from_jid),
@@ -598,12 +601,57 @@ impl Storage {
     ) -> Result<Option<String>> {
         use schema::messages_cleartext;
         let mut conn = self.pool.get()?;
+        let bare = account.to_bare().to_string();
         Ok(messages_cleartext::table
-            .filter(messages_cleartext::account.eq(account.to_string()))
+            .filter(messages_cleartext::account.eq(&bare))
             .filter(messages_cleartext::message_id.eq(message_id))
             .select(messages_cleartext::body)
             .first(&mut conn)
             .optional()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+    use xmpp_parsers::jid::FullJid;
+
+    fn make_storage() -> (Storage, tempfile::NamedTempFile) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let storage = Storage::new(file.path().to_path_buf()).unwrap();
+        (storage, file)
+    }
+
+    /// Cleartext saved under one resource must be findable when looked up with a
+    /// different resource for the same bare JID. Without this, MAM history is blank
+    /// after reconnect when aparte generates a fresh random resource per session.
+    #[test]
+    fn cleartext_lookup_succeeds_across_resources() {
+        let (mut storage, _file) = make_storage();
+
+        let account1 = Account::from_str("alice@example.org/aparte_AAAAA").unwrap();
+        let account2 = Account::from_str("alice@example.org/aparte_BBBBB").unwrap();
+
+        storage
+            .save_message_cleartext(
+                &account1,
+                "msg-uuid-x1",
+                "Hello across resources",
+                "bob@example.org",
+                "2024-01-01T00:00:00Z",
+                true,
+            )
+            .unwrap();
+
+        let result = storage
+            .get_message_cleartext(&account2, "msg-uuid-x1")
+            .unwrap();
+        assert_eq!(
+            result.as_deref(),
+            Some("Hello across resources"),
+            "cleartext stored in one session must be found in a new session with a different resource"
+        );
     }
 }
 
