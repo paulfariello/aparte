@@ -12,6 +12,8 @@
 //!      fails — no key for our own device) is not displayed a second time.
 //!   3. A sent OMEMO 1:1 message is stored at send time and restored when MAM
 //!      replays the encrypted stanza (simulating history fetch after restart).
+//!   4. Same as 3 but the MAM-replayed stanza has no `from` attribute (some servers
+//!      archive sent messages without stamping the sender JID).
 
 mod common;
 
@@ -26,7 +28,8 @@ use xmpp_parsers::{
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{
     muc_join_presence_with_jid, omemo_encrypted_chat_message, omemo_encrypted_chat_replay,
-    omemo_encrypted_groupchat_echo, room_subject_message, XmppFixture,
+    omemo_encrypted_chat_replay_no_from, omemo_encrypted_groupchat_echo, room_subject_message,
+    XmppFixture,
 };
 use common::{describe, row_text, ROWS};
 
@@ -275,6 +278,58 @@ fn message_store_sent_omemo_restored_on_mam_replay() {
         count >= 2,
         "expected sent OMEMO cleartext to appear at least twice (original + MAM restore), \
          got {count}\n{}",
+        describe(parser.screen()),
+    );
+}
+
+/// Same scenario as `message_store_sent_omemo_restored_on_mam_replay` but the
+/// replayed stanza carries no `from` attribute — matching what some XMPP servers
+/// do when they archive sent messages exactly as submitted by the client (before
+/// the server stamps the sender JID). MessageStoreMod must still find the stored
+/// cleartext and display the message.
+#[test]
+fn message_store_sent_omemo_restored_without_from() {
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(CONTACT_JID, contact.device_id, contact.bundle.clone());
+
+    let (_aparte_device_id, _aparte_bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {CONTACT_JID}"));
+    fixture.send_command(&format!("/omemo enable {CONTACT_JID}"));
+    thread::sleep(Duration::from_secs(3));
+
+    fixture.send_command("mstore-nofrom-p3q7");
+
+    let sent = capture
+        .recv_message_matching(message_has_omemo, Duration::from_secs(5))
+        .expect("no OMEMO stanza from sent chat message");
+    let msg_id = sent.id.as_ref().expect("sent stanza has no id").0.clone();
+
+    assert!(
+        fixture.wait_for("mstore-nofrom-p3q7", Duration::from_secs(5)),
+        "sent OMEMO message was not displayed in UI"
+    );
+
+    // Inject a MAM replay with no `from` attribute and a past timestamp.
+    fixture.inject(omemo_encrypted_chat_replay_no_from(
+        CONTACT_JID,
+        &msg_id,
+        sent.payloads.clone(),
+        Some("2020-06-01T12:00:00Z"),
+    ));
+
+    thread::sleep(Duration::from_millis(800));
+
+    let parser = fixture.snapshot();
+    let count = (0..ROWS)
+        .filter(|&r| row_text(parser.screen(), r).contains("mstore-nofrom-p3q7"))
+        .count();
+    assert!(
+        count >= 2,
+        "sent OMEMO message without `from` was not restored from cleartext store; \
+         got {count} occurrence(s)\n{}",
         describe(parser.screen()),
     );
 }

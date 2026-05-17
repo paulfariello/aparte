@@ -1097,6 +1097,30 @@ pub fn omemo_encrypted_chat_replay(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
+/// Same as `omemo_encrypted_chat_replay` but without a `from` attribute.
+/// Some XMPP servers archive sent messages without the `from` field (they store
+/// the stanza as the client sent it, before the server stamps it).
+pub fn omemo_encrypted_chat_replay_no_from(
+    to: &str,
+    id: &str,
+    payloads: Vec<xmpp_parsers::minidom::Element>,
+    delay_stamp: Option<&str>,
+) -> XmppStreamElement {
+    let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
+    // from is deliberately left as None
+    msg.id = Some(Id(id.to_string()));
+    for p in payloads {
+        msg.payloads.push(p);
+    }
+    if let Some(stamp) = delay_stamp {
+        let delay_elem: Element = format!("<delay xmlns='urn:xmpp:delay' stamp='{stamp}'/>")
+            .parse()
+            .expect("valid delay element");
+        msg.payloads.push(delay_elem);
+    }
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 /// A chat reaction message (XEP-0444). `referenced_id` is the id of the
 /// original message being reacted to. `emojis` is the full set of emojis the
 /// sender is expressing (empty slice clears all reactions from this sender).

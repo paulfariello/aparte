@@ -568,6 +568,7 @@ impl Storage {
         &mut self,
         account: &Account,
         message_id: &str,
+        conversation_jid: &str,
         body: &str,
         from_jid: &str,
         timestamp: &str,
@@ -582,6 +583,7 @@ impl Storage {
             .values((
                 messages_cleartext::account.eq(&bare),
                 messages_cleartext::message_id.eq(message_id),
+                messages_cleartext::conversation_jid.eq(conversation_jid),
                 messages_cleartext::body.eq(body),
                 messages_cleartext::from_jid.eq(from_jid),
                 messages_cleartext::timestamp.eq(timestamp),
@@ -637,8 +639,9 @@ mod tests {
             .save_message_cleartext(
                 &account1,
                 "msg-uuid-x1",
-                "Hello across resources",
                 "bob@example.org",
+                "Hello across resources",
+                "alice@example.org",
                 "2024-01-01T00:00:00Z",
                 true,
             )

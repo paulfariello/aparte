@@ -78,6 +78,7 @@ diesel::table! {
     messages_cleartext (account, message_id) {
         account -> Text,
         message_id -> Text,
+        conversation_jid -> Text,
         from_jid -> Text,
         body -> Text,
         timestamp -> Text,

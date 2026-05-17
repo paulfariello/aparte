@@ -11,7 +11,7 @@ use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType as XmppPa
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
-use crate::message::{Message, VersionedXmppMessage, XmppMessageType};
+use crate::message::{Direction, Message, VersionedXmppMessage, XmppMessageType};
 
 #[derive(Default)]
 pub struct MessageStoreMod {
@@ -80,6 +80,14 @@ impl ModTrait for MessageStoreMod {
                 let mut msg = message.clone();
                 msg.bodies
                     .insert(xmpp_parsers::message::Lang(String::new()), body);
+                // Some XMPP servers archive sent messages without stamping the
+                // `from` attribute (they store the stanza as the client submitted
+                // it). Message::from_xmpp returns Err(()) when `from` is absent,
+                // so we default it to the account JID — making the message appear
+                // as outgoing, which is correct for a message we sent.
+                if msg.from.is_none() {
+                    msg.from = Some(account.clone().into());
+                }
                 if let Ok(message) = Message::from_xmpp(account, &msg, delay, archive) {
                     aparte.schedule(Event::Message(Some(account.clone()), message));
                 }
@@ -121,10 +129,15 @@ fn save_if_encrypted(aparte: &mut Aparte, account: &Account, xmpp: &VersionedXmp
     if body.is_empty() {
         return;
     }
+    let conversation_jid = match xmpp.direction {
+        Direction::Outgoing => xmpp.to.to_string(),
+        Direction::Incoming => xmpp.from.to_string(),
+    };
     let ts = xmpp.get_original_timestamp().to_rfc3339();
     if let Err(e) = aparte.storage.save_message_cleartext(
         account,
         &xmpp.id,
+        &conversation_jid,
         body,
         &xmpp.from.to_string(),
         &ts,

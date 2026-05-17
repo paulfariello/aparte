@@ -91,6 +91,7 @@ pub struct OmemoMucRoom {
 pub struct MessageCleartext {
     pub account: String,
     pub message_id: String,
+    pub conversation_jid: String,
     pub from_jid: String,
     pub body: String,
     pub timestamp: String,
