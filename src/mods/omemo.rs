@@ -778,8 +778,17 @@ impl CryptoEngineTrait for OmemoEngine {
             )
         };
 
+        // Use the actual sender's bare JID for the Signal session address.
+        // For <sent> carbons from our own other device, message.from is our own
+        // full JID; using its bare form means the session is keyed by own_jid/sid
+        // rather than self.contact/sid, preventing cross-session collision.
+        let sender_bare = message
+            .from
+            .as_ref()
+            .map(|j| j.to_bare().to_string())
+            .unwrap_or_else(|| self.contact.to_string());
         let remote_address = ProtocolAddress::new(
-            self.contact.to_string(),
+            sender_bare,
             libsignal_protocol::DeviceId::from(encrypted.header.sid),
         );
 

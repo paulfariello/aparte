@@ -1660,8 +1660,18 @@ impl Aparte {
         // Decrypt if required
         // TODO EME can't be required
         if let (Some(encryption_ns), Some(from)) = (encryption_ns, message.from.clone()) {
+            // For <sent> carbons from another device of the same user, `from` is our
+            // own bare JID — no engine is registered for that. Use the `to` JID
+            // (the contact's JID) to find the engine for this conversation instead.
+            let peer_jid = if from.to_bare() == account.to_bare() {
+                message.to.as_ref().map(|j| j.to_bare())
+            } else {
+                Some(from.to_bare())
+            };
             let mut crypto_engines = self.crypto_engines.lock().unwrap();
-            if let Some(crypto_engine) = crypto_engines.get_mut(&(account.clone(), from.to_bare()))
+            if let Some(crypto_engine) = peer_jid
+                .as_ref()
+                .and_then(|jid| crypto_engines.get_mut(&(account.clone(), jid.clone())))
             {
                 if encryption_ns == crypto_engine.ns() {
                     message = match crypto_engine.decrypt(self, &account, &message) {

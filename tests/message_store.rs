@@ -14,6 +14,8 @@
 //!      replays the encrypted stanza (simulating history fetch after restart).
 //!   4. Same as 3 but the MAM-replayed stanza has no `from` attribute (some servers
 //!      archive sent messages without stamping the sender JID).
+//!   5. A `<sent>` carbon copy of an OMEMO message sent from another device of the
+//!      same user is decrypted using our pre-key and displayed as an outgoing message.
 
 mod common;
 
@@ -27,9 +29,9 @@ use xmpp_parsers::{
 
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{
-    muc_join_presence_with_jid, omemo_encrypted_chat_message, omemo_encrypted_chat_replay,
-    omemo_encrypted_chat_replay_no_from, omemo_encrypted_groupchat_echo, room_subject_message,
-    XmppFixture,
+    muc_join_presence_with_jid, omemo_encrypted_carbon_sent, omemo_encrypted_chat_message,
+    omemo_encrypted_chat_replay, omemo_encrypted_chat_replay_no_from,
+    omemo_encrypted_groupchat_echo, room_subject_message, XmppFixture,
 };
 use common::{describe, row_text, ROWS};
 
@@ -331,5 +333,53 @@ fn message_store_sent_omemo_restored_without_from() {
         "sent OMEMO message without `from` was not restored from cleartext store; \
          got {count} occurrence(s)\n{}",
         describe(parser.screen()),
+    );
+}
+
+/// A `<sent>` carbon copy of an OMEMO message from another device of the same user
+/// must be decrypted and displayed as an outgoing message.
+///
+/// Scenario: Device B (simulated via ContactKeys) encrypts a message addressed to
+/// `contact@localhost` and includes our device in the OMEMO recipients. The server
+/// forwards the message to us as a `<sent>` carbon. We must decrypt it using our
+/// pre-key and display the cleartext in the contact conversation window.
+#[test]
+fn message_store_carbon_sent_omemo_from_other_device() {
+    let mut device_b = ContactKeys::generate();
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(CONTACT_JID, contact.device_id, contact.bundle.clone());
+
+    let (aparte_device_id, aparte_bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {CONTACT_JID}"));
+    fixture.send_command(&format!("/omemo enable {CONTACT_JID}"));
+    thread::sleep(Duration::from_secs(3));
+
+    // Device B encrypts a message for our device (aparte).
+    let aparte_bare = BareJid::new("user@localhost").expect("bare jid");
+    let encrypted = device_b.encrypt_for(
+        &aparte_bare,
+        aparte_device_id,
+        &aparte_bundle,
+        "carbon-omemo-body-d9f2",
+    );
+    let encrypted_elem = xmpp_parsers::minidom::Element::from(encrypted);
+
+    // The server delivers this as a <sent> carbon to our full JID.
+    fixture.inject(omemo_encrypted_carbon_sent(
+        "user@localhost",          // outer from: user's bare JID (server reflection)
+        BOUND_JID,                 // outer to: our full JID
+        "user@localhost/device_b", // inner from: Device B's full JID
+        CONTACT_JID,               // inner to: the contact
+        "carbon-msg-id-d9f2",
+        encrypted_elem,
+    ));
+
+    assert!(
+        fixture.wait_for("carbon-omemo-body-d9f2", Duration::from_secs(5)),
+        "OMEMO <sent> carbon from other device was not decrypted and displayed\n{}",
+        describe(fixture.snapshot().screen()),
     );
 }

@@ -268,7 +268,8 @@ impl Storage {
         log::debug!("Is {address}'s identity trusted?");
         Ok(match self.get_omemo_identity(account, address)? {
             Some(stored) => &stored == identity,
-            _ => false,
+            // TOFU: no stored identity means first contact with this device — trust it.
+            None => true,
         })
     }
 

@@ -636,6 +636,40 @@ pub fn carbon_sent(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
 }
 
+/// A `<sent>` carbon wrapping an OMEMO-encrypted 1:1 message.
+/// Used to simulate a message sent from another device of the same user,
+/// where the inner message carries OMEMO ciphertext addressed to our device.
+pub fn omemo_encrypted_carbon_sent(
+    outer_from: &str,
+    outer_to: &str,
+    inner_from: &str,
+    inner_to: &str,
+    id: &str,
+    encrypted_elem: Element,
+) -> XmppStreamElement {
+    let mut inner = Message::chat(Some(Jid::new(inner_to).unwrap()));
+    inner.from = Some(Jid::new(inner_from).unwrap());
+    inner.id = Some(Id(id.to_string()));
+    inner.bodies.insert(
+        Default::default(),
+        "I sent you an OMEMO encrypted message but your client doesn't seem to support that."
+            .to_string(),
+    );
+    inner.payloads.push(encrypted_elem);
+
+    let sent = Sent {
+        forwarded: Forwarded {
+            delay: None,
+            message: inner,
+        },
+    };
+
+    let mut outer = Message::new_with_type(MessageType::Normal, Some(Jid::new(outer_to).unwrap()));
+    outer.from = Some(Jid::new(outer_from).unwrap());
+    outer.payloads.push(sent.into());
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(outer))
+}
+
 pub fn carbon_sent_groupchat(
     outer_from: &str,
     outer_to: &str,
