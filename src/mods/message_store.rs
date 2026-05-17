@@ -32,14 +32,17 @@ impl ModTrait for MessageStoreMod {
         Ok(())
     }
 
-    /// Claim encrypted Chat/Groupchat messages with no body — these are OMEMO
-    /// messages where decryption failed (ratchet advanced) or no crypto engine
-    /// exists (session never established). Returns lower confidence than
-    /// MessagesMod (0.01) so it only wins when bodies are empty.
+    /// Claim OMEMO-encrypted Chat/Groupchat messages when we have stored cleartext
+    /// for the message ID. OMEMO messages always carry a plaintext fallback body
+    /// ("I sent you an OMEMO encrypted message…") so checking for an empty body is
+    /// not sufficient. Instead we look up the cleartext store and return confidence
+    /// 0.02 — beating MessagesMod (0.01) — only when a stored body is found.
+    /// Messages with no stored cleartext fall through to MessagesMod which shows
+    /// the fallback text.
     fn can_handle_xmpp_message(
         &mut self,
-        _aparte: &mut Aparte,
-        _account: &Account,
+        aparte: &mut Aparte,
+        account: &Account,
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
@@ -47,10 +50,15 @@ impl ModTrait for MessageStoreMod {
             message.type_,
             XmppParsersMessageType::Chat | XmppParsersMessageType::Groupchat
         );
-        if relevant_type && message.bodies.is_empty() && has_omemo_payload(message) {
-            0.005
-        } else {
-            0.0
+        if !relevant_type || !has_omemo_payload(message) {
+            return 0.0;
+        }
+        let Some(id) = message.id.as_ref().map(|id| id.0.as_str()) else {
+            return 0.0;
+        };
+        match aparte.storage.get_message_cleartext(account, id) {
+            Ok(Some(_)) => 0.02,
+            _ => 0.0,
         }
     }
 

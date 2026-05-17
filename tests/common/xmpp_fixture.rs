@@ -1045,6 +1045,12 @@ pub fn omemo_encrypted_chat_message(
     let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
     msg.from = Some(Jid::new(from).unwrap());
     msg.id = Some(Id(id.to_string()));
+    // Real OMEMO stanzas always carry a plaintext fallback body.
+    msg.bodies.insert(
+        Default::default(),
+        "I sent you an OMEMO encrypted message but your client doesn't seem to support that."
+            .to_string(),
+    );
     msg.payloads.push(encrypted_elem);
     if let Some(stamp) = delay_stamp {
         let delay_elem: Element = format!("<delay xmlns='urn:xmpp:delay' stamp='{stamp}'/>")
@@ -1055,7 +1061,7 @@ pub fn omemo_encrypted_chat_message(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
-/// An OMEMO-encrypted groupchat message with no body (the server echo of a sent MUC OMEMO message).
+/// An OMEMO-encrypted groupchat echo with the standard OMEMO fallback body.
 /// `payloads` are copied verbatim from the sent stanza's payloads (the OMEMO `<encrypted>` element).
 pub fn omemo_encrypted_groupchat_echo(
     from_full: &str,
@@ -1066,6 +1072,11 @@ pub fn omemo_encrypted_groupchat_echo(
     let mut msg = Message::new_with_type(MessageType::Groupchat, Some(Jid::new(to).unwrap()));
     msg.from = Some(Jid::new(from_full).unwrap());
     msg.id = Some(Id(id.to_string()));
+    msg.bodies.insert(
+        Default::default(),
+        "I sent you an OMEMO encrypted message but your client doesn't seem to support that."
+            .to_string(),
+    );
     for p in payloads {
         msg.payloads.push(p);
     }
@@ -1085,6 +1096,11 @@ pub fn omemo_encrypted_chat_replay(
     let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
     msg.from = Some(Jid::new(from).unwrap());
     msg.id = Some(Id(id.to_string()));
+    msg.bodies.insert(
+        Default::default(),
+        "I sent you an OMEMO encrypted message but your client doesn't seem to support that."
+            .to_string(),
+    );
     for p in payloads {
         msg.payloads.push(p);
     }
@@ -1109,6 +1125,11 @@ pub fn omemo_encrypted_chat_replay_no_from(
     let mut msg = Message::chat(Some(Jid::new(to).unwrap()));
     // from is deliberately left as None
     msg.id = Some(Id(id.to_string()));
+    msg.bodies.insert(
+        Default::default(),
+        "I sent you an OMEMO encrypted message but your client doesn't seem to support that."
+            .to_string(),
+    );
     for p in payloads {
         msg.payloads.push(p);
     }
