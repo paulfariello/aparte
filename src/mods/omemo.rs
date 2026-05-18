@@ -609,6 +609,7 @@ impl CryptoEngineTrait for MucOmemoEngine {
                 .map_err(|_| anyhow!("Message decryption failed"))?;
             let body = String::from_utf8(cleartext)
                 .context("Message decryption resulted in invalid utf-8")?;
+            decrypted_message.bodies.clear();
             decrypted_message.bodies.insert(Lang::default(), body);
         }
 
@@ -835,6 +836,7 @@ impl CryptoEngineTrait for OmemoEngine {
                 .map_err(|_| anyhow!("Message decryption failed"))?;
             let message = String::from_utf8(cleartext)
                 .context("Message decryption resulted in invalid utf-8")?;
+            decrypted_message.bodies.clear();
             decrypted_message.bodies.insert(Lang::default(), message);
         }
 

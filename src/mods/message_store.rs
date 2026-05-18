@@ -104,6 +104,7 @@ impl ModTrait for MessageStoreMod {
         match aparte.storage.get_message_cleartext(account, id) {
             Ok(Some(body)) => {
                 let mut msg = message.clone();
+                msg.bodies.clear();
                 msg.bodies
                     .insert(xmpp_parsers::message::Lang(String::new()), body);
                 // Some XMPP servers archive sent messages without stamping the
