@@ -75,19 +75,28 @@ diesel::table! {
 }
 
 diesel::table! {
-    messages_cleartext (account, message_id) {
+    archives (account, message_id) {
         account -> Text,
         message_id -> Text,
         conversation_jid -> Text,
         from_jid -> Text,
-        body -> Text,
+        body_enc -> Binary,
         timestamp -> Text,
         encrypted -> Bool,
     }
 }
 
+diesel::table! {
+    account_crypto_config (account) {
+        account -> Text,
+        kdf_salt -> Binary,
+        wrapped_dek -> Binary,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
-    messages_cleartext,
+    account_crypto_config,
+    archives,
     omemo_contact_device,
     omemo_identity,
     omemo_muc_room,

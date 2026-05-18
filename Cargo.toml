@@ -19,6 +19,7 @@ insecure-xmpp = ["tokio-xmpp/insecure-tcp"]
 
 [dependencies]
 aes-gcm = "0.10.3"
+argon2 = "0.5"
 anyhow = "^1.0"
 async-trait = "0.1.41" # same as libsignal
 backtrace = "^0.3"

@@ -58,7 +58,7 @@ use crate::conversation::{Channel, Conversation};
 use crate::crypto::CryptoEngine;
 use crate::message::Message;
 use crate::mods;
-use crate::storage::Storage;
+use crate::storage::{PasswordMismatch, Storage};
 use crate::{
     command_def, generate_arg_autocompletion, generate_command_autocompletions, generate_help,
     parse_command_args, parse_lookup_arg,
@@ -469,6 +469,7 @@ impl Display for Mod {
 pub struct Connection {
     pub sink: mpsc::UnboundedSender<Element>,
     pub iq_sink: mpsc::UnboundedSender<IqEnvelope>,
+    pub pending_password: Option<Password>,
 }
 
 command_def!(connect,
@@ -519,6 +520,41 @@ Examples:
 
     aparte.schedule(Event::Connect(account, password));
 
+    Ok(())
+});
+
+command_def!(rekey_archive,
+r":rekey_archive <account>
+
+    account       Bare JID of the account whose archive needs re-encrypting
+
+Description:
+    Re-encrypts the message archive after an XMPP password change.
+    Triggered automatically when the stored DEK cannot be decrypted
+    with the current login password. The user is prompted for their
+    old password to unwrap the DEK, then re-wraps it with the new one.
+",
+{
+    account_jid: String = {},
+    old_password: Password = {},
+},
+|aparte, _command| {
+    use xmpp_parsers::jid::BareJid;
+    let bare: BareJid = BareJid::from_str(&account_jid)
+        .map_err(|e| anyhow::anyhow!("Invalid account JID: {e}"))?;
+    let new_password = aparte
+        .pending_rekey
+        .remove(&bare)
+        .ok_or_else(|| anyhow::anyhow!("No pending re-key for {bare}"))?;
+    if let Err(e) = aparte.storage.rewrap_dek_with_old(
+        &bare,
+        &old_password,
+        &new_password,
+    ) {
+        aparte.log(format!("Failed to re-encrypt archive for {bare}: {e}"));
+    } else {
+        aparte.log(format!("Archive re-encrypted for {bare}"));
+    }
     Ok(())
 });
 
@@ -808,6 +844,8 @@ pub struct Aparte {
     iq_rx: Option<mpsc::UnboundedReceiver<(Account, IqEnvelope)>>,
     crypto_engines: Arc<Mutex<HashMap<(Account, BareJid), CryptoEngine>>>,
     read_password: AtomicBool,
+    /// Accounts whose XMPP password changed; holds the new password until old-password re-key.
+    pending_rekey: HashMap<BareJid, Password>,
     /// Aparté main configuration
     pub config: Config,
     pub storage: Storage,
@@ -896,6 +934,7 @@ impl Aparte {
             config: config.clone(),
             crypto_engines: Arc::new(Mutex::new(HashMap::new())),
             read_password: AtomicBool::new(false),
+            pending_rekey: HashMap::new(),
             record_path,
             pending_annotations: Arc::new(Mutex::new(Vec::new())),
             render_notify: Arc::new(Notify::new()),
@@ -1052,6 +1091,7 @@ impl Aparte {
     pub fn init(&mut self) -> Result<(), ()> {
         self.add_command(help::new());
         self.add_command(connect::new());
+        self.add_command(rekey_archive::new());
         self.add_command(win::new());
         self.add_command(close::new());
         self.add_command(leave::new());
@@ -1366,6 +1406,7 @@ impl Aparte {
             Connection {
                 sink: connection_channel,
                 iq_sink: iq_channel,
+                pending_password: Some(password),
             },
         );
 
@@ -1536,6 +1577,43 @@ impl Aparte {
             }
             Event::Connected(account, _) => {
                 self.log(format!("Connected as {account}"));
+
+                if let Some(password) = self
+                    .connections
+                    .get_mut(&account)
+                    .and_then(|c| c.pending_password.take())
+                {
+                    match self.storage.init_account_crypto(&account, &password) {
+                        Ok(()) => {}
+                        Err(e) if e.downcast_ref::<PasswordMismatch>().is_some() => {
+                            self.pending_rekey.insert(account.to_bare(), password);
+                            self.schedule(Event::ShowPopup {
+                                title: Some("Archive password mismatch".to_string()),
+                                lines: vec![
+                                    "Your XMPP password appears to have changed since the"
+                                        .to_string(),
+                                    "message archive was last encrypted. Enter your old password"
+                                        .to_string(),
+                                    "to re-encrypt the archive with the new one.".to_string(),
+                                ],
+                            });
+                            let rekey_cmd = Command {
+                                account: Some(account.clone()),
+                                context: "rekey_archive".to_string(),
+                                args: vec![
+                                    "rekey_archive".to_string(),
+                                    account.to_bare().to_string(),
+                                ],
+                                cursor: 0,
+                            };
+                            self.schedule(Event::ReadPassword(rekey_cmd));
+                        }
+                        Err(e) => {
+                            log::error!("Failed to init archive crypto for {account}: {e}");
+                        }
+                    }
+                }
+
                 let mut presence = Presence::new(PresenceType::None);
                 presence.show = Some(PresenceShow::Chat);
 

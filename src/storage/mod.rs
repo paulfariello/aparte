@@ -4,20 +4,48 @@
 mod models;
 mod schema;
 
-use std::convert::TryFrom;
+use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use aes_gcm::{
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Aes256Gcm,
+};
 use anyhow::{anyhow, Error, Result};
+use argon2::{Algorithm, Argon2, Params, Version};
 use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+use secrecy::{ExposeSecret, Secret};
 use xmpp_parsers::jid::BareJid;
 
-use crate::account::Account;
+use crate::account::{Account, Password};
+
+const NONCE_LEN: usize = 12;
+const DEK_LEN: usize = 32;
+const KDF_SALT_LEN: usize = 16;
+const KDF_MEMORY: u32 = 65536;
+const KDF_TIME: u32 = 3;
+const KDF_PARALLELISM: u32 = 1;
+
+#[derive(Debug)]
+pub struct PasswordMismatch;
+
+impl std::fmt::Display for PasswordMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "password mismatch: stored DEK cannot be decrypted with the provided password"
+        )
+    }
+}
+
+impl std::error::Error for PasswordMismatch {}
 
 pub use models::{
     OmemoContactDevice, OmemoIdentity, OmemoOwnDevice, OmemoPreKey, OmemoSenderKey, OmemoSession,
@@ -29,6 +57,7 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 #[derive(Clone)]
 pub struct Storage {
     pub(crate) pool: Pool<ConnectionManager<SqliteConnection>>,
+    deks: Arc<Mutex<HashMap<String, Secret<Vec<u8>>>>>,
 }
 
 impl Storage {
@@ -44,7 +73,179 @@ impl Storage {
         let mut conn = pool.get()?;
         conn.run_pending_migrations(MIGRATIONS).unwrap();
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            deks: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    fn derive_kek(password: &Password, salt: &[u8]) -> Result<[u8; DEK_LEN]> {
+        let params = Params::new(KDF_MEMORY, KDF_TIME, KDF_PARALLELISM, Some(DEK_LEN))
+            .map_err(|e| anyhow!("Invalid Argon2 params: {e}"))?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+        let mut kek = [0u8; DEK_LEN];
+        argon2
+            .hash_password_into(password.expose_secret().as_bytes(), salt, &mut kek)
+            .map_err(|e| anyhow!("Argon2 KDF failed: {e}"))?;
+        Ok(kek)
+    }
+
+    fn aes256gcm_encrypt(key: &[u8; DEK_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow!("AES key error: {e}"))?;
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, plaintext)
+            .map_err(|e| anyhow!("Encryption failed: {e}"))?;
+        let mut out = nonce.to_vec();
+        out.extend(ciphertext);
+        Ok(out)
+    }
+
+    fn aes256gcm_decrypt(key: &[u8; DEK_LEN], data: &[u8]) -> Result<Vec<u8>> {
+        if data.len() < NONCE_LEN {
+            return Err(anyhow!("Ciphertext too short"));
+        }
+        let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| anyhow!("AES key error: {e}"))?;
+        let nonce = aes_gcm::Nonce::from_slice(&data[..NONCE_LEN]);
+        cipher
+            .decrypt(nonce, &data[NONCE_LEN..])
+            .map_err(|_| anyhow!("Decryption failed"))
+    }
+
+    pub fn init_account_crypto(&mut self, account: &Account, password: &Password) -> Result<()> {
+        use schema::account_crypto_config;
+        let bare = account.to_bare().to_string();
+        let mut conn = self.pool.get()?;
+
+        let config: Option<models::AccountCryptoConfig> = account_crypto_config::table
+            .filter(account_crypto_config::account.eq(&bare))
+            .first(&mut conn)
+            .optional()?;
+
+        let dek: [u8; DEK_LEN] = if let Some(cfg) = config {
+            let salt: [u8; KDF_SALT_LEN] = cfg
+                .kdf_salt
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow!("Invalid salt length"))?;
+            let kek = Self::derive_kek(password, &salt)?;
+            let dek_bytes =
+                Self::aes256gcm_decrypt(&kek, &cfg.wrapped_dek).map_err(|_| PasswordMismatch)?;
+            dek_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow!("Invalid DEK length in storage"))?
+        } else {
+            let dek: [u8; DEK_LEN] = rand::random();
+            let salt: [u8; KDF_SALT_LEN] = rand::random();
+            let kek = Self::derive_kek(password, &salt)?;
+            let wrapped_dek = Self::aes256gcm_encrypt(&kek, &dek)?;
+            diesel::insert_into(account_crypto_config::table)
+                .values((
+                    account_crypto_config::account.eq(&bare),
+                    account_crypto_config::kdf_salt.eq(salt.as_slice()),
+                    account_crypto_config::wrapped_dek.eq(&wrapped_dek),
+                ))
+                .execute(&mut conn)?;
+            dek
+        };
+
+        self.deks
+            .lock()
+            .unwrap()
+            .insert(bare, Secret::new(dek.to_vec()));
+        Ok(())
+    }
+
+    pub fn rewrap_dek(&mut self, account: &Account, new_password: &Password) -> Result<()> {
+        use schema::account_crypto_config;
+        let bare = account.to_bare().to_string();
+
+        let dek_bytes = self
+            .deks
+            .lock()
+            .unwrap()
+            .get(&bare)
+            .map(|s| s.expose_secret().clone())
+            .ok_or_else(|| {
+                anyhow!("No DEK in memory for {bare}; call init_account_crypto first")
+            })?;
+
+        let salt: [u8; KDF_SALT_LEN] = rand::random();
+        let kek = Self::derive_kek(new_password, &salt)?;
+        let wrapped_dek = Self::aes256gcm_encrypt(&kek, &dek_bytes)?;
+
+        let mut conn = self.pool.get()?;
+        diesel::update(
+            account_crypto_config::table.filter(account_crypto_config::account.eq(&bare)),
+        )
+        .set((
+            account_crypto_config::kdf_salt.eq(salt.as_slice()),
+            account_crypto_config::wrapped_dek.eq(&wrapped_dek),
+        ))
+        .execute(&mut conn)?;
+        Ok(())
+    }
+
+    /// Re-wrap the DEK when a password change is detected: decrypt with the old password,
+    /// re-encrypt with the new password, then cache the DEK for this session.
+    pub fn rewrap_dek_with_old(
+        &mut self,
+        account: &BareJid,
+        old_password: &Password,
+        new_password: &Password,
+    ) -> Result<()> {
+        use schema::account_crypto_config;
+        let bare = account.to_string();
+        let mut conn = self.pool.get()?;
+
+        let cfg: models::AccountCryptoConfig = account_crypto_config::table
+            .filter(account_crypto_config::account.eq(&bare))
+            .first(&mut conn)?;
+
+        let old_salt: [u8; KDF_SALT_LEN] = cfg
+            .kdf_salt
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("Invalid salt length"))?;
+        let old_kek = Self::derive_kek(old_password, &old_salt)?;
+        let dek_bytes =
+            Self::aes256gcm_decrypt(&old_kek, &cfg.wrapped_dek).map_err(|_| PasswordMismatch)?;
+
+        let new_salt: [u8; KDF_SALT_LEN] = rand::random();
+        let new_kek = Self::derive_kek(new_password, &new_salt)?;
+        let wrapped_dek = Self::aes256gcm_encrypt(&new_kek, &dek_bytes)?;
+
+        diesel::update(
+            account_crypto_config::table.filter(account_crypto_config::account.eq(&bare)),
+        )
+        .set((
+            account_crypto_config::kdf_salt.eq(new_salt.as_slice()),
+            account_crypto_config::wrapped_dek.eq(&wrapped_dek),
+        ))
+        .execute(&mut conn)?;
+
+        let dek: [u8; DEK_LEN] = dek_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("Invalid DEK length"))?;
+        self.deks
+            .lock()
+            .unwrap()
+            .insert(bare, Secret::new(dek.to_vec()));
+        Ok(())
+    }
+
+    fn get_dek(&self, bare: &str) -> Result<[u8; DEK_LEN]> {
+        let deks = self.deks.lock().unwrap();
+        let bytes = deks
+            .get(bare)
+            .ok_or_else(|| anyhow!("No DEK for account {bare}; was init_account_crypto called?"))?
+            .expose_secret();
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("Corrupt DEK length"))
     }
 
     pub fn get_omemo_own_device(&self, account: &Account) -> Result<Option<OmemoOwnDevice>> {
@@ -575,24 +776,24 @@ impl Storage {
         timestamp: &str,
         encrypted: bool,
     ) -> Result<()> {
-        use schema::messages_cleartext;
-        let mut conn = self.pool.get()?;
-        // Use the bare JID as the account key so cleartext is found across sessions
-        // even when the resource changes (e.g. random resource on reconnect).
+        use schema::archives;
         let bare = account.to_bare().to_string();
-        diesel::insert_into(messages_cleartext::table)
+        let dek = self.get_dek(&bare)?;
+        let body_enc = Self::aes256gcm_encrypt(&dek, body.as_bytes())?;
+        let mut conn = self.pool.get()?;
+        diesel::insert_into(archives::table)
             .values((
-                messages_cleartext::account.eq(&bare),
-                messages_cleartext::message_id.eq(message_id),
-                messages_cleartext::conversation_jid.eq(conversation_jid),
-                messages_cleartext::body.eq(body),
-                messages_cleartext::from_jid.eq(from_jid),
-                messages_cleartext::timestamp.eq(timestamp),
-                messages_cleartext::encrypted.eq(encrypted),
+                archives::account.eq(&bare),
+                archives::message_id.eq(message_id),
+                archives::conversation_jid.eq(conversation_jid),
+                archives::body_enc.eq(&body_enc),
+                archives::from_jid.eq(from_jid),
+                archives::timestamp.eq(timestamp),
+                archives::encrypted.eq(encrypted),
             ))
-            .on_conflict((messages_cleartext::account, messages_cleartext::message_id))
+            .on_conflict((archives::account, archives::message_id))
             .do_update()
-            .set(messages_cleartext::body.eq(body))
+            .set(archives::body_enc.eq(&body_enc))
             .execute(&mut conn)?;
         Ok(())
     }
@@ -602,15 +803,23 @@ impl Storage {
         account: &Account,
         message_id: &str,
     ) -> Result<Option<String>> {
-        use schema::messages_cleartext;
-        let mut conn = self.pool.get()?;
+        use schema::archives;
         let bare = account.to_bare().to_string();
-        Ok(messages_cleartext::table
-            .filter(messages_cleartext::account.eq(&bare))
-            .filter(messages_cleartext::message_id.eq(message_id))
-            .select(messages_cleartext::body)
+        let dek = self.get_dek(&bare)?;
+        let mut conn = self.pool.get()?;
+        let maybe_blob: Option<Vec<u8>> = archives::table
+            .filter(archives::account.eq(&bare))
+            .filter(archives::message_id.eq(message_id))
+            .select(archives::body_enc)
             .first(&mut conn)
-            .optional()?)
+            .optional()?;
+        match maybe_blob {
+            None => Ok(None),
+            Some(blob) => {
+                let plaintext = Self::aes256gcm_decrypt(&dek, &blob)?;
+                Ok(Some(String::from_utf8(plaintext)?))
+            }
+        }
     }
 }
 
@@ -618,7 +827,6 @@ impl Storage {
 mod tests {
     use super::*;
     use std::str::FromStr;
-    use xmpp_parsers::jid::FullJid;
 
     fn make_storage() -> (Storage, tempfile::NamedTempFile) {
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -626,15 +834,21 @@ mod tests {
         (storage, file)
     }
 
-    /// Cleartext saved under one resource must be findable when looked up with a
-    /// different resource for the same bare JID. Without this, MAM history is blank
-    /// after reconnect when aparte generates a fresh random resource per session.
+    fn password(s: &str) -> Password {
+        Secret::new(s.to_string())
+    }
+
+    /// Encrypted message saved under one resource must be decryptable when looked up with a
+    /// different resource for the same bare JID.
     #[test]
     fn cleartext_lookup_succeeds_across_resources() {
         let (mut storage, _file) = make_storage();
 
         let account1 = Account::from_str("alice@example.org/aparte_AAAAA").unwrap();
         let account2 = Account::from_str("alice@example.org/aparte_BBBBB").unwrap();
+        let pw = password("hunter2");
+
+        storage.init_account_crypto(&account1, &pw).unwrap();
 
         storage
             .save_message_cleartext(
@@ -655,6 +869,91 @@ mod tests {
             result.as_deref(),
             Some("Hello across resources"),
             "cleartext stored in one session must be found in a new session with a different resource"
+        );
+    }
+
+    #[test]
+    fn crypto_roundtrip() {
+        let (mut storage, _file) = make_storage();
+        let account = Account::from_str("alice@example.org/aparte_AAAAA").unwrap();
+        let pw = password("correcthorsebatterystaple");
+
+        storage.init_account_crypto(&account, &pw).unwrap();
+        storage
+            .save_message_cleartext(
+                &account,
+                "msg-1",
+                "bob@example.org",
+                "Secret message",
+                "alice@example.org",
+                "2025-01-01T00:00:00Z",
+                true,
+            )
+            .unwrap();
+
+        let body = storage.get_message_cleartext(&account, "msg-1").unwrap();
+        assert_eq!(body.as_deref(), Some("Secret message"));
+    }
+
+    #[test]
+    fn rewrap_dek_allows_new_password() {
+        let (mut storage, _file) = make_storage();
+        let account = Account::from_str("alice@example.org/aparte_AAAAA").unwrap();
+        let pw_a = password("old_password");
+        let pw_b = password("new_password");
+
+        // First session: init + save with password A
+        storage.init_account_crypto(&account, &pw_a).unwrap();
+        storage
+            .save_message_cleartext(
+                &account,
+                "msg-rekey",
+                "bob@example.org",
+                "Rekeyed body",
+                "alice@example.org",
+                "2025-01-01T00:00:00Z",
+                true,
+            )
+            .unwrap();
+
+        // Simulate password change
+        storage.rewrap_dek(&account, &pw_b).unwrap();
+
+        // Second session: fresh storage, init with password B
+        let path = {
+            // We need to reopen with a new storage instance using the same DB file.
+            // Clone the pool to simulate "same file but fresh in-memory state".
+            let mut storage2 = Storage {
+                pool: storage.pool.clone(),
+                deks: Arc::new(Mutex::new(HashMap::new())),
+            };
+            storage2.init_account_crypto(&account, &pw_b).unwrap();
+            let body = storage2
+                .get_message_cleartext(&account, "msg-rekey")
+                .unwrap();
+            assert_eq!(body.as_deref(), Some("Rekeyed body"));
+        };
+        let _ = path;
+    }
+
+    #[test]
+    fn wrong_password_returns_mismatch() {
+        let (mut storage, _file) = make_storage();
+        let account = Account::from_str("alice@example.org/aparte_AAAAA").unwrap();
+        let pw_a = password("correct");
+        let pw_b = password("wrong");
+
+        storage.init_account_crypto(&account, &pw_a).unwrap();
+
+        // Simulate new session with wrong password
+        let mut storage2 = Storage {
+            pool: storage.pool.clone(),
+            deks: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let err = storage2.init_account_crypto(&account, &pw_b).unwrap_err();
+        assert!(
+            err.downcast_ref::<PasswordMismatch>().is_some(),
+            "expected PasswordMismatch, got: {err}"
         );
     }
 }

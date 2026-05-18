@@ -57,6 +57,7 @@
               claude-code
               git
               pre-commit
+              asciinema
             ]);
             shellHook = sslHook;
           };
