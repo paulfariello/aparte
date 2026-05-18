@@ -84,7 +84,9 @@ where
         if self.focused {
             if let Some(ref new_key) = self.current {
                 if let Some(child) = self.children.get_mut(new_key) {
-                    child.on_focus_change(true);
+                    if child.focusable() {
+                        child.on_focus_change(true);
+                    }
                 }
             }
         }
@@ -188,7 +190,9 @@ where
         self.focused = focused;
         if let Some(ref key) = self.current {
             if let Some(child) = self.children.get_mut(key) {
-                child.on_focus_change(focused);
+                if child.focusable() {
+                    child.on_focus_change(focused);
+                }
             }
         }
     }
@@ -218,6 +222,7 @@ mod tests {
             width: RequestedDimension::ExpandMax,
             height: RequestedDimension::ExpandMax,
         });
+        v.expect_focusable().return_const(true);
         v
     }
 

@@ -430,6 +430,12 @@ pub trait View<E, C = ()> {
     /// Called when this view gains or loses focus.
     /// Compound views override this to cascade the notification to their focused child.
     fn on_focus_change(&mut self, _focused: bool) {}
+
+    /// Whether this view can receive focus. Non-focusable views are skipped
+    /// by compound views when cascading focus.
+    fn focusable(&self) -> bool {
+        true
+    }
 }
 
 impl<E, C> dyn View<E, C> {}

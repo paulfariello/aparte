@@ -70,7 +70,9 @@ impl<E, C> LinearLayout<E, C> {
         self.focused_child_index = Some(index);
         if self.focused {
             if let Some(lc) = self.children.get_mut(index) {
-                lc.child.view.on_focus_change(true);
+                if lc.child.view.focusable() {
+                    lc.child.view.on_focus_change(true);
+                }
             }
         }
     }
@@ -335,9 +337,30 @@ impl<E, C> View<E, C> for LinearLayout<E, C> {
 
     fn on_focus_change(&mut self, focused: bool) {
         self.focused = focused;
-        let idx = *self.focused_child_index.get_or_insert(0);
-        if let Some(lc) = self.children.get_mut(idx) {
-            lc.child.view.on_focus_change(focused);
+        if focused {
+            // Resolve: use stored index if that child is focusable, else find the first focusable.
+            let target = match self.focused_child_index {
+                Some(i)
+                    if self
+                        .children
+                        .get(i)
+                        .is_some_and(|lc| lc.child.view.focusable()) =>
+                {
+                    Some(i)
+                }
+                _ => self
+                    .children
+                    .iter()
+                    .position(|lc| lc.child.view.focusable()),
+            };
+            if let Some(idx) = target {
+                self.focused_child_index = Some(idx);
+                self.children[idx].child.view.on_focus_change(true);
+            }
+        } else if let Some(idx) = self.focused_child_index {
+            if let Some(lc) = self.children.get_mut(idx) {
+                lc.child.view.on_focus_change(false);
+            }
         }
     }
 
@@ -619,6 +642,7 @@ mod tests {
             width: RequestedDimension::ExpandMax,
             height: RequestedDimension::ExpandMax,
         });
+        v.expect_focusable().return_const(true);
         v
     }
 
@@ -735,6 +759,86 @@ mod tests {
         child.expect_event().times(0).return_const(());
         layout.push(child, 1);
         layout.event(&mut ());
+    }
+
+    fn make_unfocusable_child() -> TestMockView {
+        let mut v = TestMockView::new();
+        v.expect_measure().return_const(RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::ExpandMax,
+        });
+        v.expect_focusable().return_const(false);
+        v
+    }
+
+    #[test]
+    fn test_on_focus_change_skips_non_focusable_child() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut non_focusable = make_unfocusable_child();
+        let mut focusable = make_mock_child();
+        non_focusable
+            .expect_on_focus_change()
+            .times(0)
+            .return_const(());
+        focusable
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        layout.push(non_focusable, 1);
+        layout.push(focusable, 1);
+        // no set_focus — defaults to 0 (non-focusable), must skip to 1
+        layout.on_focus_change(true);
+        assert_eq!(layout.focused_child_index, Some(1));
+    }
+
+    #[test]
+    fn test_on_focus_change_skips_non_focusable_stored_index() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut focusable = make_mock_child();
+        let mut non_focusable = make_unfocusable_child();
+        focusable
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        non_focusable
+            .expect_on_focus_change()
+            .times(0)
+            .return_const(());
+        layout.push(focusable, 1);
+        layout.push(non_focusable, 1);
+        layout.set_focus(1); // point at non-focusable
+        layout.on_focus_change(true); // should fall back to child 0
+        assert_eq!(layout.focused_child_index, Some(0));
+    }
+
+    #[test]
+    fn test_set_focus_non_focusable_while_focused_does_not_notify_new() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut focusable = make_mock_child();
+        let mut non_focusable = make_unfocusable_child();
+        // focusable: gains focus when layout gains focus, loses it when set_focus moves away
+        focusable
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        focusable
+            .expect_on_focus_change()
+            .with(eq(false))
+            .times(1)
+            .return_const(());
+        // non_focusable must NEVER receive on_focus_change(true)
+        non_focusable
+            .expect_on_focus_change()
+            .times(0)
+            .return_const(());
+        layout.push(focusable, 1);
+        layout.push(non_focusable, 1);
+        layout.set_focus(0);
+        layout.on_focus_change(true); // child 0 (focusable) gains focus
+        layout.set_focus(1); // try to move to non-focusable — should not notify it
     }
 
     #[test]

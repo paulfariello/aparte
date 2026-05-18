@@ -205,6 +205,10 @@ impl TitleBar {
 }
 
 impl View<UIEvent, Theme> for TitleBar {
+    fn focusable(&self) -> bool {
+        false
+    }
+
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
@@ -378,6 +382,10 @@ impl WinBar {
 }
 
 impl View<UIEvent, Theme> for WinBar {
+    fn focusable(&self) -> bool {
+        false
+    }
+
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             height: RequestedDimension::Absolute(1),
