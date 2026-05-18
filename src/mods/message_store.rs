@@ -50,15 +50,33 @@ impl ModTrait for MessageStoreMod {
             message.type_,
             XmppParsersMessageType::Chat | XmppParsersMessageType::Groupchat
         );
-        if !relevant_type || !has_omemo_payload(message) {
+        if !relevant_type {
+            return 0.0;
+        }
+        if !has_omemo_payload(message) {
             return 0.0;
         }
         let Some(id) = message.id.as_ref().map(|id| id.0.as_str()) else {
+            log::debug!("message_store: OMEMO message has no id, cannot look up archive");
             return 0.0;
         };
+        log::debug!(
+            "message_store: archive lookup for OMEMO message id={id} from={:?}",
+            message.from
+        );
         match aparte.storage.get_message_cleartext(account, id) {
-            Ok(Some(_)) => 0.02,
-            _ => 0.0,
+            Ok(Some(_)) => {
+                log::debug!("message_store: found cleartext for {id}, claiming message");
+                0.02
+            }
+            Ok(None) => {
+                log::debug!("message_store: no cleartext stored for {id}, falling through");
+                0.0
+            }
+            Err(e) => {
+                log::debug!("message_store: archive lookup failed for {id}: {e}");
+                0.0
+            }
         }
     }
 
@@ -130,11 +148,20 @@ impl ModTrait for MessageStoreMod {
 }
 
 fn save_if_encrypted(aparte: &mut Aparte, account: &Account, xmpp: &VersionedXmppMessage) {
-    if !xmpp.encrypted || xmpp.archive {
+    if !xmpp.encrypted {
+        log::debug!("message_store: skip save id={} — not encrypted", xmpp.id);
+        return;
+    }
+    if xmpp.archive {
+        log::debug!(
+            "message_store: skip save id={} — archive flag set (reconstructed from store)",
+            xmpp.id
+        );
         return;
     }
     let body = xmpp.get_last_body(vec![]);
     if body.is_empty() {
+        log::debug!("message_store: skip save id={} — empty body", xmpp.id);
         return;
     }
     let conversation_jid = match xmpp.direction {
@@ -142,6 +169,10 @@ fn save_if_encrypted(aparte: &mut Aparte, account: &Account, xmpp: &VersionedXmp
         Direction::Incoming => xmpp.from.to_string(),
     };
     let ts = xmpp.get_original_timestamp().to_rfc3339();
+    log::debug!(
+        "message_store: saving cleartext for id={} conversation={conversation_jid}",
+        xmpp.id
+    );
     if let Err(e) = aparte.storage.save_message_cleartext(
         account,
         &xmpp.id,

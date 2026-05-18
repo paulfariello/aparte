@@ -1753,7 +1753,14 @@ impl Aparte {
             {
                 if encryption_ns == crypto_engine.ns() {
                     message = match crypto_engine.decrypt(self, &account, &message) {
-                        Ok(message) => message,
+                        Ok(message) => {
+                            log::debug!(
+                                "Decrypted message {:?} with {}",
+                                message.id,
+                                crypto_engine.ns()
+                            );
+                            message
+                        }
                         Err(err) => {
                             log::error!(
                                 "Cannot decrypt message with {}: {}",
