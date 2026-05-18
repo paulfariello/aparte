@@ -23,8 +23,14 @@ fn enter_normal(h: &Harness) {
     wait_for_screen(h, "NORMAL", Duration::from_secs(2));
 }
 
+fn enter_insert(h: &Harness) {
+    enter_normal(h);
+    h.send_bytes(b"i");
+    wait_for_screen(h, "INSERT", Duration::from_secs(2));
+}
+
 #[test]
-fn default_mode_is_insert() {
+fn default_mode_is_normal() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
@@ -34,8 +40,8 @@ fn default_mode_is_insert() {
     h.shutdown();
 
     assert!(
-        grid_contains(screen, "INSERT"),
-        "Expected INSERT mode indicator in win_bar\n{}",
+        grid_contains(screen, "NORMAL"),
+        "Expected NORMAL mode indicator in win_bar at startup\n{}",
         describe(screen)
     );
 }
@@ -590,6 +596,9 @@ fn cursor_steady_bar_escape_sent_in_insert_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
+    // Enter INSERT mode to trigger SteadyBar emission.
+    enter_insert(&h);
+
     // SetCursorStyle::SteadyBar emits ESC [ 6 SP q  (DECSCUSR = 6)
     let steady_bar: &[u8] = b"\x1b[6 q";
     let bytes = h.bytes.lock().unwrap().clone();
@@ -1128,7 +1137,8 @@ fn command_mode_restores_insert_input_on_exit() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    // Type some text in INSERT mode.
+    // Switch to INSERT mode then type some text.
+    enter_insert(&h);
     h.send_bytes(b"hello world");
     wait_for_screen(&h, "hello world", Duration::from_secs(2));
 
@@ -1172,14 +1182,35 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     // Title bar = row ROWS - 2 (WinBar:0, Frame:1..21, TitleBar:22, Input:23).
     let title_row = ROWS - 2;
 
-    // -- INSERT (startup) --
+    // -- NORMAL (startup) --
+    {
+        let parser = h.snapshot();
+        let screen = parser.screen();
+        let bar = row_text(screen, title_row);
+        assert!(
+            bar.contains("NORMAL"),
+            "Title bar must show NORMAL at startup; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+    }
+
+    // NORMAL → INSERT
+    h.send_bytes(b"i");
+    wait_for_screen(&h, "INSERT", Duration::from_secs(2));
     {
         let parser = h.snapshot();
         let screen = parser.screen();
         let bar = row_text(screen, title_row);
         assert!(
             bar.contains("INSERT"),
-            "Title bar must show INSERT at startup; got: {:?}\n{}",
+            "Title bar must show INSERT after 'i'; got: {:?}\n{}",
+            bar,
+            describe(screen)
+        );
+        assert!(
+            !bar.contains("NORMAL"),
+            "Stray NORMAL in title bar after switching to INSERT; got: {:?}\n{}",
             bar,
             describe(screen)
         );

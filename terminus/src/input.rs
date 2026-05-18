@@ -227,6 +227,10 @@ impl<E> Input<E> {
 }
 
 impl<E, C> View<E, C> for Input<E> {
+    fn on_focus_change(&mut self, focused: bool) {
+        self.show_cursor = focused;
+    }
+
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
         RequestedDimensions {
             width: RequestedDimension::ExpandMax,
@@ -315,6 +319,22 @@ impl<E, C> View<E, C> for Input<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::View;
+
+    #[test]
+    fn test_on_focus_change_false_hides_cursor() {
+        let mut input = Input::<()>::new();
+        <Input<()> as View<(), ()>>::on_focus_change(&mut input, false);
+        assert!(!input.show_cursor);
+    }
+
+    #[test]
+    fn test_on_focus_change_true_shows_cursor() {
+        let mut input = Input::<()>::new();
+        input.show_cursor = false;
+        <Input<()> as View<(), ()>>::on_focus_change(&mut input, true);
+        assert!(input.show_cursor);
+    }
 
     #[test]
     fn test_input_backspace() {

@@ -422,10 +422,14 @@ pub trait View<E, C = ()> {
     fn layout(&mut self, dimensions: &Dimensions);
 
     /// Render the view with the given dimensions inside the given screen
-    fn render(&self, frame: ScreenFrame<'_>, config: &C);
+    fn render<'s>(&self, frame: ScreenFrame<'s>, config: &C);
 
     /// Handle an event
     fn event(&mut self, event: &mut E);
+
+    /// Called when this view gains or loses focus.
+    /// Compound views override this to cascade the notification to their focused child.
+    fn on_focus_change(&mut self, _focused: bool) {}
 }
 
 impl<E, C> dyn View<E, C> {}

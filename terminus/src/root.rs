@@ -50,6 +50,14 @@ impl<E, C> Root<E, C> {
         self.popup.is_visible()
     }
 
+    pub fn route_to_focused(&mut self, event: &mut E) {
+        if let Some(content) = self.popup.content_mut() {
+            content.event(event);
+        } else {
+            self.background.event(event);
+        }
+    }
+
     pub fn background_mut(&mut self) -> &mut dyn View<E, C> {
         self.background.as_mut()
     }
@@ -69,6 +77,14 @@ impl<E, C> Root<E, C> {
 }
 
 impl<E, C: PopupColors> View<E, C> for Root<E, C> {
+    fn on_focus_change(&mut self, focused: bool) {
+        if let Some(content) = self.popup.content_mut() {
+            content.on_focus_change(focused);
+        } else {
+            self.background.on_focus_change(focused);
+        }
+    }
+
     fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
         self.background.measure(measure_specs)
     }
@@ -109,7 +125,7 @@ mod tests {
     use crate::linear_layout::{LinearLayout, Orientation};
     use crate::rendering::{OffscreenRenderBuffer, ScreenSize};
     use crate::stories::{render_view_into, row_text};
-    use crate::Color;
+    use crate::{Color, ColorTuple};
 
     const W: u16 = 40;
     const H: u16 = 10;

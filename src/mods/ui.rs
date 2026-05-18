@@ -1465,9 +1465,7 @@ impl ModTrait for UIMod {
                     // reusing its editing logic (Ctrl+A/B/E/F/H/W/U/K, arrows, Home/End,
                     // Delete, history).
                     UIEvent::Core(Event::Key(_)) if mode == Mode::Command => {
-                        if let Some(focused) = layout.focused_child_mut() {
-                            focused.event(event);
-                        }
+                        layout.route_to_focused(event);
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(c),
@@ -1550,9 +1548,7 @@ impl ModTrait for UIMod {
                     }
                     // All other keys in INSERT mode go only to the focused input.
                     UIEvent::Core(Event::Key(_)) if mode == Mode::Insert => {
-                        if let Some(focused) = layout.focused_child_mut() {
-                            focused.event(event);
-                        }
+                        layout.route_to_focused(event);
                     }
                     // Enter in Command mode executes the typed command.
                     // (Enter is delivered as UIEvent::Validate by on_event, not as a Key event.)
@@ -1674,11 +1670,7 @@ impl ModTrait for UIMod {
                     | Event::Completed(_, _)
                     | Event::ResetCompletion
                     | Event::ReadPassword(_),
-                ) => {
-                    if let Some(current) = frame.get_current_mut() {
-                        current.event(event);
-                    }
-                }
+                ) => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {
@@ -1826,11 +1818,6 @@ impl ModTrait for UIMod {
         layout.set_focus(FRAME_LAYOUT_INDEX);
 
         self.root = Root::new(layout).with_event(|root, event| match event {
-            UIEvent::Core(Event::Key(_)) if root.is_visible() => {
-                if let Some(content) = root.content_mut() {
-                    content.event(event);
-                }
-            }
             UIEvent::ShowPopup { title, lines } => {
                 let mut scroll_win = ScrollWin::<UIEvent, PopupLine, Theme>::new()
                     .with_layout(LayoutParams {
@@ -1866,9 +1853,10 @@ impl ModTrait for UIMod {
             UIEvent::ClosePopup => {
                 root.hide();
             }
-            _ => {
-                root.background_mut().event(event);
-            }
+            // Key events route to popup (when visible) or background.
+            UIEvent::Core(Event::Key(_)) => root.route_to_focused(event),
+            // All other events always go to the background.
+            _ => root.background_mut().event(event),
         });
 
         let mut console = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal).with_event(
@@ -2118,6 +2106,9 @@ impl ModTrait for UIMod {
 
         self.add_window("console".to_string(), None, Box::new(console));
         self.change_window("console");
+
+        // Broadcast the initial mode so views (cursor style, title bar, etc.) are consistent.
+        self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
 
         // Measure, layout and render
         let measure_specs = terminus::MeasureSpecs {

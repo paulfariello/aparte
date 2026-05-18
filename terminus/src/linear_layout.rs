@@ -36,7 +36,8 @@ pub struct LinearLayout<E, C = ()> {
     pub event_handler: Option<EventHandler<Self, E>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
-    focused_child_index: Option<usize>,
+    pub focused_child_index: Option<usize>,
+    focused: bool,
 }
 
 impl<E, C> LinearLayout<E, C> {
@@ -52,11 +53,34 @@ impl<E, C> LinearLayout<E, C> {
             },
             dimensions: None,
             focused_child_index: None,
+            focused: false,
         }
     }
 
     pub fn set_focus(&mut self, index: usize) {
+        if self.focused {
+            if let Some(old) = self.focused_child_index {
+                if old != index {
+                    if let Some(lc) = self.children.get_mut(old) {
+                        lc.child.view.on_focus_change(false);
+                    }
+                }
+            }
+        }
         self.focused_child_index = Some(index);
+        if self.focused {
+            if let Some(lc) = self.children.get_mut(index) {
+                lc.child.view.on_focus_change(true);
+            }
+        }
+    }
+
+    pub fn route_to_focused(&mut self, event: &mut E) {
+        if let Some(idx) = self.focused_child_index {
+            if let Some(lc) = self.children.get_mut(idx) {
+                lc.child.view.event(event);
+            }
+        }
     }
 
     pub fn focused_child_mut(&mut self) -> Option<&mut Box<dyn View<E, C>>> {
@@ -309,15 +333,21 @@ impl<E, C> View<E, C> for LinearLayout<E, C> {
         }
     }
 
+    fn on_focus_change(&mut self, focused: bool) {
+        self.focused = focused;
+        let idx = *self.focused_child_index.get_or_insert(0);
+        if let Some(lc) = self.children.get_mut(idx) {
+            lc.child.view.on_focus_change(focused);
+        }
+    }
+
     fn event(&mut self, event: &mut E) {
         if let Some(handler) = &self.event_handler {
             let handler = Rc::clone(handler);
             let handler = &mut *handler.borrow_mut();
             handler(self, event);
         } else {
-            for child in self.iter_children_mut() {
-                child.event(event);
-            }
+            self.route_to_focused(event);
         }
     }
 }
@@ -581,6 +611,130 @@ mod tests {
             width: 100,
             height: 200,
         });
+    }
+
+    fn make_mock_child() -> TestMockView {
+        let mut v = TestMockView::new();
+        v.expect_measure().return_const(RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::ExpandMax,
+        });
+        v
+    }
+
+    #[test]
+    fn test_on_focus_change_true_cascades_to_focused_child() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child0 = make_mock_child();
+        let mut child1 = make_mock_child();
+        child0.expect_on_focus_change().times(0).return_const(());
+        child1
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        layout.push(child0, 1);
+        layout.push(child1, 1);
+        layout.set_focus(1);
+        layout.on_focus_change(true);
+    }
+
+    #[test]
+    fn test_on_focus_change_false_cascades_and_retains_index() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child0 = make_mock_child();
+        child0
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        child0
+            .expect_on_focus_change()
+            .with(eq(false))
+            .times(1)
+            .return_const(());
+        layout.push(child0, 1);
+        layout.set_focus(0);
+        layout.on_focus_change(true);
+        layout.on_focus_change(false);
+        // focused_child_index must be retained so focus is restorable
+        assert_eq!(layout.focused_child_index, Some(0));
+    }
+
+    #[test]
+    fn test_on_focus_change_defaults_to_first_child_when_no_index_set() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child = make_mock_child();
+        child
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        layout.push(child, 1);
+        // no set_focus call — should default to index 0
+        layout.on_focus_change(true);
+        assert_eq!(layout.focused_child_index, Some(0));
+    }
+
+    #[test]
+    fn test_set_focus_while_focused_notifies_old_and_new() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child0 = make_mock_child();
+        let mut child1 = make_mock_child();
+        // child0 gains focus when layout is focused, then loses it
+        child0
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        child0
+            .expect_on_focus_change()
+            .with(eq(false))
+            .times(1)
+            .return_const(());
+        // child1 gains focus
+        child1
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        layout.push(child0, 1);
+        layout.push(child1, 1);
+        layout.set_focus(0);
+        layout.on_focus_change(true); // layout gains focus → child0 notified
+        layout.set_focus(1); // child0 loses, child1 gains
+    }
+
+    #[test]
+    fn test_set_focus_while_not_focused_stores_index_without_notification() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child0 = make_mock_child();
+        // no on_focus_change expected
+        child0.expect_on_focus_change().times(0).return_const(());
+        layout.push(child0, 1);
+        layout.set_focus(0); // layout is not focused — no notification
+    }
+
+    #[test]
+    fn test_event_routes_to_focused_child_when_no_handler() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child0 = make_mock_child();
+        let mut child1 = make_mock_child();
+        child0.expect_event().times(0).return_const(());
+        child1.expect_event().times(1).return_const(());
+        layout.push(child0, 1);
+        layout.push(child1, 1);
+        layout.set_focus(1);
+        layout.event(&mut ());
+    }
+
+    #[test]
+    fn test_event_reaches_no_child_when_no_focus_set() {
+        let mut layout = LinearLayout::<()>::new(Orientation::Vertical);
+        let mut child = make_mock_child();
+        child.expect_event().times(0).return_const(());
+        layout.push(child, 1);
+        layout.event(&mut ());
     }
 
     #[test]

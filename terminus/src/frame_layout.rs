@@ -23,6 +23,7 @@ where
     event_handler: Option<EventHandler<Self, E>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
+    focused: bool,
 }
 
 impl<E, K, C> Default for FrameLayout<E, K, C>
@@ -49,6 +50,7 @@ where
                 height: LayoutParam::MatchParent,
             },
             dimensions: None,
+            focused: false,
         }
     }
 
@@ -68,8 +70,29 @@ where
     }
 
     pub fn set_current(&mut self, key: K) {
-        if self.current.as_ref() != Some(&key) {
-            self.current = Some(key);
+        if self.current.as_ref() == Some(&key) {
+            return;
+        }
+        if self.focused {
+            if let Some(ref old_key) = self.current {
+                if let Some(child) = self.children.get_mut(old_key) {
+                    child.on_focus_change(false);
+                }
+            }
+        }
+        self.current = Some(key);
+        if self.focused {
+            if let Some(ref new_key) = self.current {
+                if let Some(child) = self.children.get_mut(new_key) {
+                    child.on_focus_change(true);
+                }
+            }
+        }
+    }
+
+    pub fn route_to_focused(&mut self, event: &mut E) {
+        if let Some(current) = self.get_current_mut() {
+            current.event(event);
         }
     }
 
@@ -161,15 +184,124 @@ where
         }
     }
 
+    fn on_focus_change(&mut self, focused: bool) {
+        self.focused = focused;
+        if let Some(ref key) = self.current {
+            if let Some(child) = self.children.get_mut(key) {
+                child.on_focus_change(focused);
+            }
+        }
+    }
+
     fn event(&mut self, event: &mut E) {
         if let Some(handler) = &self.event_handler {
             let handler = Rc::clone(handler);
             let handler = &mut *handler.borrow_mut();
             handler(self, event);
         } else {
-            for child in self.iter_children_mut() {
-                child.event(event);
-            }
+            self.route_to_focused(event);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MockView;
+    type TestMockView = MockView<(), ()>;
+    use crate::{RequestedDimension, RequestedDimensions};
+    use mockall::predicate::*;
+
+    fn make_mock_child() -> TestMockView {
+        let mut v = TestMockView::new();
+        v.expect_measure().return_const(RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::ExpandMax,
+        });
+        v
+    }
+
+    #[test]
+    fn test_on_focus_change_cascades_to_current_child() {
+        let mut frame = FrameLayout::<(), &str>::new();
+        let mut child = make_mock_child();
+        child
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        frame.insert("a", child);
+        frame.set_current("a");
+        frame.on_focus_change(true);
+    }
+
+    #[test]
+    fn test_on_focus_change_false_cascades_and_retains_current() {
+        let mut frame = FrameLayout::<(), &str>::new();
+        let mut child = make_mock_child();
+        child
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        child
+            .expect_on_focus_change()
+            .with(eq(false))
+            .times(1)
+            .return_const(());
+        frame.insert("a", child);
+        frame.set_current("a");
+        frame.on_focus_change(true);
+        frame.on_focus_change(false);
+        assert_eq!(frame.current, Some("a"));
+    }
+
+    #[test]
+    fn test_set_current_while_focused_notifies_old_and_new() {
+        let mut frame = FrameLayout::<(), &str>::new();
+        let mut child_a = make_mock_child();
+        let mut child_b = make_mock_child();
+        child_a
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        child_a
+            .expect_on_focus_change()
+            .with(eq(false))
+            .times(1)
+            .return_const(());
+        child_b
+            .expect_on_focus_change()
+            .with(eq(true))
+            .times(1)
+            .return_const(());
+        frame.insert("a", child_a);
+        frame.insert("b", child_b);
+        frame.set_current("a");
+        frame.on_focus_change(true); // frame focused → child_a notified
+        frame.set_current("b"); // child_a loses, child_b gains
+    }
+
+    #[test]
+    fn test_set_current_while_not_focused_no_notification() {
+        let mut frame = FrameLayout::<(), &str>::new();
+        let mut child_a = make_mock_child();
+        child_a.expect_on_focus_change().times(0).return_const(());
+        frame.insert("a", child_a);
+        frame.set_current("a");
+    }
+
+    #[test]
+    fn test_event_routes_to_current_when_no_handler() {
+        let mut frame = FrameLayout::<(), &str>::new();
+        let mut child_a = make_mock_child();
+        let mut child_b = make_mock_child();
+        child_a.expect_event().times(0).return_const(());
+        child_b.expect_event().times(1).return_const(());
+        frame.insert("a", child_a);
+        frame.insert("b", child_b);
+        frame.set_current("b");
+        frame.event(&mut ());
     }
 }
