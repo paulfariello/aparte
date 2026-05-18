@@ -180,7 +180,7 @@ impl TitleBar {
             current_jid: None,
             display_name: None,
             display_names: HashMap::new(),
-            mode: Mode::Insert,
+            mode: Mode::Normal,
             connection: None,
             subjects: HashMap::new(),
             dimensions: None,
@@ -699,7 +699,7 @@ impl UIMod {
             conversations: HashMap::new(),
             jid_to_name: HashMap::new(),
             password_command: None,
-            current_mode: Mode::Insert,
+            current_mode: Mode::Normal,
             popup_saved_mode: None,
             outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
             _panic_handler: panic_handler,
@@ -1367,7 +1367,7 @@ impl ModTrait for UIMod {
 
         let layout;
         {
-            let mut mode = Mode::Insert;
+            let mut mode = Mode::Normal;
             let mut command_buffer = String::new();
             let mut saved_input = String::new();
             let mut timeout_generation: u64 = 0;
@@ -1823,7 +1823,7 @@ impl ModTrait for UIMod {
         layout.push(frame, 1);
         layout.push(title_bar, 0);
         layout.push(input, 0);
-        layout.set_focus(INPUT_INDEX);
+        layout.set_focus(FRAME_LAYOUT_INDEX);
 
         self.root = Root::new(layout).with_event(|root, event| match event {
             UIEvent::Core(Event::Key(_)) if root.is_visible() => {
@@ -2145,6 +2145,7 @@ impl ModTrait for UIMod {
         match event {
             Event::ReadPassword(command) => {
                 self.password_command = Some(command.clone());
+                self.root.event(&mut UIEvent::ModeChange(Mode::Insert));
                 self.root
                     .event(&mut UIEvent::Core(Event::ReadPassword(command.clone())));
             }

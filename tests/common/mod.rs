@@ -264,7 +264,7 @@ pub fn wait_for_screen(h: &Harness, needle: &str, timeout: Duration) -> bool {
     false
 }
 
-/// Poll until the app reaches INSERT mode (ready to accept input).
+/// Poll until the app reaches NORMAL mode (ready to accept input).
 /// Fails immediately if the process exits, or after 60 s on a loaded machine.
 pub fn wait_for_ready(h: &Harness) {
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -272,17 +272,17 @@ pub fn wait_for_ready(h: &Harness) {
         if h.exited.load(Ordering::Relaxed) {
             let parser = h.snapshot();
             panic!(
-                "App exited before reaching INSERT mode — likely a startup crash\n{}",
+                "App exited before reaching NORMAL mode — likely a startup crash\n{}",
                 describe(parser.screen())
             );
         }
         let parser = h.snapshot();
-        if grid_contains(parser.screen(), "INSERT") {
+        if grid_contains(parser.screen(), "NORMAL") {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "App did not reach INSERT mode within 60s — startup hung\n{}",
+            "App did not reach NORMAL mode within 60s — startup hung\n{}",
             describe(parser.screen())
         );
         thread::sleep(Duration::from_millis(100));
