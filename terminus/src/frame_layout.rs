@@ -206,6 +206,14 @@ where
             self.route_to_focused(event);
         }
     }
+
+    fn insertable(&self) -> bool {
+        self.current
+            .as_ref()
+            .and_then(|key| self.children.get(key))
+            .map(|child| child.insertable())
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

@@ -156,9 +156,13 @@ fn i_after_jk_navigation_returns_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
+    fill_console(&h);
+
     enter_normal(&h);
+    // Navigate up with 'k' (moves focus to message frame) then back to the
+    // last message with 'G', then 'j' to bubble focus back to the input bar.
     h.send_bytes(b"k");
-    h.send_bytes(b"k");
+    h.send_bytes(b"G");
     h.send_bytes(b"j");
     thread::sleep(Duration::from_millis(200));
 
@@ -171,7 +175,7 @@ fn i_after_jk_navigation_returns_to_insert() {
 
     assert!(
         found,
-        "Expected INSERT mode after 'i' following j/k navigation\n{}",
+        "Expected INSERT mode after navigating messages and returning to input bar via 'j'\n{}",
         describe(screen)
     );
 }
@@ -181,8 +185,14 @@ fn insert_mode_typing_works_after_jk_navigation() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
+    fill_console(&h);
+
     enter_normal(&h);
-    h.send_bytes(b"kkj");
+    // Navigate into messages with 'k', jump to last with 'G', then bubble
+    // back to the input bar with 'j' before entering INSERT mode.
+    h.send_bytes(b"k");
+    h.send_bytes(b"G");
+    h.send_bytes(b"j");
     thread::sleep(Duration::from_millis(200));
 
     // Return to insert and type something
@@ -520,12 +530,15 @@ fn insert_mode_jk_do_not_move_message_selection() {
     fill_console(&h);
     wait_for_screen(&h, "bad29", Duration::from_secs(5));
 
-    // Enter NORMAL mode and select a message with 'k'.
+    // Enter NORMAL mode and select a message with 'k' (moves focus to message frame).
     enter_normal(&h);
     h.send_bytes(b"k");
     thread::sleep(Duration::from_millis(200));
 
-    // Return to INSERT mode — ModeChange clears the selection.
+    // Return to INSERT mode: jump to last message then bubble back to input bar.
+    // ModeChange(Insert) clears the selection.
+    h.send_bytes(b"G");
+    h.send_bytes(b"j");
     h.send_bytes(b"i");
     let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
 
@@ -971,6 +984,143 @@ fn command_mode_esc_then_i_returns_to_insert() {
     assert!(
         !grid_contains(screen, "/hello"),
         "Command buffer should be cleared after Esc from COMMAND mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn i_on_non_insertable_component_does_not_enter_insert_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+
+    // Enter NORMAL mode — last message is auto-selected by ModeChange(Normal),
+    // and focus is on the input bar (INPUT_INDEX).
+    enter_normal(&h);
+
+    // Press 'k': selects the second-to-last message AND moves focus to the
+    // message frame (FRAME_LAYOUT_INDEX), which is not insertable.
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    // Sanity: a message row should be highlighted.
+    {
+        let parser = h.snapshot();
+        assert!(
+            !rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR).is_empty(),
+            "Expected a selected message after pressing 'k'\n{}",
+            describe(parser.screen())
+        );
+    }
+
+    // Save the cursor row before pressing 'i'.
+    let cursor_row_before = {
+        let parser = h.snapshot();
+        parser.screen().cursor_position().0
+    };
+
+    // Press 'i' — the focused component (message frame) is NOT insertable,
+    // so INSERT mode must be silently denied.
+    h.send_bytes(b"i");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    // Mode must still be NORMAL.
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "Mode must remain NORMAL when 'i' is pressed on a non-insertable component\n{}",
+        describe(screen)
+    );
+    assert!(
+        !grid_contains(screen, "INSERT"),
+        "'i' must not switch to INSERT mode when the focused component is not insertable\n{}",
+        describe(screen)
+    );
+
+    // Cursor must not have moved to the input bar — it should still be on the
+    // selected message row (or wherever it was before 'i').
+    let (cursor_row_after, _) = parser.screen().cursor_position();
+    assert_ne!(
+        cursor_row_after,
+        ROWS - 1,
+        "Cursor must not jump to the input bar (row {}) when INSERT is denied; got row {}\n{}",
+        ROWS - 1,
+        cursor_row_after,
+        describe(screen)
+    );
+    assert_eq!(
+        cursor_row_after,
+        cursor_row_before,
+        "Cursor must not move when INSERT is denied (was row {}, now row {})\n{}",
+        cursor_row_before,
+        cursor_row_after,
+        describe(screen)
+    );
+}
+
+#[test]
+fn j_on_last_message_moves_cursor_to_input_bar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+
+    // Enter NORMAL mode — the ScrollWin auto-selects the last visible message.
+    enter_normal(&h);
+    // Jump explicitly to the last message so the selection is on "bad29".
+    h.send_bytes(b"G");
+    wait_for_screen(&h, "bad29", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(200));
+
+    // Sanity: a message row should be highlighted at this point.
+    {
+        let parser = h.snapshot();
+        assert!(
+            !rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR).is_empty(),
+            "Expected a selected message before pressing j at the last message\n{}",
+            describe(parser.screen())
+        );
+    }
+
+    // Press j one more time — we are already on the last message, so this bubbles
+    // up to the parent layout which clears the selection and moves focus to the
+    // input bar (the next insertable sibling after FRAME_LAYOUT_INDEX).
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    // Selection must be cleared: no message row should be highlighted.
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "Selection should be cleared after j bubbles from the last message, but {} rows are still highlighted\n{}",
+        selected.len(),
+        describe(screen)
+    );
+
+    // Cursor must be on the input bar (last row).
+    let (row, _) = parser.screen().cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor should be on the input bar (row {}) after j bubbles from the last message, got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen)
+    );
+
+    // Mode must remain NORMAL — j does not switch modes.
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "Mode should remain NORMAL after j bubbles from last message\n{}",
         describe(screen)
     );
 }

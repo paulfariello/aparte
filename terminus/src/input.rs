@@ -227,8 +227,12 @@ impl<E> Input<E> {
 }
 
 impl<E, C> View<E, C> for Input<E> {
-    fn on_focus_change(&mut self, focused: bool) {
-        self.show_cursor = focused;
+    fn on_focus_change(&mut self, _focused: bool) {
+        // Cursor visibility is managed by mode changes, not by focus transitions.
+    }
+
+    fn insertable(&self) -> bool {
+        true
     }
 
     fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
@@ -322,16 +326,16 @@ mod tests {
     use crate::View;
 
     #[test]
-    fn test_on_focus_change_false_hides_cursor() {
+    fn test_on_focus_change_does_not_affect_cursor() {
         let mut input = Input::<()>::new();
+        // Cursor visibility must not change on focus loss — mode changes manage it.
         <Input<()> as View<(), ()>>::on_focus_change(&mut input, false);
-        assert!(!input.show_cursor);
+        assert!(input.show_cursor);
     }
 
     #[test]
     fn test_on_focus_change_true_shows_cursor() {
         let mut input = Input::<()>::new();
-        input.show_cursor = false;
         <Input<()> as View<(), ()>>::on_focus_change(&mut input, true);
         assert!(input.show_cursor);
     }

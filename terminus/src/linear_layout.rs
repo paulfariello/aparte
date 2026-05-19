@@ -85,6 +85,11 @@ impl<E, C> LinearLayout<E, C> {
         }
     }
 
+    pub fn focused_child(&self) -> Option<&Box<dyn View<E, C>>> {
+        self.focused_child_index
+            .and_then(|i| self.children.get(i).map(|lc| &lc.child.view))
+    }
+
     pub fn focused_child_mut(&mut self) -> Option<&mut Box<dyn View<E, C>>> {
         self.focused_child_index
             .and_then(|i| self.children.get_mut(i).map(|lc| &mut lc.child.view))
@@ -372,6 +377,12 @@ impl<E, C> View<E, C> for LinearLayout<E, C> {
         } else {
             self.route_to_focused(event);
         }
+    }
+
+    fn insertable(&self) -> bool {
+        self.focused_child()
+            .map(|c| c.insertable())
+            .unwrap_or(false)
     }
 }
 

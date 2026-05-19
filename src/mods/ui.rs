@@ -128,7 +128,10 @@ enum UIEvent {
         Option<Box<dyn View<UIEvent, Theme>>>,
     ),
     ModeChange(Mode),
-    NormalCommand(NormalCommand),
+    NormalCommand {
+        cmd: NormalCommand,
+        bubbled: bool,
+    },
     CommandBufferUpdate(String),
     SetInput(String),
     ReduceHighlight(String, u64, u64),
@@ -833,17 +836,26 @@ impl UIMod {
                                 }
                                 mam_requested = false;
                             }
-                            UIEvent::NormalCommand(cmd) => match cmd {
+                            UIEvent::NormalCommand { bubbled, cmd } => match cmd {
                                 NormalCommand::SelectPrev => {
                                     let (old, new, at_top) = view.select_prev();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        if let Some(i) = view.clear_selection() {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
                                         }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
+                                    } else {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
                                         }
                                     }
                                     if at_top && !mam_requested {
@@ -859,14 +871,23 @@ impl UIMod {
                                 }
                                 NormalCommand::SelectNext => {
                                     let (old, new) = view.select_next();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        if let Some(i) = view.clear_selection() {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
                                         }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
+                                    } else {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
                                         }
                                     }
                                 }
@@ -1084,17 +1105,26 @@ impl UIMod {
                                 }
                                 mam_requested = false;
                             }
-                            UIEvent::NormalCommand(cmd) => match cmd {
+                            UIEvent::NormalCommand { bubbled, cmd } => match cmd {
                                 NormalCommand::SelectPrev => {
                                     let (old, new, at_top) = view.select_prev();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        if let Some(i) = view.clear_selection() {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
                                         }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
+                                    } else {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
                                         }
                                     }
                                     if at_top && !mam_requested {
@@ -1110,14 +1140,23 @@ impl UIMod {
                                 }
                                 NormalCommand::SelectNext => {
                                     let (old, new) = view.select_next();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        if let Some(i) = view.clear_selection() {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
                                         }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
+                                    } else {
+                                        if let Some(i) = old {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.deselect();
+                                            }
+                                        }
+                                        if let Some(i) = new {
+                                            if let Some(c) = view.child_at(i) {
+                                                c.select(selection_bg);
+                                            }
                                         }
                                     }
                                 }
@@ -1400,7 +1439,6 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         command_buffer.clear();
-                        layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                         }
@@ -1409,14 +1447,20 @@ impl ModTrait for UIMod {
                         code: KeyCode::Char('i'),
                         ..
                     })) if mode == Mode::Normal => {
-                        command_buffer.clear();
-                        mode = Mode::Insert;
-                        aparte_proxy.schedule(Event::UIMode(Mode::Insert));
-                        layout.set_focus(INPUT_INDEX);
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
-                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                        let focused_is_insertable = layout
+                            .focused_child()
+                            .map(|c| c.insertable())
+                            .unwrap_or(false);
+                        if focused_is_insertable {
+                            command_buffer.clear();
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
                         }
+                        // If focused component is not insertable, deny INSERT mode silently.
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(':'),
@@ -1468,9 +1512,11 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         let saved = std::mem::take(&mut saved_input);
-                        layout.set_focus(FRAME_LAYOUT_INDEX);
-                        if let Some(focused) = layout.focused_child_mut() {
-                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SearchCancel));
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut UIEvent::NormalCommand {
+                                cmd: NormalCommand::SearchCancel,
+                                bubbled: false,
+                            });
                         }
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
@@ -1492,11 +1538,52 @@ impl ModTrait for UIMod {
 
                         if let Some(cmd) = normal_commands.get(&command_buffer).cloned() {
                             command_buffer.clear();
-                            if let Some(focused) = layout.focused_child_mut() {
-                                focused.event(&mut UIEvent::NormalCommand(cmd));
+                            let mut cmd_event = UIEvent::NormalCommand {
+                                cmd,
+                                bubbled: false,
+                            };
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(&mut cmd_event);
                             }
-                            for child in layout.iter_children_mut() {
-                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            let is_bubbled =
+                                matches!(cmd_event, UIEvent::NormalCommand { bubbled: true, .. });
+                            let is_select_next = matches!(
+                                cmd_event,
+                                UIEvent::NormalCommand {
+                                    cmd: NormalCommand::SelectNext,
+                                    ..
+                                }
+                            );
+                            let is_select_prev = matches!(
+                                cmd_event,
+                                UIEvent::NormalCommand {
+                                    cmd: NormalCommand::SelectPrev,
+                                    ..
+                                }
+                            );
+                            if is_bubbled {
+                                if is_select_next {
+                                    if let Some(next) = layout
+                                        .children
+                                        .iter()
+                                        .enumerate()
+                                        .skip(FRAME_LAYOUT_INDEX + 1)
+                                        .find(|(_, lc)| lc.child.view.insertable())
+                                        .map(|(i, _)| i)
+                                    {
+                                        layout.set_focus(next);
+                                    }
+                                } else if is_select_prev {
+                                    // Nothing insertable before FRAME_LAYOUT_INDEX; go to input bar.
+                                    layout.set_focus(INPUT_INDEX);
+                                }
+                            } else {
+                                if is_select_next || is_select_prev {
+                                    layout.set_focus(FRAME_LAYOUT_INDEX);
+                                }
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
                             }
                         } else if normal_commands
                             .get_raw_descendant(&command_buffer)
@@ -1523,16 +1610,44 @@ impl ModTrait for UIMod {
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Up, ..
                     })) if mode == Mode::Normal => {
-                        if let Some(focused) = layout.focused_child_mut() {
-                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SelectPrev));
+                        let mut nav_event = UIEvent::NormalCommand {
+                            cmd: NormalCommand::SelectPrev,
+                            bubbled: false,
+                        };
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut nav_event);
+                        }
+                        if matches!(nav_event, UIEvent::NormalCommand { bubbled: true, .. }) {
+                            // Nothing insertable before FRAME_LAYOUT_INDEX; go to input bar.
+                            layout.set_focus(INPUT_INDEX);
+                        } else {
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Down,
                         ..
                     })) if mode == Mode::Normal => {
-                        if let Some(focused) = layout.focused_child_mut() {
-                            focused.event(&mut UIEvent::NormalCommand(NormalCommand::SelectNext));
+                        let mut nav_event = UIEvent::NormalCommand {
+                            cmd: NormalCommand::SelectNext,
+                            bubbled: false,
+                        };
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut nav_event);
+                        }
+                        if matches!(nav_event, UIEvent::NormalCommand { bubbled: true, .. }) {
+                            if let Some(next) = layout
+                                .children
+                                .iter()
+                                .enumerate()
+                                .skip(FRAME_LAYOUT_INDEX + 1)
+                                .find(|(_, lc)| lc.child.view.insertable())
+                                .map(|(i, _)| i)
+                            {
+                                layout.set_focus(next);
+                            }
+                        } else {
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
                         }
                     }
                     UIEvent::Core(Event::CommandTimeout(gen)) => {
@@ -1584,7 +1699,6 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         let saved = std::mem::take(&mut saved_input);
-                        layout.set_focus(FRAME_LAYOUT_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                             child.event(&mut UIEvent::SetInput(saved.clone()));
@@ -1593,10 +1707,11 @@ impl ModTrait for UIMod {
                         if let Some(query) = cmd.strip_prefix('/') {
                             let query = query.to_string();
                             if !query.is_empty() {
-                                if let Some(focused) = layout.focused_child_mut() {
-                                    focused.event(&mut UIEvent::NormalCommand(
-                                        NormalCommand::SearchFirst(query),
-                                    ));
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut UIEvent::NormalCommand {
+                                        cmd: NormalCommand::SearchFirst(query),
+                                        bubbled: false,
+                                    });
                                 }
                             }
                         } else if cmd.starts_with(':') {
@@ -1619,19 +1734,23 @@ impl ModTrait for UIMod {
                             mode = Mode::Normal;
                             aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                             command_buffer.clear();
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                                 child.event(&mut UIEvent::ModeChange(Mode::Normal));
                             }
                         }
                         Mode::Insert => {
-                            mode = Mode::Insert;
-                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
-                            layout.set_focus(INPUT_INDEX);
-                            for child in layout.iter_children_mut() {
-                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
-                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            let focused_is_insertable = layout
+                                .focused_child()
+                                .map(|c| c.insertable())
+                                .unwrap_or(false);
+                            if focused_is_insertable {
+                                mode = Mode::Insert;
+                                aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                    child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                                }
                             }
                         }
                         Mode::Command => {
@@ -1817,6 +1936,7 @@ impl ModTrait for UIMod {
                     input.buf.clone_from(text);
                 }
                 UIEvent::ModeChange(Mode::Normal) => {
+                    input.set_show_cursor(true);
                     input.set_cursor_style(CursorStyle::SteadyBlock);
                 }
                 UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
@@ -1832,7 +1952,7 @@ impl ModTrait for UIMod {
         layout.push(frame, 1);
         layout.push(title_bar, 0);
         layout.push(input, 0);
-        layout.set_focus(FRAME_LAYOUT_INDEX);
+        layout.set_focus(INPUT_INDEX);
 
         self.root = Root::new(layout).with_event(|root, event| match event {
             UIEvent::ShowPopup { title, lines } => {
@@ -1937,30 +2057,48 @@ impl ModTrait for UIMod {
                                 }
                             }
                         }
-                        UIEvent::NormalCommand(cmd) => match cmd {
+                        UIEvent::NormalCommand { bubbled, cmd } => match cmd {
                             NormalCommand::SelectPrev => {
                                 let (old, new, _) = view.select_prev();
-                                if let Some(i) = old {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
+                                if old.is_some() && old == new {
+                                    *bubbled = true;
+                                    if let Some(i) = view.clear_selection() {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
                                     }
-                                }
-                                if let Some(i) = new {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
+                                } else {
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
                                     }
                                 }
                             }
                             NormalCommand::SelectNext => {
                                 let (old, new) = view.select_next();
-                                if let Some(i) = old {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
+                                if old.is_some() && old == new {
+                                    *bubbled = true;
+                                    if let Some(i) = view.clear_selection() {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
                                     }
-                                }
-                                if let Some(i) = new {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
+                                } else {
+                                    if let Some(i) = old {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.deselect();
+                                        }
+                                    }
+                                    if let Some(i) = new {
+                                        if let Some(c) = view.child_at(i) {
+                                            c.select(selection_bg);
+                                        }
                                     }
                                 }
                             }

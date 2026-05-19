@@ -436,6 +436,12 @@ pub trait View<E, C = ()> {
     fn focusable(&self) -> bool {
         true
     }
+
+    /// Whether this view can accept INSERT mode (text input).
+    /// Container views should delegate to their focused child.
+    fn insertable(&self) -> bool {
+        false
+    }
 }
 
 impl<E, C> dyn View<E, C> {}
