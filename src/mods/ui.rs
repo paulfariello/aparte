@@ -2379,6 +2379,7 @@ impl ModTrait for UIMod {
                             let mut command = self.password_command.take().unwrap();
                             command.args.push(raw_buf);
                             aparte.schedule(Event::Command(command));
+                            self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
                         } else if looks_like_cmd && !self.slash_warned {
                             self.slash_warned = true;
                             aparte.schedule(Event::ShowPopup {
