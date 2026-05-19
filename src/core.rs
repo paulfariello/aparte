@@ -28,6 +28,7 @@ use std::time::Duration;
 use terminus::charxel::IntoCharxels;
 use terminus::cursor::Cursor;
 use terminus::rendering::OffscreenRenderBuffer;
+use terminus::FocusRouted;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::signal::unix;
 use tokio::sync::{mpsc, Notify};
@@ -202,6 +203,12 @@ pub enum Event {
         jid: BareJid,
         last_stanza_id: Option<String>,
     },
+}
+
+impl FocusRouted for Event {
+    fn is_focus_routed(&self) -> bool {
+        matches!(self, Event::Key(_))
+    }
 }
 
 #[allow(clippy::large_enum_variant)]

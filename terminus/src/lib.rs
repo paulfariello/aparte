@@ -440,6 +440,10 @@ pub trait View<E, C = ()> {
 
 impl<E, C> dyn View<E, C> {}
 
+pub trait FocusRouted {
+    fn is_focus_routed(&self) -> bool;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

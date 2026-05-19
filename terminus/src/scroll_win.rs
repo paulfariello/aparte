@@ -147,6 +147,10 @@ where
         self.children.iter().map(|LayoutChild { child, .. }| child)
     }
 
+    pub fn selected(&self) -> Option<&I> {
+        self.selected_child_index.and_then(|i| self.child_at(i))
+    }
+
     pub fn predecessor(&self, item: &I) -> Option<&I> {
         let mut prev: Option<&I> = None;
         for LayoutChild { child, .. } in &self.children {
@@ -1583,5 +1587,39 @@ mod tests {
 
         w.select_prev(); // move to 1 – now above first_visible(2), should scroll
         assert_eq!(w.bottom_visible_child_index, 2); // scrolled up by 1
+    }
+
+    #[test]
+    fn test_selected_returns_none_when_no_selection() {
+        let mut w = ScrollWin::<(), MockView>::new();
+        for i in 0..3 {
+            w.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        assert_eq!(w.selected(), None);
+    }
+
+    #[test]
+    fn test_selected_returns_current_child() {
+        let mut w = ScrollWin::<(), MockView>::new();
+        for i in 0..5 {
+            w.insert(MockView {
+                ord: i,
+                height: 5,
+                ..Default::default()
+            });
+        }
+        w.layout(&Dimensions {
+            width: 100,
+            height: 50,
+            top: 0,
+            left: 0,
+        });
+        w.select_last_visible();
+        let idx = w.selected_child_index.unwrap();
+        assert_eq!(w.selected(), w.child_at(idx));
     }
 }

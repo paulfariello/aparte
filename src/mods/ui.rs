@@ -32,7 +32,7 @@ use terminus::{
     list_view::ListView,
     root::Root,
     scroll_win::ScrollWin,
-    CursorStyle, Dimensions, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    CursorStyle, Dimensions, FocusRouted, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
     RequestedDimension, RequestedDimensions, View,
 };
 use uuid::Uuid;
@@ -137,6 +137,15 @@ enum UIEvent {
         lines: Vec<String>,
     },
     ClosePopup,
+}
+
+impl FocusRouted for UIEvent {
+    fn is_focus_routed(&self) -> bool {
+        match self {
+            UIEvent::Core(event) => event.is_focus_routed(),
+            _ => false,
+        }
+    }
 }
 
 fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: MessageView) {
