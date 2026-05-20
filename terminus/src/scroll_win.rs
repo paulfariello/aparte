@@ -6,7 +6,6 @@ use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::rc::Rc;
 
-use crate::CursorPos;
 use crate::ScreenFrame;
 
 use super::Dimensions;
@@ -74,6 +73,10 @@ where
     first_visible_child_index: usize,
     /// Index of the currently selected child, if any
     selected_child_index: Option<usize>,
+    /// Background colour applied to the selected child during render via `View::select()`.
+    /// When `None` the selection visual is suppressed (useful for views where selection
+    /// is managed externally or not needed).
+    selection_bg: Option<super::BgColor>,
     event_handler: Option<EventHandler<Self, E>>,
     children: BTreeSet<LayoutChild<I>>,
     layouts: LayoutParams,
@@ -101,6 +104,7 @@ where
             bottom_visible_child_index: 0,
             first_visible_child_index: 0,
             selected_child_index: None,
+            selection_bg: None,
             event_handler: None,
             layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
@@ -109,6 +113,14 @@ where
             dimensions: None,
             search_query: None,
         }
+    }
+
+    /// Set the background colour used to highlight the selected child during render.
+    /// Must be called for selection highlighting and cursor positioning to work.
+    #[must_use]
+    pub fn with_selection_bg(mut self, bg: super::BgColor) -> Self {
+        self.selection_bg = Some(bg);
+        self
     }
 
     #[must_use]
@@ -509,7 +521,7 @@ where
             .count()
     }
 
-    /// List visible children starting from bottom (used by render after layout).
+    #[cfg(test)]
     fn visible_children<'a, 'b>(
         &'a self,
         dimensions: &'b Dimensions,
@@ -732,32 +744,27 @@ where
         log::debug!("rendering {}", std::any::type_name::<Self>(),);
 
         if self.children.is_empty() {
-            // Don't bother
             return;
         }
 
         let ScreenFrame { offscreen, .. } = frame;
-        for LayoutChild { child, dimensions } in
-            self.visible_children(self.dimensions.as_ref().expect(MISSING_DIMENSIONS))
-        {
-            let frame = ScreenFrame::new(offscreen, dimensions.as_ref().expect(MISSING_DIMENSIONS));
-            child.render(frame, config);
-        }
-
-        if let Some(idx) = self.selected_child_index {
-            if let Some(LayoutChild {
-                dimensions: Some(dims),
-                ..
-            }) = self.children.iter().nth(idx)
-            {
-                offscreen.set_cursor_with_priority(
-                    CursorPos {
-                        top: dims.top,
-                        left: dims.left,
-                    },
-                    2,
-                );
+        for (idx, LayoutChild { child, dimensions }) in self.children.iter().enumerate() {
+            if idx < self.first_visible_child_index {
+                continue;
             }
+            if idx > self.bottom_visible_child_index {
+                break;
+            }
+            let dims = dimensions.as_ref().expect(MISSING_DIMENSIONS);
+            if Some(idx) == self.selected_child_index {
+                if let Some(bg) = self.selection_bg {
+                    child.select(bg);
+                }
+            } else {
+                child.deselect();
+            }
+            let child_frame = ScreenFrame::new(offscreen, dims);
+            child.render(child_frame, config);
         }
     }
 
@@ -1621,5 +1628,54 @@ mod tests {
         w.select_last_visible();
         let idx = w.selected_child_index.unwrap();
         assert_eq!(w.selected(), w.child_at(idx));
+    }
+
+    #[test]
+    fn test_select_last_visible_tracks_bottom_on_sequential_inserts() {
+        // Simulates MAM backfill: messages arrive one-by-one and select_last_visible
+        // should always return the current bottom_visible_child_index.
+        let mut w = ScrollWin::<(), MockView>::new();
+        for ord in 0..5 {
+            w.insert(MockView {
+                ord,
+                height: 10,
+                ..Default::default()
+            });
+            let (_, new) = w.select_last_visible();
+            assert_eq!(
+                new,
+                Some(w.bottom_visible_child_index),
+                "after insert {ord}: selection should equal bottom_visible_child_index"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bottom_visible_decreases_after_page_up() {
+        // After page_up, bottom_visible_child_index moves up; the caller (ui.rs)
+        // sets follow_bottom=false so auto-tracking stops.  This test verifies
+        // page_up actually moves the bottom so follow_bottom logic is meaningful.
+        let mut w = ScrollWin::<(), MockView>::new();
+        for ord in 0..5 {
+            w.insert(MockView {
+                ord,
+                height: 10,
+                ..Default::default()
+            });
+        }
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: 80,
+            height: 20,
+        };
+        w.layout(&dims);
+        w.select_last_visible(); // init at 4
+        assert_eq!(w.bottom_visible_child_index, 4);
+        w.page_up();
+        assert!(
+            w.bottom_visible_child_index < 4,
+            "page_up should move bottom_visible_child_index below 4"
+        );
     }
 }

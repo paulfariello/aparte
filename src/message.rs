@@ -26,6 +26,7 @@ use std::collections::HashSet;
 
 use terminus::charxel::{Charxel, Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
+use terminus::CursorPos;
 use terminus::{
     self, BgColor, Dimensions, FgColor, MeasureSpec, MeasureSpecs, RequestedDimension,
     RequestedDimensions, Searchable, Style, View,
@@ -1004,14 +1005,6 @@ impl MessageView {
         buffers
     }
 
-    pub fn select(&self, color: BgColor) {
-        self.selected.set(Some(color));
-    }
-
-    pub fn deselect(&self) {
-        self.selected.set(None);
-    }
-
     pub fn set_highlight(&self, data: Option<(String, FgColor, BgColor)>) {
         *self.highlight.borrow_mut() = data;
     }
@@ -1167,10 +1160,22 @@ impl<E, C> View<E, C> for MessageView {
 
         if let Some(color) = self.selected.get() {
             frame.set_background(color);
+            frame.set_cursor_with_priority(
+                CursorPos::from((frame.dimensions.left, frame.dimensions.top)),
+                2,
+            );
         }
     }
 
     fn event(&mut self, _event: &mut E) {}
+
+    fn select(&self, color: BgColor) {
+        self.selected.set(Some(color));
+    }
+
+    fn deselect(&self) {
+        self.selected.set(None);
+    }
 }
 
 impl Searchable for MessageView {

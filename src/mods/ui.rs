@@ -754,110 +754,57 @@ impl UIMod {
         match conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin = ScrollWin::<UIEvent, MessageView, Theme>::new().with_event({
-                    let mut aparte = aparte.proxy();
-                    let mut mam_requested = false;
-                    move |view, event| {
-                        match event {
-                            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
-                                match message.direction {
-                                    // TODO check to == us
-                                    Direction::Incoming => {
-                                        if message.from == chat_for_event.contact {
-                                            insert_message(
-                                                view,
-                                                MessageView::new(
-                                                    &mut aparte,
-                                                    Message::Xmpp(message.clone()),
-                                                ),
-                                            );
-                                            mam_requested = false;
-                                        }
-                                    }
-                                    Direction::Outgoing => {
-                                        // TODO check from == us
-                                        if message.to == chat_for_event.contact {
-                                            insert_message(
-                                                view,
-                                                MessageView::new(
-                                                    &mut aparte,
-                                                    Message::Xmpp(message.clone()),
-                                                ),
-                                            );
-                                            mam_requested = false;
-                                        }
-                                    }
-                                }
-                            }
-                            UIEvent::Core(Event::Key(KeyEvent {
-                                code: KeyCode::PageUp,
-                                ..
-                            })) => {
-                                let (at_top, old_sel, new_sel) = view.page_up();
-                                if old_sel != new_sel {
-                                    if let Some(i) = old_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
-                                if at_top && !mam_requested {
-                                    mam_requested = true;
-                                    let from =
-                                        view.first().map(|message| message.message.timestamp());
-                                    scheduler.schedule(Event::LoadChatHistory {
-                                        account: chat_for_event.account.clone(),
-                                        contact: chat_for_event.contact.clone(),
-                                        from: from.copied(),
-                                    });
-                                }
-                            }
-                            UIEvent::Core(Event::Key(KeyEvent {
-                                code: KeyCode::PageDown,
-                                ..
-                            })) => {
-                                let (old_sel, new_sel) = view.page_down();
-                                if old_sel != new_sel {
-                                    if let Some(i) = old_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
-                                mam_requested = false;
-                            }
-                            UIEvent::NormalCommand { bubbled, cmd } => match cmd {
-                                NormalCommand::SelectPrev => {
-                                    let (old, new, at_top) = view.select_prev();
-                                    if old.is_some() && old == new {
-                                        *bubbled = true;
-                                        if let Some(i) = view.clear_selection() {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
+                let chatwin = ScrollWin::<UIEvent, MessageView, Theme>::new()
+                    .with_selection_bg(selection_bg)
+                    .with_event({
+                        let mut aparte = aparte.proxy();
+                        let mut mam_requested = false;
+                        let mut current_mode = Mode::Normal;
+                        let mut follow_bottom = true;
+                        move |view, event| {
+                            match event {
+                                UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
+                                    match message.direction {
+                                        // TODO check to == us
+                                        Direction::Incoming => {
+                                            if message.from == chat_for_event.contact {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.select_last_visible();
+                                                }
                                             }
                                         }
-                                    } else {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
+                                        Direction::Outgoing => {
+                                            // TODO check from == us
+                                            if message.to == chat_for_event.contact {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.select_last_visible();
+                                                }
                                             }
                                         }
                                     }
+                                }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageUp,
+                                    ..
+                                })) => {
+                                    follow_bottom = false;
+                                    let (at_top, _, _) = view.page_up();
                                     if at_top && !mam_requested {
                                         mam_requested = true;
                                         let from =
@@ -869,146 +816,103 @@ impl UIMod {
                                         });
                                     }
                                 }
-                                NormalCommand::SelectNext => {
-                                    let (old, new) = view.select_next();
-                                    if old.is_some() && old == new {
-                                        *bubbled = true;
-                                        if let Some(i) = view.clear_selection() {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                    } else {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
-                                        }
-                                    }
-                                }
-                                NormalCommand::ScrollToTop => {
-                                    let (old, new) = view.scroll_to_top();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                    if !mam_requested {
-                                        mam_requested = true;
-                                        let from =
-                                            view.first().map(|message| message.message.timestamp());
-                                        scheduler.schedule(Event::LoadChatHistory {
-                                            account: chat_for_event.account.clone(),
-                                            contact: chat_for_event.contact.clone(),
-                                            from: from.copied(),
-                                        });
-                                    }
-                                }
-                                NormalCommand::ScrollToBottom => {
-                                    let (old, new) = view.scroll_to_bottom();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageDown,
+                                    ..
+                                })) => {
+                                    view.page_down();
                                     mam_requested = false;
                                 }
-                                NormalCommand::SearchFirst(query) => {
-                                    let (old, new) = view.set_search(query);
-                                    for child in view.children_iter() {
-                                        child.set_highlight(Some((
-                                            query.clone(),
-                                            search_highlight_fg,
-                                            search_highlight_bg,
-                                        )));
-                                    }
-                                    if old != new {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
+                                UIEvent::NormalCommand { bubbled, cmd } => match cmd {
+                                    NormalCommand::SelectPrev => {
+                                        follow_bottom = false;
+                                        let (old, new, at_top) = view.select_prev();
+                                        if old.is_some() && old == new {
+                                            *bubbled = true;
+                                            view.clear_selection();
                                         }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
+                                        if at_top && !mam_requested {
+                                            mam_requested = true;
+                                            let from = view
+                                                .first()
+                                                .map(|message| message.message.timestamp());
+                                            scheduler.schedule(Event::LoadChatHistory {
+                                                account: chat_for_event.account.clone(),
+                                                contact: chat_for_event.contact.clone(),
+                                                from: from.copied(),
+                                            });
                                         }
                                     }
+                                    NormalCommand::SelectNext => {
+                                        follow_bottom = false;
+                                        let (old, new) = view.select_next();
+                                        if old.is_some() && old == new {
+                                            *bubbled = true;
+                                            view.clear_selection();
+                                        }
+                                    }
+                                    NormalCommand::ScrollToTop => {
+                                        follow_bottom = false;
+                                        view.scroll_to_top();
+                                        if !mam_requested {
+                                            mam_requested = true;
+                                            let from = view
+                                                .first()
+                                                .map(|message| message.message.timestamp());
+                                            scheduler.schedule(Event::LoadChatHistory {
+                                                account: chat_for_event.account.clone(),
+                                                contact: chat_for_event.contact.clone(),
+                                                from: from.copied(),
+                                            });
+                                        }
+                                    }
+                                    NormalCommand::ScrollToBottom => {
+                                        follow_bottom = true;
+                                        view.scroll_to_bottom();
+                                        mam_requested = false;
+                                    }
+                                    NormalCommand::SearchFirst(query) => {
+                                        follow_bottom = false;
+                                        view.set_search(query);
+                                        for child in view.children_iter() {
+                                            child.set_highlight(Some((
+                                                query.clone(),
+                                                search_highlight_fg,
+                                                search_highlight_bg,
+                                            )));
+                                        }
+                                    }
+                                    NormalCommand::SearchNext => {
+                                        follow_bottom = false;
+                                        view.search_next();
+                                    }
+                                    NormalCommand::SearchPrev => {
+                                        follow_bottom = false;
+                                        view.search_prev();
+                                    }
+                                    NormalCommand::SearchCancel => {
+                                        view.clear_search();
+                                        for child in view.children_iter() {
+                                            child.set_highlight(None);
+                                        }
+                                    }
+                                },
+                                UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
+                                    current_mode = Mode::Normal;
+                                    view.select_last_visible();
                                 }
-                                NormalCommand::SearchNext => {
-                                    let (old, new) = view.search_next();
-                                    if old != new {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
-                                        }
-                                    }
-                                }
-                                NormalCommand::SearchPrev => {
-                                    let (old, new) = view.search_prev();
-                                    if old != new {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
-                                        }
-                                    }
-                                }
-                                NormalCommand::SearchCancel => {
-                                    view.clear_search();
+                                UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
+                                    current_mode = *mode;
+                                    follow_bottom = true;
+                                    view.clear_selection();
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
                                     }
                                 }
-                            },
-                            UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
-                                let (_, new) = view.select_last_visible();
-                                if let Some(i) = new {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
-                                    }
-                                }
+                                _ => {}
                             }
-                            UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
-                                if let Some(i) = view.clear_selection() {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
-                                    }
-                                }
-                                for child in view.children_iter() {
-                                    child.set_highlight(None);
-                                }
-                            }
-                            _ => {}
                         }
-                    }
-                });
+                    });
 
                 self.add_window(chat.contact.to_string(), None, Box::new(chatwin));
                 self.conversations
@@ -1023,110 +927,57 @@ impl UIMod {
                     });
 
                 let channel_for_event = channel.clone();
-                let chanwin = ScrollWin::<UIEvent, MessageView, Theme>::new().with_event({
-                    let mut aparte = aparte.proxy();
-                    let mut mam_requested = false;
-                    move |view, event| {
-                        match event {
-                            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
-                                match message.direction {
-                                    // TODO check to == us
-                                    Direction::Incoming => {
-                                        if message.from == channel_for_event.jid {
-                                            insert_message(
-                                                view,
-                                                MessageView::new(
-                                                    &mut aparte,
-                                                    Message::Xmpp(message.clone()),
-                                                ),
-                                            );
-                                            mam_requested = false;
-                                        }
-                                    }
-                                    Direction::Outgoing => {
-                                        // TODO check from == us
-                                        if message.to == channel_for_event.jid {
-                                            insert_message(
-                                                view,
-                                                MessageView::new(
-                                                    &mut aparte,
-                                                    Message::Xmpp(message.clone()),
-                                                ),
-                                            );
-                                            mam_requested = false;
-                                        }
-                                    }
-                                }
-                            }
-                            UIEvent::Core(Event::Key(KeyEvent {
-                                code: KeyCode::PageUp,
-                                ..
-                            })) => {
-                                let (at_top, old_sel, new_sel) = view.page_up();
-                                if old_sel != new_sel {
-                                    if let Some(i) = old_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
-                                if at_top && !mam_requested {
-                                    mam_requested = true;
-                                    let from =
-                                        view.first().map(|message| message.message.timestamp());
-                                    scheduler.schedule(Event::LoadChannelHistory {
-                                        account: channel_for_event.account.clone(),
-                                        jid: channel_for_event.jid.clone(),
-                                        from: from.copied(),
-                                    });
-                                }
-                            }
-                            UIEvent::Core(Event::Key(KeyEvent {
-                                code: KeyCode::PageDown,
-                                ..
-                            })) => {
-                                let (old_sel, new_sel) = view.page_down();
-                                if old_sel != new_sel {
-                                    if let Some(i) = old_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new_sel {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
-                                mam_requested = false;
-                            }
-                            UIEvent::NormalCommand { bubbled, cmd } => match cmd {
-                                NormalCommand::SelectPrev => {
-                                    let (old, new, at_top) = view.select_prev();
-                                    if old.is_some() && old == new {
-                                        *bubbled = true;
-                                        if let Some(i) = view.clear_selection() {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
+                let chanwin = ScrollWin::<UIEvent, MessageView, Theme>::new()
+                    .with_selection_bg(selection_bg)
+                    .with_event({
+                        let mut aparte = aparte.proxy();
+                        let mut mam_requested = false;
+                        let mut current_mode = Mode::Normal;
+                        let mut follow_bottom = true;
+                        move |view, event| {
+                            match event {
+                                UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
+                                    match message.direction {
+                                        // TODO check to == us
+                                        Direction::Incoming => {
+                                            if message.from == channel_for_event.jid {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.select_last_visible();
+                                                }
                                             }
                                         }
-                                    } else {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
+                                        Direction::Outgoing => {
+                                            // TODO check from == us
+                                            if message.to == channel_for_event.jid {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.select_last_visible();
+                                                }
                                             }
                                         }
                                     }
+                                }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageUp,
+                                    ..
+                                })) => {
+                                    follow_bottom = false;
+                                    let (at_top, _, _) = view.page_up();
                                     if at_top && !mam_requested {
                                         mam_requested = true;
                                         let from =
@@ -1138,158 +989,115 @@ impl UIMod {
                                         });
                                     }
                                 }
-                                NormalCommand::SelectNext => {
-                                    let (old, new) = view.select_next();
-                                    if old.is_some() && old == new {
-                                        *bubbled = true;
-                                        if let Some(i) = view.clear_selection() {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                    } else {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
-                                        }
-                                    }
-                                }
-                                NormalCommand::ScrollToTop => {
-                                    let (old, new) = view.scroll_to_top();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                    if !mam_requested {
-                                        mam_requested = true;
-                                        let from =
-                                            view.first().map(|message| message.message.timestamp());
-                                        scheduler.schedule(Event::LoadChannelHistory {
-                                            account: channel_for_event.account.clone(),
-                                            jid: channel_for_event.jid.clone(),
-                                            from: from.copied(),
-                                        });
-                                    }
-                                }
-                                NormalCommand::ScrollToBottom => {
-                                    let (old, new) = view.scroll_to_bottom();
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageDown,
+                                    ..
+                                })) => {
+                                    view.page_down();
                                     mam_requested = false;
                                 }
-                                NormalCommand::SearchFirst(query) => {
-                                    let (old, new) = view.set_search(query);
-                                    for child in view.children_iter() {
-                                        child.set_highlight(Some((
-                                            query.clone(),
-                                            search_highlight_fg,
-                                            search_highlight_bg,
-                                        )));
-                                    }
-                                    if old != new {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
+                                UIEvent::NormalCommand { bubbled, cmd } => match cmd {
+                                    NormalCommand::SelectPrev => {
+                                        follow_bottom = false;
+                                        let (old, new, at_top) = view.select_prev();
+                                        if old.is_some() && old == new {
+                                            *bubbled = true;
+                                            view.clear_selection();
                                         }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
+                                        if at_top && !mam_requested {
+                                            mam_requested = true;
+                                            let from = view
+                                                .first()
+                                                .map(|message| message.message.timestamp());
+                                            scheduler.schedule(Event::LoadChannelHistory {
+                                                account: channel_for_event.account.clone(),
+                                                jid: channel_for_event.jid.clone(),
+                                                from: from.copied(),
+                                            });
                                         }
                                     }
+                                    NormalCommand::SelectNext => {
+                                        follow_bottom = false;
+                                        let (old, new) = view.select_next();
+                                        if old.is_some() && old == new {
+                                            *bubbled = true;
+                                            view.clear_selection();
+                                        }
+                                    }
+                                    NormalCommand::ScrollToTop => {
+                                        follow_bottom = false;
+                                        view.scroll_to_top();
+                                        if !mam_requested {
+                                            mam_requested = true;
+                                            let from = view
+                                                .first()
+                                                .map(|message| message.message.timestamp());
+                                            scheduler.schedule(Event::LoadChannelHistory {
+                                                account: channel_for_event.account.clone(),
+                                                jid: channel_for_event.jid.clone(),
+                                                from: from.copied(),
+                                            });
+                                        }
+                                    }
+                                    NormalCommand::ScrollToBottom => {
+                                        follow_bottom = true;
+                                        view.scroll_to_bottom();
+                                        mam_requested = false;
+                                    }
+                                    NormalCommand::SearchFirst(query) => {
+                                        follow_bottom = false;
+                                        view.set_search(query);
+                                        for child in view.children_iter() {
+                                            child.set_highlight(Some((
+                                                query.clone(),
+                                                search_highlight_fg,
+                                                search_highlight_bg,
+                                            )));
+                                        }
+                                    }
+                                    NormalCommand::SearchNext => {
+                                        follow_bottom = false;
+                                        view.search_next();
+                                    }
+                                    NormalCommand::SearchPrev => {
+                                        follow_bottom = false;
+                                        view.search_prev();
+                                    }
+                                    NormalCommand::SearchCancel => {
+                                        view.clear_search();
+                                        for child in view.children_iter() {
+                                            child.set_highlight(None);
+                                        }
+                                    }
+                                },
+                                UIEvent::Core(Event::ChangeWindow(name))
+                                    if name == &channel_for_event.jid.to_string()
+                                        && view.first().is_none()
+                                        && !mam_requested =>
+                                {
+                                    mam_requested = true;
+                                    scheduler.schedule(Event::LoadChannelHistory {
+                                        account: channel_for_event.account.clone(),
+                                        jid: channel_for_event.jid.clone(),
+                                        from: None,
+                                    });
                                 }
-                                NormalCommand::SearchNext => {
-                                    let (old, new) = view.search_next();
-                                    if old != new {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
-                                        }
-                                    }
+                                UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
+                                    current_mode = Mode::Normal;
+                                    view.select_last_visible();
                                 }
-                                NormalCommand::SearchPrev => {
-                                    let (old, new) = view.search_prev();
-                                    if old != new {
-                                        if let Some(i) = old {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.deselect();
-                                            }
-                                        }
-                                        if let Some(i) = new {
-                                            if let Some(c) = view.child_at(i) {
-                                                c.select(selection_bg);
-                                            }
-                                        }
-                                    }
-                                }
-                                NormalCommand::SearchCancel => {
-                                    view.clear_search();
+                                UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
+                                    current_mode = *mode;
+                                    follow_bottom = true;
+                                    view.clear_selection();
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
                                     }
                                 }
-                            },
-                            UIEvent::Core(Event::ChangeWindow(name))
-                                if name == &channel_for_event.jid.to_string()
-                                    && view.first().is_none()
-                                    && !mam_requested =>
-                            {
-                                mam_requested = true;
-                                scheduler.schedule(Event::LoadChannelHistory {
-                                    account: channel_for_event.account.clone(),
-                                    jid: channel_for_event.jid.clone(),
-                                    from: None,
-                                });
+                                _ => {}
                             }
-                            UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
-                                let (_, new) = view.select_last_visible();
-                                if let Some(i) = new {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
-                                    }
-                                }
-                            }
-                            UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
-                                if let Some(i) = view.clear_selection() {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
-                                    }
-                                }
-                                for child in view.children_iter() {
-                                    child.set_highlight(None);
-                                }
-                            }
-                            _ => {}
                         }
-                    }
-                });
+                    });
                 layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
@@ -2003,17 +1811,20 @@ impl ModTrait for UIMod {
                 }
             },
         );
+        let console_selection_bg = aparte.config.theme.selected_message;
+        let console_search_highlight_fg = aparte.config.theme.search_highlight_fg;
+        let console_search_highlight_bg = aparte.config.theme.search_highlight_bg;
         console.push(
             ScrollWin::<UIEvent, MessageView, Theme>::new()
                 .with_layout(LayoutParams {
                     width: LayoutParam::MatchParent,
                     height: LayoutParam::MatchParent,
                 })
+                .with_selection_bg(console_selection_bg)
                 .with_event({
                     let mut aparte = aparte.proxy();
-                    let selection_bg = aparte.config.theme.selected_message;
-                    let search_highlight_fg = aparte.config.theme.search_highlight_fg;
-                    let search_highlight_bg = aparte.config.theme.search_highlight_bg;
+                    let search_highlight_fg = console_search_highlight_fg;
+                    let search_highlight_bg = console_search_highlight_bg;
                     move |view, event| match event {
                         UIEvent::Core(Event::Message(_, Message::Log(message))) => {
                             insert_message(
@@ -2025,111 +1836,37 @@ impl ModTrait for UIMod {
                             code: KeyCode::PageUp,
                             ..
                         })) => {
-                            let (_, old_sel, new_sel) = view.page_up();
-                            if old_sel != new_sel {
-                                if let Some(i) = old_sel {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
-                                    }
-                                }
-                                if let Some(i) = new_sel {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
-                                    }
-                                }
-                            }
+                            view.page_up();
                         }
                         UIEvent::Core(Event::Key(KeyEvent {
                             code: KeyCode::PageDown,
                             ..
                         })) => {
-                            let (old_sel, new_sel) = view.page_down();
-                            if old_sel != new_sel {
-                                if let Some(i) = old_sel {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
-                                    }
-                                }
-                                if let Some(i) = new_sel {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
-                                    }
-                                }
-                            }
+                            view.page_down();
                         }
                         UIEvent::NormalCommand { bubbled, cmd } => match cmd {
                             NormalCommand::SelectPrev => {
                                 let (old, new, _) = view.select_prev();
                                 if old.is_some() && old == new {
                                     *bubbled = true;
-                                    if let Some(i) = view.clear_selection() {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                } else {
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
+                                    view.clear_selection();
                                 }
                             }
                             NormalCommand::SelectNext => {
                                 let (old, new) = view.select_next();
                                 if old.is_some() && old == new {
                                     *bubbled = true;
-                                    if let Some(i) = view.clear_selection() {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                } else {
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
+                                    view.clear_selection();
                                 }
                             }
                             NormalCommand::ScrollToTop => {
-                                let (old, new) = view.scroll_to_top();
-                                if let Some(i) = old {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
-                                    }
-                                }
-                                if let Some(i) = new {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
-                                    }
-                                }
+                                view.scroll_to_top();
                             }
                             NormalCommand::ScrollToBottom => {
-                                let (old, new) = view.scroll_to_bottom();
-                                if let Some(i) = old {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.deselect();
-                                    }
-                                }
-                                if let Some(i) = new {
-                                    if let Some(c) = view.child_at(i) {
-                                        c.select(selection_bg);
-                                    }
-                                }
+                                view.scroll_to_bottom();
                             }
                             NormalCommand::SearchFirst(query) => {
-                                let (old, new) = view.set_search(query);
+                                view.set_search(query);
                                 for child in view.children_iter() {
                                     child.set_highlight(Some((
                                         query.clone(),
@@ -2137,48 +1874,12 @@ impl ModTrait for UIMod {
                                         search_highlight_bg,
                                     )));
                                 }
-                                if old != new {
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
                             }
                             NormalCommand::SearchNext => {
-                                let (old, new) = view.search_next();
-                                if old != new {
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
+                                view.search_next();
                             }
                             NormalCommand::SearchPrev => {
-                                let (old, new) = view.search_prev();
-                                if old != new {
-                                    if let Some(i) = old {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.deselect();
-                                        }
-                                    }
-                                    if let Some(i) = new {
-                                        if let Some(c) = view.child_at(i) {
-                                            c.select(selection_bg);
-                                        }
-                                    }
-                                }
+                                view.search_prev();
                             }
                             NormalCommand::SearchCancel => {
                                 view.clear_search();
@@ -2188,11 +1889,7 @@ impl ModTrait for UIMod {
                             }
                         },
                         UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
-                            if let Some(i) = view.clear_selection() {
-                                if let Some(c) = view.child_at(i) {
-                                    c.deselect();
-                                }
-                            }
+                            view.clear_selection();
                             for child in view.children_iter() {
                                 child.set_highlight(None);
                             }

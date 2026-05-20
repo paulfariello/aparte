@@ -442,6 +442,13 @@ pub trait View<E, C = ()> {
     fn insertable(&self) -> bool {
         false
     }
+
+    /// Mark this view as the selected item (e.g. highlighted message cursor).
+    /// Container views and non-selectable views can leave this as a no-op.
+    fn select(&self, _color: BgColor) {}
+
+    /// Unmark this view as selected.
+    fn deselect(&self) {}
 }
 
 impl<E, C> dyn View<E, C> {}
