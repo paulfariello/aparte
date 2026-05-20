@@ -612,6 +612,11 @@ impl TryFrom<Message> for xmpp_parsers::minidom::Element {
                                 .parse()
                                 .expect("valid XEP-0184 request");
                         xmpp_message.payloads.push(request);
+                        let markable: xmpp_parsers::minidom::Element =
+                            "<markable xmlns='urn:xmpp:chat-markers:0'/>"
+                                .parse()
+                                .expect("valid XEP-0333 markable");
+                        xmpp_message.payloads.push(markable);
                         Ok(xmpp_message.into())
                     }
                     XmppMessageType::Channel => {
@@ -624,6 +629,11 @@ impl TryFrom<Message> for xmpp_parsers::minidom::Element {
                             .get_last_bodies()
                             .map(|(lang, body)| (XmppParsersLang(lang.clone()), body.clone()))
                             .collect();
+                        let markable: xmpp_parsers::minidom::Element =
+                            "<markable xmlns='urn:xmpp:chat-markers:0'/>"
+                                .parse()
+                                .expect("valid XEP-0333 markable");
+                        xmpp_message.payloads.push(markable);
                         Ok(xmpp_message.into())
                     }
                 },

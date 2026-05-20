@@ -7,6 +7,8 @@
 //! - A groupchat marker is ignored when the MUC has not announced XEP-0359 support.
 //! - A displayed marker is sent to the MUC after MAM catchup when the window is current.
 //! - No displayed marker is sent on join when the MUC does not announce XEP-0359 support.
+//! - Outgoing chat messages include `<markable/>` so the recipient can send us markers.
+//! - Outgoing groupchat messages include `<markable/>` so MUC members can send us markers.
 
 mod common;
 
@@ -22,6 +24,8 @@ use common::xmpp_fixture::{
     chat_displayed_marker, chat_message, groupchat_displayed_marker, groupchat_message,
     groupchat_message_with_stanza_id, muc_join_presence, xmpp, xmpp_with_contact, XmppFixture,
 };
+
+const CHAT_MARKERS_NS: &str = "urn:xmpp:chat-markers:0";
 
 const NICK: &str = "user";
 
@@ -253,7 +257,8 @@ fn muc_join_sends_displayed_marker_when_window_current() {
     let sent = xmpp.recv_outgoing_displayed_marker_for(ROOM, Duration::from_secs(5));
     assert!(
         sent,
-        "expected aparte to send a <displayed> marker to {ROOM} after MAM catchup",
+        "expected aparte to send a <displayed> marker to {} after MAM catchup",
+        ROOM,
     );
 }
 
@@ -308,5 +313,62 @@ fn muc_join_no_marker_when_all_mam_messages_are_self() {
     assert!(
         !sent,
         "marker was sent even though all MAM messages were from ourselves",
+    );
+}
+
+/// Outgoing chat messages must include `<markable xmlns='urn:xmpp:chat-markers:0'/>` so
+/// the recipient knows it may send `<displayed>` markers back to us (XEP-0333 §4.1).
+#[rstest]
+fn outgoing_chat_message_includes_markable(mut xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp_with_contact.send_command("markable-chat-test-1");
+
+    let sent = xmpp_with_contact
+        .recv_outgoing_message_matching(
+            |m| {
+                m.bodies
+                    .values()
+                    .any(|b| b.contains("markable-chat-test-1"))
+            },
+            Duration::from_secs(5),
+        )
+        .expect("outgoing chat stanza not captured");
+
+    assert!(
+        sent.payloads
+            .iter()
+            .any(|p| p.is("markable", CHAT_MARKERS_NS)),
+        "outgoing chat message is missing <markable xmlns='{}'/>",
+        CHAT_MARKERS_NS,
+    );
+}
+
+/// Outgoing groupchat messages must include `<markable xmlns='urn:xmpp:chat-markers:0'/>` so
+/// MUC members know they may send `<displayed>` markers back (XEP-0333 §4.1).
+#[test]
+fn outgoing_groupchat_message_includes_markable() {
+    let mut xmpp = XmppFixture::new_with_muc_sid(&[], &[ROOM]);
+    thread::sleep(Duration::from_millis(300));
+    join_room(&xmpp, ROOM, NICK);
+
+    xmpp.send_command("markable-gc-test-1");
+    thread::sleep(Duration::from_millis(200));
+
+    let sent = xmpp
+        .recv_outgoing_message_matching(
+            |m| m.bodies.values().any(|b| b.contains("markable-gc-test-1")),
+            Duration::from_secs(5),
+        )
+        .expect("outgoing groupchat stanza not captured");
+
+    assert!(
+        sent.payloads
+            .iter()
+            .any(|p| p.is("markable", CHAT_MARKERS_NS)),
+        "outgoing groupchat message is missing <markable xmlns='{}'/>",
+        CHAT_MARKERS_NS,
     );
 }
