@@ -26,6 +26,7 @@ use xmpp_parsers::iq::Iq;
 use xmpp_parsers::jid::{BareJid, Jid};
 use xmpp_parsers::legacy_omemo;
 use xmpp_parsers::message::{Id as XmppParsersMessageId, Lang, Message as XmppParsersMessage};
+use xmpp_parsers::message_correct::Replace as XmppParsersReplace;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub;
 use xmpp_parsers::pubsub::{ItemId, PubSub};
@@ -495,6 +496,14 @@ impl CryptoEngineTrait for MucOmemoEngine {
             }
             .into(),
         );
+        if let Some(ref cid) = message.correcting_id {
+            xmpp_message.payloads.push(
+                XmppParsersReplace {
+                    id: XmppParsersMessageId(cid.clone()),
+                }
+                .into(),
+            );
+        }
         Ok(xmpp_message.into())
     }
 
@@ -733,6 +742,14 @@ impl CryptoEngineTrait for OmemoEngine {
             }
             .into(),
         );
+        if let Some(ref cid) = message.correcting_id {
+            xmpp_message.payloads.push(
+                XmppParsersReplace {
+                    id: XmppParsersMessageId(cid.clone()),
+                }
+                .into(),
+            );
+        }
         Ok(xmpp_message.into())
     }
 
