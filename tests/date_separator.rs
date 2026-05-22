@@ -8,7 +8,9 @@ use std::time::Duration;
 use rstest::rstest;
 
 use common::xmpp_fixture::{chat_message_with_delay, xmpp_with_contact, XmppFixture};
-use common::{describe, find_row_with, grid_contains, row_text};
+use common::{
+    describe, find_row_with, grid_contains, row_has_bgcolor, row_text, SELECTION_BGCOLOR,
+};
 
 const CONTACT: &str = "contact@localhost";
 const BOUND_JID: &str = "user@localhost/aparte_test";
@@ -110,6 +112,67 @@ fn no_date_separator_for_same_day_messages(xmpp_with_contact: XmppFixture) {
     assert!(
         !grid_contains(screen, "─"),
         "Unexpected ─ separator found on screen for same-day messages\n{}",
+        describe(screen),
+    );
+}
+
+/// Selecting a message that owns a day-barrier must not highlight the barrier row.
+///
+/// When the second message (from a different day) is selected in Normal mode,
+/// only its content row should carry the selection background; the ─ separator
+/// line that belongs to the same MessageView must keep its themed background.
+#[rstest]
+fn selecting_message_with_day_barrier_does_not_highlight_barrier_row(
+    xmpp_with_contact: XmppFixture,
+) {
+    xmpp_with_contact.send_command(&format!("/msg {CONTACT}"));
+    xmpp_with_contact.switch_window(CONTACT);
+
+    xmpp_with_contact.inject(chat_message_with_delay(
+        CONTACT,
+        BOUND_JID,
+        "sel-day1-msg",
+        "Selection day one",
+        "2024-07-01T12:00:00Z",
+    ));
+    xmpp_with_contact.inject(chat_message_with_delay(
+        CONTACT,
+        BOUND_JID,
+        "sel-day2-msg",
+        "Selection day two",
+        "2024-07-02T12:00:00Z",
+    ));
+
+    let _ = xmpp_with_contact.wait_for("Selection day one", Duration::from_secs(5));
+    let _ = xmpp_with_contact.wait_for("Selection day two", Duration::from_secs(5));
+    let _ = xmpp_with_contact.wait_for("─", Duration::from_secs(5));
+
+    // Enter Normal mode and jump to the last message (which has the separator).
+    xmpp_with_contact.send_bytes(b"\x1b");
+    xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2));
+    xmpp_with_contact.send_bytes(b"G");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+
+    let row_sep = find_row_with(screen, "─").expect("date separator (─) must be visible on screen");
+    let row_msg = find_row_with(screen, "Selection day two")
+        .expect("second message must be visible on screen");
+
+    assert!(
+        row_sep < row_msg,
+        "separator row ({row_sep}) must appear above message row ({row_msg})\n{}",
+        describe(screen),
+    );
+    assert!(
+        row_has_bgcolor(screen, row_msg, SELECTION_BGCOLOR),
+        "message content row {row_msg} must carry the selection background\n{}",
+        describe(screen),
+    );
+    assert!(
+        !row_has_bgcolor(screen, row_sep, SELECTION_BGCOLOR),
+        "day-barrier row {row_sep} must NOT carry the selection background\n{}",
         describe(screen),
     );
 }

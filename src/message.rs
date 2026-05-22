@@ -1356,9 +1356,10 @@ impl<E, C> View<E, C> for MessageView {
         }
 
         if let Some(color) = self.selected.get() {
-            frame.set_background(color);
+            let sep_rows = u16::from(self.show_date_sep.get());
+            frame.set_background_from_row(sep_rows, color);
             frame.set_cursor_with_priority(
-                CursorPos::from((frame.dimensions.left, frame.dimensions.top)),
+                CursorPos::from((frame.dimensions.left, frame.dimensions.top + sep_rows)),
                 2,
             );
         }
