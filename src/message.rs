@@ -26,6 +26,7 @@ use std::collections::HashSet;
 
 use terminus::charxel::{Charxel, Charxels, IntoCharxels};
 use terminus::rendering::ScreenFrame;
+use terminus::text_editor::TextEditor;
 use terminus::CursorPos;
 use terminus::{
     self, BgColor, Dimensions, FgColor, MeasureSpec, MeasureSpecs, RequestedDimension,
@@ -39,6 +40,7 @@ use xmpp_parsers::message::{
     Id as XmppParsersMessageId, Lang as XmppParsersLang, Message as XmppParsersMessage,
     MessageType as XmppParsersMessageType,
 };
+use xmpp_parsers::message_correct::Replace as XmppParsersReplace;
 use xmpp_parsers::oob::Oob;
 use xmpp_parsers::stanza_id::StanzaId;
 
@@ -115,6 +117,9 @@ pub struct VersionedXmppMessage {
     pub stanza_id: Option<String>,
     pub reactions: HashMap<BareJid, Vec<String>>,
     pub delivery_status: DeliveryStatus,
+    /// When set, this outgoing message is a XEP-0308 correction whose
+    /// `<replace id="...">` references the original message id stored here.
+    pub correcting_id: Option<String>,
 }
 
 impl VersionedXmppMessage {
@@ -137,6 +142,13 @@ impl VersionedXmppMessage {
             .id
             .as_ref()
             .map_or_else(|| Uuid::new_v4().to_string(), |id| id.0.clone());
+
+        // Idempotence: if we already have this version (e.g. server reflected
+        // back our own outgoing correction via carbons), skip it.
+        if self.history.iter().any(|v| v.id == id) {
+            return;
+        }
+
         let bodies: HashMap<String, String> = message
             .bodies
             .iter()
@@ -408,6 +420,7 @@ impl Message {
             stanza_id: None,
             reactions: HashMap::new(),
             delivery_status: DeliveryStatus::None,
+            correcting_id: None,
         })
     }
 
@@ -444,6 +457,7 @@ impl Message {
             stanza_id: None,
             reactions: HashMap::new(),
             delivery_status: DeliveryStatus::None,
+            correcting_id: None,
         })
     }
 
@@ -480,6 +494,7 @@ impl Message {
             stanza_id: None,
             reactions: HashMap::new(),
             delivery_status: DeliveryStatus::None,
+            correcting_id: None,
         })
     }
 
@@ -516,6 +531,7 @@ impl Message {
             stanza_id: None,
             reactions: HashMap::new(),
             delivery_status: DeliveryStatus::None,
+            correcting_id: None,
         })
     }
 
@@ -525,6 +541,43 @@ impl Message {
             timestamp: LocalTz::now().into(),
             body: msg.into_charxels(),
         })
+    }
+
+    /// Mark this outgoing message as a XEP-0308 correction of `original_id`.
+    pub fn set_correcting_id(&mut self, original_id: String) {
+        if let Message::Xmpp(m) = self {
+            m.correcting_id = Some(original_id);
+        }
+    }
+
+    /// True if this message carries a `correcting_id` (i.e. is a XEP-0308 correction).
+    #[must_use]
+    pub fn is_correction(&self) -> bool {
+        matches!(self, Message::Xmpp(m) if m.correcting_id.is_some())
+    }
+
+    /// Append a new version to this message's history with the given body.
+    /// Idempotent: a no-op if a version with `correction_id` already exists.
+    /// Used to apply our own outgoing correction locally at send-time.
+    pub fn apply_correction(
+        &mut self,
+        correction_id: String,
+        body: String,
+        timestamp: DateTime<FixedOffset>,
+    ) {
+        if let Message::Xmpp(m) = self {
+            if m.history.iter().any(|v| v.id == correction_id) {
+                return;
+            }
+            let mut bodies = HashMap::new();
+            bodies.insert(String::new(), body);
+            m.history.push(XmppMessageVersion {
+                id: correction_id,
+                timestamp,
+                bodies,
+                oobs: vec![],
+            });
+        }
     }
 
     pub fn encryption_recipient(&self) -> Option<BareJid> {
@@ -617,6 +670,12 @@ impl TryFrom<Message> for xmpp_parsers::minidom::Element {
                                 .parse()
                                 .expect("valid XEP-0333 markable");
                         xmpp_message.payloads.push(markable);
+                        if let Some(ref cid) = message.correcting_id {
+                            let replace = XmppParsersReplace {
+                                id: XmppParsersMessageId(cid.clone()),
+                            };
+                            xmpp_message.payloads.push(replace.into());
+                        }
                         Ok(xmpp_message.into())
                     }
                     XmppMessageType::Channel => {
@@ -634,6 +693,12 @@ impl TryFrom<Message> for xmpp_parsers::minidom::Element {
                                 .parse()
                                 .expect("valid XEP-0333 markable");
                         xmpp_message.payloads.push(markable);
+                        if let Some(ref cid) = message.correcting_id {
+                            let replace = XmppParsersReplace {
+                                id: XmppParsersMessageId(cid.clone()),
+                            };
+                            xmpp_message.payloads.push(replace.into());
+                        }
                         Ok(xmpp_message.into())
                     }
                 },
@@ -656,6 +721,9 @@ pub struct MessageView {
     date_sep_fg: FgColor,
     date_sep_bg: BgColor,
     preferred_langs: Vec<String>,
+    /// XEP-0308 in-place edit buffer. `Some` while the user is editing this
+    /// outgoing message in INSERT mode; `None` otherwise.
+    pub edit: Option<TextEditor>,
 }
 
 impl Eq for MessageView {}
@@ -796,6 +864,7 @@ impl MessageView {
             date_sep_fg: theme.date_separator_fg,
             date_sep_bg: theme.date_separator_bg,
             preferred_langs: aparte.config.preferred_langs.clone(),
+            edit: None,
         }
     }
 
@@ -849,6 +918,116 @@ impl MessageView {
             date_sep_fg: theme.date_separator_fg,
             date_sep_bg: theme.date_separator_bg,
             preferred_langs: aparte.config.preferred_langs.clone(),
+            edit: None,
+        }
+    }
+
+    // --- XEP-0308 in-place editing ---------------------------------------
+
+    /// Start editing this message in place. The edit buffer is initialised
+    /// with the current body (last version). No-op for non-outgoing or non-XMPP
+    /// messages.
+    pub fn start_edit(&mut self) {
+        if let Message::Xmpp(m) = &self.message {
+            if m.direction == Direction::Outgoing {
+                let body = m.get_last_body(vec![]).to_string();
+                self.edit = Some(TextEditor::with_text(&body));
+            }
+        }
+    }
+
+    /// Abandon any in-progress edit and revert to displaying the message body.
+    pub fn cancel_edit(&mut self) {
+        self.edit = None;
+    }
+
+    /// Take the current edit buffer (clearing the edit state).
+    /// Returns `None` if the message wasn't being edited.
+    /// Used by Phase 7 (Enter → send correction). Allow `dead_code` until
+    /// the UIMod Enter handler wiring lands.
+    #[allow(dead_code)]
+    pub fn take_edit(&mut self) -> Option<String> {
+        self.edit.take().map(|e| e.buf)
+    }
+
+    /// Whether this message is currently being edited in place.
+    #[must_use]
+    pub fn is_editing(&self) -> bool {
+        self.edit.is_some()
+    }
+
+    /// Insert a character at the cursor (no-op when not editing).
+    pub fn key(&mut self, c: char) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.key(c);
+        }
+    }
+
+    /// Delete the character before the cursor (no-op when not editing).
+    pub fn backspace(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.backspace();
+        }
+    }
+
+    /// Delete the character at the cursor (no-op when not editing).
+    pub fn delete(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.delete();
+        }
+    }
+
+    pub fn cursor_left(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.left();
+        }
+    }
+
+    pub fn cursor_right(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.right();
+        }
+    }
+
+    pub fn cursor_home(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.home();
+        }
+    }
+
+    pub fn cursor_end(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.end();
+        }
+    }
+
+    pub fn word_left(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.word_left();
+        }
+    }
+
+    pub fn word_right(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.word_right();
+        }
+    }
+
+    pub fn backward_delete_word(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.backward_delete_word();
+        }
+    }
+
+    pub fn delete_from_cursor_to_start(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.delete_from_cursor_to_start();
+        }
+    }
+
+    pub fn delete_from_cursor_to_end(&mut self) {
+        if let Some(editor) = self.edit.as_mut() {
+            editor.delete_from_cursor_to_end();
         }
     }
 
@@ -932,13 +1111,17 @@ impl MessageView {
         header
     }
 
-    fn format_xmpp_text(message: &VersionedXmppMessage, max_width: Option<u16>) -> Vec<Charxels> {
+    fn format_xmpp_text(
+        message: &VersionedXmppMessage,
+        max_width: Option<u16>,
+        body_override: Option<&str>,
+    ) -> Vec<Charxels> {
         let mut header = Self::format_header(message);
 
         let padding_len = header.display_width();
         let padding = " ".repeat(padding_len.into());
 
-        let body = message.get_last_body(vec![]);
+        let body = body_override.unwrap_or_else(|| message.get_last_body(vec![]));
         let mut iter = body.strip_prefix("/me").unwrap_or(body).lines();
 
         if let Some(line) = iter.next() {
@@ -970,9 +1153,10 @@ impl MessageView {
     }
 
     fn format(&self, max_width: Option<u16>) -> Vec<Charxels> {
+        let edit_body = self.edit.as_ref().map(|e| e.buf.as_str());
         let mut lines = match &self.message {
             Message::Log(message) => Self::format_log(message, max_width),
-            Message::Xmpp(message) => Self::format_xmpp_text(message, max_width),
+            Message::Xmpp(message) => Self::format_xmpp_text(message, max_width, edit_body),
         };
         if self.show_date_sep.get() {
             let width = max_width.unwrap_or(80);
@@ -1048,7 +1232,9 @@ impl MessageView {
         let width = frame.width();
         let cache = self.measure_cache.borrow();
         let formatted_owned;
-        let formatted = if cache.as_ref().map(|(w, _)| *w) == Some(width) {
+        // When in-place editing, the body changes per keystroke — bypass the
+        // measure cache so we always render the live edit buffer.
+        let formatted = if self.edit.is_none() && cache.as_ref().map(|(w, _)| *w) == Some(width) {
             &cache.as_ref().unwrap().1
         } else {
             drop(cache);
@@ -1092,7 +1278,8 @@ impl MessageView {
             },
             MeasureSpec::AtMost(at_most_width) => {
                 let mut cache = self.measure_cache.borrow_mut();
-                if cache.as_ref().map(|(w, _)| *w) != Some(at_most_width) {
+                // While editing, body changes per keystroke — recompute every time.
+                if self.edit.is_some() || cache.as_ref().map(|(w, _)| *w) != Some(at_most_width) {
                     *cache = Some((at_most_width, self.format(Some(at_most_width))));
                 }
                 let formatted = &cache.as_ref().unwrap().1;
@@ -1175,9 +1362,37 @@ impl<E, C> View<E, C> for MessageView {
                 2,
             );
         }
+
+        // When editing in place, override the cursor to land at the edit
+        // position with a steady-bar style, taking priority over the selection
+        // marker.
+        if let (Some(editor), Message::Xmpp(message)) = (&self.edit, &self.message) {
+            let header_width = Self::format_header(message).display_width();
+            let buf = &editor.buf;
+            let cursor_byte_index = editor.cursor.index(buf);
+            #[allow(clippy::cast_possible_truncation)]
+            let body_col: u16 = buf[..cursor_byte_index]
+                .graphemes(true)
+                .map(|g| unicode_display_width::width(g) as u16)
+                .sum();
+            #[allow(clippy::cast_possible_truncation)]
+            let total_col = header_width + body_col;
+            // Single-line approximation: stay on the last rendered row, clamp
+            // to frame width.
+            let max_col = frame.dimensions.width.saturating_sub(1);
+            let col = std::cmp::min(total_col, max_col);
+            let row = frame.dimensions.top + frame.dimensions.height.saturating_sub(1);
+            frame.set_cursor_with_priority(CursorPos::from((frame.dimensions.left + col, row)), 3);
+            frame.set_cursor_style(terminus::CursorStyle::SteadyBar);
+            frame.set_cursor_visible(true);
+        }
     }
 
     fn event(&mut self, _event: &mut E) {}
+
+    fn insertable(&self) -> bool {
+        matches!(&self.message, Message::Xmpp(m) if m.direction == Direction::Outgoing)
+    }
 
     fn select(&self, color: BgColor) {
         self.selected.set(Some(color));
@@ -1228,6 +1443,7 @@ mod tests {
                 date_sep_fg: FgColor(terminus::Color::Default),
                 date_sep_bg: BgColor(terminus::Color::Default),
                 preferred_langs: vec![],
+                edit: None,
             },
             Local.from_utc_datetime(&epoch.naive_utc()),
         )
@@ -1496,5 +1712,328 @@ mod tests {
                 "'>no space' must not be a quote"
             );
         }
+    }
+
+    // --- XEP-0308 message correction (Phase 2) -----------------------------
+
+    use std::convert::TryInto as _;
+    use std::str::FromStr as _;
+
+    fn now() -> DateTime<FixedOffset> {
+        LocalTz::now().into()
+    }
+
+    fn make_outgoing_chat(body: &str) -> Message {
+        let from = Jid::from_str("me@localhost").unwrap();
+        let to = Jid::from_str("contact@localhost").unwrap();
+        let mut bodies = HashMap::new();
+        bodies.insert(String::new(), body.to_string());
+        Message::outgoing_chat(
+            Uuid::new_v4().to_string(),
+            now(),
+            &from,
+            &to,
+            bodies,
+            None,
+            false,
+        )
+    }
+
+    fn make_incoming_chat(body: &str) -> Message {
+        let from = Jid::from_str("contact@localhost").unwrap();
+        let to = Jid::from_str("me@localhost").unwrap();
+        let mut bodies = HashMap::new();
+        bodies.insert(String::new(), body.to_string());
+        Message::incoming_chat(
+            Uuid::new_v4().to_string(),
+            now(),
+            &from,
+            &to,
+            bodies,
+            None,
+            false,
+        )
+    }
+
+    fn message_view_for(message: Message) -> MessageView {
+        MessageView {
+            message,
+            dimensions: None,
+            #[cfg(feature = "image")]
+            image: Arc::new(RwLock::new(None)),
+            measure_cache: RefCell::new(None),
+            selected: Cell::new(None),
+            highlight: RefCell::new(None),
+            show_date_sep: Cell::new(false),
+            date_sep_fg: FgColor(terminus::Color::Default),
+            date_sep_bg: BgColor(terminus::Color::Default),
+            preferred_langs: vec![],
+            edit: None,
+        }
+    }
+
+    #[test]
+    fn message_view_insertable_true_for_outgoing() {
+        let mv = message_view_for(make_outgoing_chat("hi"));
+        assert!(<MessageView as View<(), ()>>::insertable(&mv));
+    }
+
+    #[test]
+    fn message_view_insertable_false_for_incoming() {
+        let mv = message_view_for(make_incoming_chat("hi"));
+        assert!(!<MessageView as View<(), ()>>::insertable(&mv));
+    }
+
+    #[test]
+    fn message_view_insertable_false_for_log() {
+        let mv = message_view_for(Message::log("hi"));
+        assert!(!<MessageView as View<(), ()>>::insertable(&mv));
+    }
+
+    // --- Phase 5: in-place edit state on MessageView ----------------------
+
+    #[test]
+    fn message_view_starts_with_no_edit_state() {
+        let mv = message_view_for(make_outgoing_chat("hi"));
+        assert!(!mv.is_editing());
+        assert!(mv.edit.is_none());
+    }
+
+    #[test]
+    fn start_edit_initializes_editor_with_current_body() {
+        let mut mv = message_view_for(make_outgoing_chat("hello"));
+        mv.start_edit();
+        let editor = mv.edit.as_ref().expect("editor should be initialized");
+        assert_eq!(editor.buf, "hello");
+        assert_eq!(editor.cursor.get(), 5);
+    }
+
+    #[test]
+    fn message_view_key_appends_to_edit_buffer() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.start_edit();
+        mv.key('!');
+        assert_eq!(mv.edit.as_ref().unwrap().buf, "hi!");
+    }
+
+    #[test]
+    fn message_view_backspace_deletes_last_char() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.start_edit();
+        mv.backspace();
+        assert_eq!(mv.edit.as_ref().unwrap().buf, "h");
+    }
+
+    #[test]
+    fn cancel_edit_clears_state() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.start_edit();
+        mv.cancel_edit();
+        assert!(!mv.is_editing());
+        assert!(mv.edit.is_none());
+    }
+
+    #[test]
+    fn take_edit_returns_buffer_and_clears() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.start_edit();
+        mv.key('!');
+        let body = mv.take_edit();
+        assert_eq!(body.as_deref(), Some("hi!"));
+        assert!(!mv.is_editing());
+    }
+
+    #[test]
+    fn start_edit_on_incoming_does_nothing() {
+        let mut mv = message_view_for(make_incoming_chat("hello"));
+        mv.start_edit();
+        assert!(!mv.is_editing());
+    }
+
+    #[test]
+    fn key_when_not_editing_is_noop() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.key('!');
+        if let Message::Xmpp(x) = &mv.message {
+            assert_eq!(x.get_last_body(vec![]), "hi");
+        }
+        assert!(mv.edit.is_none());
+    }
+
+    #[test]
+    fn message_view_delete_removes_char_at_cursor() {
+        let mut mv = message_view_for(make_outgoing_chat("abc"));
+        mv.start_edit();
+        mv.cursor_home();
+        mv.delete();
+        assert_eq!(mv.edit.as_ref().unwrap().buf, "bc");
+    }
+
+    #[test]
+    fn message_view_cursor_left_right() {
+        let mut mv = message_view_for(make_outgoing_chat("ab"));
+        mv.start_edit();
+        // Cursor is at end (2). Move left twice.
+        mv.cursor_left();
+        mv.cursor_left();
+        assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 0);
+        // Right moves it back
+        mv.cursor_right();
+        assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 1);
+    }
+
+    #[test]
+    fn message_view_word_left_word_right() {
+        let mut mv = message_view_for(make_outgoing_chat("foo bar"));
+        mv.start_edit();
+        // Cursor at end. word_left moves to start of "bar".
+        mv.word_left();
+        assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 4);
+    }
+
+    #[test]
+    fn message_view_backward_delete_word_removes_previous_word() {
+        let mut mv = message_view_for(make_outgoing_chat("foo bar"));
+        mv.start_edit();
+        mv.backward_delete_word();
+        assert_eq!(mv.edit.as_ref().unwrap().buf, "foo ");
+    }
+
+    #[test]
+    fn message_view_home_end_jumps_cursor() {
+        let mut mv = message_view_for(make_outgoing_chat("hello"));
+        mv.start_edit();
+        mv.cursor_home();
+        assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 0);
+        mv.cursor_end();
+        assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 5);
+    }
+
+    #[test]
+    fn new_outgoing_chat_is_not_a_correction() {
+        let m = make_outgoing_chat("hello");
+        assert!(!m.is_correction());
+        if let Message::Xmpp(x) = &m {
+            assert!(x.correcting_id.is_none());
+        }
+    }
+
+    #[test]
+    fn set_correcting_id_marks_message_as_correction() {
+        let mut m = make_outgoing_chat("new body");
+        m.set_correcting_id("orig-1".to_string());
+        assert!(m.is_correction());
+        if let Message::Xmpp(x) = &m {
+            assert_eq!(x.correcting_id.as_deref(), Some("orig-1"));
+        }
+    }
+
+    #[test]
+    fn apply_correction_appends_version_and_updates_last_body() {
+        let mut m = make_outgoing_chat("v1");
+        let initial_len = match &m {
+            Message::Xmpp(x) => x.history.len(),
+            _ => unreachable!(),
+        };
+        // Sleep tiny amount or use a later timestamp so the version is "max".
+        let later: DateTime<FixedOffset> = now() + chrono::Duration::seconds(1);
+        m.apply_correction("v2-id".to_string(), "v2 body".to_string(), later);
+        if let Message::Xmpp(x) = &m {
+            assert_eq!(x.history.len(), initial_len + 1);
+            assert_eq!(x.get_last_body(vec![]), "v2 body");
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn apply_correction_is_idempotent_by_id() {
+        let mut m = make_outgoing_chat("v1");
+        let later: DateTime<FixedOffset> = now() + chrono::Duration::seconds(1);
+        m.apply_correction("v2-id".to_string(), "v2".to_string(), later);
+        m.apply_correction("v2-id".to_string(), "v2-again".to_string(), later);
+        if let Message::Xmpp(x) = &m {
+            assert_eq!(x.history.iter().filter(|v| v.id == "v2-id").count(), 1);
+            assert_eq!(x.get_last_body(vec![]), "v2");
+        } else {
+            unreachable!();
+        }
+    }
+
+    fn build_xmpp_msg_with_body(id: &str, body: &str) -> XmppParsersMessage {
+        let mut m = XmppParsersMessage::new(Some(Jid::from_str("contact@localhost").unwrap()));
+        m.id = Some(XmppParsersMessageId(id.to_string()));
+        m.type_ = XmppParsersMessageType::Chat;
+        m.bodies
+            .insert(XmppParsersLang(String::new()), body.to_string());
+        m
+    }
+
+    fn make_outgoing_channel(body: &str) -> Message {
+        let from = Jid::from_str("me@localhost/aparte").unwrap();
+        let to = Jid::from_str("room@conference.localhost").unwrap();
+        let mut bodies = HashMap::new();
+        bodies.insert(String::new(), body.to_string());
+        Message::outgoing_channel(
+            Uuid::new_v4().to_string(),
+            now(),
+            &from,
+            &to,
+            bodies,
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn outgoing_chat_to_element_includes_replace_when_correcting() {
+        let mut m = make_outgoing_chat("corrected text");
+        m.set_correcting_id("orig-1".to_string());
+        let elem: xmpp_parsers::minidom::Element = m.try_into().unwrap();
+        let has_replace = elem.children().any(|c| {
+            c.is("replace", "urn:xmpp:message-correct:0") && c.attr("id") == Some("orig-1")
+        });
+        assert!(has_replace, "expected <replace id='orig-1'/> in stanza");
+    }
+
+    #[test]
+    fn outgoing_chat_to_element_omits_replace_when_not_correcting() {
+        let m = make_outgoing_chat("hello");
+        let elem: xmpp_parsers::minidom::Element = m.try_into().unwrap();
+        let has_replace = elem
+            .children()
+            .any(|c| c.is("replace", "urn:xmpp:message-correct:0"));
+        assert!(!has_replace, "no <replace> expected for plain message");
+    }
+
+    #[test]
+    fn outgoing_channel_to_element_includes_replace_when_correcting() {
+        let mut m = make_outgoing_channel("corrected");
+        m.set_correcting_id("orig-2".to_string());
+        let elem: xmpp_parsers::minidom::Element = m.try_into().unwrap();
+        let has_replace = elem.children().any(|c| {
+            c.is("replace", "urn:xmpp:message-correct:0") && c.attr("id") == Some("orig-2")
+        });
+        assert!(
+            has_replace,
+            "expected <replace id='orig-2'/> in channel stanza"
+        );
+    }
+
+    #[test]
+    fn add_version_from_xmpp_dedups_by_version_id() {
+        let mut versioned = match make_outgoing_chat("v1") {
+            Message::Xmpp(x) => x,
+            _ => unreachable!(),
+        };
+        let initial_len = versioned.history.len();
+        let xmpp_msg = build_xmpp_msg_with_body("v2-id", "v2 body");
+        versioned.add_version_from_xmpp(&xmpp_msg);
+        versioned.add_version_from_xmpp(&xmpp_msg);
+        assert_eq!(versioned.history.len(), initial_len + 1);
+        assert_eq!(
+            versioned.history.iter().filter(|v| v.id == "v2-id").count(),
+            1
+        );
     }
 }

@@ -27,6 +27,7 @@ pub mod rendering;
 pub mod root;
 pub mod scroll_win;
 pub mod stories;
+pub mod text_editor;
 
 pub type EventHandler<V, E> = Rc<RefCell<Box<dyn FnMut(&mut V, &mut E)>>>;
 

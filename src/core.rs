@@ -1559,9 +1559,16 @@ impl Aparte {
                         .unwrap()
                         .contains_key(&(account.clone(), recipient))
                 });
-                let mut display_message = message.clone();
-                display_message.set_encrypted(will_encrypt);
-                self.schedule(Event::Message(Some(account.clone()), display_message));
+                // For XEP-0308 corrections, UIMod has already applied the new
+                // version to the local message store and pushed the updated
+                // original into the UI synchronously. Don't schedule a second
+                // Message event here (that would render the correction as a
+                // *new* message in the conversation).
+                if !message.is_correction() {
+                    let mut display_message = message.clone();
+                    display_message.set_encrypted(will_encrypt);
+                    self.schedule(Event::Message(Some(account.clone()), display_message));
+                }
 
                 // Encrypt if required
                 let encryption = message.encryption_recipient().and_then(|recipient| {

@@ -1,40 +1,28 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use crate::cursor::Cursor;
 use crate::rendering::ScreenFrame;
+use crate::text_editor::TextEditor;
 use crate::CursorPos;
 use crate::CursorStyle;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    next_word, Dimensions, EventHandler, MeasureSpecs, RequestedDimension, RequestedDimensions,
-    View,
+    Dimensions, EventHandler, MeasureSpecs, RequestedDimension, RequestedDimensions, View,
 };
 
 pub struct Input<E> {
-    pub buf: String,
+    pub editor: TextEditor,
     pub tmp_buf: Option<String>,
     pub password: bool,
     pub history: Vec<String>,
     pub history_index: usize,
-    // Used to index code points in buf (don't use it to directly index buf)
-    pub cursor: Cursor,
-    // start index (in code points) of the view inside the buffer
-    // |-----------------------|
-    // | buffer text           |
-    // |-----------------------|
-    //     |-----------|
-    //     | view      |
-    //     |-----------|
-    pub view: Cursor,
     pub event_handler: Option<EventHandler<Self, E>>,
     pub show_cursor: bool,
     pub cursor_style: CursorStyle,
-    width: Cell<usize>,
     dimensions: Option<Dimensions>,
 }
 
@@ -48,17 +36,14 @@ impl<E> Input<E> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            buf: String::new(),
+            editor: TextEditor::new(),
             tmp_buf: None,
             password: false,
             history: Vec::new(),
             history_index: 0,
-            cursor: Cursor::new(0),
-            view: Cursor::new(0),
             event_handler: None,
             show_cursor: true,
             cursor_style: CursorStyle::SteadyBar,
-            width: Cell::new(0),
             dimensions: None,
         }
     }
@@ -81,101 +66,58 @@ impl<E> Input<E> {
     }
 
     pub fn key(&mut self, c: char) {
-        let byte_index = self.cursor.index(&self.buf);
-        self.buf.insert(byte_index, c);
-        self.cursor += 1;
+        self.editor.key(c);
     }
 
     pub fn backspace(&mut self) {
-        if self.cursor > Cursor::new(0) {
-            self.cursor -= 1;
-            let mut byte_index = self.cursor.index(&self.buf);
-            if byte_index == self.buf.len() {
-                byte_index -= 1;
-            }
-            self.buf.remove(byte_index);
-            // TODO work on grapheme
-            while !self.buf.is_char_boundary(byte_index) {
-                self.buf.remove(byte_index);
-            }
-        }
+        self.editor.backspace();
     }
 
     pub fn backward_delete_word(&mut self) {
-        let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
-        let mut word_start = self.cursor.clone();
-        word_start -= next_word(iter);
-        self.buf.replace_range(
-            word_start.index(&self.buf)..self.cursor.index(&self.buf),
-            "",
-        );
-        self.cursor = word_start;
+        self.editor.backward_delete_word();
     }
 
     pub fn delete_from_cursor_to_start(&mut self) {
-        self.buf.replace_range(0..self.cursor.index(&self.buf), "");
-        self.cursor.set(0);
-        self.view.set(0);
+        self.editor.delete_from_cursor_to_start();
     }
 
     pub fn delete_from_cursor_to_end(&mut self) {
-        self.buf.replace_range(self.cursor.index(&self.buf).., "");
+        self.editor.delete_from_cursor_to_end();
     }
 
     pub fn delete(&mut self) {
-        if self.cursor < self.buf.graphemes(true).count() {
-            let byte_index = self.cursor.index(&self.buf);
-
-            self.buf.remove(byte_index);
-            while !self.buf.is_char_boundary(byte_index) {
-                self.buf.remove(byte_index);
-            }
-        }
+        self.editor.delete();
     }
 
     pub fn home(&mut self) {
-        self.cursor.set(0);
-        self.view.set(0);
+        self.editor.home();
     }
 
     pub fn end(&mut self) {
-        self.cursor.set(self.buf.graphemes(true).count());
-        if self.cursor > self.width.get() - 1 {
-            self.view = &self.cursor - (self.width.get() - 1);
-        } else {
-            self.view.set(0);
-        }
+        self.editor.end();
     }
 
     pub fn clear(&mut self) {
-        self.buf.clear();
-        self.cursor.set(0);
-        self.view.set(0);
+        self.editor.clear();
         let _ = self.tmp_buf.take();
         self.password = false;
         self.show_cursor = true;
     }
 
     pub fn left(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        }
+        self.editor.left();
     }
 
     pub fn right(&mut self) {
-        if self.cursor < self.buf.graphemes(true).count() {
-            self.cursor += 1;
-        }
+        self.editor.right();
     }
 
     pub fn word_left(&mut self) {
-        let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
-        self.cursor -= next_word(iter);
+        self.editor.word_left();
     }
 
     pub fn word_right(&mut self) {
-        let iter = self.buf[self.cursor.index(&self.buf)..].chars();
-        self.cursor += next_word(iter);
+        self.editor.word_right();
     }
 
     pub fn password(&mut self) {
@@ -185,10 +127,10 @@ impl<E> Input<E> {
 
     pub fn validate(&mut self) -> (String, bool) {
         if !self.password {
-            self.history.push(self.buf.clone());
+            self.history.push(self.editor.buf.clone());
             self.history_index = self.history.len();
         }
-        let buf = self.buf.clone();
+        let buf = self.editor.buf.clone();
         let password = self.password;
         self.clear();
         (buf, password)
@@ -200,12 +142,12 @@ impl<E> Input<E> {
         }
 
         if self.tmp_buf.is_none() {
-            self.tmp_buf = Some(self.buf.clone());
+            self.tmp_buf = Some(self.editor.buf.clone());
         }
 
         self.history_index -= 1;
-        self.buf = self.history[self.history_index].clone();
-        self.end();
+        self.editor.buf = self.history[self.history_index].clone();
+        self.editor.end();
     }
 
     /// # Panics
@@ -218,11 +160,11 @@ impl<E> Input<E> {
 
         self.history_index += 1;
         if self.history_index == self.history.len() {
-            self.buf = self.tmp_buf.take().unwrap();
+            self.editor.buf = self.tmp_buf.take().unwrap();
         } else {
-            self.buf = self.history[self.history_index].clone();
+            self.editor.buf = self.history[self.history_index].clone();
         }
-        self.end();
+        self.editor.end();
     }
 }
 
@@ -256,7 +198,7 @@ impl<E, C> View<E, C> for Input<E> {
             self.dimensions
         );
 
-        self.width.set(frame.dimensions.width as usize);
+        self.editor.set_width(frame.dimensions.width as usize);
         if self.password {
             let prompt = "password: ";
             frame.write(prompt);
@@ -273,29 +215,32 @@ impl<E, C> View<E, C> for Input<E> {
             let max_size = (frame.dimensions.width - 1) as usize;
 
             // cursor must always be inside the view
-            if self.cursor < self.view {
-                if self.cursor < max_size {
-                    self.view.set(0);
+            if self.editor.cursor < self.editor.view {
+                if self.editor.cursor < max_size {
+                    self.editor.view.set(0);
                 } else {
-                    self.view
-                        .update(&self.cursor - (frame.dimensions.width as usize - 1));
+                    self.editor
+                        .view
+                        .update(&self.editor.cursor - (frame.dimensions.width as usize - 1));
                 }
-            } else if self.cursor > &self.view + (frame.dimensions.width as usize - 1) {
-                self.view
-                    .update(&self.cursor - (frame.dimensions.width as usize - 1));
+            } else if self.editor.cursor > &self.editor.view + (frame.dimensions.width as usize - 1)
+            {
+                self.editor
+                    .view
+                    .update(&self.editor.cursor - (frame.dimensions.width as usize - 1));
             }
-            assert!(self.cursor >= self.view);
-            assert!(self.cursor <= &self.view + (max_size + 1));
+            assert!(self.editor.cursor >= self.editor.view);
+            assert!(self.editor.cursor <= &self.editor.view + (max_size + 1));
 
-            let start_index = self.view.index(&self.buf);
-            let end_index = (&self.view + max_size).index(&self.buf);
-            let buf = &self.buf[start_index..end_index];
+            let start_index = self.editor.view.index(&self.editor.buf);
+            let end_index = (&self.editor.view + max_size).index(&self.editor.buf);
+            let buf = &self.editor.buf[start_index..end_index];
 
             frame.write(buf);
 
-            let cursor_byte_index = self.cursor.index(&self.buf);
+            let cursor_byte_index = self.editor.cursor.index(&self.editor.buf);
             #[allow(clippy::cast_possible_truncation)]
-            let cursor_col: u16 = self.buf[start_index..cursor_byte_index]
+            let cursor_col: u16 = self.editor.buf[start_index..cursor_byte_index]
                 .graphemes(true)
                 .map(|g| unicode_display_width::width(g) as u16)
                 .sum();
@@ -352,6 +297,6 @@ mod tests {
         input.backspace();
 
         // Then
-        assert_eq!(input.buf, "ab".to_string());
+        assert_eq!(input.editor.buf, "ab".to_string());
     }
 }

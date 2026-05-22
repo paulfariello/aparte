@@ -40,6 +40,7 @@ use xmpp_parsers::jid::{BareJid, Jid};
 
 use radix_trie::Trie;
 
+use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::config::{Config, Theme};
@@ -121,6 +122,16 @@ impl<E, C> View<E, C> for PopupLine {
 enum UIEvent {
     Core(Event),
     Validate(Rc<RefCell<Option<(String, bool)>>>),
+    /// Explicit "start editing the selected message" request. Dispatched by
+    /// the top-level `i` key handler only when focus is on the message frame,
+    /// so we don't accidentally start an in-place edit when the user just
+    /// wants to type in the input bar.
+    StartEdit,
+    /// XEP-0308 in-place edit commit. If the focused conversation has an
+    /// editing MessageView, the slot is filled with `(original_message_id,
+    /// new_body)` and the edit state is cleared. Used by the Enter handler
+    /// to detect and send a correction instead of a fresh message.
+    ValidateEdit(Rc<RefCell<Option<(String, String)>>>),
     GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
     AddWindow(
         String,
@@ -148,6 +159,35 @@ impl FocusRouted for UIEvent {
             UIEvent::Core(event) => event.is_focus_routed(),
             _ => false,
         }
+    }
+}
+
+/// Route a key event to a `MessageView` that is currently being edited in
+/// place (XEP-0308 correction). The set of accepted keys mirrors the input
+/// bar's key bindings.
+fn dispatch_edit_key(msg: &mut MessageView, key: &KeyEvent) {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => msg.key(c),
+        (KeyCode::Backspace, _) | (KeyCode::Char('h'), KeyModifiers::CONTROL) => msg.backspace(),
+        (KeyCode::Delete, _) => msg.delete(),
+        (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => msg.cursor_home(),
+        (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => msg.cursor_end(),
+        (KeyCode::Left, KeyModifiers::NONE) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+            msg.cursor_left();
+        }
+        (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+            msg.cursor_right();
+        }
+        (KeyCode::Left, KeyModifiers::ALT) | (KeyCode::Char('b'), KeyModifiers::ALT) => {
+            msg.word_left();
+        }
+        (KeyCode::Right, KeyModifiers::ALT) | (KeyCode::Char('f'), KeyModifiers::ALT) => {
+            msg.word_right();
+        }
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => msg.backward_delete_word(),
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => msg.delete_from_cursor_to_start(),
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) => msg.delete_from_cursor_to_end(),
+        _ => {}
     }
 }
 
@@ -745,6 +785,79 @@ impl UIMod {
         }
     }
 
+    /// Send a XEP-0308 correction for the message identified by
+    /// `original_id`, with the new body. Applies the correction to the local
+    /// message store immediately and pushes the updated message into the UI
+    /// synchronously, then schedules the outgoing stanza.
+    fn send_correction(&mut self, aparte: &mut Aparte, original_id: &str, new_body: String) {
+        let Some(current_window) = self.current_window.clone() else {
+            return;
+        };
+        let Some(conversation) = self.conversations.get(&current_window).cloned() else {
+            return;
+        };
+
+        let new_id = Uuid::new_v4().to_string();
+        let timestamp: DateTime<FixedOffset> = LocalTz::now().into();
+        let mut bodies = HashMap::new();
+        bodies.insert(String::new(), new_body.clone());
+
+        let (account, mut correction): (Account, Message) = match &conversation {
+            Conversation::Chat(chat) => {
+                let from: Jid = chat.account.clone().into();
+                let to: Jid = chat.contact.clone().into();
+                let msg = Message::outgoing_chat(
+                    new_id.clone(),
+                    timestamp,
+                    &from,
+                    &to,
+                    bodies,
+                    None,
+                    false,
+                );
+                (chat.account.clone(), msg)
+            }
+            Conversation::Channel(channel) => {
+                let Ok(us) = channel.account.to_bare().with_resource_str(&channel.nick) else {
+                    return;
+                };
+                let from: Jid = us.into();
+                let to: Jid = channel.jid.clone().into();
+                let msg = Message::outgoing_channel(
+                    new_id.clone(),
+                    timestamp,
+                    &from,
+                    &to,
+                    bodies,
+                    None,
+                    false,
+                );
+                (channel.account.clone(), msg)
+            }
+        };
+        correction.set_correcting_id(original_id.to_string());
+
+        // Apply correction to the local store and push the updated original
+        // into the UI immediately, so the edited message updates in place.
+        let updated = {
+            let mut msgs = aparte.get_mod_mut::<crate::mods::messages::MessagesMod>();
+            if let Some(original) = msgs.get_mut(&Some(account.clone()), &original_id.to_string()) {
+                original.apply_correction(new_id, new_body, timestamp);
+                Some(original.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(updated_msg) = updated {
+            self.root.event(&mut UIEvent::Core(Event::Message(
+                Some(account.clone()),
+                updated_msg,
+            )));
+        }
+
+        aparte.schedule(Event::SendMessage(account, correction));
+    }
+
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn add_conversation(&mut self, aparte: &mut Aparte, conversation: &Conversation) {
         let scheduler = self.get_scheduler();
@@ -897,16 +1010,75 @@ impl UIMod {
                                         }
                                     }
                                 },
-                                UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
+                                UIEvent::ModeChange(Mode::Normal) => {
                                     current_mode = Mode::Normal;
-                                    view.select_last_visible();
+                                    // Cancel any in-place edit on the selected
+                                    // message. Do NOT auto-select: when the user
+                                    // presses Esc from the input bar the cursor
+                                    // must stay on the input bar. Navigation
+                                    // (k/j/gg/G) establishes the selection.
+                                    view.update_selected(|msg| {
+                                        if msg.is_editing() {
+                                            msg.cancel_edit();
+                                        }
+                                    });
                                 }
                                 UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
                                     current_mode = *mode;
                                     follow_bottom = true;
-                                    view.clear_selection();
+                                    // Keep the selection only when a StartEdit
+                                    // has already initialised an in-place edit
+                                    // on the selected message. Otherwise clear
+                                    // it so typing in the input bar doesn't
+                                    // leave a highlighted message behind.
+                                    let editing =
+                                        view.selected().is_some_and(MessageView::is_editing);
+                                    if !editing {
+                                        view.clear_selection();
+                                    }
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
+                                    }
+                                }
+                                // Begin an in-place edit on the selected
+                                // outgoing message. Dispatched by the
+                                // top-level `i` handler when focus is on the
+                                // message frame.
+                                UIEvent::StartEdit => {
+                                    view.update_selected(|msg| {
+                                        if let Message::Xmpp(m) = &msg.message {
+                                            if m.direction == Direction::Outgoing {
+                                                msg.start_edit();
+                                            }
+                                        }
+                                    });
+                                }
+                                // Route INSERT-mode key events to the selected
+                                // message when it's being edited in place.
+                                UIEvent::Core(Event::Key(key))
+                                    if current_mode == Mode::Insert
+                                        && view.selected().is_some_and(MessageView::is_editing) =>
+                                {
+                                    view.update_selected(|msg| dispatch_edit_key(msg, key));
+                                }
+                                // Commit an in-place edit: if the selected
+                                // MessageView is editing, fill the slot with
+                                // (original_id, new_body) and clear the edit
+                                // state.
+                                UIEvent::ValidateEdit(result) => {
+                                    let pair = view.update_selected(|msg| {
+                                        if !msg.is_editing() {
+                                            return None;
+                                        }
+                                        let id = match &msg.message {
+                                            Message::Xmpp(m) => Some(m.id.clone()),
+                                            Message::Log(_) => None,
+                                        };
+                                        let body = msg.take_edit();
+                                        id.zip(body)
+                                    });
+                                    if let Some(Some(p)) = pair {
+                                        *result.borrow_mut() = Some(p);
                                     }
                                 }
                                 _ => {}
@@ -1082,17 +1254,39 @@ impl UIMod {
                                         from: None,
                                     });
                                 }
-                                UIEvent::ModeChange(Mode::Normal) if !view.has_selection() => {
+                                UIEvent::ModeChange(Mode::Normal) => {
                                     current_mode = Mode::Normal;
-                                    view.select_last_visible();
+                                    view.update_selected(|msg| {
+                                        if msg.is_editing() {
+                                            msg.cancel_edit();
+                                        }
+                                    });
                                 }
                                 UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
                                     current_mode = *mode;
                                     follow_bottom = true;
-                                    view.clear_selection();
+                                    let start = *mode == Mode::Insert
+                                        && view.selected().is_some_and(|msg| {
+                                            matches!(
+                                                &msg.message,
+                                                Message::Xmpp(m)
+                                                    if m.direction == Direction::Outgoing
+                                            )
+                                        });
+                                    if start {
+                                        view.update_selected(MessageView::start_edit);
+                                    } else {
+                                        view.clear_selection();
+                                    }
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
                                     }
+                                }
+                                UIEvent::Core(Event::Key(key))
+                                    if current_mode == Mode::Insert
+                                        && view.selected().is_some_and(MessageView::is_editing) =>
+                                {
+                                    view.update_selected(|msg| dispatch_edit_key(msg, key));
                                 }
                                 _ => {}
                             }
@@ -1260,6 +1454,18 @@ impl ModTrait for UIMod {
                             .map(|c| c.insertable())
                             .unwrap_or(false);
                         if focused_is_insertable {
+                            // Only request an in-place edit when focus is on
+                            // the message frame. Otherwise (focus on input
+                            // bar), `i` just enters INSERT for typing — even
+                            // if the auto-selection on NORMAL highlighted an
+                            // outgoing message.
+                            let focus_on_frame =
+                                layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+                            if focus_on_frame {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::StartEdit);
+                                }
+                            }
                             command_buffer.clear();
                             mode = Mode::Insert;
                             aparte_proxy.schedule(Event::UIMode(Mode::Insert));
@@ -1614,7 +1820,14 @@ impl ModTrait for UIMod {
                     | Event::Completed(_, _)
                     | Event::ResetCompletion
                     | Event::ReadPassword(_),
-                ) => frame.route_to_focused(event),
+                )
+                // NormalCommand must go to the current window only: all windows
+                // get ModeChange(Normal) and call select_last_visible(), so any
+                // non-current window that is already at its last selection would
+                // set `bubbled = true` on the shared event, making the outer
+                // layout think navigation failed when it actually succeeded.
+                | UIEvent::NormalCommand { .. }
+                | UIEvent::StartEdit => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {
@@ -1731,17 +1944,21 @@ impl ModTrait for UIMod {
                 }
                 UIEvent::GetInput(result) => {
                     let mut result = result.borrow_mut();
-                    result.replace((input.buf.clone(), input.cursor.clone(), input.password));
+                    result.replace((
+                        input.editor.buf.clone(),
+                        input.editor.cursor.clone(),
+                        input.password,
+                    ));
                 }
                 UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                    input.buf.clone_from(raw_buf);
-                    input.cursor.clone_from(cursor);
+                    input.editor.buf.clone_from(raw_buf);
+                    input.editor.cursor.clone_from(cursor);
                 }
                 UIEvent::Core(Event::ReadPassword(_)) => input.password(),
                 UIEvent::SetInput(text) => {
-                    input.cursor =
+                    input.editor.cursor =
                         Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
-                    input.buf.clone_from(text);
+                    input.editor.buf.clone_from(text);
                 }
                 UIEvent::ModeChange(Mode::Normal) => {
                     input.set_show_cursor(true);
@@ -2197,6 +2414,22 @@ impl ModTrait for UIMod {
                         code: KeyCode::Enter,
                         ..
                     } => {
+                        // First, see whether a MessageView is being edited in
+                        // place — if so, commit it as a XEP-0308 correction
+                        // rather than running the input-bar send path.
+                        let edit_result: Rc<RefCell<Option<(String, String)>>> =
+                            Rc::new(RefCell::new(None));
+                        self.root
+                            .event(&mut UIEvent::ValidateEdit(Rc::clone(&edit_result)));
+                        if let Some((original_id, new_body)) = edit_result.borrow_mut().take() {
+                            self.send_correction(aparte, &original_id, new_body);
+                            // Return to NORMAL mode; the layout closure listens
+                            // for ModeChange and updates its captured `mode`.
+                            self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            aparte.schedule(Event::UIMode(Mode::Normal));
+                            return;
+                        }
+
                         let result = Rc::new(RefCell::new(None));
                         // TODO avoid direct send to root, should go back to main event loop
                         self.root.event(&mut UIEvent::Validate(Rc::clone(&result)));

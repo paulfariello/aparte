@@ -67,6 +67,14 @@ Switch windows with `Alt+[1-9]` or `:win <name>`.
 
 Commands accept unique prefixes: `:conn` resolves to `:connect` when unambiguous.
 
+### Correcting a sent message
+
+In Normal mode, navigate with `k`/`j` to one of your own sent messages and
+press `i`. The cursor moves onto the message itself (steady bar), pre-filled
+with the current body. Edit the text and press `Enter` to send the correction
+(XEP-0308): the message updates in place and is marked with a `✎` icon. Press
+`Esc` to cancel the edit and revert. Incoming messages are not editable.
+
 Install
 -------
 

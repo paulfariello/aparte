@@ -20,7 +20,7 @@ pub trait Searchable {
     fn matches(&self, query: &str) -> bool;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct LayoutChild<I> {
     child: I,
     dimensions: Option<Dimensions>,
@@ -161,6 +161,23 @@ where
 
     pub fn selected(&self) -> Option<&I> {
         self.selected_child_index.and_then(|i| self.child_at(i))
+    }
+
+    /// Apply a closure to a mutable reference of the currently selected
+    /// child. Uses a take-then-reinsert pattern because children are stored
+    /// in a `BTreeSet`. The closure MUST NOT change fields that affect the
+    /// child's `Ord` (since the reinsert position depends on that key).
+    pub fn update_selected<F, R>(&mut self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut I) -> R,
+        I: Clone,
+    {
+        let idx = self.selected_child_index?;
+        let key = self.children.iter().nth(idx)?.clone();
+        let mut lc = self.children.take(&key)?;
+        let result = f(&mut lc.child);
+        self.children.insert(lc);
+        Some(result)
     }
 
     pub fn predecessor(&self, item: &I) -> Option<&I> {
@@ -775,6 +792,10 @@ where
             handler(self, event);
         }
     }
+
+    fn insertable(&self) -> bool {
+        self.selected().map(View::insertable).unwrap_or(false)
+    }
 }
 
 impl<E, I, C> ScrollWin<E, I, C>
@@ -861,6 +882,7 @@ mod tests {
         pub ord: usize,
         pub height: u16,
         pub dimensions: Option<Dimensions>,
+        pub insertable: bool,
     }
 
     impl PartialOrd for MockView {
@@ -907,6 +929,10 @@ mod tests {
 
         fn event(&mut self, _event: &mut E) {
             unreachable!()
+        }
+
+        fn insertable(&self) -> bool {
+            self.insertable
         }
     }
 
@@ -1677,5 +1703,46 @@ mod tests {
             w.bottom_visible_child_index < 4,
             "page_up should move bottom_visible_child_index below 4"
         );
+    }
+
+    #[test]
+    fn insertable_false_when_no_child_selected() {
+        let mut w = ScrollWin::<(), MockView>::new();
+        w.insert(MockView {
+            ord: 0,
+            height: 1,
+            insertable: true,
+            ..Default::default()
+        });
+        // No selection yet
+        assert!(!<ScrollWin<(), MockView> as View<(), ()>>::insertable(&w));
+    }
+
+    #[test]
+    fn insertable_delegates_to_selected_child() {
+        let mut w = ScrollWin::<(), MockView>::new();
+        w.insert(MockView {
+            ord: 0,
+            height: 1,
+            insertable: true,
+            ..Default::default()
+        });
+        w.insert(MockView {
+            ord: 1,
+            height: 1,
+            insertable: false,
+            ..Default::default()
+        });
+        w.layout(&Dimensions {
+            top: 0,
+            left: 0,
+            width: 80,
+            height: 20,
+        });
+        w.selected_child_index = Some(0);
+        assert!(<ScrollWin<(), MockView> as View<(), ()>>::insertable(&w));
+
+        w.selected_child_index = Some(1);
+        assert!(!<ScrollWin<(), MockView> as View<(), ()>>::insertable(&w));
     }
 }

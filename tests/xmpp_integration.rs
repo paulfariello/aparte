@@ -20,12 +20,13 @@ use xmpp_parsers::presence::Show;
 use common::describe;
 use common::grid_contains;
 use common::row_text;
+use common::rows_with_bgcolor;
 use common::xmpp_fixture::{
     carbon_received, carbon_received_groupchat, carbon_sent, carbon_sent_groupchat, chat_message,
     contact_offline_presence, contact_presence, corrected_chat_message, groupchat_message,
     muc_join_presence, xmpp, xmpp_with_contact, XmppFixture,
 };
-use common::ROWS;
+use common::{ROWS, SELECTION_BGCOLOR};
 
 /// Verify that carbon stanzas can be built and round-trip through xmpp-parsers.
 #[test]
@@ -544,5 +545,386 @@ fn carbon_received_muc_message_ignored() {
         !(0..ROWS).any(|r| row_text(parser.screen(), r).contains("carbon-muc-body-9f1w")),
         "groupchat carbons::Received should be ignored but message appeared in UI\n{}",
         describe(parser.screen()),
+    );
+}
+
+/// Regression: pressing `i` directly after `Esc` (without first `k` to move
+/// focus into the message frame) must NOT start an in-place edit, even if the
+/// auto-select on NORMAL mode highlighted an outgoing message. Otherwise the
+/// cursor stays on the input bar but the message also enters edit state,
+/// keystrokes are typed into the input bar (never reaching the message), and
+/// Enter sends a "correction" with the unmodified body — i.e. a no-op
+/// correction that appears as a duplicate message to peers.
+#[rstest]
+fn esc_then_i_without_k_does_not_start_in_place_edit(mut xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp_with_contact.send_command("Hello world");
+    assert!(
+        xmpp_with_contact.wait_for("Hello world", Duration::from_secs(5)),
+        "original message not visible",
+    );
+
+    // Drain the original send.
+    let _ = xmpp_with_contact.recv_outgoing_message_matching(
+        |msg| msg.bodies.values().any(|b| b == "Hello world"),
+        Duration::from_secs(5),
+    );
+
+    // Esc → NORMAL; focus is still on the input bar (no `k` pressed).
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+
+    // Press 'i' — must enter INSERT on the input bar (not on the message).
+    xmpp_with_contact.send_bytes(b"i");
+    assert!(xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)));
+
+    // Type a fresh body in the input bar.
+    xmpp_with_contact.send_bytes(b"Brand new");
+    assert!(
+        xmpp_with_contact.wait_for("Brand new", Duration::from_secs(3)),
+        "expected typed text to appear in the input bar",
+    );
+    xmpp_with_contact.send_bytes(b"\r");
+
+    // The next outgoing stanza must be a *plain* message with "Brand new",
+    // NOT a correction of "Hello world" with the same body.
+    let next = xmpp_with_contact
+        .recv_outgoing_message_matching(|_| true, Duration::from_secs(5))
+        .expect("expected an outgoing stanza after Enter");
+
+    let has_replace = next
+        .payloads
+        .iter()
+        .any(|p| p.is("replace", "urn:xmpp:message-correct:0"));
+    assert!(
+        !has_replace,
+        "Esc + i (focus still on input bar) must not produce a correction stanza",
+    );
+
+    let body = next
+        .bodies
+        .values()
+        .next()
+        .map(String::as_str)
+        .unwrap_or("");
+    assert_eq!(
+        body, "Brand new",
+        "expected a fresh message with the typed body, got: {body:?}",
+    );
+}
+
+/// Press `k` to select a previously-sent outgoing message, `i` to start an
+/// in-place edit, type more text, then Enter. The client must send a XEP-0308
+/// correction stanza: a fresh `<message>` carrying
+/// `<replace xmlns='urn:xmpp:message-correct:0' id='<original-id>'/>`
+/// where the replace id is the original message id and the stanza id differs.
+///
+/// We send two messages. Without auto-select on NORMAL entry, the first `k`
+/// selects the last message and the second `k` moves to "Original body".
+/// A single message would cause the second `k` to bubble back to the input
+/// bar — see `select_prev` handler in `src/mods/ui.rs`.
+#[rstest]
+fn enter_in_correction_edit_sends_replace_stanza(mut xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp_with_contact.send_command("Original body");
+    xmpp_with_contact.send_command("Second message");
+    assert!(
+        xmpp_with_contact.wait_for("Second message", Duration::from_secs(5)),
+        "second message not visible",
+    );
+
+    // Capture both outgoing stanzas and remember the id of the *first* one —
+    // it's the one we'll correct.
+    let original = xmpp_with_contact
+        .recv_outgoing_message_matching(
+            |msg| msg.bodies.values().any(|b| b == "Original body"),
+            Duration::from_secs(5),
+        )
+        .expect("original outgoing stanza was not captured");
+    let original_id = original
+        .id
+        .as_ref()
+        .expect("original must carry an id")
+        .0
+        .clone();
+    // Drain the "Second message" stanza so it doesn't get picked up below.
+    let _ = xmpp_with_contact.recv_outgoing_message_matching(
+        |msg| msg.bodies.values().any(|b| b == "Second message"),
+        Duration::from_secs(5),
+    );
+
+    // Esc → NORMAL (no auto-select), then k twice: the first k selects the
+    // last message ("Second message"), the second k moves up to "Original body".
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(100));
+    xmpp_with_contact.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+    xmpp_with_contact.send_bytes(b"i");
+    assert!(xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)));
+
+    // Append " plus" to the in-place edit and commit. We wait for the edited
+    // text to actually render before pressing Enter; otherwise the keys can
+    // race the PTY/renderer and the correction is sent before the edit is
+    // applied.
+    xmpp_with_contact.send_bytes(b" plus");
+    assert!(
+        xmpp_with_contact.wait_for("Original body plus", Duration::from_secs(5)),
+        "edited text did not render in place before Enter",
+    );
+    xmpp_with_contact.send_bytes(b"\r");
+
+    let correction = xmpp_with_contact
+        .recv_outgoing_message_matching(
+            |msg| {
+                msg.payloads
+                    .iter()
+                    .any(|p| p.is("replace", "urn:xmpp:message-correct:0"))
+            },
+            Duration::from_secs(5),
+        )
+        .expect("expected a <replace> correction stanza on the wire");
+
+    let replace = correction
+        .payloads
+        .iter()
+        .find(|p| p.is("replace", "urn:xmpp:message-correct:0"))
+        .expect("correction stanza must contain a <replace> element");
+    assert_eq!(
+        replace.attr("id"),
+        Some(original_id.as_str()),
+        "<replace> id must equal the original message id",
+    );
+
+    let new_id = correction
+        .id
+        .as_ref()
+        .expect("correction stanza must have its own id")
+        .0
+        .clone();
+    assert_ne!(
+        new_id, original_id,
+        "the correction stanza must use a fresh id distinct from the original",
+    );
+
+    let body = correction
+        .bodies
+        .values()
+        .next()
+        .expect("correction must carry a body");
+    assert!(
+        body.contains("plus"),
+        "new body should reflect the edit, got: {}",
+        body,
+    );
+}
+
+/// After `k` selects a sent outgoing message and `i` starts the in-place edit,
+/// the terminal cursor must sit on the message row (steady bar), NOT on the
+/// input bar (row ROWS-1). Typing must mutate the message text, not the input
+/// bar; the input bar must remain empty.
+#[rstest]
+fn i_on_outgoing_message_puts_cursor_at_message_not_input_bar(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    // Two messages so the first `k` selects the older one without bubbling to
+    // the input bar.
+    xmpp_with_contact.send_command("First message");
+    xmpp_with_contact.send_command("Second message");
+    assert!(
+        xmpp_with_contact.wait_for("Second message", Duration::from_secs(5)),
+        "second message not visible on screen",
+    );
+
+    // Esc → NORMAL; the last message is auto-selected.
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+
+    // k — select "First message" (the older one) and move focus into the
+    // message frame.
+    xmpp_with_contact.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    // Record which row is highlighted as the selection.
+    let selection_row = {
+        let parser = xmpp_with_contact.snapshot();
+        let selected = rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR);
+        assert!(
+            !selected.is_empty(),
+            "expected a selected message row after 'k'\n{}",
+            describe(parser.screen()),
+        );
+        *selected.first().unwrap()
+    };
+
+    // Press 'i' — focus is on the message frame (FRAME_LAYOUT_INDEX), which is
+    // insertable because the selected message is outgoing. The cursor must jump
+    // to the selected message row with a steady-bar shape, NOT to the input
+    // bar.
+    xmpp_with_contact.send_bytes(b"i");
+    assert!(
+        xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)),
+        "expected INSERT mode after pressing 'i' on an outgoing message",
+    );
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+    let (cursor_row, _cursor_col) = screen.cursor_position();
+
+    assert_ne!(
+        cursor_row,
+        ROWS - 1,
+        "cursor must NOT be on the input bar (row {}) after pressing 'i' on a selected outgoing message; got row {}\n{}",
+        ROWS - 1,
+        cursor_row,
+        describe(screen),
+    );
+    assert_eq!(
+        cursor_row,
+        selection_row,
+        "cursor must sit on the selected message row ({}) in edit mode, not row {}\n{}",
+        selection_row,
+        cursor_row,
+        describe(screen),
+    );
+}
+
+/// Pressing `j` to navigate from an older message BACK to the last (most
+/// recent) message and then pressing `i` must start an in-place edit on the
+/// last message, not switch focus to the input bar.
+///
+/// Regression: `j` on the last message bubbles focus to the input bar. When
+/// the user navigates `k` → last-1, then `j` → last, the focus is correctly
+/// on FRAME_LAYOUT_INDEX. But if the user is already on the last message and
+/// presses `j` one extra time focus escapes to INPUT_INDEX. The fix must
+/// ensure that when navigating back to the last message (via `j`) while focus
+/// is on the frame, `i` still triggers in-place edit.
+#[rstest]
+fn i_on_last_message_after_j_navigation_starts_in_place_edit(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp_with_contact.send_command("First message");
+    xmpp_with_contact.send_command("Last message");
+    assert!(
+        xmpp_with_contact.wait_for("Last message", Duration::from_secs(5)),
+        "last message not visible",
+    );
+
+    // Esc → NORMAL (no auto-select).
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+
+    // First k → selects "Last message" (bottom visible, no prior selection).
+    // Second k → moves to "First message".
+    // j → moves back to "Last message"; focus must remain on the message frame.
+    xmpp_with_contact.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(100));
+    xmpp_with_contact.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+    xmpp_with_contact.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(200));
+
+    // The last message row must be highlighted.
+    let selection_row = {
+        let parser = xmpp_with_contact.snapshot();
+        let selected = rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR);
+        assert!(
+            !selected.is_empty(),
+            "expected a selected message row after k+j\n{}",
+            describe(parser.screen()),
+        );
+        *selected.last().unwrap()
+    };
+
+    // i must start an in-place edit on the last message — cursor on the
+    // message row, NOT on the input bar.
+    xmpp_with_contact.send_bytes(b"i");
+    assert!(
+        xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)),
+        "expected INSERT mode after pressing 'i' on the last message",
+    );
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+    let (cursor_row, _) = screen.cursor_position();
+
+    assert_ne!(
+        cursor_row,
+        ROWS - 1,
+        "cursor must NOT jump to the input bar (row {}) when pressing 'i' on the last message; got row {}\n{}",
+        ROWS - 1,
+        cursor_row,
+        describe(screen),
+    );
+    assert_eq!(
+        cursor_row,
+        selection_row,
+        "cursor must sit on the last message row ({}) after pressing 'i', not row {}\n{}",
+        selection_row,
+        cursor_row,
+        describe(screen),
+    );
+}
+
+/// Pressing Escape from INSERT mode while typing in the chat input bar must
+/// leave the cursor on the input bar in NORMAL mode. No chat message should
+/// be auto-selected and the cursor must NOT jump to a message row.
+#[rstest]
+fn escape_from_insert_in_chat_stays_on_input_bar(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    // Send a message so the chat window has content that could be auto-selected.
+    xmpp_with_contact.send_command("Hello world");
+    assert!(
+        xmpp_with_contact.wait_for("Hello world", Duration::from_secs(5)),
+        "sent message not visible",
+    );
+
+    // After send_command the app is still in INSERT mode (Enter does not change
+    // mode). Explicitly switch to NORMAL first, then back to INSERT — this
+    // puts us in the "typing in the input bar" state we want to test.
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b"i");
+    assert!(xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b"draft");
+    assert!(
+        xmpp_with_contact.wait_for("draft", Duration::from_secs(2)),
+        "typed text not visible in input bar",
+    );
+
+    // Press Escape — must stay on input bar in NORMAL mode.
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+
+    // No chat message row must be highlighted.
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "no message should be selected after Escape from the input bar, but {} rows are highlighted\n{}",
+        selected.len(),
+        describe(screen),
+    );
+
+    // Cursor must stay on the input bar (last row).
+    let (row, _) = screen.cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must remain on the input bar (row {}) after Escape from INSERT mode, got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen),
     );
 }
