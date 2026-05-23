@@ -1452,3 +1452,264 @@ fn title_bar_mode_label_is_stable_across_transitions() {
 
     h.shutdown();
 }
+
+// ── Normal-mode in-line cursor motion tests ──────────────────────────────────
+//
+// Pattern: enter Insert, type ASCII text, switch to Normal (Esc moves cursor
+// back one), press a motion key, then verify the terminal cursor column on the
+// input bar (row ROWS-1).  For plain ASCII, grapheme index == screen column.
+//
+// "hello world" grapheme map: h=0 e=1 l=2 l=3 o=4 ' '=5 w=6 o=7 r=8 l=9 d=10
+// After Esc, cursor is at 10 (back one from Insert's end position of 11).
+
+fn type_hello_world_then_normal(h: &Harness) {
+    enter_insert(h);
+    h.send_bytes(b"hello world");
+    wait_for_screen(h, "hello world", Duration::from_secs(2));
+    enter_normal(h);
+    thread::sleep(Duration::from_millis(150));
+}
+
+#[test]
+fn normal_mode_0_moves_cursor_to_start() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    assert_eq!(
+        col,
+        0,
+        "0 must move cursor to column 0\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_dollar_moves_cursor_to_end() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    // Start at beginning then jump to end
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"$");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    assert_eq!(
+        col,
+        10,
+        "$ must move cursor to last char (col 10)\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_l_moves_cursor_right() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"l");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    assert_eq!(
+        col,
+        1,
+        "l from col 0 must move to col 1\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_h_moves_cursor_left() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    // Move to col 1, then h to go back
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"l");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"h");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    assert_eq!(
+        col,
+        0,
+        "h from col 1 must return to col 0\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_w_moves_cursor_to_next_word() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"w");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    // w from 'h' (col 0) skips "hello " and lands on 'w' of "world" (col 6)
+    assert_eq!(
+        col,
+        6,
+        "w from col 0 must land on start of 'world' (col 6)\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_b_moves_cursor_to_word_start() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    // Cursor is at col 10 ('d') after Esc; b should land on 'w' of "world"
+    h.send_bytes(b"b");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    assert_eq!(
+        col,
+        6,
+        "b from col 10 must land on start of 'world' (col 6)\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_e_moves_cursor_to_word_end() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"e");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    // e from 'h' (col 0) lands on 'o' of "hello" (col 4)
+    assert_eq!(
+        col,
+        4,
+        "e from col 0 must land on end of 'hello' (col 4)\n{}",
+        describe(parser.screen())
+    );
+}
+
+#[test]
+fn normal_mode_count_prefix_multiplies_motion() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    // 2l = move right twice → col 2
+    h.send_bytes(b"2l");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar\n{}",
+        describe(parser.screen())
+    );
+    assert_eq!(
+        col,
+        2,
+        "2l from col 0 must land on col 2\n{}",
+        describe(parser.screen())
+    );
+}
