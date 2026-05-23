@@ -6,7 +6,9 @@ use std::cell::Cell;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cursor::Cursor;
+use crate::motion::{Action, Motion, Operator};
 use crate::next_word;
+use crate::registers::{MotionType, RegisterValue};
 
 /// Reusable text-editing state: a string buffer with a cursor and a scrolling
 /// view window. All edit operations (insert/delete/cursor movement/word ops)
@@ -155,6 +157,291 @@ impl TextEditor {
         let iter = self.buf[self.cursor.index(&self.buf)..].chars();
         self.cursor += next_word(iter);
     }
+
+    // ── Vim Normal-mode motion support ───────────────────────────────────────
+
+    /// Grapheme position the cursor would move to after applying `motion`
+    /// `count` times.  Capped at `len-1` (Normal-mode semantics: cursor cannot
+    /// sit past the last character).
+    pub fn motion_target(&self, motion: &Motion, count: usize) -> usize {
+        let len = self.buf.graphemes(true).count();
+        let mut pos = self.cursor.get();
+        for _ in 0..count {
+            pos = self.motion_once_raw(motion, pos);
+        }
+        if len == 0 {
+            0
+        } else {
+            pos.min(len - 1)
+        }
+    }
+
+    /// Apply a complete [`Action`]: move cursor, delete, change, or yank.
+    /// Returns the yanked [`RegisterValue`] when the operator produces one
+    /// (`Delete`, `Change`, `Yank`); returns `None` for a plain `Move`.
+    pub fn apply_action(&mut self, action: &Action) -> Option<RegisterValue> {
+        match action.operator {
+            Operator::Move => {
+                let target = self.motion_target(&action.motion, action.count);
+                self.cursor.set(target);
+                None
+            }
+            Operator::Yank => Some(self.yank_motion(&action.motion, action.count)),
+            // Caller must enter Insert mode after Change.
+            Operator::Delete | Operator::Change => {
+                Some(self.delete_motion(&action.motion, action.count))
+            }
+        }
+    }
+
+    /// Delete the text covered by `motion × count`. Returns the deleted text.
+    /// Cursor is left at the start of the deleted range (or end of buffer if
+    /// the deletion reached the end).
+    pub fn delete_motion(&mut self, motion: &Motion, count: usize) -> RegisterValue {
+        let (lo, hi) = self.grapheme_range(motion, count);
+        if lo >= hi {
+            return RegisterValue::new("", MotionType::Char);
+        }
+        let text = extract_grapheme_range(&self.buf, lo, hi);
+        let byte_lo = Cursor::new(lo).index(&self.buf);
+        let byte_hi = Cursor::new(hi).index(&self.buf);
+        self.buf.replace_range(byte_lo..byte_hi, "");
+        let new_len = self.buf.graphemes(true).count();
+        let new_cursor = if new_len == 0 { 0 } else { lo.min(new_len - 1) };
+        self.cursor.set(new_cursor);
+        RegisterValue::new(text, MotionType::Char)
+    }
+
+    /// Return the text covered by `motion × count` without modifying the
+    /// buffer or the cursor.
+    pub fn yank_motion(&self, motion: &Motion, count: usize) -> RegisterValue {
+        let (lo, hi) = self.grapheme_range(motion, count);
+        RegisterValue::new(extract_grapheme_range(&self.buf, lo, hi), MotionType::Char)
+    }
+
+    // ── private helpers ───────────────────────────────────────────────────────
+
+    /// (lo, hi) grapheme range covered by `motion × count`, already normalised
+    /// so that `lo ≤ hi`.  Used for both delete and yank.
+    fn grapheme_range(&self, motion: &Motion, count: usize) -> (usize, usize) {
+        let len = self.buf.graphemes(true).count();
+        let pos = self.cursor.get();
+        match motion {
+            Motion::WholeLine => (0, len),
+            // h and l use direct arithmetic so deletion always covers exactly
+            // `count` chars regardless of Normal-mode cursor caps.
+            Motion::Left => (pos.saturating_sub(count), pos),
+            Motion::Right => (pos, (pos + count).min(len)),
+            _ => {
+                let mut target = pos;
+                for _ in 0..count {
+                    target = self.motion_once_raw(motion, target);
+                }
+                target = target.min(len);
+                let (lo, hi) = if target >= pos {
+                    (pos, target)
+                } else {
+                    (target, pos)
+                };
+                if motion.is_inclusive() {
+                    (lo, (hi + 1).min(len))
+                } else {
+                    (lo, hi)
+                }
+            }
+        }
+    }
+
+    /// Single-step raw motion: returns the target grapheme position WITHOUT
+    /// applying Normal-mode cursor caps.  May return values up to `len`.
+    fn motion_once_raw(&self, motion: &Motion, pos: usize) -> usize {
+        let len = self.buf.graphemes(true).count();
+        match motion {
+            Motion::Left => pos.saturating_sub(1),
+            Motion::Right => (pos + 1).min(len),
+            Motion::LineStart => 0,
+            Motion::LineEnd => len.saturating_sub(1),
+            Motion::FirstNonBlank => self
+                .buf
+                .graphemes(true)
+                .position(|g| !g.chars().next().map(is_space).unwrap_or(true))
+                .unwrap_or(0),
+            Motion::WordForward => vim_word_forward(&self.buf, pos),
+            Motion::WordBackward => vim_word_backward(&self.buf, pos),
+            Motion::WordEnd => vim_word_end(&self.buf, pos),
+            Motion::BigWordForward => vim_bigword_forward(&self.buf, pos),
+            Motion::BigWordBackward => vim_bigword_backward(&self.buf, pos),
+            Motion::BigWordEnd => vim_bigword_end(&self.buf, pos),
+            // Navigation / special motions are handled by the UI layer.
+            _ => pos,
+        }
+    }
+}
+
+// ── word character classification ─────────────────────────────────────────────
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+fn is_space(c: char) -> bool {
+    c == ' ' || c == '\t'
+}
+
+fn first_char(g: &str) -> char {
+    g.chars().next().unwrap_or(' ')
+}
+
+// ── vim word motions (operate on grapheme positions) ─────────────────────────
+
+/// `w` — move to the start of the next word.
+fn vim_word_forward(buf: &str, pos: usize) -> usize {
+    let gs: Vec<&str> = buf.graphemes(true).collect();
+    let len = gs.len();
+    if pos >= len {
+        return pos;
+    }
+    let mut i = pos;
+    let c = first_char(gs[i]);
+    if is_word(c) {
+        while i < len && is_word(first_char(gs[i])) {
+            i += 1;
+        }
+    } else if !is_space(c) {
+        while i < len && !is_word(first_char(gs[i])) && !is_space(first_char(gs[i])) {
+            i += 1;
+        }
+    }
+    // skip spaces
+    while i < len && is_space(first_char(gs[i])) {
+        i += 1;
+    }
+    i
+}
+
+/// `b` — move to the start of the current/previous word.
+fn vim_word_backward(buf: &str, pos: usize) -> usize {
+    let gs: Vec<&str> = buf.graphemes(true).collect();
+    if pos == 0 {
+        return 0;
+    }
+    let mut i = pos - 1;
+    // skip spaces backwards
+    while i > 0 && is_space(first_char(gs[i])) {
+        i -= 1;
+    }
+    if is_space(first_char(gs[i])) {
+        return 0;
+    }
+    let word_type = is_word(first_char(gs[i]));
+    // skip same-type chars backwards
+    while i > 0 {
+        let prev = first_char(gs[i - 1]);
+        if is_word(prev) != word_type || is_space(prev) {
+            break;
+        }
+        i -= 1;
+    }
+    i
+}
+
+/// `e` — move to the end of the current/next word (inclusive position).
+fn vim_word_end(buf: &str, pos: usize) -> usize {
+    let gs: Vec<&str> = buf.graphemes(true).collect();
+    let len = gs.len();
+    if len == 0 || pos + 1 >= len {
+        return len.saturating_sub(1);
+    }
+    let mut i = pos + 1;
+    // skip spaces
+    while i < len && is_space(first_char(gs[i])) {
+        i += 1;
+    }
+    if i >= len {
+        return len - 1;
+    }
+    let word_type = is_word(first_char(gs[i]));
+    // advance to end of token
+    while i + 1 < len {
+        let next = first_char(gs[i + 1]);
+        let matches = if word_type {
+            is_word(next)
+        } else {
+            !is_space(next) && !is_word(next)
+        };
+        if matches {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+/// `W` — move to the start of the next WORD (non-blank sequence).
+fn vim_bigword_forward(buf: &str, pos: usize) -> usize {
+    let gs: Vec<&str> = buf.graphemes(true).collect();
+    let len = gs.len();
+    let mut i = pos;
+    // skip non-blank
+    while i < len && !is_space(first_char(gs[i])) {
+        i += 1;
+    }
+    // skip spaces
+    while i < len && is_space(first_char(gs[i])) {
+        i += 1;
+    }
+    i
+}
+
+/// `B` — move to the start of the current/previous WORD.
+fn vim_bigword_backward(buf: &str, pos: usize) -> usize {
+    let gs: Vec<&str> = buf.graphemes(true).collect();
+    if pos == 0 {
+        return 0;
+    }
+    let mut i = pos - 1;
+    // skip spaces backwards
+    while i > 0 && is_space(first_char(gs[i])) {
+        i -= 1;
+    }
+    if is_space(first_char(gs[i])) {
+        return 0;
+    }
+    // skip non-blank backwards
+    while i > 0 && !is_space(first_char(gs[i - 1])) {
+        i -= 1;
+    }
+    i
+}
+
+/// `E` — move to the end of the current/next WORD (inclusive position).
+fn vim_bigword_end(buf: &str, pos: usize) -> usize {
+    let gs: Vec<&str> = buf.graphemes(true).collect();
+    let len = gs.len();
+    if len == 0 || pos + 1 >= len {
+        return len.saturating_sub(1);
+    }
+    let mut i = pos + 1;
+    // skip spaces
+    while i < len && is_space(first_char(gs[i])) {
+        i += 1;
+    }
+    if i >= len {
+        return len - 1;
+    }
+    // advance to end of WORD
+    while i + 1 < len && !is_space(first_char(gs[i + 1])) {
+        i += 1;
+    }
+    i
+}
+
+fn extract_grapheme_range(buf: &str, lo: usize, hi: usize) -> String {
+    if lo >= hi {
+        return String::new();
+    }
+    buf.graphemes(true).skip(lo).take(hi - lo).collect()
 }
 
 #[cfg(test)]
@@ -336,5 +623,270 @@ mod tests {
         editor.backspace();
         assert_eq!(editor.buf, "");
         assert_eq!(editor.cursor.get(), 0);
+    }
+
+    // ── motion_target ─────────────────────────────────────────────────────────
+
+    fn at(text: &str, pos: usize) -> TextEditor {
+        let ed = TextEditor::with_text(text);
+        ed.cursor.set(pos);
+        ed
+    }
+
+    #[test]
+    fn motion_left_moves_back() {
+        assert_eq!(at("foo bar", 3).motion_target(&Motion::Left, 1), 2);
+    }
+
+    #[test]
+    fn motion_left_floors_at_zero() {
+        assert_eq!(at("foo bar", 0).motion_target(&Motion::Left, 1), 0);
+    }
+
+    #[test]
+    fn motion_right_moves_forward() {
+        assert_eq!(at("foo bar", 3).motion_target(&Motion::Right, 1), 4);
+    }
+
+    #[test]
+    fn motion_right_caps_at_last_char() {
+        // "foo bar" has len=7, last grapheme index = 6
+        assert_eq!(at("foo bar", 6).motion_target(&Motion::Right, 1), 6);
+    }
+
+    #[test]
+    fn motion_line_start() {
+        assert_eq!(at("foo bar", 4).motion_target(&Motion::LineStart, 1), 0);
+    }
+
+    #[test]
+    fn motion_line_end() {
+        assert_eq!(at("foo bar", 0).motion_target(&Motion::LineEnd, 1), 6);
+    }
+
+    #[test]
+    fn motion_first_non_blank_skips_leading_spaces() {
+        assert_eq!(at("  foo", 4).motion_target(&Motion::FirstNonBlank, 1), 2);
+    }
+
+    #[test]
+    fn motion_first_non_blank_on_no_leading_spaces() {
+        assert_eq!(at("foo", 2).motion_target(&Motion::FirstNonBlank, 1), 0);
+    }
+
+    #[test]
+    fn motion_word_forward_to_next_word() {
+        // "foo bar": w from 'f'(0) → 'b'(4)
+        assert_eq!(at("foo bar", 0).motion_target(&Motion::WordForward, 1), 4);
+    }
+
+    #[test]
+    fn motion_word_forward_skips_extra_spaces() {
+        // "foo  bar": w from 0 → 5
+        assert_eq!(at("foo  bar", 0).motion_target(&Motion::WordForward, 1), 5);
+    }
+
+    #[test]
+    fn motion_word_forward_at_last_word_caps() {
+        // "foo bar": w from 'b'(4) has no next word → caps at len-1=6
+        assert_eq!(at("foo bar", 4).motion_target(&Motion::WordForward, 1), 6);
+    }
+
+    #[test]
+    fn motion_word_forward_count_2() {
+        // "foo bar baz": 2w from 0 → 8 ('b' in "baz")
+        assert_eq!(
+            at("foo bar baz", 0).motion_target(&Motion::WordForward, 2),
+            8
+        );
+    }
+
+    #[test]
+    fn motion_word_backward_to_word_start() {
+        // "foo bar": b from 'r'(6) → 'b'(4)
+        assert_eq!(at("foo bar", 6).motion_target(&Motion::WordBackward, 1), 4);
+    }
+
+    #[test]
+    fn motion_word_backward_from_start_of_word() {
+        // "foo bar": b from 'b'(4) → 'f'(0)
+        assert_eq!(at("foo bar", 4).motion_target(&Motion::WordBackward, 1), 0);
+    }
+
+    #[test]
+    fn motion_word_end_to_end_of_word() {
+        // "foo bar": e from 'f'(0) → 'o'(2)
+        assert_eq!(at("foo bar", 0).motion_target(&Motion::WordEnd, 1), 2);
+    }
+
+    #[test]
+    fn motion_word_end_from_end_jumps_to_next() {
+        // "foo bar": e from 'o'(2) → 'r'(6)
+        assert_eq!(at("foo bar", 2).motion_target(&Motion::WordEnd, 1), 6);
+    }
+
+    #[test]
+    fn motion_bigword_forward_skips_punctuation() {
+        // "foo,bar baz": W from 0 → 8 ('b' in "baz")
+        assert_eq!(
+            at("foo,bar baz", 0).motion_target(&Motion::BigWordForward, 1),
+            8
+        );
+    }
+
+    #[test]
+    fn motion_bigword_backward() {
+        // "foo,bar baz": B from 8 → 0
+        assert_eq!(
+            at("foo,bar baz", 8).motion_target(&Motion::BigWordBackward, 1),
+            0
+        );
+    }
+
+    #[test]
+    fn motion_bigword_end_skips_punctuation() {
+        // "foo,bar baz": E from 0 → 6 (last char of "foo,bar")
+        assert_eq!(
+            at("foo,bar baz", 0).motion_target(&Motion::BigWordEnd, 1),
+            6
+        );
+    }
+
+    // ── delete_motion ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn delete_word_forward_exclusive() {
+        let mut ed = at("foo bar", 0);
+        let rv = ed.delete_motion(&Motion::WordForward, 1);
+        assert_eq!(ed.buf, "bar");
+        assert_eq!(ed.cursor.get(), 0);
+        assert_eq!(rv.text, "foo ");
+    }
+
+    #[test]
+    fn delete_word_end_inclusive() {
+        let mut ed = at("foo bar", 0);
+        let rv = ed.delete_motion(&Motion::WordEnd, 1);
+        assert_eq!(ed.buf, " bar");
+        assert_eq!(ed.cursor.get(), 0);
+        assert_eq!(rv.text, "foo");
+    }
+
+    #[test]
+    fn delete_to_line_end_inclusive() {
+        let mut ed = at("foo bar", 4);
+        let rv = ed.delete_motion(&Motion::LineEnd, 1);
+        assert_eq!(ed.buf, "foo ");
+        assert_eq!(rv.text, "bar");
+        // cursor at end of remaining buf (len-1 = 3)
+        assert_eq!(ed.cursor.get(), 3);
+    }
+
+    #[test]
+    fn delete_left() {
+        let mut ed = at("foo bar", 4);
+        let rv = ed.delete_motion(&Motion::Left, 1);
+        assert_eq!(ed.buf, "foobar");
+        assert_eq!(rv.text, " ");
+        assert_eq!(ed.cursor.get(), 3);
+    }
+
+    #[test]
+    fn delete_right() {
+        let mut ed = at("foo bar", 0);
+        let rv = ed.delete_motion(&Motion::Right, 1);
+        assert_eq!(ed.buf, "oo bar");
+        assert_eq!(rv.text, "f");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn delete_right_at_last_char() {
+        let mut ed = at("foo", 2);
+        let rv = ed.delete_motion(&Motion::Right, 1);
+        assert_eq!(ed.buf, "fo");
+        assert_eq!(rv.text, "o");
+        assert_eq!(ed.cursor.get(), 1);
+    }
+
+    #[test]
+    fn delete_whole_line() {
+        let mut ed = at("foo bar", 3);
+        let rv = ed.delete_motion(&Motion::WholeLine, 1);
+        assert_eq!(ed.buf, "");
+        assert_eq!(rv.text, "foo bar");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn delete_word_backward() {
+        let mut ed = at("foo bar", 7);
+        ed.cursor.set(7); // past end (Insert-mode position)
+        let rv = ed.delete_motion(&Motion::WordBackward, 1);
+        assert_eq!(ed.buf, "foo ");
+        assert_eq!(rv.text, "bar");
+    }
+
+    // ── yank_motion ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn yank_word_does_not_modify_buffer() {
+        let ed = at("foo bar", 0);
+        let rv = ed.yank_motion(&Motion::WordForward, 1);
+        assert_eq!(ed.buf, "foo bar");
+        assert_eq!(ed.cursor.get(), 0);
+        assert_eq!(rv.text, "foo ");
+    }
+
+    #[test]
+    fn yank_whole_line() {
+        let ed = at("foo bar", 3);
+        let rv = ed.yank_motion(&Motion::WholeLine, 1);
+        assert_eq!(rv.text, "foo bar");
+    }
+
+    // ── apply_action ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn apply_action_move() {
+        use crate::motion::{Action, Operator};
+        let mut ed = at("foo bar", 0);
+        let rv = ed.apply_action(&Action {
+            count: 1,
+            register: None,
+            operator: Operator::Move,
+            motion: Motion::WordForward,
+        });
+        assert!(rv.is_none());
+        assert_eq!(ed.cursor.get(), 4);
+    }
+
+    #[test]
+    fn apply_action_delete_returns_register_value() {
+        use crate::motion::{Action, Operator};
+        let mut ed = at("foo bar", 0);
+        let rv = ed.apply_action(&Action {
+            count: 1,
+            register: None,
+            operator: Operator::Delete,
+            motion: Motion::WordForward,
+        });
+        assert!(rv.is_some());
+        assert_eq!(rv.unwrap().text, "foo ");
+        assert_eq!(ed.buf, "bar");
+    }
+
+    #[test]
+    fn apply_action_yank_does_not_modify() {
+        use crate::motion::{Action, Operator};
+        let mut ed = at("foo bar", 0);
+        let rv = ed.apply_action(&Action {
+            count: 1,
+            register: None,
+            operator: Operator::Yank,
+            motion: Motion::WholeLine,
+        });
+        assert_eq!(rv.unwrap().text, "foo bar");
+        assert_eq!(ed.buf, "foo bar");
     }
 }

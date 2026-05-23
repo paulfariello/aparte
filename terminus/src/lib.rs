@@ -22,6 +22,7 @@ pub mod input;
 pub mod label;
 pub mod linear_layout;
 pub mod list_view;
+pub mod motion;
 pub mod popup;
 pub mod registers;
 pub mod rendering;
@@ -36,6 +37,7 @@ pub use charxel::ContinuationCell;
 pub use color::{
     deserialize_color, serialize_color, BgColor, Color, ColorTuple, FgColor, NamedColor,
 };
+pub use motion::{Action, ActionParser, Motion, Operator, ParseResult};
 pub use popup::PopupColors;
 pub use registers::{MotionType, RegisterValue, Registers};
 pub use scroll_win::Searchable;

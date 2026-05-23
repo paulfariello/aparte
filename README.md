@@ -67,6 +67,36 @@ Switch windows with `Alt+[1-9]` or `:win <name>`.
 
 Commands accept unique prefixes: `:conn` resolves to `:connect` when unambiguous.
 
+### Vim motions in the input bar
+
+Normal mode supports vim-style text motions on the input bar. A motion can be
+prefixed with a count (`3w`) and an operator (`d`, `c`, `y`). Text deleted or
+yanked is stored in a register and can be pasted with `p` / `P`.
+
+| Key       | Motion                          |
+|-----------|---------------------------------|
+| `h` / `l` | Left / right one character      |
+| `w` / `W` | Forward to next word / WORD     |
+| `b` / `B` | Backward to start of word / WORD|
+| `e` / `E` | Forward to end of word / WORD   |
+| `0`       | Start of line                   |
+| `^`       | First non-blank character       |
+| `$`       | End of line                     |
+
+| Key       | Operator                        |
+|-----------|---------------------------------|
+| `d{mot}`  | Delete over motion              |
+| `c{mot}`  | Change (delete + enter Insert)  |
+| `y{mot}`  | Yank (copy) over motion         |
+| `dd`      | Delete whole input              |
+| `cc`      | Clear input and enter Insert    |
+| `yy`      | Yank whole input                |
+| `x` / `X` | Delete char under / before cursor |
+| `p` / `P` | Paste after / before cursor     |
+
+Registers: prefix any operator with `"a` (e.g. `"adw`) to use a named register.
+Uppercase letters append to the named register (`"Adw`).
+
 ### Correcting a sent message
 
 In Normal mode, navigate with `k`/`j` to one of your own sent messages and

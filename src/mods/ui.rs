@@ -32,20 +32,20 @@ use terminus::{
     list_view::ListView,
     root::Root,
     scroll_win::ScrollWin,
-    CursorStyle, Dimensions, FocusRouted, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    Action, ActionParser, CursorStyle, Dimensions, FocusRouted, LayoutParam, LayoutParams,
+    MeasureSpec, MeasureSpecs, Motion, Operator, ParseResult, RegisterValue, Registers,
     RequestedDimension, RequestedDimensions, View,
 };
+use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
 use xmpp_parsers::jid::{BareJid, Jid};
-
-use radix_trie::Trie;
 
 use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::command::Command;
 use crate::config::{Config, Theme};
 use crate::conversation::{Channel, Chat, Conversation};
-use crate::core::{Aparte, Event, ModTrait, UIMode as Mode};
+use crate::core::{Aparte, AparteAsync, Event, ModTrait, UIMode as Mode};
 use crate::i18n;
 use crate::message::{Direction, Message, MessageView, XmppMessageType};
 use crate::mods::bookmarks::BookmarksMod;
@@ -55,25 +55,14 @@ use crate::{contact, conversation};
 
 #[derive(Clone, Debug)]
 enum NormalCommand {
-    SelectNext,
-    SelectPrev,
+    SelectNext(usize),
+    SelectPrev(usize),
     ScrollToTop,
     ScrollToBottom,
     SearchFirst(String),
     SearchNext,
     SearchPrev,
     SearchCancel,
-}
-
-fn build_normal_command_trie() -> Trie<String, NormalCommand> {
-    let mut trie = Trie::new();
-    trie.insert("j".to_string(), NormalCommand::SelectNext);
-    trie.insert("k".to_string(), NormalCommand::SelectPrev);
-    trie.insert("gg".to_string(), NormalCommand::ScrollToTop);
-    trie.insert("G".to_string(), NormalCommand::ScrollToBottom);
-    trie.insert("n".to_string(), NormalCommand::SearchNext);
-    trie.insert("N".to_string(), NormalCommand::SearchPrev);
-    trie
 }
 
 /// A single line in the popup, keyed by insertion index so duplicates are preserved.
@@ -145,6 +134,13 @@ enum UIEvent {
     },
     CommandBufferUpdate(String),
     SetInput(String),
+    /// Apply a Normal-mode text action to the input bar.  The operator result
+    /// (yanked or deleted text) is written into the slot when present.
+    ApplyTextAction(Action, Rc<RefCell<Option<RegisterValue>>>),
+    /// Atomically set the input bar content and cursor (grapheme index).
+    SetInputState(String, usize),
+    /// Insert `text` at the current cursor position in the input bar.
+    Paste(String),
     ReduceHighlight(String, u64, u64),
     ShowPopup {
         title: Option<String>,
@@ -937,31 +933,38 @@ impl UIMod {
                                     mam_requested = false;
                                 }
                                 UIEvent::NormalCommand { bubbled, cmd } => match cmd {
-                                    NormalCommand::SelectPrev => {
+                                    NormalCommand::SelectPrev(count) => {
                                         follow_bottom = false;
-                                        let (old, new, at_top) = view.select_prev();
-                                        if old.is_some() && old == new {
-                                            *bubbled = true;
-                                            view.clear_selection();
-                                        }
-                                        if at_top && !mam_requested {
-                                            mam_requested = true;
-                                            let from = view
-                                                .first()
-                                                .map(|message| message.message.timestamp());
-                                            scheduler.schedule(Event::LoadChatHistory {
-                                                account: chat_for_event.account.clone(),
-                                                contact: chat_for_event.contact.clone(),
-                                                from: from.copied(),
-                                            });
+                                        for _ in 0..*count {
+                                            let (old, new, at_top) = view.select_prev();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
+                                            if at_top && !mam_requested {
+                                                mam_requested = true;
+                                                let from = view
+                                                    .first()
+                                                    .map(|message| message.message.timestamp());
+                                                scheduler.schedule(Event::LoadChatHistory {
+                                                    account: chat_for_event.account.clone(),
+                                                    contact: chat_for_event.contact.clone(),
+                                                    from: from.copied(),
+                                                });
+                                                break;
+                                            }
                                         }
                                     }
-                                    NormalCommand::SelectNext => {
+                                    NormalCommand::SelectNext(count) => {
                                         follow_bottom = false;
-                                        let (old, new) = view.select_next();
-                                        if old.is_some() && old == new {
-                                            *bubbled = true;
-                                            view.clear_selection();
+                                        for _ in 0..*count {
+                                            let (old, new) = view.select_next();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
                                         }
                                     }
                                     NormalCommand::ScrollToTop => {
@@ -1169,31 +1172,38 @@ impl UIMod {
                                     mam_requested = false;
                                 }
                                 UIEvent::NormalCommand { bubbled, cmd } => match cmd {
-                                    NormalCommand::SelectPrev => {
+                                    NormalCommand::SelectPrev(count) => {
                                         follow_bottom = false;
-                                        let (old, new, at_top) = view.select_prev();
-                                        if old.is_some() && old == new {
-                                            *bubbled = true;
-                                            view.clear_selection();
-                                        }
-                                        if at_top && !mam_requested {
-                                            mam_requested = true;
-                                            let from = view
-                                                .first()
-                                                .map(|message| message.message.timestamp());
-                                            scheduler.schedule(Event::LoadChannelHistory {
-                                                account: channel_for_event.account.clone(),
-                                                jid: channel_for_event.jid.clone(),
-                                                from: from.copied(),
-                                            });
+                                        for _ in 0..*count {
+                                            let (old, new, at_top) = view.select_prev();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
+                                            if at_top && !mam_requested {
+                                                mam_requested = true;
+                                                let from = view
+                                                    .first()
+                                                    .map(|message| message.message.timestamp());
+                                                scheduler.schedule(Event::LoadChannelHistory {
+                                                    account: channel_for_event.account.clone(),
+                                                    jid: channel_for_event.jid.clone(),
+                                                    from: from.copied(),
+                                                });
+                                                break;
+                                            }
                                         }
                                     }
-                                    NormalCommand::SelectNext => {
+                                    NormalCommand::SelectNext(count) => {
                                         follow_bottom = false;
-                                        let (old, new) = view.select_next();
-                                        if old.is_some() && old == new {
-                                            *bubbled = true;
-                                            view.clear_selection();
+                                        for _ in 0..*count {
+                                            let (old, new) = view.select_next();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
                                         }
                                     }
                                     NormalCommand::ScrollToTop => {
@@ -1413,6 +1423,101 @@ impl UIMod {
     }
 }
 
+fn dispatch_nav_command(cmd: NormalCommand, layout: &mut LinearLayout<UIEvent, Theme>) {
+    const FRAME_LAYOUT_INDEX: usize = 1;
+    const INPUT_INDEX: usize = 3;
+    let is_select_next = matches!(cmd, NormalCommand::SelectNext(_));
+    let is_select_prev = matches!(cmd, NormalCommand::SelectPrev(_));
+    let mut event = UIEvent::NormalCommand {
+        cmd,
+        bubbled: false,
+    };
+    if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+        child.child.view.event(&mut event);
+    }
+    let bubbled = matches!(event, UIEvent::NormalCommand { bubbled: true, .. });
+    if bubbled {
+        if is_select_next {
+            if let Some(next) = layout
+                .children
+                .iter()
+                .enumerate()
+                .skip(FRAME_LAYOUT_INDEX + 1)
+                .find(|(_, lc)| lc.child.view.insertable())
+                .map(|(i, _)| i)
+            {
+                layout.set_focus(next);
+            }
+        } else if is_select_prev {
+            layout.set_focus(INPUT_INDEX);
+        }
+    } else if is_select_next || is_select_prev {
+        layout.set_focus(FRAME_LAYOUT_INDEX);
+    }
+}
+
+fn dispatch_action(
+    action: Action,
+    layout: &mut LinearLayout<UIEvent, Theme>,
+    registers: &mut Registers,
+    mode: &mut Mode,
+    aparte_proxy: &mut AparteAsync,
+) {
+    if action.motion.is_navigation() {
+        let cmd = match action.motion {
+            Motion::Down => NormalCommand::SelectNext(action.count),
+            Motion::Up => NormalCommand::SelectPrev(action.count),
+            Motion::FileTop => NormalCommand::ScrollToTop,
+            Motion::FileBottom => NormalCommand::ScrollToBottom,
+            Motion::SearchNext => NormalCommand::SearchNext,
+            Motion::SearchPrev => NormalCommand::SearchPrev,
+            _ => return,
+        };
+        dispatch_nav_command(cmd, layout);
+    } else if matches!(action.motion, Motion::PasteAfter | Motion::PasteBefore) {
+        let reg_name = action.register.unwrap_or(Registers::UNNAMED);
+        if let Some(rv) = registers.get(reg_name) {
+            let text = rv.text.clone();
+            if matches!(action.motion, Motion::PasteAfter) {
+                let move_action = Action {
+                    count: 1,
+                    register: None,
+                    operator: Operator::Move,
+                    motion: Motion::Right,
+                };
+                let slot = Rc::new(RefCell::new(None::<RegisterValue>));
+                for child in layout.iter_children_mut() {
+                    child.event(&mut UIEvent::ApplyTextAction(
+                        move_action.clone(),
+                        Rc::clone(&slot),
+                    ));
+                }
+            }
+            for child in layout.iter_children_mut() {
+                child.event(&mut UIEvent::Paste(text.clone()));
+            }
+        }
+    } else {
+        let slot = Rc::new(RefCell::new(None::<RegisterValue>));
+        for child in layout.iter_children_mut() {
+            child.event(&mut UIEvent::ApplyTextAction(
+                action.clone(),
+                Rc::clone(&slot),
+            ));
+        }
+        if let Some(rv) = slot.borrow_mut().take() {
+            registers.yank(action.register, rv);
+        }
+        if matches!(action.operator, Operator::Change) {
+            *mode = Mode::Insert;
+            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+            for child in layout.iter_children_mut() {
+                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+            }
+        }
+    }
+}
+
 impl ModTrait for UIMod {
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
@@ -1426,10 +1531,10 @@ impl ModTrait for UIMod {
         let layout;
         {
             let mut mode = Mode::Normal;
-            let mut command_buffer = String::new();
-            let mut saved_input = String::new();
             let mut timeout_generation: u64 = 0;
-            let normal_commands = build_normal_command_trie();
+            let mut saved_input = String::new();
+            let mut action_parser = ActionParser::new();
+            let mut registers = Registers::new();
             let mut aparte_proxy = aparte.proxy();
             let mut current_window = String::new();
             let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
@@ -1440,7 +1545,22 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Insert => {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
-                        command_buffer.clear();
+                        action_parser.reset();
+                        // Vim: when leaving Insert, cursor moves back one if at
+                        // the end of a non-empty buffer.
+                        let slot = Rc::new(RefCell::new(None));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::GetInput(Rc::clone(&slot)));
+                        }
+                        if let Some((buf, cursor, _)) = slot.borrow().as_ref() {
+                            let len = buf.graphemes(true).count();
+                            if cursor.get() == len && len > 0 {
+                                let new_pos = len - 1;
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::SetInputState(buf.clone(), new_pos));
+                                }
+                            }
+                        }
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                         }
@@ -1466,7 +1586,7 @@ impl ModTrait for UIMod {
                                     focused.event(&mut UIEvent::StartEdit);
                                 }
                             }
-                            command_buffer.clear();
+                            action_parser.reset();
                             mode = Mode::Insert;
                             aparte_proxy.schedule(Event::UIMode(Mode::Insert));
                             for child in layout.iter_children_mut() {
@@ -1482,6 +1602,7 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Normal => {
                         mode = Mode::Command;
                         aparte_proxy.schedule(Event::UIMode(Mode::Command));
+                        action_parser.reset();
                         layout.set_focus(INPUT_INDEX);
                         // Save current input content so it can be restored on exit.
                         let result = Rc::new(RefCell::new(None));
@@ -1504,6 +1625,7 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Normal => {
                         mode = Mode::Command;
                         aparte_proxy.schedule(Event::UIMode(Mode::Command));
+                        action_parser.reset();
                         layout.set_focus(INPUT_INDEX);
                         // Save current input content so it can be restored on exit.
                         let result = Rc::new(RefCell::new(None));
@@ -1525,6 +1647,7 @@ impl ModTrait for UIMod {
                     })) if mode == Mode::Command => {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
                         let saved = std::mem::take(&mut saved_input);
                         if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                             frame.child.view.event(&mut UIEvent::NormalCommand {
@@ -1546,127 +1669,57 @@ impl ModTrait for UIMod {
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(c),
+                        modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                         ..
                     })) if mode == Mode::Normal => {
-                        command_buffer.push(*c);
-
-                        if let Some(cmd) = normal_commands.get(&command_buffer).cloned() {
-                            command_buffer.clear();
-                            let mut cmd_event = UIEvent::NormalCommand {
-                                cmd,
-                                bubbled: false,
-                            };
-                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-                                frame.child.view.event(&mut cmd_event);
+                        match action_parser.feed(*c) {
+                            ParseResult::Pending => {
+                                // Show partial sequence; schedule a 1s timeout.
+                                timeout_generation += 1;
+                                let gen = timeout_generation;
+                                let mut aparte_for_task = aparte_proxy.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    aparte_for_task.schedule(Event::CommandTimeout(gen));
+                                });
+                                let buf = action_parser.pending().to_string();
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(buf.clone()));
+                                }
                             }
-                            let is_bubbled =
-                                matches!(cmd_event, UIEvent::NormalCommand { bubbled: true, .. });
-                            let is_select_next = matches!(
-                                cmd_event,
-                                UIEvent::NormalCommand {
-                                    cmd: NormalCommand::SelectNext,
-                                    ..
-                                }
-                            );
-                            let is_select_prev = matches!(
-                                cmd_event,
-                                UIEvent::NormalCommand {
-                                    cmd: NormalCommand::SelectPrev,
-                                    ..
-                                }
-                            );
-                            if is_bubbled {
-                                if is_select_next {
-                                    if let Some(next) = layout
-                                        .children
-                                        .iter()
-                                        .enumerate()
-                                        .skip(FRAME_LAYOUT_INDEX + 1)
-                                        .find(|(_, lc)| lc.child.view.insertable())
-                                        .map(|(i, _)| i)
-                                    {
-                                        layout.set_focus(next);
-                                    }
-                                } else if is_select_prev {
-                                    // Nothing insertable before FRAME_LAYOUT_INDEX; go to input bar.
-                                    layout.set_focus(INPUT_INDEX);
-                                }
-                            } else {
-                                if is_select_next || is_select_prev {
-                                    layout.set_focus(FRAME_LAYOUT_INDEX);
-                                }
+                            ParseResult::Complete(action) => {
                                 for child in layout.iter_children_mut() {
                                     child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                                 }
+                                dispatch_action(
+                                    action,
+                                    layout,
+                                    &mut registers,
+                                    &mut mode,
+                                    &mut aparte_proxy,
+                                );
                             }
-                        } else if normal_commands
-                            .get_raw_descendant(&command_buffer)
-                            .is_some()
-                        {
-                            timeout_generation += 1;
-                            let gen = timeout_generation;
-                            let mut aparte_for_task = aparte_proxy.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                aparte_for_task.schedule(Event::CommandTimeout(gen));
-                            });
-                            let buf = command_buffer.clone();
-                            for child in layout.iter_children_mut() {
-                                child.event(&mut UIEvent::CommandBufferUpdate(buf.clone()));
-                            }
-                        } else {
-                            command_buffer.clear();
-                            for child in layout.iter_children_mut() {
-                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            ParseResult::Invalid => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
                             }
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Up, ..
                     })) if mode == Mode::Normal => {
-                        let mut nav_event = UIEvent::NormalCommand {
-                            cmd: NormalCommand::SelectPrev,
-                            bubbled: false,
-                        };
-                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-                            frame.child.view.event(&mut nav_event);
-                        }
-                        if matches!(nav_event, UIEvent::NormalCommand { bubbled: true, .. }) {
-                            // Nothing insertable before FRAME_LAYOUT_INDEX; go to input bar.
-                            layout.set_focus(INPUT_INDEX);
-                        } else {
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
-                        }
+                        dispatch_nav_command(NormalCommand::SelectPrev(1), layout);
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Down,
                         ..
                     })) if mode == Mode::Normal => {
-                        let mut nav_event = UIEvent::NormalCommand {
-                            cmd: NormalCommand::SelectNext,
-                            bubbled: false,
-                        };
-                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-                            frame.child.view.event(&mut nav_event);
-                        }
-                        if matches!(nav_event, UIEvent::NormalCommand { bubbled: true, .. }) {
-                            if let Some(next) = layout
-                                .children
-                                .iter()
-                                .enumerate()
-                                .skip(FRAME_LAYOUT_INDEX + 1)
-                                .find(|(_, lc)| lc.child.view.insertable())
-                                .map(|(i, _)| i)
-                            {
-                                layout.set_focus(next);
-                            }
-                        } else {
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
-                        }
+                        dispatch_nav_command(NormalCommand::SelectNext(1), layout);
                     }
                     UIEvent::Core(Event::CommandTimeout(gen)) => {
-                        if *gen == timeout_generation && !command_buffer.is_empty() {
-                            command_buffer.clear();
+                        if *gen == timeout_generation && action_parser.is_pending() {
+                            action_parser.reset();
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                             }
@@ -1747,7 +1800,7 @@ impl ModTrait for UIMod {
                         Mode::Normal => {
                             mode = Mode::Normal;
                             aparte_proxy.schedule(Event::UIMode(Mode::Normal));
-                            command_buffer.clear();
+                            action_parser.reset();
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                                 child.event(&mut UIEvent::ModeChange(Mode::Normal));
@@ -1960,6 +2013,20 @@ impl ModTrait for UIMod {
                         Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
                     input.editor.buf.clone_from(text);
                 }
+                UIEvent::ApplyTextAction(action, slot) => {
+                    if let Some(rv) = input.editor.apply_action(action) {
+                        *slot.borrow_mut() = Some(rv);
+                    }
+                }
+                UIEvent::SetInputState(content, cursor_pos) => {
+                    input.editor.buf = content.clone();
+                    input.editor.cursor = Cursor::new(*cursor_pos);
+                }
+                UIEvent::Paste(text) => {
+                    for c in text.chars() {
+                        input.key(c);
+                    }
+                }
                 UIEvent::ModeChange(Mode::Normal) => {
                     input.set_show_cursor(true);
                     input.set_cursor_style(CursorStyle::SteadyBlock);
@@ -2062,18 +2129,24 @@ impl ModTrait for UIMod {
                             view.page_down();
                         }
                         UIEvent::NormalCommand { bubbled, cmd } => match cmd {
-                            NormalCommand::SelectPrev => {
-                                let (old, new, _) = view.select_prev();
-                                if old.is_some() && old == new {
-                                    *bubbled = true;
-                                    view.clear_selection();
+                            NormalCommand::SelectPrev(count) => {
+                                for _ in 0..*count {
+                                    let (old, new, _) = view.select_prev();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        view.clear_selection();
+                                        break;
+                                    }
                                 }
                             }
-                            NormalCommand::SelectNext => {
-                                let (old, new) = view.select_next();
-                                if old.is_some() && old == new {
-                                    *bubbled = true;
-                                    view.clear_selection();
+                            NormalCommand::SelectNext(count) => {
+                                for _ in 0..*count {
+                                    let (old, new) = view.select_next();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        view.clear_selection();
+                                        break;
+                                    }
                                 }
                             }
                             NormalCommand::ScrollToTop => {
