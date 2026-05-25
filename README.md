@@ -105,6 +105,12 @@ with the current body. Edit the text and press `Enter` to send the correction
 (XEP-0308): the message updates in place and is marked with a `✎` icon. Press
 `Esc` to cancel the edit and revert. Incoming messages are not editable.
 
+Once a message is selected, vim text motions (`h`, `l`, `w`, `b`, `e`, `0`,
+`$`, count prefixes, etc.) apply to the message body immediately — no extra
+keypress needed. Press `i` to enter Insert mode on the message (cursor becomes
+a bar, free typing). Press `Esc` to return to Normal mode on the message
+(motions apply again). Press `Esc` once more to cancel the edit.
+
 Install
 -------
 

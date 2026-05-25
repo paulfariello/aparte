@@ -137,6 +137,10 @@ enum UIEvent {
     /// Apply a Normal-mode text action to the input bar.  The operator result
     /// (yanked or deleted text) is written into the slot when present.
     ApplyTextAction(Action, Rc<RefCell<Option<RegisterValue>>>),
+    /// Query whether any message in the focused conversation has an active
+    /// cursor (i.e. `is_editing()` is true).  The handler sets the flag to
+    /// `true` when it finds such a message.
+    HasMessageCursor(Rc<RefCell<bool>>),
     /// Atomically set the input bar content and cursor (grapheme index).
     SetInputState(String, usize),
     /// Insert `text` at the current cursor position in the input bar.
@@ -162,27 +166,32 @@ impl FocusRouted for UIEvent {
 /// place (XEP-0308 correction). The set of accepted keys mirrors the input
 /// bar's key bindings.
 fn dispatch_edit_key(msg: &mut MessageView, key: &KeyEvent) {
+    let Some(editor) = msg.edit.as_mut() else {
+        return;
+    };
     match (key.code, key.modifiers) {
-        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => msg.key(c),
-        (KeyCode::Backspace, _) | (KeyCode::Char('h'), KeyModifiers::CONTROL) => msg.backspace(),
-        (KeyCode::Delete, _) => msg.delete(),
-        (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => msg.cursor_home(),
-        (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => msg.cursor_end(),
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => editor.key(c),
+        (KeyCode::Backspace, _) | (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
+            editor.backspace();
+        }
+        (KeyCode::Delete, _) => editor.delete(),
+        (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => editor.home(),
+        (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => editor.end(),
         (KeyCode::Left, KeyModifiers::NONE) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
-            msg.cursor_left();
+            editor.left();
         }
         (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
-            msg.cursor_right();
+            editor.right();
         }
         (KeyCode::Left, KeyModifiers::ALT) | (KeyCode::Char('b'), KeyModifiers::ALT) => {
-            msg.word_left();
+            editor.word_left();
         }
         (KeyCode::Right, KeyModifiers::ALT) | (KeyCode::Char('f'), KeyModifiers::ALT) => {
-            msg.word_right();
+            editor.word_right();
         }
-        (KeyCode::Char('w'), KeyModifiers::CONTROL) => msg.backward_delete_word(),
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => msg.delete_from_cursor_to_start(),
-        (KeyCode::Char('k'), KeyModifiers::CONTROL) => msg.delete_from_cursor_to_end(),
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => editor.backward_delete_word(),
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => editor.delete_from_cursor_to_start(),
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) => editor.delete_from_cursor_to_end(),
         _ => {}
     }
 }
@@ -887,6 +896,7 @@ impl UIMod {
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
                                                     view.select_last_visible();
+                                                    view.update_selected(MessageView::start_cursor);
                                                 }
                                             }
                                         }
@@ -903,6 +913,7 @@ impl UIMod {
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
                                                     view.select_last_visible();
+                                                    view.update_selected(MessageView::start_cursor);
                                                 }
                                             }
                                         }
@@ -935,6 +946,11 @@ impl UIMod {
                                 UIEvent::NormalCommand { bubbled, cmd } => match cmd {
                                     NormalCommand::SelectPrev(count) => {
                                         follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         for _ in 0..*count {
                                             let (old, new, at_top) = view.select_prev();
                                             if old.is_some() && old == new {
@@ -955,9 +971,17 @@ impl UIMod {
                                                 break;
                                             }
                                         }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
+                                        }
                                     }
                                     NormalCommand::SelectNext(count) => {
                                         follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         for _ in 0..*count {
                                             let (old, new) = view.select_next();
                                             if old.is_some() && old == new {
@@ -965,6 +989,9 @@ impl UIMod {
                                                 view.clear_selection();
                                                 break;
                                             }
+                                        }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
                                         }
                                     }
                                     NormalCommand::ScrollToTop => {
@@ -1015,46 +1042,62 @@ impl UIMod {
                                 },
                                 UIEvent::ModeChange(Mode::Normal) => {
                                     current_mode = Mode::Normal;
-                                    // Cancel any in-place edit on the selected
-                                    // message. Do NOT auto-select: when the user
-                                    // presses Esc from the input bar the cursor
-                                    // must stay on the input bar. Navigation
-                                    // (k/j/gg/G) establishes the selection.
-                                    view.update_selected(|msg| {
-                                        if msg.is_editing() {
-                                            msg.cancel_edit();
+                                    let editor_normal_mode = view
+                                        .selected()
+                                        .and_then(|msg| msg.edit.as_ref())
+                                        .map(|e| e.normal_mode);
+                                    match editor_normal_mode {
+                                        Some(true) => {
+                                            view.update_selected(|msg| msg.cancel_edit());
                                         }
-                                    });
+                                        Some(false) => {
+                                            view.update_selected(|msg| msg.set_normal_mode(true));
+                                        }
+                                        None => {}
+                                    }
                                 }
                                 UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
                                     current_mode = *mode;
                                     follow_bottom = true;
-                                    // Keep the selection only when a StartEdit
-                                    // has already initialised an in-place edit
-                                    // on the selected message. Otherwise clear
-                                    // it so typing in the input bar doesn't
-                                    // leave a highlighted message behind.
                                     let editing =
                                         view.selected().is_some_and(MessageView::is_editing);
                                     if !editing {
                                         view.clear_selection();
+                                    } else if *mode == Mode::Insert {
+                                        view.update_selected(|msg| msg.set_normal_mode(false));
                                     }
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
                                     }
                                 }
-                                // Begin an in-place edit on the selected
-                                // outgoing message. Dispatched by the
-                                // top-level `i` handler when focus is on the
-                                // message frame.
+                                // Begin an in-place edit on the selected outgoing message.
+                                // 'i' on a message: switch to Insert mode for outgoing
+                                // messages; incoming messages stay in Normal mode (read-only).
                                 UIEvent::StartEdit => {
                                     view.update_selected(|msg| {
-                                        if let Message::Xmpp(m) = &msg.message {
-                                            if m.direction == Direction::Outgoing {
-                                                msg.start_edit();
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
                                             }
+                                            msg.set_normal_mode(false);
                                         }
                                     });
+                                }
+                                UIEvent::ApplyTextAction(action, slot) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        let rv =
+                                            view.update_selected(|msg| msg.apply_action(action));
+                                        if let Some(Some(rv)) = rv {
+                                            *slot.borrow_mut() = Some(rv);
+                                        }
+                                    }
+                                }
+                                UIEvent::HasMessageCursor(flag) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        *flag.borrow_mut() = true;
+                                    }
                                 }
                                 // Route INSERT-mode key events to the selected
                                 // message when it's being edited in place.
@@ -1126,6 +1169,7 @@ impl UIMod {
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
                                                     view.select_last_visible();
+                                                    view.update_selected(MessageView::start_cursor);
                                                 }
                                             }
                                         }
@@ -1142,6 +1186,7 @@ impl UIMod {
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
                                                     view.select_last_visible();
+                                                    view.update_selected(MessageView::start_cursor);
                                                 }
                                             }
                                         }
@@ -1174,6 +1219,11 @@ impl UIMod {
                                 UIEvent::NormalCommand { bubbled, cmd } => match cmd {
                                     NormalCommand::SelectPrev(count) => {
                                         follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         for _ in 0..*count {
                                             let (old, new, at_top) = view.select_prev();
                                             if old.is_some() && old == new {
@@ -1194,9 +1244,17 @@ impl UIMod {
                                                 break;
                                             }
                                         }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
+                                        }
                                     }
                                     NormalCommand::SelectNext(count) => {
                                         follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         for _ in 0..*count {
                                             let (old, new) = view.select_next();
                                             if old.is_some() && old == new {
@@ -1204,6 +1262,9 @@ impl UIMod {
                                                 view.clear_selection();
                                                 break;
                                             }
+                                        }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
                                         }
                                     }
                                     NormalCommand::ScrollToTop => {
@@ -1266,30 +1327,58 @@ impl UIMod {
                                 }
                                 UIEvent::ModeChange(Mode::Normal) => {
                                     current_mode = Mode::Normal;
-                                    view.update_selected(|msg| {
-                                        if msg.is_editing() {
-                                            msg.cancel_edit();
+                                    let editor_normal_mode = view
+                                        .selected()
+                                        .and_then(|msg| msg.edit.as_ref())
+                                        .map(|e| e.normal_mode);
+                                    match editor_normal_mode {
+                                        Some(true) => {
+                                            view.update_selected(|msg| msg.cancel_edit());
                                         }
-                                    });
+                                        Some(false) => {
+                                            view.update_selected(|msg| msg.set_normal_mode(true));
+                                        }
+                                        None => {}
+                                    }
                                 }
                                 UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
                                     current_mode = *mode;
                                     follow_bottom = true;
-                                    let start = *mode == Mode::Insert
-                                        && view.selected().is_some_and(|msg| {
-                                            matches!(
-                                                &msg.message,
-                                                Message::Xmpp(m)
-                                                    if m.direction == Direction::Outgoing
-                                            )
-                                        });
-                                    if start {
-                                        view.update_selected(MessageView::start_edit);
-                                    } else {
+                                    let editing =
+                                        view.selected().is_some_and(MessageView::is_editing);
+                                    if !editing {
                                         view.clear_selection();
+                                    } else if *mode == Mode::Insert {
+                                        view.update_selected(|msg| msg.set_normal_mode(false));
                                     }
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
+                                    }
+                                }
+                                UIEvent::StartEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                        }
+                                    });
+                                }
+                                UIEvent::ApplyTextAction(action, slot) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        let rv =
+                                            view.update_selected(|msg| msg.apply_action(action));
+                                        if let Some(Some(rv)) = rv {
+                                            *slot.borrow_mut() = Some(rv);
+                                        }
+                                    }
+                                }
+                                UIEvent::HasMessageCursor(flag) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        *flag.borrow_mut() = true;
                                     }
                                 }
                                 UIEvent::Core(Event::Key(key))
@@ -1463,6 +1552,7 @@ fn dispatch_action(
     mode: &mut Mode,
     aparte_proxy: &mut AparteAsync,
 ) {
+    const FRAME_LAYOUT_INDEX: usize = 1;
     if action.motion.is_navigation() {
         let cmd = match action.motion {
             Motion::Down => NormalCommand::SelectNext(action.count),
@@ -1499,11 +1589,36 @@ fn dispatch_action(
         }
     } else {
         let slot = Rc::new(RefCell::new(None::<RegisterValue>));
-        for child in layout.iter_children_mut() {
-            child.event(&mut UIEvent::ApplyTextAction(
-                action.clone(),
-                Rc::clone(&slot),
-            ));
+        // Route to the frame when it has an active message cursor, regardless
+        // of focused_child_index (which may still point at the input bar after
+        // returning from Command mode before any j/k navigation).
+        let cursor_flag = Rc::new(RefCell::new(false));
+        if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+            child
+                .child
+                .view
+                .event(&mut UIEvent::HasMessageCursor(Rc::clone(&cursor_flag)));
+        }
+        let frame_has_cursor =
+            *cursor_flag.borrow() || layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+        if frame_has_cursor {
+            // Active message cursor or explicit frame focus: route to frame only.
+            if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                child.child.view.event(&mut UIEvent::ApplyTextAction(
+                    action.clone(),
+                    Rc::clone(&slot),
+                ));
+            }
+        } else {
+            // Focus on the input bar: send to non-frame children only.
+            for (i, child) in layout.children.iter_mut().enumerate() {
+                if i != FRAME_LAYOUT_INDEX {
+                    child.child.view.event(&mut UIEvent::ApplyTextAction(
+                        action.clone(),
+                        Rc::clone(&slot),
+                    ));
+                }
+            }
         }
         if let Some(rv) = slot.borrow_mut().take() {
             registers.yank(action.register, rv);
@@ -1546,23 +1661,47 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
-                        // Vim: when leaving Insert, cursor moves back one if at
-                        // the end of a non-empty buffer.
-                        let slot = Rc::new(RefCell::new(None));
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::GetInput(Rc::clone(&slot)));
-                        }
-                        if let Some((buf, cursor, _)) = slot.borrow().as_ref() {
-                            let len = buf.graphemes(true).count();
-                            if cursor.get() == len && len > 0 {
-                                let new_pos = len - 1;
-                                for child in layout.iter_children_mut() {
-                                    child.event(&mut UIEvent::SetInputState(buf.clone(), new_pos));
+                        let focus_on_frame = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+                        if focus_on_frame {
+                            // Esc while editing: switch editor from Insert to Normal mode.
+                            // A second Esc (in Normal mode) cancels the edit.
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            }
+                        } else {
+                            // Vim: when leaving Insert on the input bar, cursor
+                            // moves back one if at the end of a non-empty buffer.
+                            let slot = Rc::new(RefCell::new(None));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::GetInput(Rc::clone(&slot)));
+                            }
+                            if let Some((buf, cursor, _)) = slot.borrow().as_ref() {
+                                let len = buf.graphemes(true).count();
+                                if cursor.get() == len && len > 0 {
+                                    let new_pos = len - 1;
+                                    for child in layout.iter_children_mut() {
+                                        child.event(&mut UIEvent::SetInputState(
+                                            buf.clone(),
+                                            new_pos,
+                                        ));
+                                    }
                                 }
                             }
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            }
                         }
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                    }
+                    // Esc in Normal mode: if focus is on the message frame,
+                    // fire ModeChange(Normal) so the scroll win can cancel the edit.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Normal => {
+                        let focus_on_frame = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+                        if focus_on_frame {
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            }
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1880,7 +2019,10 @@ impl ModTrait for UIMod {
                 // set `bubbled = true` on the shared event, making the outer
                 // layout think navigation failed when it actually succeeded.
                 | UIEvent::NormalCommand { .. }
-                | UIEvent::StartEdit => frame.route_to_focused(event),
+                | UIEvent::StartEdit
+                // Text actions and cursor queries go to the focused window only.
+                | UIEvent::ApplyTextAction(..)
+                | UIEvent::HasMessageCursor(..) => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {

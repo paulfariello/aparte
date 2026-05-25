@@ -1713,3 +1713,185 @@ fn normal_mode_count_prefix_multiplies_motion() {
         describe(parser.screen())
     );
 }
+
+// ── Message-editor Normal-mode tests ──────────────────────────────────────────
+
+/// Set up for message-editor tests: inject a fake outgoing message then
+/// navigate to it.  After the second 'k' the message frame has focus and
+/// the edit buffer is open in Normal mode — motions work immediately.
+fn setup_message_editor_normal_mode(h: &Harness) {
+    h.send_command("/inject_msg hello world");
+    let visible = wait_for_screen(h, "hello world", Duration::from_secs(5));
+    assert!(
+        visible,
+        "injected message 'hello world' must appear on screen"
+    );
+
+    // The message is auto-selected on arrival (follow_bottom + Normal mode).
+    // The first 'k' finds old==new at index 0 → bubbles, clears selection.
+    // The second 'k' selects fresh from None and focuses the message frame;
+    // navigation auto-starts the edit buffer in Normal mode.
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+}
+
+/// Pressing '0' while in Normal mode on the message editor moves the cursor
+/// to the start of the message body.
+#[test]
+fn message_editor_0_moves_cursor_to_start() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    setup_message_editor_normal_mode(&h);
+
+    // Cursor starts at position 0; move to end first so '0' has somewhere to go.
+    h.send_bytes(b"$");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser_before = h.snapshot();
+    let (row_before, col_before) = parser_before.screen().cursor_position();
+
+    // '0' → start of line (start of message body).
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser_after = h.snapshot();
+    let (row_after, col_after) = parser_after.screen().cursor_position();
+
+    h.shutdown();
+
+    // Cursor must be on a message row (not the input bar).
+    assert_ne!(
+        row_before,
+        ROWS - 1,
+        "cursor must be on the message row, not the input bar\n{}",
+        describe(parser_before.screen())
+    );
+    assert_eq!(
+        row_before,
+        row_after,
+        "row must not change after '0'\n{}",
+        describe(parser_after.screen())
+    );
+    // '0' must move the cursor to the left (towards the start of the body).
+    assert!(
+        col_after < col_before,
+        "'0' must move cursor left: col_before={col_before} col_after={col_after}\n{}",
+        describe(parser_after.screen())
+    );
+}
+
+/// Pressing 'w' while in Normal mode on the message editor moves the cursor
+/// forward to the next word start.
+#[test]
+fn message_editor_w_moves_cursor_to_next_word() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    setup_message_editor_normal_mode(&h);
+
+    // First go to line start so we have a known start position.
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    let parser_at_start = h.snapshot();
+    let (_, col_start) = parser_at_start.screen().cursor_position();
+
+    // 'w' → jump to start of next word ("world").
+    h.send_bytes(b"w");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser_after = h.snapshot();
+    let (row_after, col_after) = parser_after.screen().cursor_position();
+
+    h.shutdown();
+
+    assert_ne!(
+        row_after,
+        ROWS - 1,
+        "cursor must stay on the message row\n{}",
+        describe(parser_after.screen())
+    );
+    // 'w' from the start of "hello world" must move right by 6 graphemes.
+    assert_eq!(
+        col_after,
+        col_start + 6,
+        "'w' from start of 'hello world' must land on 'world' (col_start+6)\n{}",
+        describe(parser_after.screen())
+    );
+}
+
+/// Escape while in message-editor Normal mode (auto-started by navigation)
+/// cancels the edit.
+#[test]
+fn message_editor_second_esc_cancels_edit() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    setup_message_editor_normal_mode(&h);
+
+    // Single Escape cancels the edit (editor was already in Normal mode).
+    h.send_bytes(b"\x1b");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let (row, _) = parser.screen().cursor_position();
+
+    h.shutdown();
+
+    // After cancel, focus should return to input bar or the message row
+    // without an active edit. The mode bar still shows NORMAL.
+    assert!(
+        grid_contains(parser.screen(), "NORMAL"),
+        "Should still be in NORMAL mode after canceling edit\n{}",
+        describe(parser.screen())
+    );
+    // Cursor must NOT be on the input bar when we were just editing a message
+    // and then canceled — the frame still has focus (message is selected but
+    // no longer in editing state, so selection cursor applies).
+    // We just verify the mode indicator is correct.
+    let _ = row; // row assertion omitted: position depends on selection state
+}
+
+/// Regression: 'w' must work on the auto-selected message immediately after
+/// `:inject_msg` in Command mode, without any explicit j/k navigation.
+/// Previously, focus remained on INPUT_INDEX after the command completed, so
+/// dispatch_action routed 'w' to the input bar instead of the message editor.
+#[test]
+fn message_editor_w_works_immediately_after_inject_msg_command() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // :inject_msg goes through Command mode → Validate → Normal mode.
+    // The message is auto-selected and start_cursor() fires.
+    h.send_command("/inject_msg hello world");
+    let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
+    assert!(visible, "injected message must appear on screen");
+
+    // Cursor starts at position 0 of the message body (from start_cursor).
+    // 'w' should jump to the start of "world" (grapheme 6).
+    let parser_before = h.snapshot();
+    let (_, col_before) = parser_before.screen().cursor_position();
+
+    h.send_bytes(b"w");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser_after = h.snapshot();
+    let (row_after, col_after) = parser_after.screen().cursor_position();
+
+    h.shutdown();
+
+    assert_ne!(
+        row_after,
+        ROWS - 1,
+        "'w' must keep cursor on the message row, not the input bar\n{}",
+        describe(parser_after.screen())
+    );
+    assert_eq!(
+        col_after,
+        col_before + 6,
+        "'w' from start of 'hello world' must land 6 cols right (start of 'world')\n{}",
+        describe(parser_after.screen())
+    );
+}

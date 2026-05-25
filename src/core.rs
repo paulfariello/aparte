@@ -783,6 +783,51 @@ Example:
     }
 );
 
+command_def!(
+    inject_msg,
+    r":inject_msg <body>
+
+    body    Message body to inject (all remaining words)
+
+Description:
+    Debug: inject a fake outgoing chat message without an XMPP connection.
+    Useful for testing the in-place message editor.
+
+Example:
+    :inject_msg hello world",
+    {},
+    |aparte, command| {
+        let body = command.args[1..].join(" ");
+        if body.is_empty() {
+            anyhow::bail!("Missing body argument");
+        }
+        let fake_account: Account =
+            FullJid::from_str("test@test.localhost/aparte").context("Invalid fake account JID")?;
+        let fake_contact: Jid =
+            Jid::from_str("test-contact@test.localhost").context("Invalid fake contact JID")?;
+        let id = Uuid::new_v4().to_string();
+        let timestamp = LocalTz::now();
+        let from: Jid = fake_account.clone().into();
+        let mut bodies = HashMap::new();
+        bodies.insert(String::new(), body);
+        let msg = Message::outgoing_chat(
+            id,
+            timestamp.into(),
+            &from,
+            &fake_contact,
+            bodies,
+            None,
+            false,
+        );
+        aparte.schedule(Event::Chat {
+            account: fake_account.clone(),
+            contact: fake_contact.to_bare(),
+        });
+        aparte.schedule(Event::Message(Some(fake_account), msg));
+        Ok(())
+    }
+);
+
 command_def!(help,
 r":help [command]
 
@@ -1097,6 +1142,7 @@ impl Aparte {
 
     pub fn init(&mut self) -> Result<(), ()> {
         self.add_command(help::new());
+        self.add_command(inject_msg::new());
         self.add_command(connect::new());
         self.add_command(rekey_archive::new());
         self.add_command(win::new());

@@ -514,7 +514,7 @@ macro_rules! command_def (
                 Command::new(account.clone(), context.to_string(), buf)
             }
 
-            #[allow(clippy::unnecessary_wraps)]
+            #[allow(clippy::unnecessary_wraps, unused_mut)]
             fn exec($aparte: &mut Aparte, mut $command: Command) -> ::anyhow::Result<()> {
                 #[allow(unused_variables, unused_mut)]
                 let mut index = 1;

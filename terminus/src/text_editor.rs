@@ -21,6 +21,9 @@ pub struct TextEditor {
     pub buf: String,
     pub cursor: Cursor,
     pub view: Cursor,
+    /// Whether the editor is in Normal mode (cursor capped at `len-1`,
+    /// block cursor style) vs Insert mode (cursor may sit at `len`).
+    pub normal_mode: bool,
     width: Cell<usize>,
 }
 
@@ -37,6 +40,7 @@ impl TextEditor {
             buf: String::new(),
             cursor: Cursor::new(0),
             view: Cursor::new(0),
+            normal_mode: false,
             width: Cell::new(0),
         }
     }
@@ -47,10 +51,23 @@ impl TextEditor {
             buf: text.to_string(),
             cursor: Cursor::new(0),
             view: Cursor::new(0),
+            normal_mode: false,
             width: Cell::new(0),
         };
         editor.end();
         editor
+    }
+
+    /// Switch between Insert and Normal mode, capping the cursor when entering
+    /// Normal mode (cursor must not sit past the last character).
+    pub fn set_normal_mode(&mut self, normal: bool) {
+        self.normal_mode = normal;
+        if normal {
+            let len = self.buf.graphemes(true).count();
+            if len > 0 && self.cursor.get() >= len {
+                self.cursor.set(len - 1);
+            }
+        }
     }
 
     pub fn set_width(&self, width: usize) {

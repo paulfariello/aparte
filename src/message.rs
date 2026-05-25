@@ -29,8 +29,8 @@ use terminus::rendering::ScreenFrame;
 use terminus::text_editor::TextEditor;
 use terminus::CursorPos;
 use terminus::{
-    self, BgColor, Dimensions, FgColor, MeasureSpec, MeasureSpecs, RequestedDimension,
-    RequestedDimensions, Searchable, Style, View,
+    self, Action, BgColor, Dimensions, FgColor, MeasureSpec, MeasureSpecs, RegisterValue,
+    RequestedDimension, RequestedDimensions, Searchable, Style, View,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 use uuid::Uuid;
@@ -926,13 +926,27 @@ impl MessageView {
 
     /// Start editing this message in place. The edit buffer is initialised
     /// with the current body (last version). No-op for non-outgoing or non-XMPP
-    /// messages.
+    /// messages. Cursor is placed at the end (Insert-mode ready).
+    #[cfg(test)]
     pub fn start_edit(&mut self) {
         if let Message::Xmpp(m) = &self.message {
             if m.direction == Direction::Outgoing {
                 let body = m.get_last_body(vec![]).to_string();
                 self.edit = Some(TextEditor::with_text(&body));
             }
+        }
+    }
+
+    /// Open a cursor for Normal-mode navigation on any XMPP message (incoming
+    /// or outgoing). The cursor starts at the beginning of the body.
+    /// No-op for non-XMPP messages.
+    pub fn start_cursor(&mut self) {
+        if let Message::Xmpp(m) = &self.message {
+            let body = m.get_last_body(vec![]).to_string();
+            let mut editor = TextEditor::with_text(&body);
+            editor.set_normal_mode(true);
+            editor.home();
+            self.edit = Some(editor);
         }
     }
 
@@ -956,78 +970,31 @@ impl MessageView {
         self.edit.is_some()
     }
 
-    /// Insert a character at the cursor (no-op when not editing).
-    pub fn key(&mut self, c: char) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.key(c);
+    /// Apply a Normal-mode text action to the edit buffer.
+    /// Returns the yanked/deleted [`RegisterValue`] when the operator produces one.
+    /// No-op when not editing. Destructive operators (delete/change) are blocked
+    /// for non-outgoing messages since their body is read-only.
+    pub fn apply_action(&mut self, action: &Action) -> Option<RegisterValue> {
+        let is_outgoing =
+            matches!(&self.message, Message::Xmpp(m) if m.direction == Direction::Outgoing);
+        let editor = self.edit.as_mut()?;
+        if !is_outgoing
+            && matches!(
+                action.operator,
+                terminus::Operator::Delete | terminus::Operator::Change
+            )
+        {
+            return None;
         }
+        editor.apply_action(action)
     }
 
-    /// Delete the character before the cursor (no-op when not editing).
-    pub fn backspace(&mut self) {
+    /// Switch the edit buffer between Insert and Normal mode.
+    /// When entering Normal mode, the cursor is capped to `len-1`.
+    /// No-op when not editing.
+    pub fn set_normal_mode(&mut self, normal: bool) {
         if let Some(editor) = self.edit.as_mut() {
-            editor.backspace();
-        }
-    }
-
-    /// Delete the character at the cursor (no-op when not editing).
-    pub fn delete(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.delete();
-        }
-    }
-
-    pub fn cursor_left(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.left();
-        }
-    }
-
-    pub fn cursor_right(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.right();
-        }
-    }
-
-    pub fn cursor_home(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.home();
-        }
-    }
-
-    pub fn cursor_end(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.end();
-        }
-    }
-
-    pub fn word_left(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.word_left();
-        }
-    }
-
-    pub fn word_right(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.word_right();
-        }
-    }
-
-    pub fn backward_delete_word(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.backward_delete_word();
-        }
-    }
-
-    pub fn delete_from_cursor_to_start(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.delete_from_cursor_to_start();
-        }
-    }
-
-    pub fn delete_from_cursor_to_end(&mut self) {
-        if let Some(editor) = self.edit.as_mut() {
-            editor.delete_from_cursor_to_end();
+            editor.set_normal_mode(normal);
         }
     }
 
@@ -1384,7 +1351,11 @@ impl<E, C> View<E, C> for MessageView {
             let col = std::cmp::min(total_col, max_col);
             let row = frame.dimensions.top + frame.dimensions.height.saturating_sub(1);
             frame.set_cursor_with_priority(CursorPos::from((frame.dimensions.left + col, row)), 3);
-            frame.set_cursor_style(terminus::CursorStyle::SteadyBar);
+            frame.set_cursor_style(if editor.normal_mode {
+                terminus::CursorStyle::SteadyBlock
+            } else {
+                terminus::CursorStyle::SteadyBar
+            });
             frame.set_cursor_visible(true);
         }
     }
@@ -1806,14 +1777,34 @@ mod tests {
         mv.start_edit();
         let editor = mv.edit.as_ref().expect("editor should be initialized");
         assert_eq!(editor.buf, "hello");
-        assert_eq!(editor.cursor.get(), 5);
+        assert_eq!(editor.cursor.get(), 5); // cursor at end in start_edit
+    }
+
+    #[test]
+    fn start_cursor_initializes_editor_at_beginning() {
+        let mut mv = message_view_for(make_outgoing_chat("hello"));
+        mv.start_cursor();
+        let editor = mv.edit.as_ref().expect("editor should be initialized");
+        assert_eq!(editor.buf, "hello");
+        assert_eq!(editor.cursor.get(), 0); // cursor at beginning
+    }
+
+    #[test]
+    fn start_cursor_works_on_incoming() {
+        let mut mv = message_view_for(make_incoming_chat("hello"));
+        mv.start_cursor();
+        assert!(
+            mv.is_editing(),
+            "start_cursor should open cursor on incoming messages"
+        );
+        assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 0);
     }
 
     #[test]
     fn message_view_key_appends_to_edit_buffer() {
         let mut mv = message_view_for(make_outgoing_chat("hi"));
         mv.start_edit();
-        mv.key('!');
+        mv.edit.as_mut().unwrap().key('!');
         assert_eq!(mv.edit.as_ref().unwrap().buf, "hi!");
     }
 
@@ -1821,7 +1812,7 @@ mod tests {
     fn message_view_backspace_deletes_last_char() {
         let mut mv = message_view_for(make_outgoing_chat("hi"));
         mv.start_edit();
-        mv.backspace();
+        mv.edit.as_mut().unwrap().backspace();
         assert_eq!(mv.edit.as_ref().unwrap().buf, "h");
     }
 
@@ -1838,7 +1829,7 @@ mod tests {
     fn take_edit_returns_buffer_and_clears() {
         let mut mv = message_view_for(make_outgoing_chat("hi"));
         mv.start_edit();
-        mv.key('!');
+        mv.edit.as_mut().unwrap().key('!');
         let body = mv.take_edit();
         assert_eq!(body.as_deref(), Some("hi!"));
         assert!(!mv.is_editing());
@@ -1847,17 +1838,14 @@ mod tests {
     #[test]
     fn start_edit_on_incoming_does_nothing() {
         let mut mv = message_view_for(make_incoming_chat("hello"));
-        mv.start_edit();
+        mv.start_edit(); // editing-only method; no-op for incoming
         assert!(!mv.is_editing());
     }
 
     #[test]
     fn key_when_not_editing_is_noop() {
-        let mut mv = message_view_for(make_outgoing_chat("hi"));
-        mv.key('!');
-        if let Message::Xmpp(x) = &mv.message {
-            assert_eq!(x.get_last_body(vec![]), "hi");
-        }
+        let mv = message_view_for(make_outgoing_chat("hi"));
+        // No editor means no edit state — the edit field is None.
         assert!(mv.edit.is_none());
     }
 
@@ -1865,8 +1853,8 @@ mod tests {
     fn message_view_delete_removes_char_at_cursor() {
         let mut mv = message_view_for(make_outgoing_chat("abc"));
         mv.start_edit();
-        mv.cursor_home();
-        mv.delete();
+        mv.edit.as_mut().unwrap().home();
+        mv.edit.as_mut().unwrap().delete();
         assert_eq!(mv.edit.as_ref().unwrap().buf, "bc");
     }
 
@@ -1875,11 +1863,11 @@ mod tests {
         let mut mv = message_view_for(make_outgoing_chat("ab"));
         mv.start_edit();
         // Cursor is at end (2). Move left twice.
-        mv.cursor_left();
-        mv.cursor_left();
+        mv.edit.as_mut().unwrap().left();
+        mv.edit.as_mut().unwrap().left();
         assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 0);
         // Right moves it back
-        mv.cursor_right();
+        mv.edit.as_mut().unwrap().right();
         assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 1);
     }
 
@@ -1888,7 +1876,7 @@ mod tests {
         let mut mv = message_view_for(make_outgoing_chat("foo bar"));
         mv.start_edit();
         // Cursor at end. word_left moves to start of "bar".
-        mv.word_left();
+        mv.edit.as_mut().unwrap().word_left();
         assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 4);
     }
 
@@ -1896,7 +1884,7 @@ mod tests {
     fn message_view_backward_delete_word_removes_previous_word() {
         let mut mv = message_view_for(make_outgoing_chat("foo bar"));
         mv.start_edit();
-        mv.backward_delete_word();
+        mv.edit.as_mut().unwrap().backward_delete_word();
         assert_eq!(mv.edit.as_ref().unwrap().buf, "foo ");
     }
 
@@ -1904,9 +1892,9 @@ mod tests {
     fn message_view_home_end_jumps_cursor() {
         let mut mv = message_view_for(make_outgoing_chat("hello"));
         mv.start_edit();
-        mv.cursor_home();
+        mv.edit.as_mut().unwrap().home();
         assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 0);
-        mv.cursor_end();
+        mv.edit.as_mut().unwrap().end();
         assert_eq!(mv.edit.as_ref().unwrap().cursor.get(), 5);
     }
 
