@@ -1012,6 +1012,7 @@ impl UIMod {
                                     NormalCommand::ScrollToBottom => {
                                         follow_bottom = true;
                                         view.scroll_to_bottom();
+                                        view.update_selected(MessageView::start_cursor);
                                         mam_requested = false;
                                     }
                                     NormalCommand::SearchFirst(query) => {
@@ -1285,6 +1286,7 @@ impl UIMod {
                                     NormalCommand::ScrollToBottom => {
                                         follow_bottom = true;
                                         view.scroll_to_bottom();
+                                        view.update_selected(MessageView::start_cursor);
                                         mam_requested = false;
                                     }
                                     NormalCommand::SearchFirst(query) => {
