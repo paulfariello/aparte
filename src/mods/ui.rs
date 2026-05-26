@@ -1114,7 +1114,7 @@ impl UIMod {
                                 // state.
                                 UIEvent::ValidateEdit(result) => {
                                     let pair = view.update_selected(|msg| {
-                                        if !msg.is_editing() {
+                                        if !msg.is_insert_editing() {
                                             return None;
                                         }
                                         let id = match &msg.message {

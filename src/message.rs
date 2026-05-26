@@ -970,6 +970,13 @@ impl MessageView {
         self.edit.is_some()
     }
 
+    /// True only when the user has actively entered Insert mode on this
+    /// message (normal_mode == false).  A Normal-mode navigation cursor
+    /// (from start_cursor) must not count as an in-progress edit.
+    pub fn is_insert_editing(&self) -> bool {
+        self.edit.as_ref().map(|e| !e.normal_mode).unwrap_or(false)
+    }
+
     /// Apply a Normal-mode text action to the edit buffer.
     /// Returns the yanked/deleted [`RegisterValue`] when the operator produces one.
     /// No-op when not editing. Destructive operators (delete/change) are blocked
@@ -1840,6 +1847,25 @@ mod tests {
         let mut mv = message_view_for(make_incoming_chat("hello"));
         mv.start_edit(); // editing-only method; no-op for incoming
         assert!(!mv.is_editing());
+    }
+
+    #[test]
+    fn is_insert_editing_false_for_navigation_cursor() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.start_cursor();
+        assert!(mv.is_editing(), "start_cursor sets edit");
+        assert!(
+            !mv.is_insert_editing(),
+            "navigation cursor must not be an insert edit"
+        );
+    }
+
+    #[test]
+    fn is_insert_editing_true_after_start_edit() {
+        let mut mv = message_view_for(make_outgoing_chat("hi"));
+        mv.start_edit();
+        mv.set_normal_mode(false);
+        assert!(mv.is_insert_editing());
     }
 
     #[test]

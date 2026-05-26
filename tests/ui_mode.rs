@@ -1895,3 +1895,57 @@ fn message_editor_w_works_immediately_after_inject_msg_command() {
         describe(parser_after.screen())
     );
 }
+
+/// Regression: pressing Enter in Command mode when a message has a Normal-mode
+/// navigation cursor (from start_cursor / auto-selection) must NOT trigger the
+/// ValidateEdit / send_correction path.
+///
+/// Before the fix, is_editing() returned true for any edit-Some state, so a
+/// navigation cursor was indistinguishable from an in-progress XEP-0308 edit.
+/// ValidateEdit would fire, send_correction would consume the Enter key, and
+/// the layout returned to Normal mode via ModeChange (not via the normal
+/// Validate path), so saved_input was never restored.  The command string
+/// (:win console here) stayed in the input bar.  A second Enter in Normal mode
+/// then triggered the "looks like a command" popup.
+///
+/// With the fix (is_insert_editing — only true when normal_mode==false), the
+/// command executes, mode returns via the Validate path, saved_input is
+/// restored, the input is clean, and no popup appears.
+#[test]
+fn command_executes_correctly_with_navigation_cursor_on_message() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // inject_msg opens a chat window and auto-selects the message with a
+    // Normal-mode navigation cursor (start_cursor sets normal_mode=true).
+    h.send_command("/inject_msg hello world");
+    let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
+    assert!(visible, "injected message must appear on screen");
+
+    // We are now in Normal mode, chat window focused, message cursor active.
+    // Enter Command mode and type a harmless command.
+    h.send_bytes(b":");
+    wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+    h.send_bytes(b"win console\r");
+
+    // Give the event loop time to process the command.
+    thread::sleep(Duration::from_millis(300));
+
+    // Press Enter once more in Normal mode.  If the bug were present the
+    // command above would not have executed, ":win console" would still be
+    // in the input bar, and this Enter would trigger the "looks like a
+    // command" popup.  With the fix the input is empty and nothing happens.
+    h.send_bytes(b"\r");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        !grid_contains(screen, "looks like a command"),
+        "\"looks like a command\" popup must not appear — command should have \
+         executed cleanly without triggering the correction path\n{}",
+        describe(screen)
+    );
+}
