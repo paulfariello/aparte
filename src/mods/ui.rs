@@ -895,6 +895,11 @@ impl UIMod {
                                                 );
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
                                                 }
@@ -912,6 +917,11 @@ impl UIMod {
                                                 );
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
                                                 }
@@ -996,6 +1006,11 @@ impl UIMod {
                                     }
                                     NormalCommand::ScrollToTop => {
                                         follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         view.scroll_to_top();
                                         if !mam_requested {
                                             mam_requested = true;
@@ -1011,6 +1026,11 @@ impl UIMod {
                                     }
                                     NormalCommand::ScrollToBottom => {
                                         follow_bottom = true;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         view.scroll_to_bottom();
                                         view.update_selected(MessageView::start_cursor);
                                         mam_requested = false;
@@ -1169,6 +1189,11 @@ impl UIMod {
                                                 );
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
                                                 }
@@ -1186,6 +1211,11 @@ impl UIMod {
                                                 );
                                                 mam_requested = false;
                                                 if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
                                                 }
@@ -1270,6 +1300,11 @@ impl UIMod {
                                     }
                                     NormalCommand::ScrollToTop => {
                                         follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         view.scroll_to_top();
                                         if !mam_requested {
                                             mam_requested = true;
@@ -1285,6 +1320,11 @@ impl UIMod {
                                     }
                                     NormalCommand::ScrollToBottom => {
                                         follow_bottom = true;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
                                         view.scroll_to_bottom();
                                         view.update_selected(MessageView::start_cursor);
                                         mam_requested = false;

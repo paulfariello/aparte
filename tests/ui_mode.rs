@@ -1125,6 +1125,60 @@ fn j_on_last_message_moves_cursor_to_input_bar() {
     );
 }
 
+#[test]
+fn j_twice_from_input_bar_moves_cursor_to_input_bar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+
+    // Enter NORMAL mode.
+    enter_normal(&h);
+    thread::sleep(Duration::from_millis(200));
+
+    // Press j once: should navigate to the last visible message.
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(200));
+
+    // Sanity: a message row should be highlighted.
+    {
+        let parser = h.snapshot();
+        assert!(
+            !rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR).is_empty(),
+            "Expected a selected message after first j\n{}",
+            describe(parser.screen())
+        );
+    }
+
+    // Press j again: at last message, so this bubbles to the input bar.
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    // Selection must be cleared.
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "Selection should be cleared after j bubbles from last message; {} rows highlighted\n{}",
+        selected.len(),
+        describe(screen)
+    );
+
+    // Cursor must be on the input bar.
+    let (row, _) = parser.screen().cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor should be on input bar (row {}) after j twice; got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen)
+    );
+}
+
 fn enter_command_colon(h: &Harness) {
     enter_normal(h);
     h.send_bytes(b":");
@@ -1946,6 +2000,58 @@ fn command_executes_correctly_with_navigation_cursor_on_message() {
         !grid_contains(screen, "looks like a command"),
         "\"looks like a command\" popup must not appear — command should have \
          executed cleanly without triggering the correction path\n{}",
+        describe(screen)
+    );
+}
+
+/// Regression: ScrollToBottom (G) must cancel the previously-selected
+/// message's edit cursor before jumping to the last message.
+///
+/// Without the fix, the priority-3 edit cursor on the k-navigated message
+/// survived G and overrode the input bar's priority-1 cursor after j.
+///
+/// Uses /inject_msg so send_command's leading Escape clears all edit cursors
+/// between injections — this isolates the G-handler bug specifically.
+#[test]
+fn k_then_g_then_j_moves_cursor_to_input_bar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg first message");
+    let visible = wait_for_screen(&h, "first message", Duration::from_secs(5));
+    assert!(visible, "first injected message must appear on screen");
+
+    h.send_command("/inject_msg second message");
+    let visible = wait_for_screen(&h, "second message", Duration::from_secs(5));
+    assert!(visible, "second injected message must appear on screen");
+
+    // We are now in Normal mode with the last message auto-selected.
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+    h.send_bytes(b"G");
+    thread::sleep(Duration::from_millis(200));
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "Selection must be cleared after j bubbles from last message, but {} rows highlighted\n{}",
+        selected.len(),
+        describe(screen)
+    );
+
+    let (row, _) = parser.screen().cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor must be on the input bar (row {}) after k->G->j, got row {}\n{}",
+        ROWS - 1,
+        row,
         describe(screen)
     );
 }

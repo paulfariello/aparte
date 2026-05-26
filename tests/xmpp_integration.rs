@@ -928,3 +928,65 @@ fn escape_from_insert_in_chat_stays_on_input_bar(xmpp_with_contact: XmppFixture)
         describe(screen),
     );
 }
+
+/// Regression: when multiple XMPP messages arrive in Normal mode with
+/// follow_bottom=true (typical after opening a chat with MAM history),
+/// each new message must cancel the previous selection's edit cursor before
+/// calling start_cursor on the new last message.
+///
+/// Without the fix, all arriving messages accumulate orphaned priority-3
+/// edit cursors.  After k→G→j, the earliest message's cursor overrides the
+/// input bar's priority-1 cursor and the terminal cursor never reaches the
+/// input bar row.
+///
+/// Uses a MAM archive so all three messages arrive asynchronously without
+/// any intervening Escape/ModeChange cleanup that would mask the bug.
+#[test]
+fn mam_messages_do_not_leave_orphaned_cursors_after_k_g_j() {
+    let xmpp = XmppFixture::new_with_mam(
+        &["contact@localhost"],
+        &[
+            ("contact@localhost", "user@localhost", "m1", "first message"),
+            (
+                "contact@localhost",
+                "user@localhost",
+                "m2",
+                "second message",
+            ),
+            ("contact@localhost", "user@localhost", "m3", "third message"),
+        ],
+    );
+
+    xmpp.send_command("/msg contact@localhost");
+    xmpp.switch_window("contact@localhost");
+    let visible = xmpp.wait_for("third message", Duration::from_secs(10));
+    assert!(visible, "all three MAM messages must appear on screen");
+
+    xmpp.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+    xmpp.send_bytes(b"G");
+    thread::sleep(Duration::from_millis(200));
+    xmpp.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "selection must be cleared after j bubbles from last message, but {} rows highlighted\n{}",
+        selected.len(),
+        describe(screen)
+    );
+
+    let (row, _) = screen.cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar (row {}) after k->G->j with MAM messages, got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen)
+    );
+}
