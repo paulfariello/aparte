@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cell::Cell;
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cursor::Cursor;
@@ -173,6 +174,35 @@ impl TextEditor {
     pub fn word_right(&mut self) {
         let iter = self.buf[self.cursor.index(&self.buf)..].chars();
         self.cursor += next_word(iter);
+    }
+
+    /// Dispatch a key event to the appropriate editing operation.
+    /// Covers all standard readline/emacs-style bindings shared across every
+    /// editable widget (input bar, in-place message correction, …).
+    pub fn handle_key_event(&mut self, key: &KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => self.key(c),
+            (KeyCode::Backspace, _) | (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
+                self.backspace();
+            }
+            (KeyCode::Delete, _) => self.delete(),
+            (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => self.home(),
+            (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => self.end(),
+            (KeyCode::Left, KeyModifiers::NONE) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+                self.left();
+            }
+            (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                self.right();
+            }
+            (KeyCode::Left, KeyModifiers::ALT | KeyModifiers::CONTROL)
+            | (KeyCode::Char('b'), KeyModifiers::ALT) => self.word_left(),
+            (KeyCode::Right, KeyModifiers::ALT | KeyModifiers::CONTROL)
+            | (KeyCode::Char('f'), KeyModifiers::ALT) => self.word_right(),
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => self.backward_delete_word(),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.delete_from_cursor_to_start(),
+            (KeyCode::Char('k'), KeyModifiers::CONTROL) => self.delete_from_cursor_to_end(),
+            _ => {}
+        }
     }
 
     // ── Vim Normal-mode motion support ───────────────────────────────────────

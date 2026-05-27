@@ -169,31 +169,7 @@ fn dispatch_edit_key(msg: &mut MessageView, key: &KeyEvent) {
     let Some(editor) = msg.edit.as_mut() else {
         return;
     };
-    match (key.code, key.modifiers) {
-        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => editor.key(c),
-        (KeyCode::Backspace, _) | (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
-            editor.backspace();
-        }
-        (KeyCode::Delete, _) => editor.delete(),
-        (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => editor.home(),
-        (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => editor.end(),
-        (KeyCode::Left, KeyModifiers::NONE) | (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
-            editor.left();
-        }
-        (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
-            editor.right();
-        }
-        (KeyCode::Left, KeyModifiers::ALT) | (KeyCode::Char('b'), KeyModifiers::ALT) => {
-            editor.word_left();
-        }
-        (KeyCode::Right, KeyModifiers::ALT) | (KeyCode::Char('f'), KeyModifiers::ALT) => {
-            editor.word_right();
-        }
-        (KeyCode::Char('w'), KeyModifiers::CONTROL) => editor.backward_delete_word(),
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => editor.delete_from_cursor_to_start(),
-        (KeyCode::Char('k'), KeyModifiers::CONTROL) => editor.delete_from_cursor_to_end(),
-        _ => {}
-    }
+    editor.handle_key_event(key);
 }
 
 fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: MessageView) {
@@ -2073,154 +2049,62 @@ impl ModTrait for UIMod {
                 }
             });
         let title_bar = TitleBar::new(aparte.config.preferred_langs.clone());
-        let input = Input::new().with_event(|input, event| {
-            if let UIEvent::Core(Event::Key(key)) = event {
+        let input = Input::new().with_event(|input, event| match event {
+            UIEvent::Core(Event::Key(key)) => {
                 log::debug!("Input event: {:?}", key);
+                match key.code {
+                    KeyCode::Up => input.previous(),
+                    KeyCode::Down => input.next(),
+                    _ => {
+                        input.editor.handle_key_event(key);
+                    }
+                }
             }
-            match event {
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char(c),
-                    modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
-                    ..
-                })) => input.key(*c),
-                UIEvent::Core(Event::Key(
-                    KeyEvent {
-                        code: KeyCode::Backspace,
-                        ..
-                    }
-                    | KeyEvent {
-                        code: KeyCode::Char('h'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    },
-                )) => input.backspace(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Delete,
-                    ..
-                })) => input.delete(),
-                UIEvent::Core(Event::Key(
-                    KeyEvent {
-                        code: KeyCode::Home,
-                        ..
-                    }
-                    | KeyEvent {
-                        code: KeyCode::Char('a'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    },
-                )) => input.home(),
-                UIEvent::Core(Event::Key(
-                    KeyEvent {
-                        code: KeyCode::End, ..
-                    }
-                    | KeyEvent {
-                        code: KeyCode::Char('e'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    },
-                )) => input.end(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Up, ..
-                })) => input.previous(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Down,
-                    ..
-                })) => input.next(),
-                UIEvent::Core(Event::Key(
-                    KeyEvent {
-                        code: KeyCode::Left,
-                        modifiers: KeyModifiers::NONE,
-                        ..
-                    }
-                    | KeyEvent {
-                        code: KeyCode::Char('b'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    },
-                )) => input.left(),
-                UIEvent::Core(Event::Key(
-                    KeyEvent {
-                        code: KeyCode::Right,
-                        modifiers: KeyModifiers::NONE,
-                        ..
-                    }
-                    | KeyEvent {
-                        code: KeyCode::Char('f'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    },
-                )) => input.right(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('w'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.backward_delete_word(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('u'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.delete_from_cursor_to_start(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Char('k'),
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.delete_from_cursor_to_end(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Left,
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.word_left(),
-                UIEvent::Core(Event::Key(KeyEvent {
-                    code: KeyCode::Right,
-                    modifiers: KeyModifiers::CONTROL,
-                    ..
-                })) => input.word_right(),
-                UIEvent::Validate(result) => {
-                    let mut result = result.borrow_mut();
-                    result.replace(input.validate());
-                }
-                UIEvent::GetInput(result) => {
-                    let mut result = result.borrow_mut();
-                    result.replace((
-                        input.editor.buf.clone(),
-                        input.editor.cursor.clone(),
-                        input.password,
-                    ));
-                }
-                UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                    input.editor.buf.clone_from(raw_buf);
-                    input.editor.cursor.clone_from(cursor);
-                }
-                UIEvent::Core(Event::ReadPassword(_)) => input.password(),
-                UIEvent::SetInput(text) => {
-                    input.editor.cursor =
-                        Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
-                    input.editor.buf.clone_from(text);
-                }
-                UIEvent::ApplyTextAction(action, slot) => {
-                    if let Some(rv) = input.editor.apply_action(action) {
-                        *slot.borrow_mut() = Some(rv);
-                    }
-                }
-                UIEvent::SetInputState(content, cursor_pos) => {
-                    input.editor.buf = content.clone();
-                    input.editor.cursor = Cursor::new(*cursor_pos);
-                }
-                UIEvent::Paste(text) => {
-                    for c in text.chars() {
-                        input.key(c);
-                    }
-                }
-                UIEvent::ModeChange(Mode::Normal) => {
-                    input.set_show_cursor(true);
-                    input.set_cursor_style(CursorStyle::SteadyBlock);
-                }
-                UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
-                    input.set_show_cursor(true);
-                    input.set_cursor_style(CursorStyle::SteadyBar);
-                }
-                _ => {}
+            UIEvent::Validate(result) => {
+                let mut result = result.borrow_mut();
+                result.replace(input.validate());
             }
+            UIEvent::GetInput(result) => {
+                let mut result = result.borrow_mut();
+                result.replace((
+                    input.editor.buf.clone(),
+                    input.editor.cursor.clone(),
+                    input.password,
+                ));
+            }
+            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+                input.editor.buf.clone_from(raw_buf);
+                input.editor.cursor.clone_from(cursor);
+            }
+            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
+            UIEvent::SetInput(text) => {
+                input.editor.cursor =
+                    Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
+                input.editor.buf.clone_from(text);
+            }
+            UIEvent::ApplyTextAction(action, slot) => {
+                if let Some(rv) = input.editor.apply_action(action) {
+                    *slot.borrow_mut() = Some(rv);
+                }
+            }
+            UIEvent::SetInputState(content, cursor_pos) => {
+                input.editor.buf = content.clone();
+                input.editor.cursor = Cursor::new(*cursor_pos);
+            }
+            UIEvent::Paste(text) => {
+                for c in text.chars() {
+                    input.key(c);
+                }
+            }
+            UIEvent::ModeChange(Mode::Normal) => {
+                input.set_show_cursor(true);
+                input.set_cursor_style(CursorStyle::SteadyBlock);
+            }
+            UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
+                input.set_show_cursor(true);
+                input.set_cursor_style(CursorStyle::SteadyBar);
+            }
+            _ => {}
         });
 
         let mut layout = layout;
