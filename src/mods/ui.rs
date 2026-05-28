@@ -854,6 +854,8 @@ impl UIMod {
                         let mut mam_requested = false;
                         let mut current_mode = Mode::Normal;
                         let mut follow_bottom = true;
+                        let mut is_current_window = false;
+                        let mut first_visit = true;
                         move |view, event| {
                             match event {
                                 UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -1036,6 +1038,14 @@ impl UIMod {
                                         }
                                     }
                                 },
+                                UIEvent::Core(Event::ChangeWindow(name)) => {
+                                    is_current_window = name == &chat_for_event.contact.to_string();
+                                    if is_current_window && first_visit {
+                                        first_visit = false;
+                                        view.clear_selection();
+                                        follow_bottom = false;
+                                    }
+                                }
                                 UIEvent::ModeChange(Mode::Normal) => {
                                     current_mode = Mode::Normal;
                                     let editor_normal_mode = view
@@ -1054,13 +1064,17 @@ impl UIMod {
                                 }
                                 UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
                                     current_mode = *mode;
-                                    follow_bottom = true;
-                                    let editing =
-                                        view.selected().is_some_and(MessageView::is_editing);
-                                    if !editing {
-                                        view.clear_selection();
-                                    } else if *mode == Mode::Insert {
-                                        view.update_selected(|msg| msg.set_normal_mode(false));
+                                    if is_current_window {
+                                        follow_bottom = true;
+                                        let editing =
+                                            view.selected().is_some_and(MessageView::is_editing);
+                                        if !editing {
+                                            view.clear_selection();
+                                        } else if *mode == Mode::Insert {
+                                            view.update_selected(|msg| {
+                                                msg.set_normal_mode(false);
+                                            });
+                                        }
                                     }
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
@@ -1148,6 +1162,8 @@ impl UIMod {
                         let mut mam_requested = false;
                         let mut current_mode = Mode::Normal;
                         let mut follow_bottom = true;
+                        let mut is_current_window = false;
+                        let mut first_visit = true;
                         move |view, event| {
                             match event {
                                 UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
@@ -1330,17 +1346,22 @@ impl UIMod {
                                         }
                                     }
                                 },
-                                UIEvent::Core(Event::ChangeWindow(name))
-                                    if name == &channel_for_event.jid.to_string()
-                                        && view.first().is_none()
-                                        && !mam_requested =>
-                                {
-                                    mam_requested = true;
-                                    scheduler.schedule(Event::LoadChannelHistory {
-                                        account: channel_for_event.account.clone(),
-                                        jid: channel_for_event.jid.clone(),
-                                        from: None,
-                                    });
+                                UIEvent::Core(Event::ChangeWindow(name)) => {
+                                    is_current_window = name == &channel_for_event.jid.to_string();
+                                    if is_current_window && first_visit {
+                                        first_visit = false;
+                                        view.clear_selection();
+                                        follow_bottom = false;
+                                    }
+                                    if is_current_window && view.first().is_none() && !mam_requested
+                                    {
+                                        mam_requested = true;
+                                        scheduler.schedule(Event::LoadChannelHistory {
+                                            account: channel_for_event.account.clone(),
+                                            jid: channel_for_event.jid.clone(),
+                                            from: None,
+                                        });
+                                    }
                                 }
                                 UIEvent::ModeChange(Mode::Normal) => {
                                     current_mode = Mode::Normal;
@@ -1360,13 +1381,17 @@ impl UIMod {
                                 }
                                 UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
                                     current_mode = *mode;
-                                    follow_bottom = true;
-                                    let editing =
-                                        view.selected().is_some_and(MessageView::is_editing);
-                                    if !editing {
-                                        view.clear_selection();
-                                    } else if *mode == Mode::Insert {
-                                        view.update_selected(|msg| msg.set_normal_mode(false));
+                                    if is_current_window {
+                                        follow_bottom = true;
+                                        let editing =
+                                            view.selected().is_some_and(MessageView::is_editing);
+                                        if !editing {
+                                            view.clear_selection();
+                                        } else if *mode == Mode::Insert {
+                                            view.update_selected(|msg| {
+                                                msg.set_normal_mode(false);
+                                            });
+                                        }
                                     }
                                     for child in view.children_iter() {
                                         child.set_highlight(None);
@@ -1672,6 +1697,7 @@ impl ModTrait for UIMod {
             let mut registers = Registers::new();
             let mut aparte_proxy = aparte.proxy();
             let mut current_window = String::new();
+            let mut visited_windows: HashSet<String> = HashSet::new();
             let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
             layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
@@ -1950,9 +1976,14 @@ impl ModTrait for UIMod {
                         result.borrow_mut().replace((String::new(), false));
                     }
                     UIEvent::Core(Event::ChangeWindow(name)) => {
-                        current_window = terminus::clean_str(name);
+                        let clean = terminus::clean_str(name);
+                        let first_visit = visited_windows.insert(clean.clone());
+                        current_window = clean;
                         for child in layout.iter_children_mut() {
                             child.event(event);
+                        }
+                        if first_visit {
+                            layout.set_focus(INPUT_INDEX);
                         }
                     }
                     UIEvent::ModeChange(new_mode) => match *new_mode {
@@ -2179,6 +2210,7 @@ impl ModTrait for UIMod {
                     let mut aparte = aparte.proxy();
                     let search_highlight_fg = console_search_highlight_fg;
                     let search_highlight_bg = console_search_highlight_bg;
+                    let mut is_current_window = false;
                     move |view, event| match event {
                         UIEvent::Core(Event::Message(_, Message::Log(message))) => {
                             insert_message(
@@ -2248,8 +2280,13 @@ impl ModTrait for UIMod {
                                 }
                             }
                         },
+                        UIEvent::Core(Event::ChangeWindow(name)) => {
+                            is_current_window = name == "console";
+                        }
                         UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
-                            view.clear_selection();
+                            if is_current_window {
+                                view.clear_selection();
+                            }
                             for child in view.children_iter() {
                                 child.set_highlight(None);
                             }

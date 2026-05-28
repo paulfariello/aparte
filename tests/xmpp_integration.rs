@@ -990,3 +990,208 @@ fn mam_messages_do_not_leave_orphaned_cursors_after_k_g_j() {
         describe(screen)
     );
 }
+
+/// On first visit to a chat window that already has messages loaded (e.g. via
+/// MAM or an incoming message), the cursor must still be on the input bar —
+/// not on the last message.
+#[rstest]
+fn new_window_with_history_cursor_on_input_bar(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    // Inject a message before the user opens the window — simulates MAM loading.
+    xmpp.inject(chat_message(
+        "contact@localhost",
+        "user@localhost/aparte_test",
+        "m_hist",
+        "Historical message",
+    ));
+    // Switch to the chat window for the first time.
+    xmpp.switch_window("contact@localhost");
+    assert!(
+        xmpp.wait_for("Historical message", Duration::from_secs(5)),
+        "message not visible in chat window",
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "first visit with history: no message should be selected, got rows {:?}\n{}",
+        selected,
+        describe(screen),
+    );
+
+    let (row, _) = screen.cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "first visit with history: cursor should be on input bar (row {}), got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen),
+    );
+}
+
+/// Opening a chat window for the first time puts the cursor on the input bar
+/// in Normal mode — no automatic mode switch, no message selected.
+#[rstest]
+fn new_window_first_visit_cursor_on_input_bar(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    // Open chat window for the first time.
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    assert!(
+        xmpp_with_contact.wait_for("contact@localhost", Duration::from_secs(5)),
+        "chat window did not open",
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+
+    // No message should be selected.
+    let selected = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        selected.is_empty(),
+        "first visit: no message should be selected, got selected rows {:?}\n{}",
+        selected,
+        describe(screen),
+    );
+
+    // Cursor must be on the input bar (last row).
+    let (row, _) = screen.cursor_position();
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "first visit: cursor should be on input bar (row {}), got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen),
+    );
+
+    // Mode must remain NORMAL — no automatic mode switch.
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "first visit: mode must remain NORMAL\n{}",
+        describe(screen),
+    );
+}
+
+/// After navigating to a message in a window, switching away and back
+/// restores the selection exactly where it was.
+#[rstest]
+fn return_to_window_restores_selection(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    // Inject a message so there is something to select.
+    xmpp_with_contact.inject(chat_message(
+        "contact@localhost",
+        "user@localhost/aparte_test",
+        "msg1",
+        "Hello from contact",
+    ));
+    xmpp_with_contact.switch_window("contact@localhost");
+    assert!(
+        xmpp_with_contact.wait_for("Hello from contact", Duration::from_secs(5)),
+        "message not visible in chat window",
+    );
+
+    // Navigate to the message (G = go to last message).
+    xmpp_with_contact.send_bytes(b"G");
+    thread::sleep(Duration::from_millis(300));
+
+    let selection_before: Vec<u16> = {
+        let p = xmpp_with_contact.snapshot();
+        rows_with_bgcolor(p.screen(), SELECTION_BGCOLOR)
+    };
+    assert!(
+        !selection_before.is_empty(),
+        "expected a selected message after G",
+    );
+
+    // Switch to console, then return to the chat window.
+    xmpp_with_contact.switch_window("console");
+    xmpp_with_contact.wait_for("Connected as", Duration::from_secs(3));
+    xmpp_with_contact.switch_window("contact@localhost");
+    assert!(
+        xmpp_with_contact.wait_for("Hello from contact", Duration::from_secs(3)),
+        "chat window did not re-appear",
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+    let selection_after = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+
+    assert_eq!(
+        selection_before,
+        selection_after,
+        "return visit: selection must be preserved\n{}",
+        describe(screen),
+    );
+}
+
+/// Pressing `i` (Insert mode) in the active window must not clear the
+/// selection in a background window.
+#[rstest]
+fn insert_mode_in_active_window_preserves_inactive_selection(xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    // Inject a message so there is something to select in the chat window.
+    xmpp_with_contact.inject(chat_message(
+        "contact@localhost",
+        "user@localhost/aparte_test",
+        "msg2",
+        "Background message",
+    ));
+    xmpp_with_contact.switch_window("contact@localhost");
+    assert!(
+        xmpp_with_contact.wait_for("Background message", Duration::from_secs(5)),
+        "message not visible",
+    );
+
+    // Navigate to the message in the chat window.
+    xmpp_with_contact.send_bytes(b"G");
+    thread::sleep(Duration::from_millis(300));
+
+    let selection_in_chat: Vec<u16> = {
+        let p = xmpp_with_contact.snapshot();
+        rows_with_bgcolor(p.screen(), SELECTION_BGCOLOR)
+    };
+    assert!(
+        !selection_in_chat.is_empty(),
+        "expected a selected message in chat window",
+    );
+
+    // Switch to console and enter Insert mode there.
+    xmpp_with_contact.switch_window("console");
+    xmpp_with_contact.wait_for("Connected as", Duration::from_secs(3));
+    xmpp_with_contact.send_bytes(b"i");
+    assert!(
+        xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)),
+        "did not enter INSERT mode in console",
+    );
+
+    // Return to Normal mode and go back to the chat window.
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(
+        xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)),
+        "did not return to NORMAL mode",
+    );
+    xmpp_with_contact.switch_window("contact@localhost");
+    assert!(
+        xmpp_with_contact.wait_for("Background message", Duration::from_secs(3)),
+        "chat window did not re-appear",
+    );
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = xmpp_with_contact.snapshot();
+    let screen = parser.screen();
+    let selection_after = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+
+    assert_eq!(
+        selection_in_chat,
+        selection_after,
+        "Insert mode in console must not clear the chat window's selection\n{}",
+        describe(screen),
+    );
+}
