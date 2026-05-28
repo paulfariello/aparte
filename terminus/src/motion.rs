@@ -19,6 +19,8 @@ pub enum Motion {
     FirstNonBlank,   // ^
     LineEnd,         // $  (inclusive)
     WholeLine,       // produced by dd / cc / yy
+    AWord,           // aw — word + adjacent whitespace (inclusive)
+    IWord,           // iw — inner word only (not inclusive)
     PasteAfter,      // p
     PasteBefore,     // P
     // ── Navigation motions (operate on the ScrollWin, not the text) ─────────
@@ -34,7 +36,10 @@ impl Motion {
     /// Whether the character *at* the motion target is included in the
     /// operator range (vim "inclusive" motions).
     pub fn is_inclusive(&self) -> bool {
-        matches!(self, Motion::WordEnd | Motion::BigWordEnd | Motion::LineEnd)
+        matches!(
+            self,
+            Motion::WordEnd | Motion::BigWordEnd | Motion::LineEnd | Motion::AWord
+        )
     }
 
     /// Whether this motion drives ScrollWin navigation rather than editing.
@@ -107,6 +112,13 @@ enum ParserState {
     },
     /// Just saw `g` — waiting for the second character (only `gg` supported).
     GPrefix { pre_count: usize, reg: Option<char> },
+    /// Have operator + `a`/`i` — waiting for the text-object character (e.g. `w`).
+    AfterTextObjectPrefix {
+        pre_count: usize,
+        reg: Option<char>,
+        op: Operator,
+        around: bool,
+    },
 }
 
 // ── ActionParser ──────────────────────────────────────────────────────────────
@@ -187,6 +199,12 @@ impl ActionParser {
                 op_count,
             } => self.on_after_operator_count(pre_count, reg, op, op_count, c),
             ParserState::GPrefix { pre_count, reg } => self.on_g_prefix(pre_count, reg, c),
+            ParserState::AfterTextObjectPrefix {
+                pre_count,
+                reg,
+                op,
+                around,
+            } => self.on_after_text_object_prefix(pre_count, reg, op, around, c),
         }
     }
 
@@ -292,10 +310,47 @@ impl ActionParser {
                 });
                 ParseResult::Pending
             }
+            'a' => {
+                self.state = Some(ParserState::AfterTextObjectPrefix {
+                    pre_count,
+                    reg,
+                    op,
+                    around: true,
+                });
+                ParseResult::Pending
+            }
+            'i' => {
+                self.state = Some(ParserState::AfterTextObjectPrefix {
+                    pre_count,
+                    reg,
+                    op,
+                    around: false,
+                });
+                ParseResult::Pending
+            }
             _ => match char_to_motion(c) {
                 Some(m) => self.done(pre_count, reg, op, m),
                 None => ParseResult::Invalid,
             },
+        }
+    }
+
+    fn on_after_text_object_prefix(
+        &mut self,
+        pre_count: usize,
+        reg: Option<char>,
+        op: Operator,
+        around: bool,
+        c: char,
+    ) -> ParseResult {
+        match c {
+            'w' => self.done(
+                pre_count,
+                reg,
+                op,
+                if around { Motion::AWord } else { Motion::IWord },
+            ),
+            _ => ParseResult::Invalid,
         }
     }
 
@@ -778,6 +833,84 @@ mod tests {
         assert!(matches!(r2, ParseResult::Complete(_)));
     }
 
+    // ── Text objects (aw / iw) ───────────────────────────────────────────────
+
+    #[test]
+    fn change_around_word_caw() {
+        assert_eq!(
+            feed_all("caw"),
+            complete(1, None, Operator::Change, Motion::AWord)
+        );
+    }
+
+    #[test]
+    fn delete_around_word_daw() {
+        assert_eq!(
+            feed_all("daw"),
+            complete(1, None, Operator::Delete, Motion::AWord)
+        );
+    }
+
+    #[test]
+    fn yank_around_word_yaw() {
+        assert_eq!(
+            feed_all("yaw"),
+            complete(1, None, Operator::Yank, Motion::AWord)
+        );
+    }
+
+    #[test]
+    fn change_inner_word_ciw() {
+        assert_eq!(
+            feed_all("ciw"),
+            complete(1, None, Operator::Change, Motion::IWord)
+        );
+    }
+
+    #[test]
+    fn delete_inner_word_diw() {
+        assert_eq!(
+            feed_all("diw"),
+            complete(1, None, Operator::Delete, Motion::IWord)
+        );
+    }
+
+    #[test]
+    fn register_a_caw() {
+        assert_eq!(
+            feed_all("\"acaw"),
+            complete(1, Some('a'), Operator::Change, Motion::AWord)
+        );
+    }
+
+    #[test]
+    fn register_a_ciw() {
+        assert_eq!(
+            feed_all("\"aciw"),
+            complete(1, Some('a'), Operator::Change, Motion::IWord)
+        );
+    }
+
+    #[test]
+    fn text_object_unknown_cax_is_invalid() {
+        assert_eq!(feed_all("cax"), ParseResult::Invalid);
+    }
+
+    #[test]
+    fn text_object_unknown_cix_is_invalid() {
+        assert_eq!(feed_all("cix"), ParseResult::Invalid);
+    }
+
+    #[test]
+    fn pending_after_ca() {
+        assert_eq!(feed_all("ca"), ParseResult::Pending);
+    }
+
+    #[test]
+    fn pending_after_ci() {
+        assert_eq!(feed_all("ci"), ParseResult::Pending);
+    }
+
     // ── Inclusivity flag ────────────────────────────────────────────────────
 
     #[test]
@@ -788,6 +921,16 @@ mod tests {
     #[test]
     fn line_end_is_inclusive() {
         assert!(Motion::LineEnd.is_inclusive());
+    }
+
+    #[test]
+    fn aword_is_inclusive() {
+        assert!(Motion::AWord.is_inclusive());
+    }
+
+    #[test]
+    fn iword_is_not_inclusive() {
+        assert!(!Motion::IWord.is_inclusive());
     }
 
     #[test]

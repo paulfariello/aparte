@@ -234,9 +234,15 @@ impl TextEditor {
                 None
             }
             Operator::Yank => Some(self.yank_motion(&action.motion, action.count)),
-            // Caller must enter Insert mode after Change.
-            Operator::Delete | Operator::Change => {
-                Some(self.delete_motion(&action.motion, action.count))
+            Operator::Delete => Some(self.delete_motion(&action.motion, action.count)),
+            Operator::Change => {
+                // Pre-compute lo before deletion: delete_motion caps the cursor at
+                // new_len-1 (Normal-mode rule), but Change enters Insert mode where
+                // the cursor must sit at lo even when lo == new_len (end of buffer).
+                let (lo, _) = self.grapheme_range(&action.motion, action.count);
+                let rv = self.delete_motion(&action.motion, action.count);
+                self.cursor.set(lo);
+                Some(rv)
             }
         }
     }
@@ -279,6 +285,51 @@ impl TextEditor {
             // `count` chars regardless of Normal-mode cursor caps.
             Motion::Left => (pos.saturating_sub(count), pos),
             Motion::Right => (pos, (pos + count).min(len)),
+            Motion::AWord => {
+                if self.buf.is_empty() {
+                    return (0, 0);
+                }
+                let spans = word_spans(&self.buf);
+                let idx = spans
+                    .partition_point(|&(_, e, _)| e <= pos)
+                    .min(spans.len() - 1);
+                let (lo, hi) = (spans[idx].0, spans[idx].1);
+                match spans[idx].2 {
+                    CharClass::Space => {
+                        // whitespace span: consume it + the following word/punct span
+                        if let Some(&(_, nhi, _)) = spans.get(idx + 1) {
+                            (lo, nhi)
+                        } else {
+                            (lo, hi)
+                        }
+                    }
+                    _ => {
+                        // word/punct span: prefer trailing space, else consume leading space
+                        if let Some(&(_, nhi, CharClass::Space)) = spans.get(idx + 1) {
+                            (lo, nhi)
+                        } else if idx > 0 {
+                            if let Some(&(nlo, _, CharClass::Space)) = spans.get(idx - 1) {
+                                (nlo, hi)
+                            } else {
+                                (lo, hi)
+                            }
+                        } else {
+                            (lo, hi)
+                        }
+                    }
+                }
+            }
+            Motion::IWord => {
+                if self.buf.is_empty() {
+                    return (0, 0);
+                }
+                let spans = word_spans(&self.buf);
+                let idx = spans
+                    .partition_point(|&(_, e, _)| e <= pos)
+                    .min(spans.len() - 1);
+                let (lo, hi) = (spans[idx].0, spans[idx].1);
+                (lo, hi)
+            }
             _ => {
                 let mut target = pos;
                 for _ in 0..count {
@@ -337,6 +388,51 @@ fn is_space(c: char) -> bool {
 
 fn first_char(g: &str) -> char {
     g.chars().next().unwrap_or(' ')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CharClass {
+    Word,
+    Space,
+    Other,
+}
+
+fn char_class(c: char) -> CharClass {
+    if is_word(c) {
+        CharClass::Word
+    } else if is_space(c) {
+        CharClass::Space
+    } else {
+        CharClass::Other
+    }
+}
+
+/// Split `buf` into contiguous runs of the same [`CharClass`] (vim word definition).
+/// Returns `(start, end, class)` in grapheme-index space (end exclusive).
+///
+/// Uses `split_word_bounds` from `unicode_segmentation` for the initial
+/// segmentation, then merges adjacent segments sharing the same vim char class.
+/// Merging is necessary because Unicode splits e.g. "hello123" at the
+/// letter/digit boundary while vim treats alphanumerics+underscore as one word.
+fn word_spans(buf: &str) -> Vec<(usize, usize, CharClass)> {
+    let mut spans: Vec<(usize, usize, CharClass)> = Vec::new();
+    let mut pos = 0usize;
+    for segment in buf.split_word_bounds() {
+        let n = segment.graphemes(true).count();
+        let cls = segment
+            .graphemes(true)
+            .next()
+            .and_then(|g| g.chars().next())
+            .map(char_class)
+            .unwrap_or(CharClass::Other);
+        if let Some(last) = spans.last_mut().filter(|s| s.2 == cls) {
+            last.1 += n;
+        } else {
+            spans.push((pos, pos + n, cls));
+        }
+        pos += n;
+    }
+    spans
 }
 
 // ── vim word motions (operate on grapheme positions) ─────────────────────────
@@ -935,5 +1031,242 @@ mod tests {
         });
         assert_eq!(rv.unwrap().text, "foo bar");
         assert_eq!(ed.buf, "foo bar");
+    }
+
+    // ── apply_action / Change ─────────────────────────────────────────────────
+
+    #[test]
+    fn apply_action_change_cursor_at_end_of_buffer() {
+        // caw on the last word must leave cursor at new_len (Insert-mode position),
+        // not at new_len-1 (the last char of the preceding word).
+        use crate::motion::{Action, Operator};
+        let mut ed = at("hello world", 6);
+        ed.apply_action(&Action {
+            count: 1,
+            register: None,
+            operator: Operator::Change,
+            motion: Motion::AWord,
+        });
+        assert_eq!(ed.buf, "hello");
+        assert_eq!(ed.cursor.get(), 5); // Insert mode: right after 'o'
+    }
+
+    #[test]
+    fn apply_action_change_returns_register_value() {
+        use crate::motion::{Action, Operator};
+        let mut ed = at("foo bar", 0);
+        let rv = ed.apply_action(&Action {
+            count: 1,
+            register: None,
+            operator: Operator::Change,
+            motion: Motion::WordForward,
+        });
+        assert!(rv.is_some());
+        assert_eq!(rv.unwrap().text, "foo ");
+        assert_eq!(ed.buf, "bar");
+    }
+
+    #[test]
+    fn apply_action_change_whole_line() {
+        use crate::motion::{Action, Operator};
+        let mut ed = at("foo bar", 3);
+        let rv = ed.apply_action(&Action {
+            count: 1,
+            register: None,
+            operator: Operator::Change,
+            motion: Motion::WholeLine,
+        });
+        assert_eq!(rv.unwrap().text, "foo bar");
+        assert_eq!(ed.buf, "");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn apply_action_change_stores_to_unnamed_register() {
+        use crate::motion::{Action, Operator};
+        use crate::registers::Registers;
+        let mut ed = at("foo bar", 0);
+        let mut registers = Registers::new();
+        let action = Action {
+            count: 1,
+            register: None,
+            operator: Operator::Change,
+            motion: Motion::WordForward,
+        };
+        let rv = ed.apply_action(&action).unwrap();
+        registers.yank(action.register, rv);
+        assert_eq!(registers.get(Registers::UNNAMED).unwrap().text, "foo ");
+    }
+
+    #[test]
+    fn apply_action_change_stores_to_named_register() {
+        use crate::motion::{Action, Operator};
+        use crate::registers::Registers;
+        let mut ed = at("hello world", 0);
+        let mut registers = Registers::new();
+        let action = Action {
+            count: 1,
+            register: Some('a'),
+            operator: Operator::Change,
+            motion: Motion::AWord,
+        };
+        let rv = ed.apply_action(&action).unwrap();
+        registers.yank(action.register, rv);
+        assert_eq!(registers.get('a').unwrap().text, "hello ");
+        assert_eq!(registers.get(Registers::UNNAMED).unwrap().text, "hello ");
+    }
+
+    // ── word_spans ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn word_spans_empty() {
+        assert!(word_spans("").is_empty());
+    }
+
+    #[test]
+    fn word_spans_single_word() {
+        assert_eq!(word_spans("hello"), vec![(0, 5, CharClass::Word)]);
+    }
+
+    #[test]
+    fn word_spans_word_space_word() {
+        assert_eq!(
+            word_spans("hello world"),
+            vec![
+                (0, 5, CharClass::Word),
+                (5, 6, CharClass::Space),
+                (6, 11, CharClass::Word),
+            ]
+        );
+    }
+
+    #[test]
+    fn word_spans_leading_space() {
+        assert_eq!(
+            word_spans(" hello"),
+            vec![(0, 1, CharClass::Space), (1, 6, CharClass::Word)]
+        );
+    }
+
+    #[test]
+    fn word_spans_trailing_space() {
+        assert_eq!(
+            word_spans("hello "),
+            vec![(0, 5, CharClass::Word), (5, 6, CharClass::Space)]
+        );
+    }
+
+    #[test]
+    fn word_spans_merges_alnum() {
+        // Unicode splits "hello123" at the letter/digit boundary;
+        // word_spans must merge both segments into one Word span.
+        assert_eq!(word_spans("hello123"), vec![(0, 8, CharClass::Word)]);
+    }
+
+    #[test]
+    fn word_spans_punctuation() {
+        assert_eq!(
+            word_spans("hello-world"),
+            vec![
+                (0, 5, CharClass::Word),
+                (5, 6, CharClass::Other),
+                (6, 11, CharClass::Word),
+            ]
+        );
+    }
+
+    #[test]
+    fn word_spans_multiple_spaces() {
+        assert_eq!(
+            word_spans("foo  bar"),
+            vec![
+                (0, 3, CharClass::Word),
+                (3, 5, CharClass::Space),
+                (5, 8, CharClass::Word),
+            ]
+        );
+    }
+
+    // ── delete_motion / AWord ─────────────────────────────────────────────────
+
+    #[test]
+    fn aword_first_word_with_trailing_space() {
+        let mut ed = at("hello world", 0);
+        let rv = ed.delete_motion(&Motion::AWord, 1);
+        assert_eq!(rv.text, "hello ");
+        assert_eq!(ed.buf, "world");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn aword_last_word_with_leading_space() {
+        let mut ed = at("hello world", 6);
+        let rv = ed.delete_motion(&Motion::AWord, 1);
+        assert_eq!(rv.text, " world");
+        assert_eq!(ed.buf, "hello");
+        assert_eq!(ed.cursor.get(), 4);
+    }
+
+    #[test]
+    fn aword_single_word_no_spaces() {
+        let mut ed = at("hello", 2);
+        let rv = ed.delete_motion(&Motion::AWord, 1);
+        assert_eq!(rv.text, "hello");
+        assert_eq!(ed.buf, "");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn aword_cursor_inside_word() {
+        let mut ed = at("hello world", 2);
+        let rv = ed.delete_motion(&Motion::AWord, 1);
+        assert_eq!(rv.text, "hello ");
+        assert_eq!(ed.buf, "world");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn aword_on_space() {
+        // cursor on the space between "hello" and "world"
+        let mut ed = at("hello world", 5);
+        let rv = ed.delete_motion(&Motion::AWord, 1);
+        assert_eq!(rv.text, " world");
+        assert_eq!(ed.buf, "hello");
+    }
+
+    // ── delete_motion / IWord ─────────────────────────────────────────────────
+
+    #[test]
+    fn iword_first_word() {
+        let mut ed = at("hello world", 0);
+        let rv = ed.delete_motion(&Motion::IWord, 1);
+        assert_eq!(rv.text, "hello");
+        assert_eq!(ed.buf, " world");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn iword_last_word() {
+        let mut ed = at("hello world", 6);
+        let rv = ed.delete_motion(&Motion::IWord, 1);
+        assert_eq!(rv.text, "world");
+        assert_eq!(ed.buf, "hello ");
+    }
+
+    #[test]
+    fn iword_cursor_inside() {
+        let mut ed = at("hello world", 2);
+        let rv = ed.delete_motion(&Motion::IWord, 1);
+        assert_eq!(rv.text, "hello");
+        assert_eq!(ed.buf, " world");
+        assert_eq!(ed.cursor.get(), 0);
+    }
+
+    #[test]
+    fn iword_on_space() {
+        let mut ed = at("hello world", 5);
+        let rv = ed.delete_motion(&Motion::IWord, 1);
+        assert_eq!(rv.text, " ");
+        assert_eq!(ed.buf, "helloworld");
     }
 }

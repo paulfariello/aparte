@@ -2055,3 +2055,175 @@ fn k_then_g_then_j_moves_cursor_to_input_bar() {
         describe(screen)
     );
 }
+
+// ── c (change) operator — message frame ──────────────────────────────────────
+
+/// Regression: after `caw` on a message-frame cursor, typed text must go to
+/// the message editor, not to the input bar.
+///
+/// Before the fix, `dispatch_action` switched the mode to Insert without
+/// calling `layout.set_focus(FRAME_LAYOUT_INDEX)`, so the event router still
+/// sent keystrokes to the input bar (the previous `focused_child`).
+#[test]
+fn message_editor_caw_types_into_frame_not_input_bar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    setup_message_editor_normal_mode(&h);
+
+    // On "hello world", go to start then 'w' to land on "world".
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"w");
+    thread::sleep(Duration::from_millis(150));
+
+    // caw deletes "world" (last word, eats leading space) and enters Insert.
+    h.send_bytes(b"caw");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    assert!(found, "caw on message editor must switch to INSERT mode");
+
+    // Type a sentinel string; it must land in the message frame.
+    h.send_bytes(b"xyz");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let (cursor_row, _) = screen.cursor_position();
+    h.shutdown();
+
+    // The cursor must be on a message row, not the last row (input bar).
+    assert_ne!(
+        cursor_row,
+        ROWS - 1,
+        "after caw on message editor, typed text must go to the frame, not the input bar\n{}",
+        describe(screen)
+    );
+    assert!(
+        row_text(screen, cursor_row).contains("xyz"),
+        "typed 'xyz' must appear in the message editor row\n{}",
+        describe(screen)
+    );
+    assert!(
+        !row_text(screen, ROWS - 1).contains("xyz"),
+        "typed 'xyz' must NOT appear in the input bar\n{}",
+        describe(screen)
+    );
+}
+
+// ── c (change) operator — input bar ──────────────────────────────────────────
+
+#[test]
+fn normal_mode_cw_enters_insert_and_deletes_to_word_end() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"cw");
+
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(found, "cw must switch to INSERT mode\n{}", describe(screen));
+    assert!(
+        row_text(screen, ROWS - 1).contains("world"),
+        "cw must leave 'world' in the input bar\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn normal_mode_cc_enters_insert_and_clears_line() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"cc");
+
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(found, "cc must switch to INSERT mode\n{}", describe(screen));
+    assert!(
+        !row_text(screen, ROWS - 1).contains("hello"),
+        "cc must clear the input bar\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn normal_mode_caw_enters_insert_and_changes_around_word() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"w");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"caw");
+
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "caw must switch to INSERT mode\n{}",
+        describe(screen)
+    );
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("hello"),
+        "caw from 'world' must leave 'hello' in the input bar\n{}",
+        describe(screen)
+    );
+    assert!(
+        !input.contains("world"),
+        "caw must delete 'world' from the input bar\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn normal_mode_ciw_enters_insert_and_changes_inner_word() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"ciw");
+
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "ciw must switch to INSERT mode\n{}",
+        describe(screen)
+    );
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        !input.contains("hello"),
+        "ciw must delete 'hello' from the input bar\n{}",
+        describe(screen)
+    );
+    assert!(
+        input.contains("world"),
+        "ciw must preserve ' world' (space+word) in the input bar\n{}",
+        describe(screen)
+    );
+}

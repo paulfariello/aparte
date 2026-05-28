@@ -163,8 +163,7 @@ impl FocusRouted for UIEvent {
 }
 
 /// Route a key event to a `MessageView` that is currently being edited in
-/// place (XEP-0308 correction). The set of accepted keys mirrors the input
-/// bar's key bindings.
+/// place (XEP-0308 correction).
 fn dispatch_edit_key(msg: &mut MessageView, key: &KeyEvent) {
     let Some(editor) = msg.edit.as_mut() else {
         return;
@@ -1647,6 +1646,9 @@ fn dispatch_action(
             for child in layout.iter_children_mut() {
                 child.event(&mut UIEvent::ModeChange(Mode::Insert));
             }
+            if frame_has_cursor {
+                layout.set_focus(FRAME_LAYOUT_INDEX);
+            }
         }
     }
 }
@@ -1725,7 +1727,7 @@ impl ModTrait for UIMod {
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char('i'),
                         ..
-                    })) if mode == Mode::Normal => {
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
                         let focused_is_insertable = layout
                             .focused_child()
                             .map(|c| c.insertable())
