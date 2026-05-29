@@ -1062,15 +1062,23 @@ impl UIMod {
                                         None => {}
                                     }
                                 }
-                                UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
-                                    current_mode = *mode;
+                                UIEvent::ModeChange(Mode::Command) => {
+                                    current_mode = Mode::Command;
+                                    // Keep selection alive so the cursor returns to the
+                                    // message after Esc, at the start of message content.
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Insert) => {
+                                    current_mode = Mode::Insert;
                                     if is_current_window {
                                         follow_bottom = true;
                                         let editing =
                                             view.selected().is_some_and(MessageView::is_editing);
                                         if !editing {
                                             view.clear_selection();
-                                        } else if *mode == Mode::Insert {
+                                        } else {
                                             view.update_selected(|msg| {
                                                 msg.set_normal_mode(false);
                                             });
@@ -1379,15 +1387,21 @@ impl UIMod {
                                         None => {}
                                     }
                                 }
-                                UIEvent::ModeChange(mode @ (Mode::Insert | Mode::Command)) => {
-                                    current_mode = *mode;
+                                UIEvent::ModeChange(Mode::Command) => {
+                                    current_mode = Mode::Command;
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Insert) => {
+                                    current_mode = Mode::Insert;
                                     if is_current_window {
                                         follow_bottom = true;
                                         let editing =
                                             view.selected().is_some_and(MessageView::is_editing);
                                         if !editing {
                                             view.clear_selection();
-                                        } else if *mode == Mode::Insert {
+                                        } else {
                                             view.update_selected(|msg| {
                                                 msg.set_normal_mode(false);
                                             });

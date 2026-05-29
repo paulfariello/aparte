@@ -1332,8 +1332,15 @@ impl<E, C> View<E, C> for MessageView {
         if let Some(color) = self.selected.get() {
             let sep_rows = u16::from(self.show_date_sep.get());
             frame.set_background_from_row(sep_rows, color);
+            let col: u16 = match &self.message {
+                Message::Xmpp(message) => {
+                    let w = Self::format_header(message).display_width();
+                    std::cmp::min(w, frame.dimensions.width.saturating_sub(1))
+                }
+                Message::Log(_) => 0,
+            };
             frame.set_cursor_with_priority(
-                CursorPos::from((frame.dimensions.left, frame.dimensions.top + sep_rows)),
+                CursorPos::from((frame.dimensions.left + col, frame.dimensions.top + sep_rows)),
                 2,
             );
         }

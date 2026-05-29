@@ -1195,3 +1195,75 @@ fn insert_mode_in_active_window_preserves_inactive_selection(xmpp_with_contact: 
         describe(screen),
     );
 }
+
+/// After selecting a message with j/k in Normal mode, pressing ':' and then Esc
+/// must return the cursor to the selected message at the start of message content
+/// (after the header), never at column 0 (start of line).
+#[rstest]
+fn selected_message_cursor_returns_to_message_start_after_command_escape(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    for i in 0..5 {
+        xmpp.inject(chat_message(
+            "contact@localhost",
+            "user@localhost/aparte_test",
+            &format!("msg{i}"),
+            &format!("Message {i}"),
+        ));
+    }
+
+    xmpp.switch_window("contact@localhost");
+    let found = xmpp.wait_for("Message 4", Duration::from_secs(5));
+    assert!(found, "Chat messages should be visible");
+
+    // Ensure Normal mode then select a message.
+    xmpp.send_bytes(b"\x1b");
+    xmpp.wait_for("NORMAL", Duration::from_secs(2));
+    xmpp.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+    let selected_rows = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert!(
+        !selected_rows.is_empty(),
+        "A message should be selected after 'k'\n{}",
+        describe(screen)
+    );
+    let message_row = *selected_rows.last().unwrap();
+    let (_, col_before) = screen.cursor_position();
+
+    assert_ne!(
+        col_before, 0,
+        "Cursor must be at start of message content (after header) even before :+Esc, got col 0\n{}",
+        describe(screen)
+    );
+
+    // Enter then immediately exit Command mode.
+    xmpp.send_bytes(b":");
+    xmpp.wait_for("COMMAND", Duration::from_secs(2));
+    xmpp.send_bytes(b"\x1b");
+    xmpp.wait_for("NORMAL", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+    let (row_after, col_after) = screen.cursor_position();
+
+    assert_eq!(
+        row_after,
+        message_row,
+        "Cursor must return to the selected message row after Esc from command mode\n{}",
+        describe(screen)
+    );
+    assert_ne!(
+        col_after, 0,
+        "Cursor must be at start of message content (col > 0) after :+Esc, not at start of line\n{}",
+        describe(screen)
+    );
+    assert_eq!(
+        col_after,
+        col_before,
+        "Cursor column must be preserved precisely through the :+Esc roundtrip\n{}",
+        describe(screen)
+    );
+}
