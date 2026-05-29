@@ -23,6 +23,7 @@ pub struct Input<E> {
     pub event_handler: Option<EventHandler<Self, E>>,
     pub show_cursor: bool,
     pub cursor_style: CursorStyle,
+    pub cursor_priority: u8,
     dimensions: Option<Dimensions>,
 }
 
@@ -44,12 +45,17 @@ impl<E> Input<E> {
             event_handler: None,
             show_cursor: true,
             cursor_style: CursorStyle::SteadyBar,
+            cursor_priority: 1,
             dimensions: None,
         }
     }
 
     pub fn set_show_cursor(&mut self, visible: bool) {
         self.show_cursor = visible;
+    }
+
+    pub fn set_cursor_priority(&mut self, priority: u8) {
+        self.cursor_priority = priority;
     }
 
     pub fn set_cursor_style(&mut self, style: CursorStyle) {
@@ -208,7 +214,7 @@ impl<E, C> View<E, C> for Input<E> {
                     #[allow(clippy::cast_possible_truncation)]
                     left: frame.dimensions.left + prompt.len() as u16,
                 },
-                1,
+                self.cursor_priority,
             );
         } else {
             // Max displayable size is view width less 1 for cursor
@@ -249,7 +255,7 @@ impl<E, C> View<E, C> for Input<E> {
                     top: frame.dimensions.top,
                     left: frame.dimensions.left + cursor_col,
                 },
-                1,
+                self.cursor_priority,
             );
         }
         frame.set_cursor_style(self.cursor_style);

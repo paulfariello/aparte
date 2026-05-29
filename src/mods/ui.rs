@@ -2132,10 +2132,19 @@ impl ModTrait for UIMod {
             UIEvent::ModeChange(Mode::Normal) => {
                 input.set_show_cursor(true);
                 input.set_cursor_style(CursorStyle::SteadyBlock);
+                input.set_cursor_priority(1);
             }
-            UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
+            UIEvent::ModeChange(Mode::Command) => {
                 input.set_show_cursor(true);
                 input.set_cursor_style(CursorStyle::SteadyBar);
+                // Priority 3 beats the message-selection cursor (priority 2) so
+                // the terminal cursor moves to the command bar.
+                input.set_cursor_priority(3);
+            }
+            UIEvent::ModeChange(Mode::Insert) => {
+                input.set_show_cursor(true);
+                input.set_cursor_style(CursorStyle::SteadyBar);
+                input.set_cursor_priority(1);
             }
             _ => {}
         });

@@ -2194,6 +2194,78 @@ fn normal_mode_caw_enters_insert_and_changes_around_word() {
     );
 }
 
+/// When `:` is pressed in Normal mode with an active message selection cursor,
+/// the terminal cursor must jump to the command bar (last row).  When the
+/// command is cancelled with ESC, the cursor must return to the message row.
+///
+/// Uses inject_msg + one 'k' to get a selected XMPP message with an edit
+/// cursor (priority 3).  In Command mode the input cursor also uses priority 3
+/// and renders last, so it wins → cursor at bottom.  After ESC the edit is
+/// cancelled but the selection (priority 2) beats the input (priority 1) →
+/// cursor returns to the message row.
+#[test]
+fn command_mode_cursor_moves_to_input_bar_and_back() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Inject a message, then navigate to it with one 'k'.
+    // One 'k' from no selection → selects bottom_visible_child_index (= 0,
+    // the only message).  start_cursor() opens an edit cursor at priority 3.
+    h.send_command("/inject_msg hello world");
+    let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
+    assert!(visible, "injected message must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    let before = h.snapshot();
+    let (row_before, _) = before.screen().cursor_position();
+
+    // Edit cursor (priority 3) beats input cursor (priority 1) → message row.
+    assert_ne!(
+        row_before,
+        ROWS - 1,
+        "cursor must be on the message row after 'k'\n{}",
+        describe(before.screen())
+    );
+
+    // Press ':' to enter Command mode.
+    h.send_bytes(b":");
+    wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+
+    let during = h.snapshot();
+    let (row_during, _) = during.screen().cursor_position();
+
+    // In Command mode input priority becomes 3 (same as edit cursor) and
+    // renders last → wins → cursor moves to the bottom input bar.
+    assert_eq!(
+        row_during,
+        ROWS - 1,
+        "cursor must be on the input bar while in Command mode\n{}",
+        describe(during.screen())
+    );
+
+    // Cancel with Escape → back to Normal mode.
+    h.send_bytes(b"\x1b");
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(150));
+
+    let after = h.snapshot();
+    let (row_after, _) = after.screen().cursor_position();
+
+    h.shutdown();
+
+    // After ESC: edit cancelled (was a normal_mode cursor), selection still
+    // active.  Selection cursor (priority 2) beats input (priority 1) →
+    // cursor returns to the message row.
+    assert_ne!(
+        row_after,
+        ROWS - 1,
+        "cursor must return to the message row after ESC from Command mode\n{}",
+        describe(after.screen())
+    );
+}
+
 #[test]
 fn normal_mode_ciw_enters_insert_and_changes_inner_word() {
     let h = Harness::spawn("", &[]);
