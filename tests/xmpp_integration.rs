@@ -1267,3 +1267,71 @@ fn selected_message_cursor_returns_to_message_start_after_command_escape(xmpp: X
         describe(screen)
     );
 }
+
+/// Mid-message cursor position must survive a :+Esc roundtrip unchanged.
+/// After pressing 'l' to advance the cursor inside the message body,
+/// ':' then Esc must return to that exact column — not reset it to the
+/// start of the message.
+#[rstest]
+fn mid_message_cursor_column_preserved_through_command_escape(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    for i in 0..5 {
+        xmpp.inject(chat_message(
+            "contact@localhost",
+            "user@localhost/aparte_test",
+            &format!("mid{i}"),
+            &format!("Message {i}"),
+        ));
+    }
+
+    xmpp.switch_window("contact@localhost");
+    let found = xmpp.wait_for("Message 4", Duration::from_secs(5));
+    assert!(found, "Chat messages should be visible");
+
+    // Select a message and move cursor to start of message body.
+    xmpp.send_bytes(b"\x1b");
+    xmpp.wait_for("NORMAL", Duration::from_secs(2));
+    xmpp.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    // Advance cursor inside the message body with 'l' (move right).
+    xmpp.send_bytes(b"l");
+    thread::sleep(Duration::from_millis(150));
+    xmpp.send_bytes(b"l");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+    let (message_row, col_mid) = screen.cursor_position();
+
+    assert_ne!(
+        message_row,
+        ROWS - 1,
+        "Cursor must be on a message row before entering command mode\n{}",
+        describe(screen)
+    );
+
+    // Enter then immediately exit Command mode.
+    xmpp.send_bytes(b":");
+    xmpp.wait_for("COMMAND", Duration::from_secs(2));
+    xmpp.send_bytes(b"\x1b");
+    xmpp.wait_for("NORMAL", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+    let (row_after, col_after) = screen.cursor_position();
+
+    assert_eq!(
+        row_after,
+        message_row,
+        "Cursor must return to the same message row after :+Esc\n{}",
+        describe(screen)
+    );
+    assert_eq!(
+        col_after,
+        col_mid,
+        "Cursor column inside message must be preserved through :+Esc (was {col_mid}, got {col_after})\n{}",
+        describe(screen)
+    );
+}

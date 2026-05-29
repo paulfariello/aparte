@@ -1047,19 +1047,20 @@ impl UIMod {
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Normal) => {
+                                    let was_command = current_mode == Mode::Command;
                                     current_mode = Mode::Normal;
                                     let editor_normal_mode = view
                                         .selected()
                                         .and_then(|msg| msg.edit.as_ref())
                                         .map(|e| e.normal_mode);
                                     match editor_normal_mode {
-                                        Some(true) => {
+                                        Some(true) if !was_command => {
                                             view.update_selected(|msg| msg.cancel_edit());
                                         }
                                         Some(false) => {
                                             view.update_selected(|msg| msg.set_normal_mode(true));
                                         }
-                                        None => {}
+                                        _ => {}
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Command) => {
@@ -1372,19 +1373,20 @@ impl UIMod {
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Normal) => {
+                                    let was_command = current_mode == Mode::Command;
                                     current_mode = Mode::Normal;
                                     let editor_normal_mode = view
                                         .selected()
                                         .and_then(|msg| msg.edit.as_ref())
                                         .map(|e| e.normal_mode);
                                     match editor_normal_mode {
-                                        Some(true) => {
+                                        Some(true) if !was_command => {
                                             view.update_selected(|msg| msg.cancel_edit());
                                         }
                                         Some(false) => {
                                             view.update_selected(|msg| msg.set_normal_mode(true));
                                         }
-                                        None => {}
+                                        _ => {}
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Command) => {
