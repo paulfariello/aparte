@@ -1570,11 +1570,24 @@ impl UIMod {
     }
 }
 
-fn dispatch_nav_command(cmd: NormalCommand, layout: &mut LinearLayout<UIEvent, Theme>) {
+fn dispatch_nav_command(
+    cmd: NormalCommand,
+    layout: &mut LinearLayout<UIEvent, Theme>,
+    at_nav_bottom: &mut bool,
+) {
     const FRAME_LAYOUT_INDEX: usize = 1;
     const INPUT_INDEX: usize = 3;
     let is_select_next = matches!(cmd, NormalCommand::SelectNext(_));
     let is_select_prev = matches!(cmd, NormalCommand::SelectPrev(_));
+
+    // 'j' while already at the navigation bottom (input bar, after bubbling
+    // past the last message) is a no-op — nowhere further to go.
+    if is_select_next && *at_nav_bottom {
+        return;
+    }
+    // Any nav command other than a repeated no-op clears the flag.
+    *at_nav_bottom = false;
+
     let mut event = UIEvent::NormalCommand {
         cmd,
         bubbled: false,
@@ -1594,6 +1607,7 @@ fn dispatch_nav_command(cmd: NormalCommand, layout: &mut LinearLayout<UIEvent, T
                 .map(|(i, _)| i)
             {
                 layout.set_focus(next);
+                *at_nav_bottom = true;
             }
         } else if is_select_prev {
             layout.set_focus(INPUT_INDEX);
@@ -1609,6 +1623,7 @@ fn dispatch_action(
     registers: &mut Registers,
     mode: &mut Mode,
     aparte_proxy: &mut AparteAsync,
+    at_nav_bottom: &mut bool,
 ) {
     const FRAME_LAYOUT_INDEX: usize = 1;
     if action.motion.is_navigation() {
@@ -1621,7 +1636,7 @@ fn dispatch_action(
             Motion::SearchPrev => NormalCommand::SearchPrev,
             _ => return,
         };
-        dispatch_nav_command(cmd, layout);
+        dispatch_nav_command(cmd, layout, at_nav_bottom);
     } else if matches!(action.motion, Motion::PasteAfter | Motion::PasteBefore) {
         let reg_name = action.register.unwrap_or(Registers::UNNAMED);
         if let Some(rv) = registers.get(reg_name) {
@@ -1715,6 +1730,7 @@ impl ModTrait for UIMod {
             let mut current_window = String::new();
             let mut visited_windows: HashSet<String> = HashSet::new();
             let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
+            let mut at_nav_bottom = false;
             layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1898,6 +1914,7 @@ impl ModTrait for UIMod {
                                     &mut registers,
                                     &mut mode,
                                     &mut aparte_proxy,
+                                    &mut at_nav_bottom,
                                 );
                             }
                             ParseResult::Invalid => {
@@ -1910,13 +1927,21 @@ impl ModTrait for UIMod {
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Up, ..
                     })) if mode == Mode::Normal => {
-                        dispatch_nav_command(NormalCommand::SelectPrev(1), layout);
+                        dispatch_nav_command(
+                            NormalCommand::SelectPrev(1),
+                            layout,
+                            &mut at_nav_bottom,
+                        );
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Down,
                         ..
                     })) if mode == Mode::Normal => {
-                        dispatch_nav_command(NormalCommand::SelectNext(1), layout);
+                        dispatch_nav_command(
+                            NormalCommand::SelectNext(1),
+                            layout,
+                            &mut at_nav_bottom,
+                        );
                     }
                     UIEvent::Core(Event::CommandTimeout(gen)) => {
                         if *gen == timeout_generation && action_parser.is_pending() {

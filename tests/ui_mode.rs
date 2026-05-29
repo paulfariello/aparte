@@ -523,6 +523,50 @@ fn normal_mode_page_up_scrolls_message_window() {
 }
 
 #[test]
+fn j_at_input_bar_does_not_select_message() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+
+    enter_normal(&h);
+
+    // 'j' twice: first selects the bottom message; second hits the boundary
+    // and bubbles focus back to the input bar (clears the selection).
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    // Confirm the selection was cleared (focus is on input bar).
+    let parser = h.snapshot();
+    let selected_before = rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR);
+    assert!(
+        selected_before.is_empty(),
+        "Selection should be cleared after 'j' bubbles to input bar\n{}",
+        describe(parser.screen())
+    );
+
+    // Third 'j' while already at the input bar (last component) must be a no-op:
+    // it must NOT cause the frame to steal focus and re-select the bottom message.
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let selected_after = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+
+    h.shutdown();
+
+    assert!(
+        selected_after.is_empty(),
+        "'j' at input bar must not select any message; {} rows highlighted\n{}",
+        selected_after.len(),
+        describe(screen)
+    );
+}
+
+#[test]
 fn insert_mode_jk_do_not_move_message_selection() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
