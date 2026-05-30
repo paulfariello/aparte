@@ -137,10 +137,6 @@ enum UIEvent {
     /// Apply a Normal-mode text action to the input bar.  The operator result
     /// (yanked or deleted text) is written into the slot when present.
     ApplyTextAction(Action, Rc<RefCell<Option<RegisterValue>>>),
-    /// Query whether any message in the focused conversation has an active
-    /// cursor (i.e. `is_editing()` is true).  The handler sets the flag to
-    /// `true` when it finds such a message.
-    HasMessageCursor(Rc<RefCell<bool>>),
     /// Atomically set the input bar content and cursor (grapheme index).
     SetInputState(String, usize),
     /// Insert `text` at the current cursor position in the input bar.
@@ -1113,11 +1109,6 @@ impl UIMod {
                                         }
                                     }
                                 }
-                                UIEvent::HasMessageCursor(flag) => {
-                                    if view.selected().is_some_and(MessageView::is_editing) {
-                                        *flag.borrow_mut() = true;
-                                    }
-                                }
                                 // Route INSERT-mode key events to the selected
                                 // message when it's being edited in place.
                                 UIEvent::Core(Event::Key(key))
@@ -1434,11 +1425,6 @@ impl UIMod {
                                         }
                                     }
                                 }
-                                UIEvent::HasMessageCursor(flag) => {
-                                    if view.selected().is_some_and(MessageView::is_editing) {
-                                        *flag.borrow_mut() = true;
-                                    }
-                                }
                                 UIEvent::Core(Event::Key(key))
                                     if current_mode == Mode::Insert
                                         && view.selected().is_some_and(MessageView::is_editing) =>
@@ -1662,20 +1648,9 @@ fn dispatch_action(
         }
     } else {
         let slot = Rc::new(RefCell::new(None::<RegisterValue>));
-        // Route to the frame when it has an active message cursor, regardless
-        // of focused_child_index (which may still point at the input bar after
-        // returning from Command mode before any j/k navigation).
-        let cursor_flag = Rc::new(RefCell::new(false));
-        if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-            child
-                .child
-                .view
-                .event(&mut UIEvent::HasMessageCursor(Rc::clone(&cursor_flag)));
-        }
-        let frame_has_cursor =
-            *cursor_flag.borrow() || layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+        let frame_has_cursor = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
         if frame_has_cursor {
-            // Active message cursor or explicit frame focus: route to frame only.
+            // Frame is focused: route to frame only.
             if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                 child.child.view.event(&mut UIEvent::ApplyTextAction(
                     action.clone(),
@@ -1731,6 +1706,7 @@ impl ModTrait for UIMod {
             let mut visited_windows: HashSet<String> = HashSet::new();
             let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
             let mut at_nav_bottom = false;
+            let mut message_cursor_active = false;
             layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -1802,6 +1778,7 @@ impl ModTrait for UIMod {
                                 if let Some(focused) = layout.focused_child_mut() {
                                     focused.event(&mut UIEvent::StartEdit);
                                 }
+                                message_cursor_active = true;
                             }
                             action_parser.reset();
                             mode = Mode::Insert;
@@ -1865,6 +1842,9 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
+                        if message_cursor_active {
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
+                        }
                         let saved = std::mem::take(&mut saved_input);
                         if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                             frame.child.view.event(&mut UIEvent::NormalCommand {
@@ -1991,6 +1971,9 @@ impl ModTrait for UIMod {
 
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        if message_cursor_active {
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
+                        }
                         let saved = std::mem::take(&mut saved_input);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
@@ -2030,6 +2013,7 @@ impl ModTrait for UIMod {
                     UIEvent::ModeChange(new_mode) => match *new_mode {
                         Mode::Normal => {
                             mode = Mode::Normal;
+                            message_cursor_active = false;
                             aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                             action_parser.reset();
                             for child in layout.iter_children_mut() {
@@ -2112,9 +2096,8 @@ impl ModTrait for UIMod {
                 // layout think navigation failed when it actually succeeded.
                 | UIEvent::NormalCommand { .. }
                 | UIEvent::StartEdit
-                // Text actions and cursor queries go to the focused window only.
-                | UIEvent::ApplyTextAction(..)
-                | UIEvent::HasMessageCursor(..) => frame.route_to_focused(event),
+                // Text actions go to the focused window only.
+                | UIEvent::ApplyTextAction(..) => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {
