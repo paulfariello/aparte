@@ -182,6 +182,7 @@ pub enum Event {
     Omemo(mods::omemo::OmemoEvent),
     UIRender(bool),
     UIMode(UIMode),
+    InputChanged(String, Cursor, bool),
     ShowPopup {
         title: Option<String>,
         lines: Vec<String>,
