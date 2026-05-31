@@ -15,3 +15,11 @@ repos:
     -   id: clippy
         name: clippy --features image
         args: ['--features', 'image', '--', '-W', 'clippy::pedantic']
+    -   id: cargo-check
+        name: cargo test --bins
+        entry: cargo test
+        args: ['--bins']
+    -   id: cargo-check
+        name: cargo test --tests
+        entry: cargo test
+        args: ['--tests']
