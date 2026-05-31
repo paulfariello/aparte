@@ -2350,3 +2350,68 @@ fn normal_mode_ciw_enters_insert_and_changes_inner_word() {
         describe(screen)
     );
 }
+
+#[test]
+fn normal_mode_dw_removes_word_from_input() {
+    // "hello world": after Esc, cursor is at col 10 ('d').
+    // 0 → cursor to 'h' (col 0).
+    // dw → deletes "hello " (word + trailing space), leaving "world".
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"dw");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        !input.contains("hello"),
+        "dw must remove 'hello' from the input bar\n{}",
+        describe(screen)
+    );
+    assert!(
+        input.contains("world"),
+        "dw must leave 'world' in the input bar\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn normal_mode_xp_transposes_chars() {
+    // "abc" in input, Normal mode, cursor at 'a' (col 0) after pressing 0.
+    // x → deletes 'a' (register = 'a'), buffer = "bc", cursor on 'b' (col 0).
+    // p → PasteAfter: MoveCursor(Right) advances to 'c' (col 1), then inserts
+    //     'a' at col 1 → "bac".
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_insert(&h);
+    h.send_bytes(b"abc");
+    wait_for_screen(&h, "abc", Duration::from_secs(2));
+    enter_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"x");
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"p");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("bac"),
+        "xp must transpose 'abc' to 'bac'\n{}",
+        describe(screen)
+    );
+}

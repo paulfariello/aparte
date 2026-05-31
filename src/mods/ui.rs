@@ -132,9 +132,13 @@ enum UIEvent {
     },
     CommandBufferUpdate(String),
     SetInput(String),
-    /// Apply a Normal-mode text action to the input bar.  The operator result
-    /// (yanked or deleted text) is written into the slot when present.
-    ApplyTextAction(Action, Rc<RefCell<Option<RegisterValue>>>),
+    /// Move the cursor in the focused widget by `motion × count`.
+    /// Fire-and-forget: no return value.
+    MoveCursor(Motion, usize),
+    /// Apply a Normal-mode text action to the focused widget.  The operator
+    /// result (yanked or deleted text) is written back into the `Option` field
+    /// by the handler via in-event mutation.
+    ApplyTextAction(Action, Option<RegisterValue>),
     /// Atomically set the input bar content and cursor (grapheme index).
     SetInputState(String, usize),
     /// Insert `text` at the current cursor position in the input bar.
@@ -1110,12 +1114,24 @@ impl UIMod {
                                         }
                                     });
                                 }
+                                UIEvent::MoveCursor(motion, count) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        view.update_selected(|msg| {
+                                            msg.apply_action(&Action {
+                                                count: *count,
+                                                register: None,
+                                                operator: Operator::Move,
+                                                motion: motion.clone(),
+                                            });
+                                        });
+                                    }
+                                }
                                 UIEvent::ApplyTextAction(action, slot) => {
                                     if view.selected().is_some_and(MessageView::is_editing) {
                                         let rv =
                                             view.update_selected(|msg| msg.apply_action(action));
                                         if let Some(Some(rv)) = rv {
-                                            *slot.borrow_mut() = Some(rv);
+                                            *slot = Some(rv);
                                         }
                                     }
                                 }
@@ -1441,12 +1457,24 @@ impl UIMod {
                                         }
                                     });
                                 }
+                                UIEvent::MoveCursor(motion, count) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        view.update_selected(|msg| {
+                                            msg.apply_action(&Action {
+                                                count: *count,
+                                                register: None,
+                                                operator: Operator::Move,
+                                                motion: motion.clone(),
+                                            });
+                                        });
+                                    }
+                                }
                                 UIEvent::ApplyTextAction(action, slot) => {
                                     if view.selected().is_some_and(MessageView::is_editing) {
                                         let rv =
                                             view.update_selected(|msg| msg.apply_action(action));
                                         if let Some(Some(rv)) = rv {
-                                            *slot.borrow_mut() = Some(rv);
+                                            *slot = Some(rv);
                                         }
                                     }
                                 }
@@ -1680,18 +1708,9 @@ fn dispatch_action(
         if let Some(rv) = registers.get(reg_name) {
             let text = rv.text.clone();
             if matches!(action.motion, Motion::PasteAfter) {
-                let move_action = Action {
-                    count: 1,
-                    register: None,
-                    operator: Operator::Move,
-                    motion: Motion::Right,
-                };
-                let slot = Rc::new(RefCell::new(None::<RegisterValue>));
+                let mut mv_evt = UIEvent::MoveCursor(Motion::Right, 1);
                 for child in layout.iter_children_mut() {
-                    child.event(&mut UIEvent::ApplyTextAction(
-                        move_action.clone(),
-                        Rc::clone(&slot),
-                    ));
+                    child.event(&mut mv_evt);
                 }
             }
             let mut paste_event = UIEvent::Paste(text.clone());
@@ -1704,28 +1723,22 @@ fn dispatch_action(
             }
         }
     } else {
-        let slot = Rc::new(RefCell::new(None::<RegisterValue>));
         let frame_has_cursor = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+        let mut evt = UIEvent::ApplyTextAction(action.clone(), None);
         if frame_has_cursor {
             // Frame is focused: route to frame only.
             if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-                child.child.view.event(&mut UIEvent::ApplyTextAction(
-                    action.clone(),
-                    Rc::clone(&slot),
-                ));
+                child.child.view.event(&mut evt);
             }
         } else {
             // Focus on the input bar: send to non-frame children only.
             for (i, child) in layout.children.iter_mut().enumerate() {
                 if i != FRAME_LAYOUT_INDEX {
-                    child.child.view.event(&mut UIEvent::ApplyTextAction(
-                        action.clone(),
-                        Rc::clone(&slot),
-                    ));
+                    child.child.view.event(&mut evt);
                 }
             }
         }
-        if let Some(rv) = slot.borrow_mut().take() {
+        if let UIEvent::ApplyTextAction(_, Some(rv)) = evt {
             registers.yank(action.register, rv);
         }
         if matches!(action.operator, Operator::Change) {
@@ -2222,7 +2235,8 @@ impl ModTrait for UIMod {
                 // layout think navigation failed when it actually succeeded.
                 | UIEvent::NormalCommand { .. }
                 | UIEvent::StartEdit
-                // Text actions go to the focused window only.
+                // Text actions and cursor moves go to the focused window only.
+                | UIEvent::MoveCursor(..)
                 | UIEvent::ApplyTextAction(..) => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
@@ -2278,9 +2292,17 @@ impl ModTrait for UIMod {
                     input.password,
                 );
             }
+            UIEvent::MoveCursor(motion, count) => {
+                input.editor.apply_action(&Action {
+                    count: *count,
+                    register: None,
+                    operator: Operator::Move,
+                    motion: motion.clone(),
+                });
+            }
             UIEvent::ApplyTextAction(action, slot) => {
                 if let Some(rv) = input.editor.apply_action(action) {
-                    *slot.borrow_mut() = Some(rv);
+                    *slot = Some(rv);
                 }
             }
             UIEvent::SetInputState(content, cursor_pos) => {
