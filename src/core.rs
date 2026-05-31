@@ -204,6 +204,10 @@ pub enum Event {
         jid: BareJid,
         last_stanza_id: Option<String>,
     },
+    SendCorrection {
+        original_id: String,
+        new_body: String,
+    },
 }
 
 impl FocusRouted for Event {

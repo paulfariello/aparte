@@ -110,17 +110,15 @@ impl<E, C> View<E, C> for PopupLine {
 #[allow(clippy::large_enum_variant)]
 enum UIEvent {
     Core(Event),
-    Validate(Rc<RefCell<Option<(String, bool)>>>),
     /// Explicit "start editing the selected message" request. Dispatched by
     /// the top-level `i` key handler only when focus is on the message frame,
     /// so we don't accidentally start an in-place edit when the user just
     /// wants to type in the input bar.
     StartEdit,
-    /// XEP-0308 in-place edit commit. If the focused conversation has an
-    /// editing MessageView, the slot is filled with `(original_message_id,
-    /// new_body)` and the edit state is cleared. Used by the Enter handler
-    /// to detect and send a correction instead of a fresh message.
-    ValidateEdit(Rc<RefCell<Option<(String, String)>>>),
+    /// Clears the input bar (pushes to history then blanks the buffer).
+    /// Fire-and-forget: the caller reads `self.current_input` before
+    /// dispatching, then dispatches this to let the widget clear itself.
+    ClearInput,
     InputChanged(String, Cursor, bool),
     AddWindow(
         String,
@@ -1121,19 +1119,14 @@ impl UIMod {
                                         }
                                     }
                                 }
-                                // Route INSERT-mode key events to the selected
-                                // message when it's being edited in place.
-                                UIEvent::Core(Event::Key(key))
-                                    if current_mode == Mode::Insert
-                                        && view.selected().is_some_and(MessageView::is_editing) =>
-                                {
-                                    view.update_selected(|msg| dispatch_edit_key(msg, key));
-                                }
-                                // Commit an in-place edit: if the selected
-                                // MessageView is editing, fill the slot with
-                                // (original_id, new_body) and clear the edit
-                                // state.
-                                UIEvent::ValidateEdit(result) => {
+                                // Enter in Insert mode commits an in-place edit
+                                // (if one is active) by scheduling SendCorrection
+                                // and mutating the event so the outer layout
+                                // detects the commit and transitions to Normal.
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::Enter,
+                                    ..
+                                })) if current_mode == Mode::Insert => {
                                     let pair = view.update_selected(|msg| {
                                         if !msg.is_insert_editing() {
                                             return None;
@@ -1145,9 +1138,24 @@ impl UIMod {
                                         let body = msg.take_edit();
                                         id.zip(body)
                                     });
-                                    if let Some(Some(p)) = pair {
-                                        *result.borrow_mut() = Some(p);
+                                    if let Some(Some((original_id, new_body))) = pair {
+                                        aparte.schedule(Event::SendCorrection {
+                                            original_id: original_id.clone(),
+                                            new_body: new_body.clone(),
+                                        });
+                                        *event = UIEvent::Core(Event::SendCorrection {
+                                            original_id,
+                                            new_body,
+                                        });
                                     }
+                                }
+                                // Route INSERT-mode key events to the selected
+                                // message when it's being edited in place.
+                                UIEvent::Core(Event::Key(key))
+                                    if current_mode == Mode::Insert
+                                        && view.selected().is_some_and(MessageView::is_editing) =>
+                                {
+                                    view.update_selected(|msg| dispatch_edit_key(msg, key));
                                 }
                                 _ => {}
                             }
@@ -1440,6 +1448,32 @@ impl UIMod {
                                         if let Some(Some(rv)) = rv {
                                             *slot.borrow_mut() = Some(rv);
                                         }
+                                    }
+                                }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::Enter,
+                                    ..
+                                })) if current_mode == Mode::Insert => {
+                                    let pair = view.update_selected(|msg| {
+                                        if !msg.is_insert_editing() {
+                                            return None;
+                                        }
+                                        let id = match &msg.message {
+                                            Message::Xmpp(m) => Some(m.id.clone()),
+                                            Message::Log(_) => None,
+                                        };
+                                        let body = msg.take_edit();
+                                        id.zip(body)
+                                    });
+                                    if let Some(Some((original_id, new_body))) = pair {
+                                        aparte.schedule(Event::SendCorrection {
+                                            original_id: original_id.clone(),
+                                            new_body: new_body.clone(),
+                                        });
+                                        *event = UIEvent::Core(Event::SendCorrection {
+                                            original_id,
+                                            new_body,
+                                        });
                                     }
                                 }
                                 UIEvent::Core(Event::Key(key))
@@ -1900,6 +1934,53 @@ impl ModTrait for UIMod {
                             ));
                         }
                     }
+                    // Enter in Command mode executes the typed command.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    })) if mode == Mode::Command => {
+                        let cmd = current_input.0.clone();
+
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        if message_cursor_active {
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
+                        }
+                        let saved = std::mem::take(&mut saved_input);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                        let mut si_event = UIEvent::SetInput(saved.clone());
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut si_event);
+                        }
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
+                            current_input = (buf.clone(), cursor.clone(), password);
+                            aparte_proxy.schedule(Event::InputChanged(
+                                buf.clone(),
+                                cursor.clone(),
+                                password,
+                            ));
+                        }
+                        if let Some(query) = cmd.strip_prefix('/') {
+                            let query = query.to_string();
+                            if !query.is_empty() {
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut UIEvent::NormalCommand {
+                                        cmd: NormalCommand::SearchFirst(query),
+                                        bubbled: false,
+                                    });
+                                }
+                            }
+                        } else if cmd.starts_with(':') {
+                            aparte_proxy.schedule(Event::RawCommand(
+                                aparte_proxy.current_account(),
+                                current_window.clone(),
+                                cmd,
+                            ));
+                        }
+                    }
                     // All other keys in COMMAND mode go to the focused input widget,
                     // reusing its editing logic (Ctrl+A/B/E/F/H/W/U/K, arrows, Home/End,
                     // Delete, history).
@@ -2002,6 +2083,25 @@ impl ModTrait for UIMod {
                             child.event(event);
                         }
                     }
+                    // Enter in Insert mode with a message cursor commits the
+                    // in-place edit by routing to the frame.  The ScrollWin
+                    // handles the commit and mutates the event to SendCorrection.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    })) if mode == Mode::Insert && message_cursor_active => {
+                        layout.route_to_focused(event);
+                        if matches!(*event, UIEvent::Core(Event::SendCorrection { .. })) {
+                            mode = Mode::Normal;
+                            message_cursor_active = false;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                            action_parser.reset();
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            }
+                        }
+                    }
                     // All other keys in INSERT mode go only to the focused input.
                     UIEvent::Core(Event::Key(_)) if mode == Mode::Insert => {
                         layout.route_to_focused(event);
@@ -2013,52 +2113,6 @@ impl ModTrait for UIMod {
                                 password,
                             ));
                         }
-                    }
-                    // Enter in Command mode executes the typed command.
-                    // (Enter is delivered as UIEvent::Validate by on_event, not as a Key event.)
-                    UIEvent::Validate(result) if mode == Mode::Command => {
-                        let cmd = current_input.0.clone();
-
-                        mode = Mode::Normal;
-                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
-                        if message_cursor_active {
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
-                        }
-                        let saved = std::mem::take(&mut saved_input);
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
-                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
-                        }
-                        let mut si_event = UIEvent::SetInput(saved.clone());
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut si_event);
-                        }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
-                            current_input = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
-                        }
-                        if let Some(query) = cmd.strip_prefix('/') {
-                            let query = query.to_string();
-                            if !query.is_empty() {
-                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-                                    frame.child.view.event(&mut UIEvent::NormalCommand {
-                                        cmd: NormalCommand::SearchFirst(query),
-                                        bubbled: false,
-                                    });
-                                }
-                            }
-                        } else if cmd.starts_with(':') {
-                            aparte_proxy.schedule(Event::RawCommand(
-                                aparte_proxy.current_account(),
-                                current_window.clone(),
-                                cmd,
-                            ));
-                        }
-                        result.borrow_mut().replace((String::new(), false));
                     }
                     UIEvent::Core(Event::ChangeWindow(name)) => {
                         let clean = terminus::clean_str(name);
@@ -2194,9 +2248,15 @@ impl ModTrait for UIMod {
                     input.password,
                 );
             }
-            UIEvent::Validate(result) => {
-                let mut result = result.borrow_mut();
-                result.replace(input.validate());
+            UIEvent::ClearInput => {
+                // validate() pushes to history and clears the buffer.
+                // Emit InputChanged so the layout closure updates current_input.
+                input.validate();
+                *event = UIEvent::InputChanged(
+                    input.editor.buf.clone(),
+                    input.editor.cursor.clone(),
+                    input.password,
+                );
             }
             UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
                 input.editor.buf.clone_from(raw_buf);
@@ -2651,6 +2711,14 @@ impl ModTrait for UIMod {
             Event::InputChanged(buf, cursor, password) => {
                 self.current_input = (buf.clone(), cursor.clone(), *password);
             }
+            Event::SendCorrection {
+                original_id,
+                new_body,
+            } => {
+                let oid = original_id.clone();
+                let nb = new_body.clone();
+                self.send_correction(aparte, &oid, nb);
+            }
             Event::Key(key) => {
                 match key {
                     KeyEvent {
@@ -2712,36 +2780,43 @@ impl ModTrait for UIMod {
                         code: KeyCode::Enter,
                         ..
                     } => {
-                        // First, see whether a MessageView is being edited in
-                        // place — if so, commit it as a XEP-0308 correction
-                        // rather than running the input-bar send path.
-                        let edit_result: Rc<RefCell<Option<(String, String)>>> =
-                            Rc::new(RefCell::new(None));
-                        self.root
-                            .event(&mut UIEvent::ValidateEdit(Rc::clone(&edit_result)));
-                        if let Some((original_id, new_body)) = edit_result.borrow_mut().take() {
-                            self.send_correction(aparte, &original_id, new_body);
-                            // Return to NORMAL mode; the layout closure listens
-                            // for ModeChange and updates its captured `mode`.
-                            self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
-                            aparte.schedule(Event::UIMode(Mode::Normal));
+                        if !self.root.is_visible() {
+                            self.slash_warned = false;
+                        }
+                        aparte.schedule(Event::ResetCompletion);
+
+                        // Snapshot the current input before the layout routing
+                        // may clear it via ClearInput.
+                        let (raw_buf, _cursor, password) = self.current_input.clone();
+
+                        // Route Enter into the layout tree as a UIEvent::Core(Key).
+                        // The layout closure handles:
+                        //   - Command mode: runs the command, transitions to Normal.
+                        //   - Insert + message_cursor_active: routes to the frame;
+                        //     the ScrollWin commits the edit and mutates the event
+                        //     to SendCorrection.
+                        let mut enter_evt = UIEvent::Core(Event::Key(*key));
+                        self.root.event(&mut enter_evt);
+
+                        // Command mode: the layout closure handled everything.
+                        if self.current_mode == Mode::Command {
                             return;
                         }
 
-                        let result = Rc::new(RefCell::new(None));
-                        // TODO avoid direct send to root, should go back to main event loop
-                        self.root.event(&mut UIEvent::Validate(Rc::clone(&result)));
+                        // In-place edit committed: SendCorrection was scheduled
+                        // by the ScrollWin; the layout transitioned to Normal.
+                        if matches!(enter_evt, UIEvent::Core(Event::SendCorrection { .. })) {
+                            return;
+                        }
 
-                        let result = result.borrow_mut();
-                        let (raw_buf, password) = result.as_ref().unwrap();
-                        let raw_buf = raw_buf.clone();
-
+                        // Normal Insert mode send path.
                         let looks_like_cmd = !password
                             && !raw_buf.is_empty()
                             && ((raw_buf.starts_with('/') && !raw_buf.starts_with("/me "))
                                 || raw_buf.starts_with(':'));
 
-                        if *password {
+                        if password {
+                            self.root.event(&mut UIEvent::ClearInput);
                             let mut command = self.password_command.take().unwrap();
                             command.args.push(raw_buf);
                             aparte.schedule(Event::Command(command));
@@ -2765,6 +2840,7 @@ impl ModTrait for UIMod {
                         } else if !raw_buf.is_empty() {
                             self.slash_warned = false;
                             aparte.schedule(Event::ClosePopup);
+                            self.root.event(&mut UIEvent::ClearInput);
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
