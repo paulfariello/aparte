@@ -147,6 +147,11 @@ enum UIEvent {
         lines: Vec<String>,
     },
     ClosePopup,
+    /// Signals that the current window auto-selected a message (Normal mode,
+    /// follow_bottom=true).  Emitted by mutating the in-flight event so the
+    /// outer LinearLayout can set focused_child_index = FRAME_LAYOUT_INDEX
+    /// after the dispatch loop.
+    FocusFrame,
 }
 
 impl FocusRouted for UIEvent {
@@ -877,6 +882,9 @@ impl UIMod {
                                                     });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
+                                                    if is_current_window {
+                                                        *event = UIEvent::FocusFrame;
+                                                    }
                                                 }
                                             }
                                         }
@@ -899,6 +907,9 @@ impl UIMod {
                                                     });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
+                                                    if is_current_window {
+                                                        *event = UIEvent::FocusFrame;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1041,7 +1052,6 @@ impl UIMod {
                                     if is_current_window && first_visit {
                                         first_visit = false;
                                         view.clear_selection();
-                                        follow_bottom = false;
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Normal) => {
@@ -1189,6 +1199,9 @@ impl UIMod {
                                                     });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
+                                                    if is_current_window {
+                                                        *event = UIEvent::FocusFrame;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1211,6 +1224,9 @@ impl UIMod {
                                                     });
                                                     view.select_last_visible();
                                                     view.update_selected(MessageView::start_cursor);
+                                                    if is_current_window {
+                                                        *event = UIEvent::FocusFrame;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1353,7 +1369,6 @@ impl UIMod {
                                     if is_current_window && first_visit {
                                         first_visit = false;
                                         view.clear_selection();
-                                        follow_bottom = false;
                                     }
                                     if is_current_window && view.first().is_none() && !mam_requested
                                     {
@@ -2091,7 +2106,10 @@ impl ModTrait for UIMod {
                         for child in layout.iter_children_mut() {
                             child.event(event);
                         }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                        if matches!(*event, UIEvent::FocusFrame) {
+                            layout.set_focus(FRAME_LAYOUT_INDEX);
+                        } else if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event
+                        {
                             current_input = (buf.clone(), cursor.clone(), password);
                             aparte_proxy.schedule(Event::InputChanged(
                                 buf.clone(),

@@ -2242,23 +2242,30 @@ fn normal_mode_caw_enters_insert_and_changes_around_word() {
 /// the terminal cursor must jump to the command bar (last row).  When the
 /// command is cancelled with ESC, the cursor must return to the message row.
 ///
-/// Uses inject_msg + one 'k' to get a selected XMPP message with an edit
-/// cursor (priority 3).  In Command mode the input cursor also uses priority 3
-/// and renders last, so it wins → cursor at bottom.  After ESC the edit is
-/// cancelled but the selection (priority 2) beats the input (priority 1) →
-/// cursor returns to the message row.
+/// inject_msg auto-selects the message on arrival (follow_bottom + Normal mode,
+/// priority-3 edit cursor).  The first 'k' finds old==new at index 0 → bubbles,
+/// clears selection.  The second 'k' selects fresh from None → start_cursor()
+/// opens an edit cursor at priority 3.
+///
+/// In Command mode the input cursor also uses priority 3 and renders last, so
+/// it wins → cursor at bottom.  After ESC the edit cursor is NOT cancelled
+/// (was_command=true) and still beats the input cursor (priority 1) → cursor
+/// returns to the message row.
 #[test]
 fn command_mode_cursor_moves_to_input_bar_and_back() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    // Inject a message, then navigate to it with one 'k'.
-    // One 'k' from no selection → selects bottom_visible_child_index (= 0,
-    // the only message).  start_cursor() opens an edit cursor at priority 3.
+    // inject_msg auto-selects the message on arrival.
+    // First 'k' bubbles (old==new at index 0), clearing the selection.
+    // Second 'k' selects fresh from None; start_cursor() opens an edit
+    // cursor at priority 3.
     h.send_command("/inject_msg hello world");
     let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
     assert!(visible, "injected message must appear on screen");
 
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
     h.send_bytes(b"k");
     thread::sleep(Duration::from_millis(200));
 
@@ -2269,7 +2276,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
     assert_ne!(
         row_before,
         ROWS - 1,
-        "cursor must be on the message row after 'k'\n{}",
+        "cursor must be on the message row after two 'k' presses\n{}",
         describe(before.screen())
     );
 
@@ -2299,9 +2306,9 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
 
     h.shutdown();
 
-    // After ESC: edit cancelled (was a normal_mode cursor), selection still
-    // active.  Selection cursor (priority 2) beats input (priority 1) →
-    // cursor returns to the message row.
+    // After ESC from Command: was_command=true so the Normal-mode handler
+    // does NOT cancel the edit cursor — it stays at priority 3, which beats
+    // the input cursor (priority 1) → cursor returns to the message row.
     assert_ne!(
         row_after,
         ROWS - 1,
