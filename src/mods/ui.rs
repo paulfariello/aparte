@@ -149,11 +149,6 @@ enum UIEvent {
         lines: Vec<String>,
     },
     ClosePopup,
-    /// Signals that the current window auto-selected a message (Normal mode,
-    /// follow_bottom=true).  Emitted by mutating the in-flight event so the
-    /// outer LinearLayout can set focused_child_index = FRAME_LAYOUT_INDEX
-    /// after the dispatch loop.
-    FocusFrame,
 }
 
 impl FocusRouted for UIEvent {
@@ -883,10 +878,6 @@ impl UIMod {
                                                         }
                                                     });
                                                     view.select_last_visible();
-                                                    view.update_selected(MessageView::start_cursor);
-                                                    if is_current_window {
-                                                        *event = UIEvent::FocusFrame;
-                                                    }
                                                 }
                                             }
                                         }
@@ -908,10 +899,6 @@ impl UIMod {
                                                         }
                                                     });
                                                     view.select_last_visible();
-                                                    view.update_selected(MessageView::start_cursor);
-                                                    if is_current_window {
-                                                        *event = UIEvent::FocusFrame;
-                                                    }
                                                 }
                                             }
                                         }
@@ -1222,10 +1209,6 @@ impl UIMod {
                                                         }
                                                     });
                                                     view.select_last_visible();
-                                                    view.update_selected(MessageView::start_cursor);
-                                                    if is_current_window {
-                                                        *event = UIEvent::FocusFrame;
-                                                    }
                                                 }
                                             }
                                         }
@@ -1247,10 +1230,6 @@ impl UIMod {
                                                         }
                                                     });
                                                     view.select_last_visible();
-                                                    view.update_selected(MessageView::start_cursor);
-                                                    if is_current_window {
-                                                        *event = UIEvent::FocusFrame;
-                                                    }
                                                 }
                                             }
                                         }
@@ -1865,6 +1844,19 @@ impl ModTrait for UIMod {
                         // If focused component is not insertable, deny INSERT mode silently.
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('o'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        action_parser.reset();
+                        layout.set_focus(INPUT_INDEX);
+                        mode = Mode::Insert;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(':'),
                         ..
                     })) if mode == Mode::Normal => {
@@ -2173,10 +2165,7 @@ impl ModTrait for UIMod {
                         for child in layout.iter_children_mut() {
                             child.event(event);
                         }
-                        if matches!(*event, UIEvent::FocusFrame) {
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
-                        } else if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event
-                        {
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
                             current_input = (buf.clone(), cursor.clone(), password);
                             aparte_proxy.schedule(Event::InputChanged(
                                 buf.clone(),
@@ -2327,7 +2316,9 @@ impl ModTrait for UIMod {
             UIEvent::ModeChange(Mode::Normal) => {
                 input.set_show_cursor(true);
                 input.set_cursor_style(CursorStyle::SteadyBlock);
-                input.set_cursor_priority(1);
+                // Priority 2 matches the message-selection cursor so the
+                // input bar wins when rendered later in the layout order.
+                input.set_cursor_priority(2);
             }
             UIEvent::ModeChange(Mode::Command) => {
                 input.set_show_cursor(true);

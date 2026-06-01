@@ -53,7 +53,8 @@ Switch windows with `Alt+[1-9]` or `:win <name>`.
 | From    | Key        | To / Action                       |
 |---------|------------|-----------------------------------|
 | Insert  | `Escape`   | Normal mode                       |
-| Normal  | `i`        | Insert mode                       |
+| Normal  | `i`        | Insert mode (edit selected message if on frame) |
+| Normal  | `o`        | Insert mode on input bar          |
 | Normal  | `:`        | Command mode                      |
 | Normal  | `/`        | Search mode                       |
 | Normal  | `j` / `↓`  | Select next message               |

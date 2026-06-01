@@ -1089,17 +1089,11 @@ fn i_on_non_insertable_component_does_not_enter_insert_mode() {
         describe(screen)
     );
 
-    // Cursor must not have moved to the input bar — it should still be on the
-    // selected message row (or wherever it was before 'i').
+    // Cursor must not have moved: it should be wherever it was before 'i'.
+    // In Normal mode the cursor stays on the input bar (priority-2 matches
+    // the message-selection cursor and the input bar renders last), so both
+    // before and after the denied 'i' the cursor is on the input bar.
     let (cursor_row_after, _) = parser.screen().cursor_position();
-    assert_ne!(
-        cursor_row_after,
-        ROWS - 1,
-        "Cursor must not jump to the input bar (row {}) when INSERT is denied; got row {}\n{}",
-        ROWS - 1,
-        cursor_row_after,
-        describe(screen)
-    );
     assert_eq!(
         cursor_row_after,
         cursor_row_before,
@@ -1828,10 +1822,9 @@ fn setup_message_editor_normal_mode(h: &Harness) {
         "injected message 'hello world' must appear on screen"
     );
 
-    // The message is auto-selected on arrival (follow_bottom + Normal mode).
-    // The first 'k' finds old==new at index 0 → bubbles, clears selection.
-    // The second 'k' selects fresh from None and focuses the message frame;
-    // navigation auto-starts the edit buffer in Normal mode.
+    // The message is highlighted on arrival (selection, no cursor).  The first
+    // 'k' finds old==new at index 0 → bubbles, clears selection.  The second
+    // 'k' selects fresh from None, calls start_cursor(), and focuses the frame.
     h.send_bytes(b"k");
     thread::sleep(Duration::from_millis(150));
     h.send_bytes(b"k");
@@ -1955,48 +1948,6 @@ fn message_editor_second_esc_cancels_edit() {
     let _ = row; // row assertion omitted: position depends on selection state
 }
 
-/// Regression: 'w' must work on the auto-selected message immediately after
-/// `:inject_msg` in Command mode, without any explicit j/k navigation.
-/// Previously, focus remained on INPUT_INDEX after the command completed, so
-/// dispatch_action routed 'w' to the input bar instead of the message editor.
-#[test]
-fn message_editor_w_works_immediately_after_inject_msg_command() {
-    let h = Harness::spawn("", &[]);
-    wait_for_ready(&h);
-
-    // :inject_msg goes through Command mode → Validate → Normal mode.
-    // The message is auto-selected and start_cursor() fires.
-    h.send_command("/inject_msg hello world");
-    let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
-    assert!(visible, "injected message must appear on screen");
-
-    // Cursor starts at position 0 of the message body (from start_cursor).
-    // 'w' should jump to the start of "world" (grapheme 6).
-    let parser_before = h.snapshot();
-    let (_, col_before) = parser_before.screen().cursor_position();
-
-    h.send_bytes(b"w");
-    thread::sleep(Duration::from_millis(200));
-
-    let parser_after = h.snapshot();
-    let (row_after, col_after) = parser_after.screen().cursor_position();
-
-    h.shutdown();
-
-    assert_ne!(
-        row_after,
-        ROWS - 1,
-        "'w' must keep cursor on the message row, not the input bar\n{}",
-        describe(parser_after.screen())
-    );
-    assert_eq!(
-        col_after,
-        col_before + 6,
-        "'w' from start of 'hello world' must land 6 cols right (start of 'world')\n{}",
-        describe(parser_after.screen())
-    );
-}
-
 /// Regression: pressing Enter in Command mode when a message has a Normal-mode
 /// navigation cursor (from start_cursor / auto-selection) must NOT trigger the
 /// ValidateEdit / send_correction path.
@@ -2017,13 +1968,13 @@ fn command_executes_correctly_with_navigation_cursor_on_message() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    // inject_msg opens a chat window and auto-selects the message with a
-    // Normal-mode navigation cursor (start_cursor sets normal_mode=true).
+    // inject_msg opens a chat window and highlights the message (selection only;
+    // no edit cursor on arrival).  Focus remains on the input bar.
     h.send_command("/inject_msg hello world");
     let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
     assert!(visible, "injected message must appear on screen");
 
-    // We are now in Normal mode, chat window focused, message cursor active.
+    // We are now in Normal mode, chat window focused, input bar has focus.
     // Enter Command mode and type a harmless command.
     h.send_bytes(b":");
     wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
@@ -2452,6 +2403,174 @@ fn normal_mode_named_register_paste() {
     assert!(
         input.contains("abac"),
         "\"ayl then l then \"ap must give 'abac'\n{}",
+        describe(screen)
+    );
+}
+
+/// Issue 1: in Normal mode the terminal cursor must stay on the input bar even
+/// when a message is selected via 'k'.  The selection should be shown as a
+/// highlight only; the cursor belongs on the input bar until the user
+/// explicitly starts an in-place edit.
+#[test]
+fn cursor_stays_on_input_bar_after_k_navigation_in_normal_mode() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    enter_normal(&h);
+
+    // 'k' selects the last visible message and moves layout focus to the
+    // frame.  That gives the message a priority-2 cursor while the input
+    // bar is only priority 1 → cursor ends up on the message (bug).
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let (row, _) = screen.cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor should stay on input bar (row {}) in Normal mode after 'k', got row {}\n{}",
+        ROWS - 1,
+        row,
+        describe(screen)
+    );
+}
+
+/// Issue 2: pressing `o` when the frame has focus (e.g. from 'k' navigation
+/// or from a FocusFrame event caused by an incoming message) must move the
+/// visual cursor to the input bar.
+#[test]
+fn o_from_frame_focus_moves_visual_cursor_to_input_bar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    fill_console(&h);
+    enter_normal(&h);
+
+    // Put frame in focus with a selected message (same state as after a
+    // FocusFrame event from an incoming XMPP message).
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+
+    h.send_bytes(b"o");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let (row, _) = screen.cursor_position();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Expected INSERT mode after 'o'\n{}",
+        describe(screen)
+    );
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor should be on input bar after 'o' from frame-focused state\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn o_in_normal_mode_enters_insert_on_input_bar() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"o");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let (row, _) = screen.cursor_position();
+
+    h.shutdown();
+
+    assert!(
+        found,
+        "Expected INSERT mode after 'o' in Normal mode\n{}",
+        describe(screen)
+    );
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor should be on input bar (row {})\n{}",
+        ROWS - 1,
+        describe(screen)
+    );
+}
+
+#[test]
+fn o_in_normal_mode_with_frame_focus_moves_to_input() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+    fill_console(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"o");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let (row, _) = screen.cursor_position();
+
+    h.shutdown();
+
+    assert!(
+        found,
+        "Expected INSERT mode after 'o'\n{}",
+        describe(screen)
+    );
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "Cursor must be on input bar\n{}",
+        describe(screen)
+    );
+}
+
+/// Regression: after `:msg contact@domain.tld` opens a 1-1 chat window and
+/// delivers the first message, the visual cursor must land on the input bar
+/// (row ROWS-1), not on the incoming message.
+///
+/// Root cause: when a message arrives with `current_mode == Normal && follow_bottom`,
+/// the handler calls `start_cursor()` (priority 3) on the auto-selected message and
+/// emits `FocusFrame`, which beats the input bar's priority-2 cursor and moves the
+/// terminal cursor to the message row.
+///
+/// Uses `:inject_msg` to simulate the same code path without a real XMPP connection.
+#[test]
+fn cursor_on_input_bar_after_msg_opens_chat_window() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // inject_msg fires Event::Chat (opens a chat window) then Event::Message
+    // (delivers the first message).  In Normal mode with follow_bottom=true the
+    // message-arrival handler currently emits FocusFrame + start_cursor, which
+    // gives the message a priority-3 cursor that beats the input bar (priority 2).
+    h.send_command("/inject_msg hello world");
+    let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
+    assert!(visible, "injected message must appear on screen");
+
+    // Wait for rendering to settle after FocusFrame / cursor-priority resolution.
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let (row, _) = screen.cursor_position();
+    h.shutdown();
+
+    assert_eq!(
+        row,
+        ROWS - 1,
+        "cursor must be on the input bar (row {}) after opening a 1-1 chat window via :msg, got row {}\n{}",
+        ROWS - 1,
+        row,
         describe(screen)
     );
 }
