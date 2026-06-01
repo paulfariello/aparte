@@ -21,6 +21,9 @@ fn fill_console(h: &Harness) {
 fn enter_normal(h: &Harness) {
     h.send_bytes(b"\x1b");
     wait_for_screen(h, "NORMAL", Duration::from_secs(2));
+    // Wait for crossterm's Esc-sequence timeout (~100 ms) so the next key is
+    // not misread as Alt+<key> by the terminal parser.
+    thread::sleep(Duration::from_millis(150));
 }
 
 fn enter_insert(h: &Harness) {
@@ -240,14 +243,14 @@ fn partial_command_shows_in_winbar() {
     enter_normal(&h);
     // Send 'g' — partial prefix for both 'gg' and 'gG'
     h.send_bytes(b"g");
-    thread::sleep(Duration::from_millis(300));
+    let found = wait_for_screen(&h, "g", Duration::from_secs(2));
 
     let parser = h.snapshot();
     let screen = parser.screen();
     h.shutdown();
 
     assert!(
-        grid_contains(screen, "g"),
+        found,
         "Partial command 'g' should appear in the win_bar\n{}",
         describe(screen)
     );
@@ -2412,6 +2415,43 @@ fn normal_mode_xp_transposes_chars() {
     assert!(
         input.contains("bac"),
         "xp must transpose 'abc' to 'bac'\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn normal_mode_named_register_paste() {
+    // "abc" in input, Normal mode, cursor at 'c' (col 2).
+    // 0 → cursor at 'a' (col 0).
+    // "ayl → yank 'a' into register "a; cursor stays at col 0.
+    // l → cursor at 'b' (col 1).
+    // "ap → PasteAfter from register "a: MoveCursor(Right) → col 2 ('c'),
+    //       then insert 'a' before 'c' → "abac".
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_insert(&h);
+    h.send_bytes(b"abc");
+    wait_for_screen(&h, "abc", Duration::from_secs(2));
+    enter_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"\"ayl");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"l");
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"\"ap");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("abac"),
+        "\"ayl then l then \"ap must give 'abac'\n{}",
         describe(screen)
     );
 }
