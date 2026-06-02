@@ -16,7 +16,7 @@ pub fn render_view_into(
     dims: &Dimensions,
 ) {
     view.layout(dims);
-    let frame = ScreenFrame::new(buf, dims);
+    let frame = ScreenFrame::new(buf, dims, true);
     view.render(frame, &());
 }
 

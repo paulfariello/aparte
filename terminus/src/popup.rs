@@ -123,7 +123,7 @@ impl<E, C: PopupColors> Popup<E, C> {
                     width: outer.width - 2,
                     height: outer.height - 2,
                 };
-                content.render(ScreenFrame::new(buf, &inner), config);
+                content.render(ScreenFrame::new(buf, &inner, true), config);
             }
         }
     }

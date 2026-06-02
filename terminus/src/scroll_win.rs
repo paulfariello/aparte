@@ -764,7 +764,11 @@ where
             return;
         }
 
-        let ScreenFrame { offscreen, .. } = frame;
+        let ScreenFrame {
+            offscreen,
+            cursor_granted,
+            ..
+        } = frame;
         for (idx, LayoutChild { child, dimensions }) in self.children.iter().enumerate() {
             if idx < self.first_visible_child_index {
                 continue;
@@ -780,7 +784,8 @@ where
             } else {
                 child.deselect();
             }
-            let child_frame = ScreenFrame::new(offscreen, dims);
+            let child_cursor_granted = cursor_granted && (Some(idx) == self.selected_child_index);
+            let child_frame = ScreenFrame::new(offscreen, dims, child_cursor_granted);
             child.render(child_frame, config);
         }
     }

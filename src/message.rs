@@ -1339,15 +1339,15 @@ impl<E, C> View<E, C> for MessageView {
                 }
                 Message::Log(_) => 0,
             };
-            frame.set_cursor_with_priority(
-                CursorPos::from((frame.dimensions.left + col, frame.dimensions.top + sep_rows)),
-                2,
-            );
+            frame.set_cursor(CursorPos::from((
+                frame.dimensions.left + col,
+                frame.dimensions.top + sep_rows,
+            )));
+            frame.set_cursor_style(terminus::CursorStyle::SteadyBlock);
         }
 
         // When editing in place, override the cursor to land at the edit
-        // position with a steady-bar style, taking priority over the selection
-        // marker.
+        // position with a steady-bar style.
         if let (Some(editor), Message::Xmpp(message)) = (&self.edit, &self.message) {
             let header_width = Self::format_header(message).display_width();
             let buf = &editor.buf;
@@ -1364,13 +1364,12 @@ impl<E, C> View<E, C> for MessageView {
             let max_col = frame.dimensions.width.saturating_sub(1);
             let col = std::cmp::min(total_col, max_col);
             let row = frame.dimensions.top + frame.dimensions.height.saturating_sub(1);
-            frame.set_cursor_with_priority(CursorPos::from((frame.dimensions.left + col, row)), 3);
+            frame.set_cursor(CursorPos::from((frame.dimensions.left + col, row)));
             frame.set_cursor_style(if editor.normal_mode {
                 terminus::CursorStyle::SteadyBlock
             } else {
                 terminus::CursorStyle::SteadyBar
             });
-            frame.set_cursor_visible(true);
         }
     }
 
@@ -1470,7 +1469,7 @@ mod tests {
 
         // When
         message_view.layout(&dimensions);
-        message_view.render(ScreenFrame::new(&mut buffer, &dimensions), &());
+        message_view.render(ScreenFrame::new(&mut buffer, &dimensions, true), &());
 
         // Then
         assert_eq!(
@@ -1496,7 +1495,7 @@ mod tests {
 
         // When
         message_view.layout(&dimensions);
-        message_view.render(ScreenFrame::new(&mut buffer, &dimensions), &());
+        message_view.render(ScreenFrame::new(&mut buffer, &dimensions, true), &());
 
         // Then
         // we should render:
@@ -1526,7 +1525,7 @@ mod tests {
 
         // When
         message_view.layout(&dimensions);
-        message_view.render(ScreenFrame::new(&mut buffer, &dimensions), &());
+        message_view.render(ScreenFrame::new(&mut buffer, &dimensions, true), &());
 
         // Then
         // we should only render:

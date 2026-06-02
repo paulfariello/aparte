@@ -82,7 +82,7 @@ mod tests {
         };
         let mut label: Box<dyn View<(), ()>> = Box::new(Label::new(text));
         label.layout(&dims);
-        let frame = ScreenFrame::new(&mut buf, &dims);
+        let frame = ScreenFrame::new(&mut buf, &dims, true);
         label.render(frame, &());
         buf
     }

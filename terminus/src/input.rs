@@ -21,9 +21,7 @@ pub struct Input<E> {
     pub history: Vec<String>,
     pub history_index: usize,
     pub event_handler: Option<EventHandler<Self, E>>,
-    pub show_cursor: bool,
     pub cursor_style: CursorStyle,
-    pub cursor_priority: u8,
     dimensions: Option<Dimensions>,
 }
 
@@ -43,19 +41,9 @@ impl<E> Input<E> {
             history: Vec::new(),
             history_index: 0,
             event_handler: None,
-            show_cursor: true,
             cursor_style: CursorStyle::SteadyBar,
-            cursor_priority: 1,
             dimensions: None,
         }
-    }
-
-    pub fn set_show_cursor(&mut self, visible: bool) {
-        self.show_cursor = visible;
-    }
-
-    pub fn set_cursor_priority(&mut self, priority: u8) {
-        self.cursor_priority = priority;
     }
 
     pub fn set_cursor_style(&mut self, style: CursorStyle) {
@@ -107,7 +95,6 @@ impl<E> Input<E> {
         self.editor.clear();
         let _ = self.tmp_buf.take();
         self.password = false;
-        self.show_cursor = true;
     }
 
     pub fn left(&mut self) {
@@ -128,7 +115,6 @@ impl<E> Input<E> {
 
     pub fn password(&mut self) {
         self.password = true;
-        self.show_cursor = false;
     }
 
     pub fn validate(&mut self) -> (String, bool) {
@@ -208,14 +194,7 @@ impl<E, C> View<E, C> for Input<E> {
         if self.password {
             let prompt = "password: ";
             frame.write(prompt);
-            frame.set_cursor_with_priority(
-                CursorPos {
-                    top: frame.dimensions.top,
-                    #[allow(clippy::cast_possible_truncation)]
-                    left: frame.dimensions.left + prompt.len() as u16,
-                },
-                self.cursor_priority,
-            );
+            // No cursor in password mode — leave it hidden.
         } else {
             // Max displayable size is view width less 1 for cursor
             let max_size = (frame.dimensions.width - 1) as usize;
@@ -250,16 +229,12 @@ impl<E, C> View<E, C> for Input<E> {
                 .graphemes(true)
                 .map(|g| unicode_display_width::width(g) as u16)
                 .sum();
-            frame.set_cursor_with_priority(
-                CursorPos {
-                    top: frame.dimensions.top,
-                    left: frame.dimensions.left + cursor_col,
-                },
-                self.cursor_priority,
-            );
+            frame.set_cursor(CursorPos {
+                top: frame.dimensions.top,
+                left: frame.dimensions.left + cursor_col,
+            });
         }
         frame.set_cursor_style(self.cursor_style);
-        frame.set_cursor_visible(self.show_cursor);
     }
 
     fn event(&mut self, event: &mut E) {
@@ -274,22 +249,6 @@ impl<E, C> View<E, C> for Input<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::View;
-
-    #[test]
-    fn test_on_focus_change_does_not_affect_cursor() {
-        let mut input = Input::<()>::new();
-        // Cursor visibility must not change on focus loss — mode changes manage it.
-        <Input<()> as View<(), ()>>::on_focus_change(&mut input, false);
-        assert!(input.show_cursor);
-    }
-
-    #[test]
-    fn test_on_focus_change_true_shows_cursor() {
-        let mut input = Input::<()>::new();
-        <Input<()> as View<(), ()>>::on_focus_change(&mut input, true);
-        assert!(input.show_cursor);
-    }
 
     #[test]
     fn test_input_backspace() {

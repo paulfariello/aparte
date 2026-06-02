@@ -43,7 +43,6 @@ pub struct OffscreenRenderBuffer {
     lines: Vec<OffscreenLine>,
     size: ScreenSize,
     cursor: CursorPos,
-    cursor_priority: u8,
     cursor_style: CursorStyle,
     show_cursor: bool,
     do_bell: AtomicBool,
@@ -56,7 +55,6 @@ impl Default for OffscreenRenderBuffer {
             lines: Vec::new(),
             size: ScreenSize::default(),
             cursor: CursorPos::default(),
-            cursor_priority: 0,
             cursor_style: CursorStyle::SteadyBar,
             show_cursor: false,
             do_bell: AtomicBool::new(false),
@@ -71,7 +69,6 @@ impl Clone for OffscreenRenderBuffer {
             lines: self.lines.clone(),
             size: self.size,
             cursor: self.cursor,
-            cursor_priority: self.cursor_priority,
             cursor_style: self.cursor_style,
             show_cursor: self.show_cursor,
             do_bell: AtomicBool::new(self.do_bell.load(std::sync::atomic::Ordering::Relaxed)),
@@ -83,7 +80,6 @@ impl Clone for OffscreenRenderBuffer {
         self.lines.clone_from(&source.lines);
         self.size = source.size;
         self.cursor = source.cursor;
-        self.cursor_priority = source.cursor_priority;
         self.cursor_style = source.cursor_style;
         self.show_cursor = source.show_cursor;
         self.do_bell.swap(
@@ -154,18 +150,12 @@ impl OffscreenRenderBuffer {
                 self[i][j] = Charxel::default();
             }
         }
-        self.cursor_priority = 0;
+        self.show_cursor = false;
     }
 
     pub fn set_cursor(&mut self, pos: CursorPos) {
         self.cursor = pos;
-    }
-
-    pub fn set_cursor_with_priority(&mut self, pos: CursorPos, priority: u8) {
-        if priority >= self.cursor_priority {
-            self.cursor = pos;
-            self.cursor_priority = priority;
-        }
+        self.show_cursor = true;
     }
 
     pub fn set_cursor_style(&mut self, style: CursorStyle) {
@@ -427,14 +417,20 @@ impl OffscreenRenderBuffer {
 pub struct ScreenFrame<'a> {
     pub offscreen: &'a mut OffscreenRenderBuffer,
     pub dimensions: &'a Dimensions,
+    pub cursor_granted: bool,
     cursor: CursorPos,
 }
 
 impl<'a> ScreenFrame<'a> {
-    pub fn new(offscreen: &'a mut OffscreenRenderBuffer, dimensions: &'a Dimensions) -> Self {
+    pub fn new(
+        offscreen: &'a mut OffscreenRenderBuffer,
+        dimensions: &'a Dimensions,
+        cursor_granted: bool,
+    ) -> Self {
         Self {
             offscreen,
             dimensions,
+            cursor_granted,
             cursor: CursorPos::default(),
         }
     }
@@ -559,19 +555,21 @@ impl<'a> ScreenFrame<'a> {
     }
 
     pub fn set_cursor(&mut self, position: CursorPos) {
-        self.offscreen.set_cursor(position);
-    }
-
-    pub fn set_cursor_with_priority(&mut self, position: CursorPos, priority: u8) {
-        self.offscreen.set_cursor_with_priority(position, priority);
+        if self.cursor_granted {
+            self.offscreen.set_cursor(position);
+        }
     }
 
     pub fn set_cursor_style(&mut self, style: CursorStyle) {
-        self.offscreen.set_cursor_style(style);
+        if self.cursor_granted {
+            self.offscreen.set_cursor_style(style);
+        }
     }
 
     pub fn set_cursor_visible(&mut self, visible: bool) {
-        self.offscreen.set_cursor_visible(visible);
+        if self.cursor_granted {
+            self.offscreen.set_cursor_visible(visible);
+        }
     }
 
     #[must_use]

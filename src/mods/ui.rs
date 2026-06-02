@@ -1607,7 +1607,7 @@ impl UIMod {
         let mut render_buffer = self.render_buffer.write().unwrap();
         render_buffer.set_size((width, height).into());
         render_buffer.clear();
-        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions, true);
         self.root.render(frame, config);
         log::trace!("Mod::UI rendered in {:.2?}", before.elapsed());
         true
@@ -1756,6 +1756,7 @@ impl ModTrait for UIMod {
             let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
             let mut at_nav_bottom = false;
             let mut message_cursor_active = false;
+            let mut pre_command_focus: Option<usize> = None;
             let mut current_input: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
             layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
@@ -1863,6 +1864,7 @@ impl ModTrait for UIMod {
                         mode = Mode::Command;
                         aparte_proxy.schedule(Event::UIMode(Mode::Command));
                         action_parser.reset();
+                        pre_command_focus = layout.focused_child_index;
                         layout.set_focus(INPUT_INDEX);
                         saved_input = current_input.0.clone();
                         for child in layout.iter_children_mut() {
@@ -1888,6 +1890,7 @@ impl ModTrait for UIMod {
                         mode = Mode::Command;
                         aparte_proxy.schedule(Event::UIMode(Mode::Command));
                         action_parser.reset();
+                        pre_command_focus = layout.focused_child_index;
                         layout.set_focus(INPUT_INDEX);
                         saved_input = current_input.0.clone();
                         for child in layout.iter_children_mut() {
@@ -1912,9 +1915,10 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
-                        if message_cursor_active {
+                        if pre_command_focus == Some(FRAME_LAYOUT_INDEX) {
                             layout.set_focus(FRAME_LAYOUT_INDEX);
                         }
+                        pre_command_focus = None;
                         let saved = std::mem::take(&mut saved_input);
                         if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                             frame.child.view.event(&mut UIEvent::NormalCommand {
@@ -1948,9 +1952,10 @@ impl ModTrait for UIMod {
 
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
-                        if message_cursor_active {
+                        if pre_command_focus == Some(FRAME_LAYOUT_INDEX) {
                             layout.set_focus(FRAME_LAYOUT_INDEX);
                         }
+                        pre_command_focus = None;
                         let saved = std::mem::take(&mut saved_input);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
@@ -2134,6 +2139,7 @@ impl ModTrait for UIMod {
                         Mode::Normal => {
                             mode = Mode::Normal;
                             message_cursor_active = false;
+                            pre_command_focus = None;
                             aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                             action_parser.reset();
                             for child in layout.iter_children_mut() {
@@ -2314,23 +2320,13 @@ impl ModTrait for UIMod {
                 );
             }
             UIEvent::ModeChange(Mode::Normal) => {
-                input.set_show_cursor(true);
                 input.set_cursor_style(CursorStyle::SteadyBlock);
-                // Priority 2 matches the message-selection cursor so the
-                // input bar wins when rendered later in the layout order.
-                input.set_cursor_priority(2);
             }
             UIEvent::ModeChange(Mode::Command) => {
-                input.set_show_cursor(true);
                 input.set_cursor_style(CursorStyle::SteadyBar);
-                // Priority 3 beats the message-selection cursor (priority 2) so
-                // the terminal cursor moves to the command bar.
-                input.set_cursor_priority(3);
             }
             UIEvent::ModeChange(Mode::Insert) => {
-                input.set_show_cursor(true);
                 input.set_cursor_style(CursorStyle::SteadyBar);
-                input.set_cursor_priority(1);
             }
             _ => {}
         });
@@ -2566,7 +2562,7 @@ impl ModTrait for UIMod {
         {
             let mut render_buffer = self.render_buffer.write().unwrap();
             render_buffer.clear();
-            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions);
+            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions, true);
             self.root.render(frame, &aparte.config.get_theme());
         }
 

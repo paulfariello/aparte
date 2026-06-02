@@ -2202,9 +2202,8 @@ fn normal_mode_caw_enters_insert_and_changes_around_word() {
 /// opens an edit cursor at priority 3.
 ///
 /// In Command mode the input cursor also uses priority 3 and renders last, so
-/// it wins → cursor at bottom.  After ESC the edit cursor is NOT cancelled
-/// (was_command=true) and still beats the input cursor (priority 1) → cursor
-/// returns to the message row.
+/// Pressing ':' moves focus to the input bar (Command mode); ESC returns
+/// focus to where it was before — the message frame when navigating.
 #[test]
 fn command_mode_cursor_moves_to_input_bar_and_back() {
     let h = Harness::spawn("", &[]);
@@ -2212,8 +2211,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
 
     // inject_msg auto-selects the message on arrival.
     // First 'k' bubbles (old==new at index 0), clearing the selection.
-    // Second 'k' selects fresh from None; start_cursor() opens an edit
-    // cursor at priority 3.
+    // Second 'k' selects fresh; focus moves to frame → cursor on message.
     h.send_command("/inject_msg hello world");
     let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
     assert!(visible, "injected message must appear on screen");
@@ -2226,7 +2224,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
     let before = h.snapshot();
     let (row_before, _) = before.screen().cursor_position();
 
-    // Edit cursor (priority 3) beats input cursor (priority 1) → message row.
+    // Focus on frame → cursor on the message row.
     assert_ne!(
         row_before,
         ROWS - 1,
@@ -2234,15 +2232,14 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
         describe(before.screen())
     );
 
-    // Press ':' to enter Command mode.
+    // Press ':' to enter Command mode — focus moves to input bar.
     h.send_bytes(b":");
     wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
 
     let during = h.snapshot();
     let (row_during, _) = during.screen().cursor_position();
 
-    // In Command mode input priority becomes 3 (same as edit cursor) and
-    // renders last → wins → cursor moves to the bottom input bar.
+    // Input bar is focused in Command mode → cursor on the bottom row.
     assert_eq!(
         row_during,
         ROWS - 1,
@@ -2250,7 +2247,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
         describe(during.screen())
     );
 
-    // Cancel with Escape → back to Normal mode.
+    // Cancel with Escape → back to Normal mode, focus restored to frame.
     h.send_bytes(b"\x1b");
     wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
     thread::sleep(Duration::from_millis(150));
@@ -2260,9 +2257,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
 
     h.shutdown();
 
-    // After ESC from Command: was_command=true so the Normal-mode handler
-    // does NOT cancel the edit cursor — it stays at priority 3, which beats
-    // the input cursor (priority 1) → cursor returns to the message row.
+    // pre_command_focus was FRAME → focus returns to frame → cursor on message row.
     assert_ne!(
         row_after,
         ROWS - 1,
@@ -2407,35 +2402,40 @@ fn normal_mode_named_register_paste() {
     );
 }
 
-/// Issue 1: in Normal mode the terminal cursor must stay on the input bar even
-/// when a message is selected via 'k'.  The selection should be shown as a
-/// highlight only; the cursor belongs on the input bar until the user
-/// explicitly starts an in-place edit.
+/// In Normal mode, pressing 'k' moves layout focus to the frame and selects
+/// the last visible message.  The cursor follows focus, so it should land on
+/// the selected message row, not on the input bar.
 #[test]
-fn cursor_stays_on_input_bar_after_k_navigation_in_normal_mode() {
+fn cursor_moves_to_message_row_after_k_navigation_in_normal_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
     fill_console(&h);
     enter_normal(&h);
 
-    // 'k' selects the last visible message and moves layout focus to the
-    // frame.  That gives the message a priority-2 cursor while the input
-    // bar is only priority 1 → cursor ends up on the message (bug).
     h.send_bytes(b"k");
     thread::sleep(Duration::from_millis(200));
 
     let parser = h.snapshot();
     let screen = parser.screen();
     let (row, _) = screen.cursor_position();
+    let selected_rows = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
     h.shutdown();
 
-    assert_eq!(
+    assert!(
+        !selected_rows.is_empty(),
+        "a message should be selected after 'k'\n{}",
+        describe(screen)
+    );
+    assert_ne!(
         row,
         ROWS - 1,
-        "cursor should stay on input bar (row {}) in Normal mode after 'k', got row {}\n{}",
-        ROWS - 1,
-        row,
+        "cursor should be on the message row after 'k', not on the input bar\n{}",
+        describe(screen)
+    );
+    assert!(
+        selected_rows.contains(&row),
+        "cursor (row {row}) should be on one of the selected rows ({selected_rows:?})\n{}",
         describe(screen)
     );
 }

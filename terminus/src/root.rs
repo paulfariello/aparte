@@ -98,9 +98,12 @@ impl<E, C: PopupColors> View<E, C> for Root<E, C> {
     fn render(&self, frame: ScreenFrame<'_>, config: &C) {
         // Reborrow so the mutable reference can be reused for the popup layer.
         let parent_dims = frame.dimensions;
+        let popup_visible = self.popup.is_visible();
         let buf = frame.offscreen;
-        self.background
-            .render(ScreenFrame::new(&mut *buf, parent_dims), config);
+        self.background.render(
+            ScreenFrame::new(&mut *buf, parent_dims, !popup_visible),
+            config,
+        );
         self.popup.render(&mut *buf, config);
     }
 
@@ -350,7 +353,7 @@ mod tests {
         let mut buf = OffscreenRenderBuffer::default();
         buf.set_size(ScreenSize::from((W, H)));
         root.layout(&dims);
-        let frame = ScreenFrame::new(&mut buf, &dims);
+        let frame = ScreenFrame::new(&mut buf, &dims, true);
         root.render(frame, &ThemedConfig);
 
         // Border top-left corner is at row 3, col 16 (see popup_content_is_centered)

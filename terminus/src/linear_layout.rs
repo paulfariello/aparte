@@ -333,9 +333,18 @@ impl<E, C> View<E, C> for LinearLayout<E, C> {
 
     fn render(&self, frame: ScreenFrame, config: &C) {
         log::debug!("rendering {}", std::any::type_name::<Self>());
-        let ScreenFrame { offscreen, .. } = frame;
-        for LayoutChild { child, dimensions } in &self.children {
-            let child_frame = ScreenFrame::new(offscreen, dimensions.as_ref().unwrap());
+        let ScreenFrame {
+            offscreen,
+            cursor_granted,
+            ..
+        } = frame;
+        for (idx, LayoutChild { child, dimensions }) in self.children.iter().enumerate() {
+            let child_cursor_granted = cursor_granted && (Some(idx) == self.focused_child_index);
+            let child_frame = ScreenFrame::new(
+                offscreen,
+                dimensions.as_ref().unwrap(),
+                child_cursor_granted,
+            );
             child.view.render(child_frame, config);
         }
     }
