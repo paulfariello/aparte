@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs-local.url = "path:/home/needle/workspace/nixpkgs/";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -10,13 +11,17 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils }:
+  outputs = { self, nixpkgs, nixpkgs-local, rust-overlay, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
           inherit system overlays;
           config.allowUnfree = true;
+        };
+
+        pkgs-local = import nixpkgs-local {
+          inherit system;
         };
 
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -58,6 +63,9 @@
               git
               pre-commit
               asciinema
+            ]) ++ (with pkgs-local; [
+              python3
+              python3Packages.mempalace
             ]);
             shellHook = sslHook;
           };

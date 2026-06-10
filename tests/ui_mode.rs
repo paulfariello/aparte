@@ -2534,6 +2534,122 @@ fn o_in_normal_mode_with_frame_focus_moves_to_input() {
     );
 }
 
+// ── a / A (append) commands ───────────────────────────────────────────────────
+
+#[test]
+fn a_in_normal_mode_switches_to_insert() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"a");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Expected INSERT mode indicator after 'a' in Normal mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn a_in_normal_mode_advances_cursor_one_right() {
+    // "hello world" grapheme map: h=0 e=1 l=2 l=3 o=4 …
+    // After Esc cursor is at col 10. Move to col 2 with "0ll",
+    // then 'a' must advance to col 3 (one past the current character).
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0ll");
+    thread::sleep(Duration::from_millis(150));
+
+    h.send_bytes(b"a");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
+    assert_eq!(col, 3, "'a' from col 2 must advance cursor to col 3");
+}
+
+#[test]
+fn a_at_end_of_buffer_positions_cursor_past_last_char() {
+    // After Esc cursor is at col 10 (last char of "hello world").
+    // 'a' must enter Insert at col 11 (one past the end; Insert allows len).
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"a");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
+    assert_eq!(
+        col, 11,
+        "'a' at last char (col 10) must place cursor at col 11"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn A_in_normal_mode_switches_to_insert() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b"A");
+    let found = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Expected INSERT mode indicator after 'A' in Normal mode\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn A_in_normal_mode_moves_cursor_to_end() {
+    // From col 0 (after '0'), 'A' must enter Insert at col 11 (end of "hello world").
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    let parser = h.snapshot();
+    let (row, col) = parser.screen().cursor_position();
+    h.shutdown();
+
+    assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
+    assert_eq!(col, 11, "'A' must move cursor to end of buffer (col 11)");
+}
+
 /// Regression: after `:msg contact@domain.tld` opens a 1-1 chat window and
 /// delivers the first message, the visual cursor must land on the input bar
 /// (row ROWS-1), not on the incoming message.

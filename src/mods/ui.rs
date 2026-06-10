@@ -1717,8 +1717,13 @@ fn dispatch_action(
                 }
             }
         }
-        if let UIEvent::ApplyTextAction(_, Some(rv)) = evt {
-            registers.yank(action.register, rv);
+        if let UIEvent::ApplyTextAction(_, Some(ref rv)) = evt {
+            registers.yank(action.register, rv.clone());
+        }
+        if !frame_has_cursor {
+            if let UIEvent::InputChanged(ref buf, ref cursor, password) = evt {
+                *current_input = (buf.clone(), cursor.clone(), password);
+            }
         }
         if matches!(action.operator, Operator::Change) {
             *mode = Mode::Insert;
@@ -1843,6 +1848,93 @@ impl ModTrait for UIMod {
                             }
                         }
                         // If focused component is not insertable, deny INSERT mode silently.
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('a'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        let focused_is_insertable = layout
+                            .focused_child()
+                            .map(|c| c.insertable())
+                            .unwrap_or(false);
+                        if focused_is_insertable {
+                            let focus_on_frame =
+                                layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+                            if focus_on_frame {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::StartEdit);
+                                }
+                                message_cursor_active = true;
+                            } else {
+                                let (buf, cursor, _) = current_input.clone();
+                                let len = buf.graphemes(true).count();
+                                let new_pos = (cursor.get() + 1).min(len);
+                                let mut sis_event = UIEvent::SetInputState(buf.clone(), new_pos);
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut sis_event);
+                                }
+                                if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
+                                    sis_event
+                                {
+                                    current_input = (buf2.clone(), cursor2.clone(), password);
+                                    aparte_proxy.schedule(Event::InputChanged(
+                                        buf2.clone(),
+                                        cursor2.clone(),
+                                        password,
+                                    ));
+                                }
+                            }
+                            action_parser.reset();
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('A'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        let focused_is_insertable = layout
+                            .focused_child()
+                            .map(|c| c.insertable())
+                            .unwrap_or(false);
+                        if focused_is_insertable {
+                            let focus_on_frame =
+                                layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+                            if focus_on_frame {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::StartEdit);
+                                }
+                                message_cursor_active = true;
+                            } else {
+                                let (buf, _, _) = current_input.clone();
+                                let len = buf.graphemes(true).count();
+                                let mut sis_event = UIEvent::SetInputState(buf.clone(), len);
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut sis_event);
+                                }
+                                if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
+                                    sis_event
+                                {
+                                    current_input = (buf2.clone(), cursor2.clone(), password);
+                                    aparte_proxy.schedule(Event::InputChanged(
+                                        buf2.clone(),
+                                        cursor2.clone(),
+                                        password,
+                                    ));
+                                }
+                            }
+                            action_parser.reset();
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
+                        }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char('o'),
@@ -2298,6 +2390,13 @@ impl ModTrait for UIMod {
             UIEvent::ApplyTextAction(action, slot) => {
                 if let Some(rv) = input.editor.apply_action(action) {
                     *slot = Some(rv);
+                }
+                if matches!(action.operator, Operator::Move) {
+                    *event = UIEvent::InputChanged(
+                        input.editor.buf.clone(),
+                        input.editor.cursor.clone(),
+                        input.password,
+                    );
                 }
             }
             UIEvent::SetInputState(content, cursor_pos) => {
