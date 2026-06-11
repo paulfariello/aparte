@@ -115,6 +115,10 @@ enum UIEvent {
     /// so we don't accidentally start an in-place edit when the user just
     /// wants to type in the input bar.
     StartEdit,
+    /// Like StartEdit but positions the Insert cursor one past the current char (vim `a`).
+    AppendEdit,
+    /// Like StartEdit but positions the Insert cursor at end of buffer (vim `A`).
+    AppendEndEdit,
     /// Clears the input bar (pushes to history then blanks the buffer).
     /// Fire-and-forget: the caller reads `self.current_input` before
     /// dispatching, then dispatches this to let the widget clear itself.
@@ -1101,6 +1105,36 @@ impl UIMod {
                                         }
                                     });
                                 }
+                                UIEvent::AppendEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.right();
+                                            }
+                                        }
+                                    });
+                                }
+                                UIEvent::AppendEndEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.end();
+                                            }
+                                        }
+                                    });
+                                }
                                 UIEvent::MoveCursor(motion, count) => {
                                     if view.selected().is_some_and(MessageView::is_editing) {
                                         view.update_selected(|msg| {
@@ -1433,6 +1467,36 @@ impl UIMod {
                                                 msg.start_cursor();
                                             }
                                             msg.set_normal_mode(false);
+                                        }
+                                    });
+                                }
+                                UIEvent::AppendEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.right();
+                                            }
+                                        }
+                                    });
+                                }
+                                UIEvent::AppendEndEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.end();
+                                            }
                                         }
                                     });
                                 }
@@ -1862,7 +1926,7 @@ impl ModTrait for UIMod {
                                 layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
                             if focus_on_frame {
                                 if let Some(focused) = layout.focused_child_mut() {
-                                    focused.event(&mut UIEvent::StartEdit);
+                                    focused.event(&mut UIEvent::AppendEdit);
                                 }
                                 message_cursor_active = true;
                             } else {
@@ -1906,7 +1970,7 @@ impl ModTrait for UIMod {
                                 layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
                             if focus_on_frame {
                                 if let Some(focused) = layout.focused_child_mut() {
-                                    focused.event(&mut UIEvent::StartEdit);
+                                    focused.event(&mut UIEvent::AppendEndEdit);
                                 }
                                 message_cursor_active = true;
                             } else {
@@ -2322,6 +2386,8 @@ impl ModTrait for UIMod {
                 // layout think navigation failed when it actually succeeded.
                 | UIEvent::NormalCommand { .. }
                 | UIEvent::StartEdit
+                | UIEvent::AppendEdit
+                | UIEvent::AppendEndEdit
                 // Text actions and cursor moves go to the focused window only.
                 | UIEvent::MoveCursor(..)
                 | UIEvent::ApplyTextAction(..) => frame.route_to_focused(event),

@@ -1916,6 +1916,84 @@ fn message_editor_w_moves_cursor_to_next_word() {
     );
 }
 
+/// 'a' on a message in the frame must advance the edit cursor one right
+/// before entering Insert mode, so typing inserts AFTER the current char.
+#[test]
+fn a_in_message_editor_inserts_after_current_char() {
+    // Navigate to "hello" message.  Normal-mode cursor starts at 'h' (col 0).
+    // 'a' must enter Insert at col 1 (after 'h').  Typing 'z' must produce
+    // "hzello", not "zhello" (which would be insert-before behaviour).
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    // Cursor is now at col 0 ('h') in Normal mode.
+    h.send_bytes(b"a");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let found = find_row_with(screen, "hzello");
+    assert!(
+        found.is_some(),
+        "'a' from 'h' then 'z' must produce \"hzello\" (after 'h'), not \"zhello\" (before 'h')\n{}",
+        describe(screen)
+    );
+}
+
+/// 'A' on a message in the frame must move the edit cursor to the end of the
+/// buffer before entering Insert mode.
+#[test]
+#[allow(non_snake_case)]
+fn A_in_message_editor_moves_cursor_to_end() {
+    // Navigate to "hello" message.  Normal-mode cursor starts at 'h' (col 0).
+    // 'A' must enter Insert at end (after 'o').  Typing 'z' must produce
+    // "helloz", not "zhello".
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let found = find_row_with(screen, "helloz");
+    assert!(
+        found.is_some(),
+        "'A' from col 0 then 'z' must produce \"helloz\" (at end), not \"zhello\"\n{}",
+        describe(screen)
+    );
+}
+
 /// Escape while in message-editor Normal mode (auto-started by navigation)
 /// cancels the edit.
 #[test]
@@ -2648,6 +2726,132 @@ fn A_in_normal_mode_moves_cursor_to_end() {
 
     assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
     assert_eq!(col, 11, "'A' must move cursor to end of buffer (col 11)");
+}
+
+#[test]
+fn a_at_last_char_inserts_after_not_before() {
+    // "hello world" in input, Normal mode, cursor at 'd' (col 10) — the last
+    // char.  'a' must enter Insert at col 11 (AFTER 'd').  Typing 'X' must
+    // produce "hello worldX", not "hello worlXd" (which would mean Insert at
+    // col 10, i.e. before 'd').
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    // No motion: cursor is already at the last char (col 10) after Esc.
+    h.send_bytes(b"a");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    h.send_bytes(b"X");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("hello worldX"),
+        "'a' at last char must produce \"hello worldX\" (after 'd'), not \"hello worlXd\" (before 'd'), got: {input:?}\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn a_at_first_char_inserts_after_not_before() {
+    // "hello world" in input, Normal mode, cursor at 'h' (col 0) after '0'.
+    // 'a' must enter Insert at col 1 (AFTER 'h').  Typing 'X' must
+    // produce "hXello world", not "Xhello world" (before 'h').
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+
+    h.send_bytes(b"a");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    h.send_bytes(b"X");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("hXello world"),
+        "'a' at first char must produce \"hXello world\" (after 'h'), not \"Xhello world\" (before 'h'), got: {input:?}\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn a_in_normal_mode_typing_inserts_after_cursor() {
+    // "hello world" in input, Normal mode, cursor at 'l' (col 2) after "0ll".
+    // 'a' → Insert at col 3. Typing 'X' must produce "helXlo world".
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0ll");
+    thread::sleep(Duration::from_millis(150));
+
+    h.send_bytes(b"a");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    h.send_bytes(b"X");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("helXlo world"),
+        "'a' from col 2 then 'X' must produce \"helXlo world\", got: {input:?}\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn A_in_normal_mode_typing_inserts_at_end() {
+    // "hello world" in input, Normal mode, cursor at 'h' (col 0) after "0".
+    // 'A' → Insert at end (col 11). Typing 'X' must produce "hello worldX".
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    type_hello_world_then_normal(&h);
+
+    h.send_bytes(b"0");
+    thread::sleep(Duration::from_millis(150));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+
+    h.send_bytes(b"X");
+    thread::sleep(Duration::from_millis(150));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, ROWS - 1);
+    assert!(
+        input.contains("hello worldX"),
+        "'A' from col 0 then 'X' must produce \"hello worldX\", got: {input:?}\n{}",
+        describe(screen)
+    );
 }
 
 /// Regression: after `:msg contact@domain.tld` opens a 1-1 chat window and
