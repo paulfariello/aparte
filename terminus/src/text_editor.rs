@@ -25,6 +25,9 @@ pub struct TextEditor {
     /// Whether the editor is in Normal mode (cursor capped at `len-1`,
     /// block cursor style) vs Insert mode (cursor may sit at `len`).
     pub normal_mode: bool,
+    /// Set on the first keystroke that modifies the buffer. Distinguishes a
+    /// real Edit Session from a navigation cursor that hasn't been touched.
+    pub dirty: bool,
     width: Cell<usize>,
 }
 
@@ -42,6 +45,7 @@ impl TextEditor {
             cursor: Cursor::new(0),
             view: Cursor::new(0),
             normal_mode: false,
+            dirty: false,
             width: Cell::new(0),
         }
     }
@@ -53,6 +57,7 @@ impl TextEditor {
             cursor: Cursor::new(0),
             view: Cursor::new(0),
             normal_mode: false,
+            dirty: false,
             width: Cell::new(0),
         };
         editor.end();
@@ -81,12 +86,14 @@ impl TextEditor {
     }
 
     pub fn key(&mut self, c: char) {
+        self.dirty = true;
         let byte_index = self.cursor.index(&self.buf);
         self.buf.insert(byte_index, c);
         self.cursor += 1;
     }
 
     pub fn backspace(&mut self) {
+        self.dirty = true;
         if self.cursor > Cursor::new(0) {
             self.cursor -= 1;
             let mut byte_index = self.cursor.index(&self.buf);
@@ -102,6 +109,7 @@ impl TextEditor {
     }
 
     pub fn backward_delete_word(&mut self) {
+        self.dirty = true;
         let iter = self.buf[..self.cursor.index(&self.buf)].chars().rev();
         let mut word_start = self.cursor.clone();
         word_start -= next_word(iter);
@@ -113,16 +121,19 @@ impl TextEditor {
     }
 
     pub fn delete_from_cursor_to_start(&mut self) {
+        self.dirty = true;
         self.buf.replace_range(0..self.cursor.index(&self.buf), "");
         self.cursor.set(0);
         self.view.set(0);
     }
 
     pub fn delete_from_cursor_to_end(&mut self) {
+        self.dirty = true;
         self.buf.replace_range(self.cursor.index(&self.buf).., "");
     }
 
     pub fn delete(&mut self) {
+        self.dirty = true;
         if self.cursor < self.buf.graphemes(true).count() {
             let byte_index = self.cursor.index(&self.buf);
 
@@ -149,6 +160,7 @@ impl TextEditor {
     }
 
     pub fn clear(&mut self) {
+        self.dirty = true;
         self.buf.clear();
         self.cursor.set(0);
         self.view.set(0);
@@ -251,6 +263,7 @@ impl TextEditor {
     /// Cursor is left at the start of the deleted range (or end of buffer if
     /// the deletion reached the end).
     pub fn delete_motion(&mut self, motion: &Motion, count: usize) -> RegisterValue {
+        self.dirty = true;
         let (lo, hi) = self.grapheme_range(motion, count);
         if lo >= hi {
             return RegisterValue::new("", MotionType::Char);

@@ -119,6 +119,8 @@ enum UIEvent {
     AppendEdit,
     /// Like StartEdit but positions the Insert cursor at end of buffer (vim `A`).
     AppendEndEdit,
+    /// Discard the in-place edit on the selected message without sending a correction.
+    CancelEdit,
     /// Clears the input bar (pushes to history then blanks the buffer).
     /// Fire-and-forget: the caller reads `self.current_input` before
     /// dispatching, then dispatches this to let the widget clear itself.
@@ -148,6 +150,9 @@ enum UIEvent {
     /// Insert `text` at the current cursor position in the input bar.
     Paste(String),
     ReduceHighlight(String, u64, u64),
+    /// Signals a change in dirty Edit Session presence for a window.
+    /// `true` = a new dirty edit exists; `false` = a dirty edit was committed or cancelled.
+    EditIndicator(String, bool),
     ShowPopup {
         title: Option<String>,
         lines: Vec<String>,
@@ -364,6 +369,7 @@ struct WinBar {
     display_names: HashMap<String, String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
+    editing: HashSet<String>,
     dimensions: Option<Dimensions>,
     command_buffer: String,
 }
@@ -375,6 +381,7 @@ impl WinBar {
             display_names: HashMap::new(),
             current_window: None,
             highlighted: HashMap::new(),
+            editing: HashSet::new(),
             dimensions: None,
             command_buffer: String::new(),
         }
@@ -492,6 +499,31 @@ impl View<UIEvent, Theme> for WinBar {
             }
         }
 
+        // Show [e:name1 name2] for non-current windows with suspended dirty edits.
+        if !self.editing.is_empty() {
+            let names: Vec<&str> = self
+                .windows
+                .iter()
+                .filter(|w| {
+                    self.editing.contains(w.as_str())
+                        && self.current_window.as_deref() != Some(w.as_str())
+                })
+                .map(|w| {
+                    self.display_names
+                        .get(w.as_str())
+                        .map(String::as_str)
+                        .unwrap_or(w.as_str())
+                })
+                .collect();
+            if !names.is_empty() {
+                let indicator = format!(" [e:{}]", names.join(" ")).with_style(Style::Bold);
+                let iw = indicator.display_width();
+                if frame.width() >= iw {
+                    frame.write_at((frame.width() - iw, 0u16), &indicator);
+                }
+            }
+        }
+
         if !self.command_buffer.is_empty() {
             let cmd_buf = self.command_buffer.as_str().with_style(Style::Bold);
             let cmd_buf_width = cmd_buf.display_width();
@@ -507,7 +539,8 @@ impl View<UIEvent, Theme> for WinBar {
     fn event(&mut self, event: &mut UIEvent) {
         match event {
             UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_current_window(&terminus::clean_str(name));
+                let clean = terminus::clean_str(name);
+                self.set_current_window(&clean);
             }
             UIEvent::AddWindow(jid, display_name, _) => {
                 if let Some(name) = display_name {
@@ -527,6 +560,13 @@ impl View<UIEvent, Theme> for WinBar {
             }
             UIEvent::ReduceHighlight(window, total, important) => {
                 self.reduce_highlight(window, *total, *important);
+            }
+            UIEvent::EditIndicator(window, dirty) => {
+                if *dirty {
+                    self.editing.insert(window.clone());
+                } else {
+                    self.editing.remove(window.as_str());
+                }
             }
             UIEvent::CommandBufferUpdate(buf) => {
                 self.command_buffer.clone_from(buf);
@@ -936,7 +976,7 @@ impl UIMod {
                                     NormalCommand::SelectPrev(count) => {
                                         follow_bottom = false;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -967,7 +1007,7 @@ impl UIMod {
                                     NormalCommand::SelectNext(count) => {
                                         follow_bottom = false;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -986,7 +1026,7 @@ impl UIMod {
                                     NormalCommand::ScrollToTop => {
                                         follow_bottom = false;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -1006,7 +1046,7 @@ impl UIMod {
                                     NormalCommand::ScrollToBottom => {
                                         follow_bottom = true;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -1050,18 +1090,14 @@ impl UIMod {
                                 UIEvent::ModeChange(Mode::Normal) => {
                                     let was_command = current_mode == Mode::Command;
                                     current_mode = Mode::Normal;
-                                    let editor_normal_mode = view
-                                        .selected()
-                                        .and_then(|msg| msg.edit.as_ref())
-                                        .map(|e| e.normal_mode);
-                                    match editor_normal_mode {
-                                        Some(true) if !was_command => {
-                                            view.update_selected(|msg| msg.cancel_edit());
-                                        }
-                                        Some(false) => {
-                                            view.update_selected(|msg| msg.set_normal_mode(true));
-                                        }
-                                        _ => {}
+                                    if !was_command {
+                                        // Switch edit buffer to Normal mode when leaving Insert.
+                                        // Dirty edits are preserved for later commit or cancel.
+                                        view.update_selected(|msg| {
+                                            if msg.is_insert_editing() {
+                                                msg.set_normal_mode(true);
+                                            }
+                                        });
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Command) => {
@@ -1156,16 +1192,15 @@ impl UIMod {
                                         }
                                     }
                                 }
-                                // Enter in Insert mode commits an in-place edit
-                                // (if one is active) by scheduling SendCorrection
-                                // and mutating the event so the outer layout
-                                // detects the commit and transitions to Normal.
+                                // Enter commits a dirty in-place edit from Insert or Normal mode
+                                // by scheduling SendCorrection and mutating the event so the
+                                // outer layout transitions to Normal.
                                 UIEvent::Core(Event::Key(KeyEvent {
                                     code: KeyCode::Enter,
                                     ..
-                                })) if current_mode == Mode::Insert => {
+                                })) if matches!(current_mode, Mode::Insert | Mode::Normal) => {
                                     let pair = view.update_selected(|msg| {
-                                        if !msg.is_insert_editing() {
+                                        if !msg.is_dirty_editing() {
                                             return None;
                                         }
                                         let id = match &msg.message {
@@ -1180,9 +1215,26 @@ impl UIMod {
                                             original_id: original_id.clone(),
                                             new_body: new_body.clone(),
                                         });
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: chat_for_event.contact.to_string(),
+                                            dirty: false,
+                                        });
                                         *event = UIEvent::Core(Event::SendCorrection {
                                             original_id,
                                             new_body,
+                                        });
+                                    }
+                                }
+                                UIEvent::CancelEdit => {
+                                    let was_dirty = view
+                                        .selected()
+                                        .map(|m| m.is_dirty_editing())
+                                        .unwrap_or(false);
+                                    view.update_selected(|msg| msg.cancel_edit());
+                                    if was_dirty {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: chat_for_event.contact.to_string(),
+                                            dirty: false,
                                         });
                                     }
                                 }
@@ -1192,7 +1244,24 @@ impl UIMod {
                                     if current_mode == Mode::Insert
                                         && view.selected().is_some_and(MessageView::is_editing) =>
                                 {
+                                    let was_dirty = view
+                                        .selected()
+                                        .and_then(|m| m.edit.as_ref())
+                                        .map(|e| e.dirty)
+                                        .unwrap_or(false);
                                     view.update_selected(|msg| dispatch_edit_key(msg, key));
+                                    if !was_dirty
+                                        && view
+                                            .selected()
+                                            .and_then(|m| m.edit.as_ref())
+                                            .map(|e| e.dirty)
+                                            .unwrap_or(false)
+                                    {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: chat_for_event.contact.to_string(),
+                                            dirty: true,
+                                        });
+                                    }
                                 }
                                 _ => {}
                             }
@@ -1297,7 +1366,7 @@ impl UIMod {
                                     NormalCommand::SelectPrev(count) => {
                                         follow_bottom = false;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -1328,7 +1397,7 @@ impl UIMod {
                                     NormalCommand::SelectNext(count) => {
                                         follow_bottom = false;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -1347,7 +1416,7 @@ impl UIMod {
                                     NormalCommand::ScrollToTop => {
                                         follow_bottom = false;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -1367,7 +1436,7 @@ impl UIMod {
                                     NormalCommand::ScrollToBottom => {
                                         follow_bottom = true;
                                         view.update_selected(|msg| {
-                                            if msg.is_editing() {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
                                                 msg.cancel_edit();
                                             }
                                         });
@@ -1420,18 +1489,14 @@ impl UIMod {
                                 UIEvent::ModeChange(Mode::Normal) => {
                                     let was_command = current_mode == Mode::Command;
                                     current_mode = Mode::Normal;
-                                    let editor_normal_mode = view
-                                        .selected()
-                                        .and_then(|msg| msg.edit.as_ref())
-                                        .map(|e| e.normal_mode);
-                                    match editor_normal_mode {
-                                        Some(true) if !was_command => {
-                                            view.update_selected(|msg| msg.cancel_edit());
-                                        }
-                                        Some(false) => {
-                                            view.update_selected(|msg| msg.set_normal_mode(true));
-                                        }
-                                        _ => {}
+                                    if !was_command {
+                                        // Switch edit buffer to Normal mode when leaving Insert.
+                                        // Dirty edits are preserved for later commit or cancel.
+                                        view.update_selected(|msg| {
+                                            if msg.is_insert_editing() {
+                                                msg.set_normal_mode(true);
+                                            }
+                                        });
                                     }
                                 }
                                 UIEvent::ModeChange(Mode::Command) => {
@@ -1524,9 +1589,9 @@ impl UIMod {
                                 UIEvent::Core(Event::Key(KeyEvent {
                                     code: KeyCode::Enter,
                                     ..
-                                })) if current_mode == Mode::Insert => {
+                                })) if matches!(current_mode, Mode::Insert | Mode::Normal) => {
                                     let pair = view.update_selected(|msg| {
-                                        if !msg.is_insert_editing() {
+                                        if !msg.is_dirty_editing() {
                                             return None;
                                         }
                                         let id = match &msg.message {
@@ -1541,9 +1606,26 @@ impl UIMod {
                                             original_id: original_id.clone(),
                                             new_body: new_body.clone(),
                                         });
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: channel_for_event.jid.to_string(),
+                                            dirty: false,
+                                        });
                                         *event = UIEvent::Core(Event::SendCorrection {
                                             original_id,
                                             new_body,
+                                        });
+                                    }
+                                }
+                                UIEvent::CancelEdit => {
+                                    let was_dirty = view
+                                        .selected()
+                                        .map(|m| m.is_dirty_editing())
+                                        .unwrap_or(false);
+                                    view.update_selected(|msg| msg.cancel_edit());
+                                    if was_dirty {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: channel_for_event.jid.to_string(),
+                                            dirty: false,
                                         });
                                     }
                                 }
@@ -1551,7 +1633,24 @@ impl UIMod {
                                     if current_mode == Mode::Insert
                                         && view.selected().is_some_and(MessageView::is_editing) =>
                                 {
+                                    let was_dirty = view
+                                        .selected()
+                                        .and_then(|m| m.edit.as_ref())
+                                        .map(|e| e.dirty)
+                                        .unwrap_or(false);
                                     view.update_selected(|msg| dispatch_edit_key(msg, key));
+                                    if !was_dirty
+                                        && view
+                                            .selected()
+                                            .and_then(|m| m.edit.as_ref())
+                                            .map(|e| e.dirty)
+                                            .unwrap_or(false)
+                                    {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: channel_for_event.jid.to_string(),
+                                            dirty: true,
+                                        });
+                                    }
                                 }
                                 _ => {}
                             }
@@ -1831,14 +1930,40 @@ impl ModTrait for UIMod {
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Esc, ..
+                    })) if mode == Mode::Insert && message_cursor_active => {
+                        // Esc from message Insert mode: switch to Normal mode only.
+                        // Dirty edit is preserved (suspended) — message_cursor_active stays true.
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) if message_cursor_active => {
+                        // Ctrl+C cancels the edit from either Insert or Normal mode.
+                        layout.route_to_focused(&mut UIEvent::CancelEdit);
+                        mode = Mode::Normal;
+                        message_cursor_active = false;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
                     })) if mode == Mode::Insert => {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
                         let focus_on_frame = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
                         if focus_on_frame {
-                            // Esc while editing: switch editor from Insert to Normal mode.
-                            // A second Esc (in Normal mode) cancels the edit.
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::ModeChange(Mode::Normal));
                             }
@@ -2249,13 +2374,13 @@ impl ModTrait for UIMod {
                             child.event(event);
                         }
                     }
-                    // Enter in Insert mode with a message cursor commits the
-                    // in-place edit by routing to the frame.  The ScrollWin
-                    // handles the commit and mutates the event to SendCorrection.
+                    // Enter with an active message cursor commits the in-place edit
+                    // from Insert or Normal mode. The ScrollWin handles the commit
+                    // and mutates the event to SendCorrection.
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Enter,
                         ..
-                    })) if mode == Mode::Insert && message_cursor_active => {
+                    })) if message_cursor_active && matches!(mode, Mode::Insert | Mode::Normal) => {
                         layout.route_to_focused(event);
                         if matches!(*event, UIEvent::Core(Event::SendCorrection { .. })) {
                             mode = Mode::Normal;
@@ -3113,6 +3238,10 @@ impl ModTrait for UIMod {
                     raw_buf.clone(),
                     cursor.clone(),
                 )));
+            }
+            Event::EditSessionDirty { window, dirty } => {
+                self.root
+                    .event(&mut UIEvent::EditIndicator(window.clone(), *dirty));
             }
             Event::Notification {
                 conversation,

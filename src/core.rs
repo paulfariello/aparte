@@ -208,6 +208,13 @@ pub enum Event {
         original_id: String,
         new_body: String,
     },
+    /// Fired by the UI scroll-win when the dirty state of a message Edit Session
+    /// changes. `dirty: true` when first keystroke makes it dirty; `false` when
+    /// committed or cancelled.
+    EditSessionDirty {
+        window: String,
+        dirty: bool,
+    },
 }
 
 impl FocusRouted for Event {

@@ -953,6 +953,7 @@ impl MessageView {
     /// Abandon any in-progress edit and revert to displaying the message body.
     pub fn cancel_edit(&mut self) {
         self.edit = None;
+        *self.measure_cache.borrow_mut() = None;
     }
 
     /// Take the current edit buffer (clearing the edit state).
@@ -975,6 +976,13 @@ impl MessageView {
     /// (from start_cursor) must not count as an in-progress edit.
     pub fn is_insert_editing(&self) -> bool {
         self.edit.as_ref().map(|e| !e.normal_mode).unwrap_or(false)
+    }
+
+    /// True when an Edit Session exists and the buffer has been modified
+    /// (dirty flag set). Works regardless of whether the editor is currently
+    /// in Insert or Normal mode — covers the suspended-edit case.
+    pub fn is_dirty_editing(&self) -> bool {
+        self.edit.as_ref().map(|e| e.dirty).unwrap_or(false)
     }
 
     /// Apply a Normal-mode text action to the edit buffer.

@@ -1994,36 +1994,268 @@ fn A_in_message_editor_moves_cursor_to_end() {
     );
 }
 
-/// Escape while in message-editor Normal mode (auto-started by navigation)
-/// cancels the edit.
+/// Escape while in message-editor Normal mode is a no-op on the edit state:
+/// a navigation cursor (clean, dirty=false) is not cancelled by Esc.
 #[test]
-fn message_editor_second_esc_cancels_edit() {
+fn message_editor_esc_does_not_cancel_navigation_cursor() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
     setup_message_editor_normal_mode(&h);
 
-    // Single Escape cancels the edit (editor was already in Normal mode).
+    // Esc in Normal mode: must be a no-op — mode stays NORMAL, message visible.
     h.send_bytes(b"\x1b");
     thread::sleep(Duration::from_millis(300));
 
     let parser = h.snapshot();
-    let (row, _) = parser.screen().cursor_position();
-
     h.shutdown();
 
-    // After cancel, focus should return to input bar or the message row
-    // without an active edit. The mode bar still shows NORMAL.
     assert!(
         grid_contains(parser.screen(), "NORMAL"),
-        "Should still be in NORMAL mode after canceling edit\n{}",
+        "must stay in NORMAL mode after Esc on navigation cursor\n{}",
         describe(parser.screen())
     );
-    // Cursor must NOT be on the input bar when we were just editing a message
-    // and then canceled — the frame still has focus (message is selected but
-    // no longer in editing state, so selection cursor applies).
-    // We just verify the mode indicator is correct.
-    let _ = row; // row assertion omitted: position depends on selection state
+    assert!(
+        grid_contains(parser.screen(), "hello world"),
+        "message must still be visible after Esc (no cancellation)\n{}",
+        describe(parser.screen())
+    );
+}
+
+/// Esc from Insert mode while editing does NOT commit — the edit is suspended.
+/// Proof: Esc → Ctrl+C (cancel) → original body reappears, not the edited one.
+#[test]
+fn message_editor_esc_does_not_commit() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    // Esc → Normal mode (edit suspended, not committed).
+    h.send_bytes(b"\x1b");
+    thread::sleep(Duration::from_millis(300));
+
+    // Ctrl+C cancels the suspended edit — original body must reappear.
+    h.send_bytes(b"\x03");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "mode must be NORMAL after cancel\n{}",
+        describe(screen)
+    );
+    assert!(
+        find_row_with(screen, "helloz").is_none(),
+        "Esc must not commit: 'helloz' must NOT appear after Ctrl+C cancel\n{}",
+        describe(screen)
+    );
+    assert!(
+        find_row_with(screen, "hello").is_some(),
+        "original 'hello' must reappear after Ctrl+C cancel\n{}",
+        describe(screen)
+    );
+}
+
+/// Enter from Insert mode commits the correction.
+#[test]
+fn message_editor_enter_in_insert_commits() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    // Enter commits from Insert mode.
+    h.send_bytes(b"\r");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "mode must return to NORMAL after Enter commit\n{}",
+        describe(screen)
+    );
+    assert!(
+        find_row_with(screen, "helloz").is_some(),
+        "Enter must commit: 'helloz' must appear on screen\n{}",
+        describe(screen)
+    );
+}
+
+/// Enter from Normal mode (after Esc) also commits a dirty correction.
+#[test]
+fn message_editor_enter_in_normal_mode_commits() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    // Esc → Normal mode (edit suspended, dirty).
+    h.send_bytes(b"\x1b");
+    thread::sleep(Duration::from_millis(300));
+
+    // Enter from Normal mode must commit the suspended edit.
+    h.send_bytes(b"\r");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "mode must be NORMAL after commit\n{}",
+        describe(screen)
+    );
+    assert!(
+        find_row_with(screen, "helloz").is_some(),
+        "Enter from Normal mode must commit the suspended edit: 'helloz' must appear\n{}",
+        describe(screen)
+    );
+}
+
+/// Ctrl+C from Normal mode (after Esc) cancels a dirty correction.
+#[test]
+fn message_editor_ctrl_c_from_normal_cancels() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    // Esc → Normal mode (edit suspended).
+    h.send_bytes(b"\x1b");
+    thread::sleep(Duration::from_millis(300));
+
+    // Ctrl+C from Normal mode must cancel.
+    h.send_bytes(b"\x03");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "mode must be NORMAL after Ctrl+C cancel\n{}",
+        describe(screen)
+    );
+    assert!(
+        find_row_with(screen, "helloz").is_none(),
+        "Ctrl+C from Normal must cancel: 'helloz' must NOT appear\n{}",
+        describe(screen)
+    );
+    assert!(
+        find_row_with(screen, "hello").is_some(),
+        "original 'hello' must reappear after Ctrl+C cancel from Normal\n{}",
+        describe(screen)
+    );
+}
+
+/// Ctrl+C in Insert mode while editing a message must cancel the correction.
+#[test]
+fn message_editor_ctrl_c_in_insert_cancels_edit() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message 'hello' must appear on screen");
+
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(200));
+
+    // Enter Insert mode at end of message, append 'z'.
+    h.send_bytes(b"A");
+    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"z");
+    thread::sleep(Duration::from_millis(150));
+
+    // Ctrl+C must cancel (discard the edit).
+    h.send_bytes(b"\x03");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "mode must return to NORMAL after Ctrl+C cancel\n{}",
+        describe(screen)
+    );
+    let not_found = find_row_with(screen, "helloz");
+    assert!(
+        not_found.is_none(),
+        "Ctrl+C must cancel the edit: 'helloz' must NOT appear on screen\n{}",
+        describe(screen)
+    );
+    let found = find_row_with(screen, "hello");
+    assert!(
+        found.is_some(),
+        "original 'hello' must remain after Ctrl+C cancel\n{}",
+        describe(screen)
+    );
 }
 
 /// Regression: pressing Enter in Command mode when a message has a Normal-mode

@@ -19,6 +19,12 @@ A participant currently present in a Channel. Carries a nick, an optional real J
 ## Message
 A unit of content displayed in a Conversation window. May originate from XMPP, from the local user, or from the system (log lines). Carries an ID, timestamp, body, sender, and optional encryption/correction/reaction metadata.
 
+## Correction
+A user-initiated revision of an outgoing Message, sent via XEP-0308. A Correction replaces the body of the original Message in place. A Correction is either **committed** (sent to the server and applied locally) or **discarded** (abandoned without sending).
+
+## Edit Session
+The transient state of a Message being revised locally before the Correction is committed or discarded. An Edit Session is **dirty** when the user has made at least one change to the buffer; it is **clean** when the buffer has not been modified (navigation cursor only). Dirty Edit Sessions are suspended on navigation and survive until explicitly committed or discarded. Clean Edit Sessions are discarded on navigation.
+
 ## Command
 A user-issued instruction prefixed with `:` (e.g. `:join`, `:win`). Commands are parsed from the input bar and dispatched through the event loop. Each command has a parser, completion callbacks, and a handler function.
 
