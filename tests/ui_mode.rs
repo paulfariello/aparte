@@ -3126,3 +3126,49 @@ fn cursor_on_input_bar_after_msg_opens_chat_window() {
         describe(screen)
     );
 }
+
+/// Ctrl+K opens the window-switcher popup.
+#[test]
+fn ctrl_k_opens_window_switcher() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Ctrl+K in Normal mode must open the popup.
+    h.send_bytes(b"\x0b"); // Ctrl+K
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    // The switcher renders a "> " prompt line.
+    assert!(
+        grid_contains(screen, ">"),
+        "Ctrl+K must open window-switcher popup with a '>' prompt\n{}",
+        describe(screen)
+    );
+}
+
+/// Esc closes the window-switcher popup.
+#[test]
+fn ctrl_k_esc_closes_window_switcher() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_bytes(b"\x0b"); // Ctrl+K
+    thread::sleep(Duration::from_millis(200));
+
+    h.send_bytes(b"\x1b"); // Esc
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    // After Esc the '>' prompt must be gone and mode must be NORMAL.
+    assert!(
+        grid_contains(screen, "NORMAL"),
+        "mode must be NORMAL after closing window-switcher\n{}",
+        describe(screen)
+    );
+}

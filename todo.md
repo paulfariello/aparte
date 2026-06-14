@@ -1,4 +1,3 @@
-- Add ctrl-k with popup showing all available windows. top of popup should be an input allowing for fuzzy search, first result is highlighted/selected. Pressing enter send a :win command to switch to given command. Default order of available window are with unread count first.
 - Add action history so we can keep track of all actions. Might be used for repeating actions, creating macro etc
 - there is a memory consumption issue. aparte can easily consume gigs of ram. How can we monitor that and take action to reduce it.
 - is there a way to properly handle ESC key with a timeout (50ms) just like neovim does it?

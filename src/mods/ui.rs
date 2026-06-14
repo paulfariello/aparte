@@ -9,6 +9,8 @@ use crossterm::event::{
 use crossterm::{execute, terminal};
 use futures::task::{Context, Poll};
 use futures::Stream;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -16,6 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::panic;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -107,6 +110,160 @@ impl<E, C> View<E, C> for PopupLine {
     fn event(&mut self, _: &mut E) {}
 }
 
+/// An entry in the Ctrl+K window-switcher popup.
+#[derive(Clone)]
+struct WinEntry {
+    /// Internal key (JID string) used to send `:win`.
+    key: String,
+    /// Human-readable label shown in the popup.
+    label: String,
+    /// Unread count used for sorting when the query is empty.
+    unread: u64,
+}
+
+/// Interactive window-switcher popup triggered by Ctrl+K.
+///
+/// Cursor always stays in the search input (fzf style). Up/Down move the
+/// selection in the filtered list. Enter switches to the selected window.
+struct WindowSwitcher {
+    editor: terminus::text_editor::TextEditor,
+    /// All windows in insertion order (populated once at construction).
+    all: Vec<WinEntry>,
+    /// Filtered & sorted subset of `all` matching the current query.
+    filtered: Vec<WinEntry>,
+    /// Selected index into `filtered`.
+    selected: usize,
+}
+
+impl WindowSwitcher {
+    fn new(all: Vec<WinEntry>) -> Self {
+        let mut sw = Self {
+            editor: terminus::text_editor::TextEditor::new(),
+            filtered: all.clone(),
+            all,
+            selected: 0,
+        };
+        sw.refilter();
+        sw
+    }
+
+    /// Re-run fuzzy filter + sort and reset selection to 0.
+    fn refilter(&mut self) {
+        let query = self.editor.buf.clone();
+        let matcher = SkimMatcherV2::default();
+        if query.is_empty() {
+            // Default order: unread count descending, then insertion order.
+            let mut v = self.all.clone();
+            v.sort_by(|a, b| b.unread.cmp(&a.unread));
+            self.filtered = v;
+        } else {
+            let mut scored: Vec<(i64, u64, WinEntry)> = self
+                .all
+                .iter()
+                .filter_map(|e| {
+                    matcher
+                        .fuzzy_match(&e.label, &query)
+                        .map(|s| (s, e.unread, e.clone()))
+                })
+                .collect();
+            // Score desc, unread desc as tie-break.
+            scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+            self.filtered = scored.into_iter().map(|(_, _, e)| e).collect();
+        }
+        self.selected = 0;
+    }
+
+    fn select_prev(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    fn select_next(&mut self) {
+        if !self.filtered.is_empty() && self.selected + 1 < self.filtered.len() {
+            self.selected += 1;
+        }
+    }
+
+    /// Return the key of the currently selected entry, if any.
+    fn selected_key(&self) -> Option<&str> {
+        self.filtered.get(self.selected).map(|e| e.key.as_str())
+    }
+}
+
+impl View<UIEvent, Theme> for WindowSwitcher {
+    fn measure(&self, specs: &MeasureSpecs) -> RequestedDimensions {
+        // Width: fill available (capped to popup width by PopupLayout).
+        // Height: 1 (prompt line) + up to 10 result rows.
+        let rows = (self.filtered.len().min(10) as u16) + 1;
+        RequestedDimensions {
+            width: match specs.width {
+                terminus::MeasureSpec::AtMost(w) => RequestedDimension::Absolute(w),
+                terminus::MeasureSpec::Unspecified => RequestedDimension::Absolute(40),
+            },
+            height: RequestedDimension::Absolute(rows.max(2)),
+        }
+    }
+
+    fn layout(&mut self, _: &Dimensions) {}
+
+    fn render(&self, mut frame: ScreenFrame<'_>, config: &Theme) {
+        let w = frame.width();
+
+        // Prompt line: "> <query>"
+        let prompt = format!("> {}", self.editor.buf);
+        frame.write_at((0u16, 0u16), prompt.as_str());
+
+        // Place the cursor at the end of the typed query.
+        let cursor_col = (2 + self.editor.buf.graphemes(true).count()) as u16;
+        frame.set_cursor((cursor_col.min(w.saturating_sub(1)), 0u16).into());
+        frame.set_cursor_style(terminus::CursorStyle::SteadyBar);
+        frame.set_cursor_visible(true);
+
+        // Result rows.
+        for (i, entry) in self.filtered.iter().enumerate().take(10) {
+            let row = (i + 1) as u16;
+            let label = if entry.unread > 0 {
+                format!("{} ({})", entry.label, entry.unread)
+            } else {
+                entry.label.clone()
+            };
+            if i == self.selected {
+                frame.set_background_from_row(row, config.selected_message);
+            }
+            frame.write_at((0u16, row), label.as_str());
+        }
+    }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        match event {
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Up, ..
+            })) => self.select_prev(),
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                ..
+            })) => self.select_next(),
+            UIEvent::Core(Event::Key(key)) => {
+                self.editor.handle_key_event(key);
+                self.refilter();
+            }
+            UIEvent::WindowSwitcherPick(slot) => {
+                *slot = self.selected_key().map(ToOwned::to_owned);
+            }
+            _ => {}
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        true
+    }
+
+    fn insertable(&self) -> bool {
+        true
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 enum UIEvent {
     Core(Event),
@@ -158,6 +315,11 @@ enum UIEvent {
         lines: Vec<String>,
     },
     ClosePopup,
+    /// Open the Ctrl+K window-switcher popup.
+    ShowWindowSwitcher(Vec<WinEntry>),
+    /// In-event mutation: the popup layout sends this to the focused WindowSwitcher
+    /// to retrieve the selected window key. The switcher writes back into the Option.
+    WindowSwitcherPick(Option<String>),
 }
 
 impl FocusRouted for UIEvent {
@@ -2354,6 +2516,14 @@ impl ModTrait for UIMod {
                             }
                         }
                     }
+                    // Ctrl+K opens the window-switcher popup in any mode.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('k'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) => {
+                        aparte_proxy.schedule(Event::OpenWindowSwitcher);
+                    }
                     // Ctrl+L forces a full clean repaint in any mode.
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char('l'),
@@ -2661,10 +2831,29 @@ impl ModTrait for UIMod {
                 scroll_win.clear_selection();
                 root.show(Box::new(scroll_win), title.clone());
             }
+            UIEvent::ShowWindowSwitcher(entries) => {
+                let switcher = WindowSwitcher::new(std::mem::take(entries));
+                root.show(Box::new(switcher), None);
+            }
             UIEvent::ClosePopup => {
                 root.hide();
             }
-            // Key events route to popup (when visible) or background.
+            // Key events: when popup visible, Enter on window switcher confirms.
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            })) if root.is_visible() => {
+                // If the focused popup is a WindowSwitcher, extract the selected key
+                // via an event mutation trick: fire a dedicated event and let it write back.
+                let mut pick = UIEvent::WindowSwitcherPick(None);
+                root.route_to_focused(&mut pick);
+                if let UIEvent::WindowSwitcherPick(Some(key)) = pick {
+                    root.hide();
+                    root.background_mut()
+                        .event(&mut UIEvent::Core(Event::Win(key)));
+                }
+            }
+            // All other key events route to popup (when visible) or background.
             UIEvent::Core(Event::Key(_)) => root.route_to_focused(event),
             // All other events always go to the background.
             _ => root.background_mut().event(event),
@@ -3242,6 +3431,30 @@ impl ModTrait for UIMod {
             Event::EditSessionDirty { window, dirty } => {
                 self.root
                     .event(&mut UIEvent::EditIndicator(window.clone(), *dirty));
+            }
+            Event::OpenWindowSwitcher => {
+                let entries: Vec<WinEntry> = self
+                    .windows
+                    .iter()
+                    .map(|key| {
+                        let unread = self
+                            .unread_windows
+                            .get(key)
+                            .map(|q| q.len() as u64)
+                            .unwrap_or(0);
+                        let label = BareJid::from_str(key)
+                            .ok()
+                            .and_then(|jid| self.jid_to_name.get(&jid).cloned())
+                            .unwrap_or_else(|| key.clone());
+                        WinEntry {
+                            key: key.clone(),
+                            label,
+                            unread,
+                        }
+                    })
+                    .collect();
+                self.popup_saved_mode = Some(self.current_mode);
+                self.root.event(&mut UIEvent::ShowWindowSwitcher(entries));
             }
             Event::Notification {
                 conversation,

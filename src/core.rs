@@ -215,6 +215,8 @@ pub enum Event {
         window: String,
         dirty: bool,
     },
+    /// Request to open the Ctrl+K window-switcher popup.
+    OpenWindowSwitcher,
 }
 
 impl FocusRouted for Event {
