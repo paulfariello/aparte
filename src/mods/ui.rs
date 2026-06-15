@@ -3300,6 +3300,15 @@ impl ModTrait for UIMod {
                             return;
                         }
 
+                        // Window-switcher committed: popup mutated the event to Win(key).
+                        if let UIEvent::Core(Event::Win(window)) = enter_evt {
+                            self.change_window(&window);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
+                            return;
+                        }
+
                         // Normal Insert mode send path.
                         let looks_like_cmd = !password
                             && !raw_buf.is_empty()

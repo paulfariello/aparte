@@ -3149,6 +3149,51 @@ fn ctrl_k_opens_window_switcher() {
     );
 }
 
+/// Enter in the window-switcher switches to the selected window.
+///
+/// Uses fuzzy filtering to select the chat window without arrow keys —
+/// arrow key escape sequences can be split by the PTY and misread as Esc.
+#[test]
+fn ctrl_k_enter_switches_window() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Open a chat window so there are two entries in the switcher.
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message must appear");
+
+    // Switch back to console so we can switch away from it.
+    h.send_command("/win console");
+    let in_console = wait_for_screen(&h, "console", Duration::from_secs(3));
+    assert!(in_console, "must be in console window");
+
+    // Open switcher and type a query that fuzzy-matches the chat window
+    // (JID contains "contact") but not "console".
+    h.send_bytes(b"\x0b"); // Ctrl+K
+    thread::sleep(Duration::from_millis(300));
+    h.send_bytes(b"contact"); // filter to the chat window
+    thread::sleep(Duration::from_millis(200));
+    h.send_bytes(b"\r"); // Enter — first (and only) result is selected
+    thread::sleep(Duration::from_millis(400));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    // The injected message must be visible, confirming the window switched.
+    assert!(
+        grid_contains(screen, "hello"),
+        "Enter must switch to the filtered window; 'hello' must be visible\n{}",
+        describe(screen)
+    );
+    assert!(
+        !grid_contains(screen, "> "),
+        "window-switcher popup must be closed after Enter\n{}",
+        describe(screen)
+    );
+}
+
 /// Esc closes the window-switcher popup.
 #[test]
 fn ctrl_k_esc_closes_window_switcher() {
