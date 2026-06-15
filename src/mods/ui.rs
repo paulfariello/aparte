@@ -23,6 +23,7 @@ use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
+use terminus::color::{BgColor, Color};
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
 use terminus::Style;
@@ -209,6 +210,10 @@ impl View<UIEvent, Theme> for WindowSwitcher {
 
     fn render(&self, mut frame: ScreenFrame<'_>, config: &Theme) {
         let w = frame.width();
+
+        // Reset background to terminal default so the popup interior doesn't
+        // inherit the popup border's fill color. The selected row overrides below.
+        frame.set_background(BgColor(Color::Default));
 
         // Prompt line: "> <query>"
         let prompt = format!("> {}", self.editor.buf);
@@ -2839,18 +2844,16 @@ impl ModTrait for UIMod {
                 root.hide();
             }
             // Key events: when popup visible, Enter on window switcher confirms.
+            // Mutate *event to Win(key) so on_event can call change_window properly.
             UIEvent::Core(Event::Key(KeyEvent {
                 code: KeyCode::Enter,
                 ..
             })) if root.is_visible() => {
-                // If the focused popup is a WindowSwitcher, extract the selected key
-                // via an event mutation trick: fire a dedicated event and let it write back.
                 let mut pick = UIEvent::WindowSwitcherPick(None);
                 root.route_to_focused(&mut pick);
                 if let UIEvent::WindowSwitcherPick(Some(key)) = pick {
                     root.hide();
-                    root.background_mut()
-                        .event(&mut UIEvent::Core(Event::Win(key)));
+                    *event = UIEvent::Core(Event::Win(key));
                 }
             }
             // All other key events route to popup (when visible) or background.
@@ -3418,7 +3421,15 @@ impl ModTrait for UIMod {
                             self.slash_warned = false;
                         }
                         aparte.schedule(Event::ResetCompletion);
-                        self.root.event(&mut UIEvent::Core(Event::Key(*key)));
+                        let mut key_evt = UIEvent::Core(Event::Key(*key));
+                        self.root.event(&mut key_evt);
+                        // Window-switcher Enter mutates the event to Win(key).
+                        if let UIEvent::Core(Event::Win(window)) = key_evt {
+                            self.change_window(&window);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
+                        }
                     }
                 }
             }
