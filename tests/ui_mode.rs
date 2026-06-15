@@ -3194,6 +3194,96 @@ fn ctrl_k_enter_switches_window() {
     );
 }
 
+/// Non-selected entries in the window-switcher popup must have default background.
+///
+/// Bug: set_background_from_row painted all rows from the selected index to the
+/// end of the frame with selected_message color, so trailing cells on
+/// non-selected rows showed gray instead of the terminal default.
+#[test]
+fn ctrl_k_non_selected_entry_has_default_bg() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Open a second window so the popup has 2 entries.
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message must appear");
+
+    // Back to console, enter INSERT (no selected message in background).
+    h.send_command("/win console");
+    enter_insert(&h);
+
+    h.send_bytes(b"\x0b"); // Ctrl+K
+    let popup_visible = wait_for_screen(&h, "> ", Duration::from_secs(3));
+    assert!(popup_visible, "window-switcher popup must appear");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let highlighted = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert_eq!(
+        highlighted.len(),
+        1,
+        "only the selected entry row must have selection background; got {} rows {:?}\n{}",
+        highlighted.len(),
+        highlighted,
+        describe(screen)
+    );
+}
+
+/// Moving selection with Down in the window-switcher must shift the highlight.
+#[test]
+fn ctrl_k_arrow_down_moves_selection_highlight() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_msg hello");
+    let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
+    assert!(visible, "injected message must appear");
+
+    h.send_command("/win console");
+    enter_insert(&h);
+
+    h.send_bytes(b"\x0b"); // Ctrl+K
+    let popup_visible = wait_for_screen(&h, "> ", Duration::from_secs(3));
+    assert!(popup_visible, "window-switcher popup must appear");
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    let initial_highlighted = rows_with_bgcolor(parser.screen(), SELECTION_BGCOLOR);
+    assert_eq!(
+        initial_highlighted.len(),
+        1,
+        "exactly 1 row highlighted initially"
+    );
+    let first_row = initial_highlighted[0];
+
+    // Down arrow moves selection to next entry.
+    h.send_bytes(b"\x1b[B");
+    thread::sleep(Duration::from_millis(300));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let after_highlighted = rows_with_bgcolor(screen, SELECTION_BGCOLOR);
+    assert_eq!(
+        after_highlighted.len(),
+        1,
+        "exactly 1 row must be highlighted after Down; got {:?}\n{}",
+        after_highlighted,
+        describe(screen)
+    );
+    assert_ne!(
+        after_highlighted[0],
+        first_row,
+        "highlight must move to a different row after Down\n{}",
+        describe(screen)
+    );
+}
+
 /// Esc closes the window-switcher popup.
 #[test]
 fn ctrl_k_esc_closes_window_switcher() {

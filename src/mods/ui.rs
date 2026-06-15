@@ -234,9 +234,14 @@ impl View<UIEvent, Theme> for WindowSwitcher {
                 entry.label.clone()
             };
             if i == self.selected {
-                frame.set_background_from_row(row, config.selected_message);
+                frame.set_background_row(row, config.selected_message);
+                frame.write_at(
+                    (0u16, row),
+                    label.as_str().with_background(config.selected_message),
+                );
+            } else {
+                frame.write_at((0u16, row), label.as_str());
             }
-            frame.write_at((0u16, row), label.as_str());
         }
     }
 

@@ -448,6 +448,15 @@ impl<'a> ScreenFrame<'a> {
         }
     }
 
+    pub fn set_background_row(&mut self, row_offset: u16, color: BgColor) {
+        let row = self.dimensions.top + row_offset;
+        if row < self.dimensions.top + self.dimensions.height {
+            for j in self.dimensions.left..self.dimensions.left + self.dimensions.width {
+                self.offscreen[row][j].set_background(color);
+            }
+        }
+    }
+
     pub fn set_foreground(&mut self, color: FgColor) {
         for i in self.dimensions.top..self.dimensions.top + self.dimensions.height {
             for j in self.dimensions.left..self.dimensions.left + self.dimensions.width {
