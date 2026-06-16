@@ -3140,6 +3140,7 @@ impl ModTrait for UIMod {
                     height: LayoutParam::MatchParent,
                 })
                 .with_selection_bg(console_selection_bg)
+                .with_position_memory()
                 .with_focus_change(|view, focused| {
                     if !focused {
                         view.clear_selection();
@@ -3249,6 +3250,7 @@ impl ModTrait for UIMod {
                 height: LayoutParam::MatchParent,
             })
             .with_selection_bg(roster_selection_bg)
+            .with_position_memory()
             .with_focus_change(|view, focused| {
                 if !focused {
                     view.clear_selection();

@@ -83,6 +83,8 @@ where
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
     search_query: Option<String>,
+    remember_position: bool,
+    remembered_position: Option<(usize, Option<usize>)>,
 }
 
 impl<E, I, C> Default for ScrollWin<E, I, C>
@@ -114,6 +116,8 @@ where
             },
             dimensions: None,
             search_query: None,
+            remember_position: false,
+            remembered_position: None,
         }
     }
 
@@ -140,6 +144,12 @@ where
         F: FnMut(&mut Self, bool) + 'static,
     {
         self.focus_change_handler = Some(Box::new(handler));
+        self
+    }
+
+    #[must_use]
+    pub fn with_position_memory(mut self) -> Self {
+        self.remember_position = true;
         self
     }
 
@@ -843,6 +853,17 @@ where
     }
 
     fn on_focus_change(&mut self, focused: bool) {
+        if self.remember_position {
+            if focused {
+                if let Some((bottom, sel)) = self.remembered_position.take() {
+                    self.bottom_visible_child_index = bottom;
+                    self.selected_child_index = sel;
+                }
+            } else {
+                self.remembered_position =
+                    Some((self.bottom_visible_child_index, self.selected_child_index));
+            }
+        }
         if let Some(mut handler) = self.focus_change_handler.take() {
             handler(self, focused);
             self.focus_change_handler = Some(handler);
@@ -940,6 +961,7 @@ mod tests {
     use test_log::test;
 
     use super::*;
+    use crate::{BgColor, Color};
 
     #[derive(Debug, Clone, Default)]
     pub struct MockView {
@@ -1839,5 +1861,47 @@ mod tests {
         });
         sw.on_focus_change(true);
         assert!(!fired.get(), "blur handler must not fire on focus gained");
+    }
+
+    #[test]
+    fn position_memory_restores_selection_after_blur_and_focus() {
+        let bg = BgColor(Color::Rgb(0, 0, 0));
+        let mut sw = ScrollWin::<(), MockView>::new()
+            .with_selection_bg(bg)
+            .with_position_memory()
+            .with_focus_change(|view, focused| {
+                if !focused {
+                    view.clear_selection();
+                }
+            });
+        sw.insert(MockView {
+            ord: 1,
+            height: 1,
+            ..Default::default()
+        });
+        sw.insert(MockView {
+            ord: 2,
+            height: 1,
+            ..Default::default()
+        });
+        sw.insert(MockView {
+            ord: 3,
+            height: 1,
+            ..Default::default()
+        });
+        // After 3 inserts, bottom_visible_child_index = 2 (sticky bottom).
+        // select_prev twice: first call anchors at bottom (index 2, ord=3), second moves to index 1 (ord=2).
+        sw.select_prev();
+        sw.select_prev(); // selected_child_index = 1 (ord=2)
+
+        assert_eq!(sw.selected().map(|v| v.ord), Some(2));
+        sw.on_focus_change(false);
+        assert!(!sw.has_selection(), "selection must be cleared on blur");
+        sw.on_focus_change(true);
+        assert_eq!(
+            sw.selected().map(|v| v.ord),
+            Some(2),
+            "selection must be restored after regaining focus"
+        );
     }
 }
