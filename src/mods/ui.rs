@@ -11,7 +11,7 @@ use futures::task::{Context, Poll};
 use futures::Stream;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -35,7 +35,7 @@ use terminus::{
     linear_layout::{LinearLayout, Orientation},
     list_view::ListView,
     root::Root,
-    scroll_win::ScrollWin,
+    scroll_win::{ScrollWin, Searchable},
     Action, ActionParser, CursorStyle, Dimensions, FocusRouted, LayoutParam, LayoutParams,
     MeasureSpec, MeasureSpecs, Motion, Operator, ParseResult, RegisterValue, Registers,
     RequestedDimension, RequestedDimensions, View,
@@ -67,6 +67,8 @@ enum NormalCommand {
     SearchNext,
     SearchPrev,
     SearchCancel,
+    FocusPaneLeft,
+    FocusPaneRight,
 }
 
 /// A single line in the popup, keyed by insertion index so duplicates are preserved.
@@ -819,6 +821,168 @@ impl CharxelDisplay<Theme> for RosterItem {
     }
 }
 
+fn roster_item_display_name(item: &RosterItem) -> String {
+    match item {
+        RosterItem::Window(label) => label.clone(),
+        RosterItem::Contact(c) => c.name.clone().unwrap_or_else(|| c.jid.to_string()),
+        RosterItem::Bookmark(b) => b.name.clone().unwrap_or_else(|| b.jid.to_string()),
+    }
+}
+
+/// A single rendered row in the roster `ScrollWin`.
+/// Either a group header or a roster item (contact, bookmark, or window).
+pub struct RosterRow {
+    pub group_index: u8,
+    pub content: RosterRowContent,
+    dimensions: Option<Dimensions>,
+    selection: Cell<Option<BgColor>>,
+}
+
+pub enum RosterRowContent {
+    GroupHeader(String),
+    Item(RosterItem),
+}
+
+impl RosterRow {
+    pub fn header(group_index: u8, name: impl Into<String>) -> Self {
+        Self {
+            group_index,
+            content: RosterRowContent::GroupHeader(name.into()),
+            dimensions: None,
+            selection: Cell::new(None),
+        }
+    }
+
+    pub fn item(group_index: u8, item: RosterItem) -> Self {
+        Self {
+            group_index,
+            content: RosterRowContent::Item(item),
+            dimensions: None,
+            selection: Cell::new(None),
+        }
+    }
+
+    fn display_name(&self) -> String {
+        match &self.content {
+            RosterRowContent::GroupHeader(name) => name.clone(),
+            RosterRowContent::Item(item) => roster_item_display_name(item),
+        }
+    }
+
+    pub fn as_item(&self) -> Option<&RosterItem> {
+        match &self.content {
+            RosterRowContent::Item(item) => Some(item),
+            RosterRowContent::GroupHeader(_) => None,
+        }
+    }
+}
+
+impl Clone for RosterRow {
+    fn clone(&self) -> Self {
+        Self {
+            group_index: self.group_index,
+            content: match &self.content {
+                RosterRowContent::GroupHeader(n) => RosterRowContent::GroupHeader(n.clone()),
+                RosterRowContent::Item(i) => RosterRowContent::Item(i.clone()),
+            },
+            dimensions: self.dimensions.clone(),
+            selection: Cell::new(self.selection.get()),
+        }
+    }
+}
+
+impl PartialEq for RosterRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.group_index == other.group_index
+            && match (&self.content, &other.content) {
+                (RosterRowContent::GroupHeader(_), RosterRowContent::GroupHeader(_)) => true,
+                (RosterRowContent::Item(a), RosterRowContent::Item(b)) => a == b,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for RosterRow {}
+
+impl Hash for RosterRow {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.group_index.hash(state);
+        match &self.content {
+            RosterRowContent::GroupHeader(_) => 0u8.hash(state),
+            RosterRowContent::Item(item) => {
+                1u8.hash(state);
+                item.hash(state);
+            }
+        }
+    }
+}
+
+impl PartialOrd for RosterRow {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RosterRow {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        fn sort_key(row: &RosterRow) -> (u8, bool, String) {
+            match &row.content {
+                RosterRowContent::GroupHeader(_) => (row.group_index, false, String::new()),
+                RosterRowContent::Item(_) => (row.group_index, true, row.display_name()),
+            }
+        }
+        sort_key(self).cmp(&sort_key(other))
+    }
+}
+
+impl View<UIEvent, Theme> for RosterRow {
+    fn measure(&self, _: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::Absolute(1),
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        self.dimensions = Some(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
+        let text = match &self.content {
+            RosterRowContent::GroupHeader(name) => {
+                name.clone().with_foreground(config.roster_group_fg)
+            }
+            RosterRowContent::Item(item) => {
+                let mut indent = "  ".into_charxels();
+                indent.append(item.colored_fmt(config));
+                indent
+            }
+        };
+        if let Some(bg) = self.selection.get() {
+            frame.set_background(bg);
+        }
+        frame.write_at((0u16, 0u16), &text);
+    }
+
+    fn event(&mut self, _: &mut UIEvent) {}
+
+    fn select(&self, color: BgColor) {
+        self.selection.set(Some(color));
+    }
+
+    fn deselect(&self) {
+        self.selection.set(None);
+    }
+}
+
+impl Searchable for RosterRow {
+    fn matches(&self, query: &str) -> bool {
+        self.display_name()
+            .to_lowercase()
+            .contains(&query.to_lowercase())
+    }
+}
+
 impl CharxelDisplay<Theme> for conversation::Occupant {
     fn colored_fmt(&self, _config: &Theme) -> Charxels {
         self.nick
@@ -1251,6 +1415,8 @@ impl UIMod {
                                             child.set_highlight(None);
                                         }
                                     }
+                                    NormalCommand::FocusPaneLeft
+                                    | NormalCommand::FocusPaneRight => {}
                                 },
                                 UIEvent::Core(Event::ChangeWindow(name)) => {
                                     is_current_window = name == &chat_for_event.contact.to_string();
@@ -1641,6 +1807,8 @@ impl UIMod {
                                             child.set_highlight(None);
                                         }
                                     }
+                                    NormalCommand::FocusPaneLeft
+                                    | NormalCommand::FocusPaneRight => {}
                                 },
                                 UIEvent::Core(Event::ChangeWindow(name)) => {
                                     is_current_window = name == &channel_for_event.jid.to_string();
@@ -2014,6 +2182,8 @@ fn dispatch_action(
             Motion::FileBottom => NormalCommand::ScrollToBottom,
             Motion::SearchNext => NormalCommand::SearchNext,
             Motion::SearchPrev => NormalCommand::SearchPrev,
+            Motion::FocusPaneLeft => NormalCommand::FocusPaneLeft,
+            Motion::FocusPaneRight => NormalCommand::FocusPaneRight,
             _ => return,
         };
         dispatch_nav_command(cmd, layout, at_nav_bottom);
@@ -2458,12 +2628,57 @@ impl ModTrait for UIMod {
                             ));
                         }
                     }
+                    // Ctrl+W is the leader key for split navigation (^Wh / ^Wl).
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('w'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) if mode == Mode::Normal => {
+                        match action_parser
+                            .feed(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))
+                        {
+                            ParseResult::Pending => {
+                                timeout_generation += 1;
+                                let gen = timeout_generation;
+                                let mut aparte_for_task = aparte_proxy.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    aparte_for_task.schedule(Event::CommandTimeout(gen));
+                                });
+                                let buf = action_parser.pending().to_string();
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(buf.clone()));
+                                }
+                            }
+                            ParseResult::Complete(action) => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
+                                dispatch_action(
+                                    action,
+                                    layout,
+                                    &mut registers,
+                                    &mut mode,
+                                    &mut aparte_proxy,
+                                    &mut at_nav_bottom,
+                                    &mut current_input,
+                                );
+                            }
+                            ParseResult::Invalid => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
+                            }
+                        }
+                    }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Char(c),
                         modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                         ..
                     })) if mode == Mode::Normal => {
-                        match action_parser.feed(*c) {
+                        match action_parser
+                            .feed(KeyEvent::new(KeyCode::Char(*c), KeyModifiers::NONE))
+                        {
                             ParseResult::Pending => {
                                 // Show partial sequence; schedule a 1s timeout.
                                 timeout_generation += 1;
@@ -2867,10 +3082,30 @@ impl ModTrait for UIMod {
             _ => root.background_mut().event(event),
         });
 
+        let mut focused_pane: usize = 0;
         let mut console = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal).with_event(
-            |layout, event| {
-                for LayoutChild { child, .. } in &mut layout.children {
-                    child.view.event(event);
+            move |layout, event| match event {
+                UIEvent::NormalCommand {
+                    cmd: NormalCommand::FocusPaneLeft,
+                    ..
+                } => {
+                    focused_pane = 0;
+                }
+                UIEvent::NormalCommand {
+                    cmd: NormalCommand::FocusPaneRight,
+                    ..
+                } => {
+                    focused_pane = 1;
+                }
+                UIEvent::NormalCommand { .. } => {
+                    if let Some(child) = layout.children.get_mut(focused_pane) {
+                        child.child.view.event(event);
+                    }
+                }
+                _ => {
+                    for LayoutChild { child, .. } in &mut layout.children {
+                        child.view.event(event);
+                    }
                 }
             },
         );
@@ -2957,6 +3192,7 @@ impl ModTrait for UIMod {
                                     child.set_highlight(None);
                                 }
                             }
+                            NormalCommand::FocusPaneLeft | NormalCommand::FocusPaneRight => {}
                         },
                         UIEvent::Core(Event::ChangeWindow(name)) => {
                             is_current_window = name == "console";
@@ -2975,36 +3211,38 @@ impl ModTrait for UIMod {
             7,
         );
         let mut window_display: HashMap<String, String> = HashMap::new();
-        let roster = ListView::<UIEvent, contact::Group, RosterItem, Theme>::new()
+        let mut scheduler = aparte.proxy();
+        let roster_selection_bg = aparte.config.theme.selected_message;
+        // Group indices: 0=Windows, 1=Contacts, 2=Bookmarks
+        const WINDOWS_GROUP: u8 = 0;
+        const CONTACTS_GROUP: u8 = 1;
+        const BOOKMARKS_GROUP: u8 = 2;
+        let roster = ScrollWin::<UIEvent, RosterRow, Theme>::new()
             .with_layout(LayoutParams {
-                width: LayoutParam::WrapContent,
+                width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
             })
-            .with_none_group()
-            .with_sort_item()
+            .with_selection_bg(roster_selection_bg)
             .with_event(move |view, event| match event {
                 UIEvent::Core(Event::Connected(_, _)) => {
-                    view.add_group(contact::Group(String::from("Windows")));
-                    view.add_group(contact::Group(String::from("Contacts")));
-                    view.add_group(contact::Group(String::from("Bookmarks")));
+                    view.insert(RosterRow::header(WINDOWS_GROUP, "Windows"));
+                    view.insert(RosterRow::header(CONTACTS_GROUP, "Contacts"));
+                    view.insert(RosterRow::header(BOOKMARKS_GROUP, "Bookmarks"));
                 }
                 UIEvent::Core(Event::Contact(_, contact) | Event::ContactUpdate(_, contact)) => {
-                    if contact.groups.is_empty() {
-                        let group = contact::Group(String::from("Contacts"));
-                        view.insert(RosterItem::Contact(contact.clone()), Some(group));
-                    } else {
-                        for group in &contact.groups {
-                            view.insert(RosterItem::Contact(contact.clone()), Some(group.clone()));
-                        }
-                    }
+                    view.replace(RosterRow::item(
+                        CONTACTS_GROUP,
+                        RosterItem::Contact(contact.clone()),
+                    ));
                 }
                 UIEvent::Core(Event::Bookmark(_, bookmark)) => {
-                    let group = contact::Group(String::from("Bookmarks"));
-                    view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                    view.replace(RosterRow::item(
+                        BOOKMARKS_GROUP,
+                        RosterItem::Bookmark(bookmark.clone()),
+                    ));
                 }
                 UIEvent::Core(Event::DeletedBookmark(jid)) => {
-                    let group = contact::Group(String::from("Bookmarks"));
-                    let bookmark = contact::Bookmark {
+                    let placeholder = contact::Bookmark {
                         jid: jid.clone(),
                         name: None,
                         nick: None,
@@ -3012,20 +3250,67 @@ impl ModTrait for UIMod {
                         autojoin: false,
                         extensions: None,
                     };
-                    let _ = view.remove(RosterItem::Bookmark(bookmark), Some(group));
+                    // Remove by constructing a matching key (Eq compares group_index + item).
+                    let key = RosterRow::item(BOOKMARKS_GROUP, RosterItem::Bookmark(placeholder));
+                    view.remove_by_key(&key);
                 }
                 UIEvent::AddWindow(jid, display_name, _) => {
-                    let group = contact::Group(String::from("Windows"));
                     let label = display_name.as_deref().unwrap_or(jid.as_str()).to_string();
                     window_display.insert(jid.clone(), label.clone());
-                    view.insert(RosterItem::Window(label), Some(group));
+                    view.insert(RosterRow::item(WINDOWS_GROUP, RosterItem::Window(label)));
                 }
                 UIEvent::Core(Event::Close(window)) => {
-                    let group = contact::Group(String::from("Windows"));
                     let label = window_display
                         .remove(window.as_str())
                         .unwrap_or_else(|| window.clone());
-                    let _ = view.remove(RosterItem::Window(label), Some(group));
+                    let key = RosterRow::item(WINDOWS_GROUP, RosterItem::Window(label));
+                    view.remove_by_key(&key);
+                }
+                UIEvent::NormalCommand { cmd, .. } => match cmd {
+                    NormalCommand::SelectPrev(count) => {
+                        for _ in 0..*count {
+                            view.select_prev();
+                        }
+                    }
+                    NormalCommand::SelectNext(count) => {
+                        for _ in 0..*count {
+                            view.select_next();
+                        }
+                    }
+                    NormalCommand::ScrollToTop => {
+                        view.scroll_to_top();
+                    }
+                    NormalCommand::ScrollToBottom => {
+                        view.scroll_to_bottom();
+                    }
+                    NormalCommand::SearchFirst(query) => {
+                        view.set_search(query);
+                    }
+                    NormalCommand::SearchNext => {
+                        view.search_next();
+                    }
+                    NormalCommand::SearchPrev => {
+                        view.search_prev();
+                    }
+                    NormalCommand::SearchCancel => {
+                        view.clear_search();
+                    }
+                    NormalCommand::FocusPaneLeft | NormalCommand::FocusPaneRight => {}
+                },
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    ..
+                })) => {
+                    if let Some(row) = view.selected() {
+                        if let Some(item) = row.as_item() {
+                            let win = match item {
+                                RosterItem::Window(label) => label.clone(),
+                                RosterItem::Contact(c) => c.jid.to_string(),
+                                RosterItem::Bookmark(b) => b.jid.to_string(),
+                            };
+                            scheduler.schedule(Event::Win(win));
+                        }
+                    }
                 }
                 _ => {}
             });
@@ -3594,6 +3879,19 @@ impl EventStream {
 impl Default for EventStream {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminus::scroll_win::Searchable;
+
+    #[test]
+    fn roster_row_window_matches_its_label() {
+        let row = RosterRow::item(0, RosterItem::Window("console".to_string()));
+        assert!(row.matches("console"));
+        assert!(!row.matches("foo"));
     }
 }
 

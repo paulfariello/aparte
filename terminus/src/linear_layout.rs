@@ -85,9 +85,9 @@ impl<E, C> LinearLayout<E, C> {
         }
     }
 
-    pub fn focused_child(&self) -> Option<&Box<dyn View<E, C>>> {
+    pub fn focused_child(&self) -> Option<&dyn View<E, C>> {
         self.focused_child_index
-            .and_then(|i| self.children.get(i).map(|lc| &lc.child.view))
+            .and_then(|i| self.children.get(i).map(|lc| lc.child.view.as_ref()))
     }
 
     pub fn focused_child_mut(&mut self) -> Option<&mut Box<dyn View<E, C>>> {

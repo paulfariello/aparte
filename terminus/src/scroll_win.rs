@@ -271,6 +271,47 @@ where
         }
     }
 
+    /// Remove the item that compares equal to `key`.
+    /// Adjusts scroll and selection indices. No-op if the key is not found.
+    pub fn remove_by_key(&mut self, key: &I)
+    where
+        I: Clone,
+    {
+        let probe = LayoutChild {
+            child: key.clone(),
+            dimensions: None,
+        };
+        let Some(removed_lc) = self.children.take(&probe) else {
+            return;
+        };
+        // Determine the index of the removed element before removal.
+        let removed_index = self
+            .children
+            .iter()
+            .position(|lc| lc >= &removed_lc)
+            .unwrap_or(self.children.len());
+
+        // Adjust bottom_visible_child_index.
+        if self.children.is_empty() {
+            self.bottom_visible_child_index = 0;
+        } else if removed_index <= self.bottom_visible_child_index
+            && self.bottom_visible_child_index > 0
+        {
+            self.bottom_visible_child_index -= 1;
+        }
+
+        // Adjust or clear the selection.
+        match self.selected_child_index {
+            Some(sel) if sel == removed_index => {
+                self.selected_child_index = None;
+            }
+            Some(sel) if sel > removed_index => {
+                self.selected_child_index = Some(sel - 1);
+            }
+            _ => {}
+        }
+    }
+
     /// Insert or replace an item. If an element with the same Ord key already
     /// exists it is removed first so the new element (which may carry updated
     /// content, e.g. reactions or a correction) replaces it.

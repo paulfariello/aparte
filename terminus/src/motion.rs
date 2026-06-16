@@ -1,6 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// A vim-style motion for Normal mode: where the cursor moves, or the range an
 /// operator covers.
@@ -24,12 +25,14 @@ pub enum Motion {
     PasteAfter,      // p
     PasteBefore,     // P
     // ── Navigation motions (operate on the ScrollWin, not the text) ─────────
-    Up,         // k
-    Down,       // j
-    FileTop,    // gg
-    FileBottom, // G
-    SearchNext, // n
-    SearchPrev, // N
+    Up,             // k
+    Down,           // j
+    FileTop,        // gg
+    FileBottom,     // G
+    SearchNext,     // n
+    SearchPrev,     // N
+    FocusPaneLeft,  // Ctrl+W h
+    FocusPaneRight, // Ctrl+W l
 }
 
 impl Motion {
@@ -52,6 +55,8 @@ impl Motion {
                 | Motion::FileBottom
                 | Motion::SearchNext
                 | Motion::SearchPrev
+                | Motion::FocusPaneLeft
+                | Motion::FocusPaneRight
         )
     }
 }
@@ -112,6 +117,8 @@ enum ParserState {
     },
     /// Just saw `g` — waiting for the second character (only `gg` supported).
     GPrefix { pre_count: usize, reg: Option<char> },
+    /// Just saw `Ctrl+W` — waiting for the split direction key.
+    CtrlWPrefix,
     /// Have operator + `a`/`i` — waiting for the text-object character (e.g. `w`).
     AfterTextObjectPrefix {
         pre_count: usize,
@@ -157,13 +164,31 @@ impl ActionParser {
         self.state.is_some()
     }
 
-    /// Feed one character. Returns whether the sequence is still pending,
+    /// Feed one key event. Returns whether the sequence is still pending,
     /// complete, or invalid.  On `Complete` or `Invalid` the parser resets
     /// itself automatically.
-    pub fn feed(&mut self, c: char) -> ParseResult {
-        self.buffer.push(c);
+    pub fn feed(&mut self, key: KeyEvent) -> ParseResult {
         let state = self.state.take().unwrap_or(ParserState::Count(0));
-        let result = self.transition(state, c);
+        let result = match key {
+            KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.buffer.push_str("^W");
+                self.state = Some(ParserState::CtrlWPrefix);
+                ParseResult::Pending
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                ..
+            } => {
+                self.buffer.push(c);
+                self.transition(state, c)
+            }
+            _ => ParseResult::Invalid,
+        };
         if matches!(result, ParseResult::Complete(_) | ParseResult::Invalid) {
             self.reset();
         }
@@ -199,6 +224,7 @@ impl ActionParser {
                 op_count,
             } => self.on_after_operator_count(pre_count, reg, op, op_count, c),
             ParserState::GPrefix { pre_count, reg } => self.on_g_prefix(pre_count, reg, c),
+            ParserState::CtrlWPrefix => self.on_ctrl_w_prefix(c),
             ParserState::AfterTextObjectPrefix {
                 pre_count,
                 reg,
@@ -386,6 +412,24 @@ impl ActionParser {
             _ => ParseResult::Invalid,
         }
     }
+
+    fn on_ctrl_w_prefix(&mut self, c: char) -> ParseResult {
+        match c {
+            'h' => ParseResult::Complete(Action {
+                count: 1,
+                register: None,
+                operator: Operator::Move,
+                motion: Motion::FocusPaneLeft,
+            }),
+            'l' => ParseResult::Complete(Action {
+                count: 1,
+                register: None,
+                operator: Operator::Move,
+                motion: Motion::FocusPaneRight,
+            }),
+            _ => ParseResult::Invalid,
+        }
+    }
 }
 
 fn char_to_motion(c: char) -> Option<Motion> {
@@ -412,15 +456,34 @@ fn char_to_motion(c: char) -> Option<Motion> {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     use super::*;
 
     fn feed_all(seq: &str) -> ParseResult {
         let mut parser = ActionParser::new();
         let mut result = ParseResult::Invalid;
         for c in seq.chars() {
-            result = parser.feed(c);
+            result = parser.feed(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
         result
+    }
+
+    fn feed_keys(keys: &[KeyEvent]) -> ParseResult {
+        let mut parser = ActionParser::new();
+        let mut result = ParseResult::Invalid;
+        for &key in keys {
+            result = parser.feed(key);
+        }
+        result
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    fn plain(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
     }
 
     fn complete(
@@ -808,28 +871,59 @@ mod tests {
         assert_eq!(feed_all("gz"), ParseResult::Invalid);
     }
 
+    // ── Ctrl+W split navigation ──────────────────────────────────────────────
+
+    #[test]
+    fn ctrl_w_l_focus_pane_right() {
+        assert_eq!(
+            feed_keys(&[ctrl('w'), plain('l')]),
+            complete(1, None, Operator::Move, Motion::FocusPaneRight)
+        );
+    }
+
+    #[test]
+    fn ctrl_w_h_focus_pane_left() {
+        assert_eq!(
+            feed_keys(&[ctrl('w'), plain('h')]),
+            complete(1, None, Operator::Move, Motion::FocusPaneLeft)
+        );
+    }
+
+    #[test]
+    fn ctrl_w_pending_after_first_key() {
+        let mut parser = ActionParser::new();
+        let result = parser.feed(ctrl('w'));
+        assert_eq!(result, ParseResult::Pending);
+        assert!(parser.is_pending());
+    }
+
+    #[test]
+    fn ctrl_w_invalid_key_is_invalid() {
+        assert_eq!(feed_keys(&[ctrl('w'), plain('z')]), ParseResult::Invalid);
+    }
+
     // ── Parser resets after complete ─────────────────────────────────────────
 
     #[test]
     fn parser_resets_after_complete() {
         let mut parser = ActionParser::new();
-        let r1 = parser.feed('w');
+        let r1 = parser.feed(plain('w'));
         assert!(matches!(r1, ParseResult::Complete(_)));
         assert!(!parser.is_pending());
         assert_eq!(parser.pending(), "");
         // Next sequence starts fresh.
-        let r2 = parser.feed('b');
+        let r2 = parser.feed(plain('b'));
         assert!(matches!(r2, ParseResult::Complete(_)));
     }
 
     #[test]
     fn parser_resets_after_invalid() {
         let mut parser = ActionParser::new();
-        let r1 = parser.feed('z');
+        let r1 = parser.feed(plain('z'));
         assert_eq!(r1, ParseResult::Invalid);
         assert!(!parser.is_pending());
         // Next sequence starts fresh.
-        let r2 = parser.feed('w');
+        let r2 = parser.feed(plain('w'));
         assert!(matches!(r2, ParseResult::Complete(_)));
     }
 

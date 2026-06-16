@@ -1,5 +1,7 @@
-- Add action history so we can keep track of all actions. Might be used for repeating actions, creating macro etc
+- [x] add a way to scroll and search in roster and bookmarks view. We want a generic way to handle command dispatch on vertical splits.
+- Add action history so we can keep track of all actions. Might be used for repeating actions, creating macro etc. History must be stored as a tree. Meaning going back in time and doing modification must create a branch.
+- Add u and U action to navigate in history
+- notified window are not cleared if going to it with :win command and not with alt+a
 - there is a memory consumption issue. aparte can easily consume gigs of ram. How can we monitor that and take action to reduce it.
 - is there a way to properly handle ESC key with a timeout (50ms) just like neovim does it?
-- notified window are not cleared if going to it with /win command and not with alt+a
 - migrate XEP-0333 from manual parsing to xmpp-rs parser
