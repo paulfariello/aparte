@@ -3102,6 +3102,10 @@ impl ModTrait for UIMod {
                     cmd: NormalCommand::FocusPaneRight,
                     ..
                 } => {
+                    // forward to message pane so it can deselect before we hand focus away
+                    if let Some(child) = layout.children.get_mut(0) {
+                        child.child.view.event(event);
+                    }
                     focused_pane = 1;
                 }
                 UIEvent::NormalCommand { .. } => {
@@ -3199,7 +3203,10 @@ impl ModTrait for UIMod {
                                     child.set_highlight(None);
                                 }
                             }
-                            NormalCommand::FocusPaneLeft | NormalCommand::FocusPaneRight => {}
+                            NormalCommand::FocusPaneLeft => {}
+                            NormalCommand::FocusPaneRight => {
+                                view.clear_selection();
+                            }
                         },
                         UIEvent::Core(Event::ChangeWindow(name)) => {
                             is_current_window = name == "console";
@@ -3970,6 +3977,52 @@ mod tests {
         assert!(
             !roster.has_selection(),
             "selection must clear when pane loses focus"
+        );
+    }
+
+    #[test]
+    fn message_pane_clears_selection_on_focus_right_event() {
+        // Mirrors roster_clears_selection_on_focus_left_event for the other direction.
+        // RosterRow stands in as the item type; what matters is the event handler pattern.
+        let mut pane: ScrollWin<UIEvent, RosterRow, Theme> = ScrollWin::new()
+            .with_selection_bg(BgColor(Color::Rgb(100, 200, 50)))
+            .with_event(|view, event| {
+                if let UIEvent::NormalCommand { cmd, .. } = event {
+                    match cmd {
+                        NormalCommand::SelectNext(count) => {
+                            for _ in 0..*count {
+                                view.select_next();
+                            }
+                        }
+                        NormalCommand::FocusPaneRight => {
+                            view.clear_selection();
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+        pane.insert(RosterRow::item(0, RosterItem::Window("msg1".to_string())));
+        pane.insert(RosterRow::item(0, RosterItem::Window("msg2".to_string())));
+
+        let mut ev = UIEvent::NormalCommand {
+            cmd: NormalCommand::SelectNext(1),
+            bubbled: false,
+        };
+        pane.event(&mut ev);
+        assert!(
+            pane.has_selection(),
+            "item should be selected after SelectNext"
+        );
+
+        let mut ev = UIEvent::NormalCommand {
+            cmd: NormalCommand::FocusPaneRight,
+            bubbled: false,
+        };
+        pane.event(&mut ev);
+        assert!(
+            !pane.has_selection(),
+            "selection must clear when message pane loses focus"
         );
     }
 }
