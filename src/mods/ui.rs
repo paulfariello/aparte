@@ -958,9 +958,12 @@ impl View<UIEvent, Theme> for RosterRow {
                 indent
             }
         };
-        if let Some(bg) = self.selection.get() {
+        let text = if let Some(bg) = self.selection.get() {
             frame.set_background(bg);
-        }
+            text.with_background(bg)
+        } else {
+            text
+        };
         frame.write_at((0u16, 0u16), &text);
     }
 
@@ -3089,6 +3092,10 @@ impl ModTrait for UIMod {
                     cmd: NormalCommand::FocusPaneLeft,
                     ..
                 } => {
+                    // forward to roster so it can deselect before we hand focus away
+                    if let Some(child) = layout.children.get_mut(1) {
+                        child.child.view.event(event);
+                    }
                     focused_pane = 0;
                 }
                 UIEvent::NormalCommand {
@@ -3295,7 +3302,10 @@ impl ModTrait for UIMod {
                     NormalCommand::SearchCancel => {
                         view.clear_search();
                     }
-                    NormalCommand::FocusPaneLeft | NormalCommand::FocusPaneRight => {}
+                    NormalCommand::FocusPaneLeft => {
+                        view.clear_selection();
+                    }
+                    NormalCommand::FocusPaneRight => {}
                 },
                 UIEvent::Core(Event::Key(KeyEvent {
                     code: KeyCode::Enter,
@@ -3885,6 +3895,7 @@ impl Default for EventStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use terminus::rendering::OffscreenRenderBuffer;
     use terminus::scroll_win::Searchable;
 
     #[test]
@@ -3892,6 +3903,74 @@ mod tests {
         let row = RosterRow::item(0, RosterItem::Window("console".to_string()));
         assert!(row.matches("console"));
         assert!(!row.matches("foo"));
+    }
+
+    #[test]
+    fn roster_row_selected_background_covers_text() {
+        let row = RosterRow::item(0, RosterItem::Window("console".to_string()));
+        let selection_bg = BgColor(Color::Rgb(100, 200, 50));
+        row.select(selection_bg);
+
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size((20u16, 1u16).into());
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: 20,
+            height: 1,
+        };
+        let frame = ScreenFrame::new(&mut buf, &dims, false);
+        row.render(frame, &Theme::default());
+
+        // col 0-1: indent spaces; col 2: first char of "console" — must carry selection bg
+        assert_eq!(buf[0u16][2u16].background, selection_bg);
+    }
+
+    #[test]
+    fn roster_clears_selection_on_focus_left_event() {
+        let mut roster: ScrollWin<UIEvent, RosterRow, Theme> = ScrollWin::new()
+            .with_selection_bg(BgColor(Color::Rgb(100, 200, 50)))
+            .with_event(|view, event| {
+                if let UIEvent::NormalCommand { cmd, .. } = event {
+                    match cmd {
+                        NormalCommand::SelectNext(count) => {
+                            for _ in 0..*count {
+                                view.select_next();
+                            }
+                        }
+                        NormalCommand::FocusPaneLeft => {
+                            view.clear_selection();
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+        roster.insert(RosterRow::item(
+            0,
+            RosterItem::Window("console".to_string()),
+        ));
+        roster.insert(RosterRow::item(0, RosterItem::Window("chat".to_string())));
+
+        let mut ev = UIEvent::NormalCommand {
+            cmd: NormalCommand::SelectNext(1),
+            bubbled: false,
+        };
+        roster.event(&mut ev);
+        assert!(
+            roster.has_selection(),
+            "item should be selected after SelectNext"
+        );
+
+        let mut ev = UIEvent::NormalCommand {
+            cmd: NormalCommand::FocusPaneLeft,
+            bubbled: false,
+        };
+        roster.event(&mut ev);
+        assert!(
+            !roster.has_selection(),
+            "selection must clear when pane loses focus"
+        );
     }
 }
 
