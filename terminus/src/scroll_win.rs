@@ -78,6 +78,7 @@ where
     /// is managed externally or not needed).
     selection_bg: Option<super::BgColor>,
     event_handler: Option<EventHandler<Self, E>>,
+    focus_change_handler: Option<Box<dyn FnMut(&mut Self, bool)>>,
     children: BTreeSet<LayoutChild<I>>,
     layouts: LayoutParams,
     dimensions: Option<Dimensions>,
@@ -106,6 +107,7 @@ where
             selected_child_index: None,
             selection_bg: None,
             event_handler: None,
+            focus_change_handler: None,
             layouts: LayoutParams {
                 width: LayoutParam::MatchParent,
                 height: LayoutParam::MatchParent,
@@ -129,6 +131,15 @@ where
         F: FnMut(&mut Self, &mut E) + 'static,
     {
         self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
+        self
+    }
+
+    #[must_use]
+    pub fn with_focus_change<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&mut Self, bool) + 'static,
+    {
+        self.focus_change_handler = Some(Box::new(handler));
         self
     }
 
@@ -828,6 +839,13 @@ where
             let child_cursor_granted = cursor_granted && (Some(idx) == self.selected_child_index);
             let child_frame = ScreenFrame::new(offscreen, dims, child_cursor_granted);
             child.render(child_frame, config);
+        }
+    }
+
+    fn on_focus_change(&mut self, focused: bool) {
+        if let Some(mut handler) = self.focus_change_handler.take() {
+            handler(self, focused);
+            self.focus_change_handler = Some(handler);
         }
     }
 
@@ -1790,5 +1808,36 @@ mod tests {
 
         w.selected_child_index = Some(1);
         assert!(!<ScrollWin<(), MockView> as View<(), ()>>::insertable(&w));
+    }
+
+    #[test]
+    fn focus_change_handler_fires_on_blur() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let fired = Rc::new(Cell::new(false));
+        let fired2 = fired.clone();
+        let mut sw = ScrollWin::<(), MockView>::new().with_focus_change(move |_, focused| {
+            if !focused {
+                fired2.set(true);
+            }
+        });
+        assert!(!fired.get(), "handler must not fire before on_focus_change");
+        sw.on_focus_change(false);
+        assert!(fired.get(), "handler must fire when focus is lost");
+    }
+
+    #[test]
+    fn focus_change_handler_not_called_when_focus_gained() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let fired = Rc::new(Cell::new(false));
+        let fired2 = fired.clone();
+        let mut sw = ScrollWin::<(), MockView>::new().with_focus_change(move |_, focused| {
+            if !focused {
+                fired2.set(true);
+            }
+        });
+        sw.on_focus_change(true);
+        assert!(!fired.get(), "blur handler must not fire on focus gained");
     }
 }
