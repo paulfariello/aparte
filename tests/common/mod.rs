@@ -79,7 +79,6 @@ impl Harness {
             let writer = Arc::clone(&writer);
             let exited = Arc::clone(&exited);
             thread::spawn(move || {
-                let mut shadow = vt100::Parser::new(ROWS, COLS, 0);
                 let mut buf = [0u8; 4096];
                 loop {
                     match reader.read(&mut buf) {
@@ -89,11 +88,18 @@ impl Harness {
                         }
                         Ok(n) => {
                             let chunk = &buf[..n];
-                            bytes.lock().unwrap().extend_from_slice(chunk);
-                            shadow.process(chunk);
                             let queries = count_dsr_queries(chunk);
+                            {
+                                bytes.lock().unwrap().extend_from_slice(chunk);
+                            }
                             if queries > 0 {
-                                let (row, col) = shadow.screen().cursor_position();
+                                // Replay ALL accumulated bytes so the cursor
+                                // position reflects the complete render frame,
+                                // not a potentially split partial chunk.
+                                let data = bytes.lock().unwrap().clone();
+                                let mut full = vt100::Parser::new(ROWS, COLS, 0);
+                                full.process(&data);
+                                let (row, col) = full.screen().cursor_position();
                                 let reply = format!("\x1b[{};{}R", row + 1, col + 1);
                                 let mut w = writer.lock().unwrap();
                                 for _ in 0..queries {
@@ -240,6 +246,29 @@ pub fn rows_with_bgcolor(screen: &vt100::Screen, color: vt100::Color) -> Vec<u16
     (0..ROWS)
         .filter(|&r| row_has_bgcolor(screen, r, color))
         .collect()
+}
+
+/// Press 'k' twice to navigate Normal-mode cursor onto the message pane, then
+/// poll until the cursor has left the input bar (ROWS - 1).  Use this in place
+/// of the old `k` / `sleep(150ms)` / `k` / `sleep(200ms)` pattern.
+pub fn navigate_to_message_pane(h: &Harness) {
+    h.send_bytes(b"k");
+    h.send_bytes(b"k");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if h.exited.load(Ordering::Relaxed) {
+            let parser = h.snapshot();
+            panic!(
+                "Child process exited while waiting for cursor to reach message pane\n{}",
+                describe(parser.screen())
+            );
+        }
+        let parser = h.snapshot();
+        if parser.screen().cursor_position().0 != ROWS - 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Poll until `needle` appears on screen or the timeout elapses.

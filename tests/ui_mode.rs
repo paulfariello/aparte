@@ -4,8 +4,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{
-    describe, find_row_with, grid_contains, row_text, rows_with_bgcolor, wait_for_ready,
-    wait_for_screen, Harness, ROWS, SELECTION_BGCOLOR,
+    describe, find_row_with, grid_contains, navigate_to_message_pane, row_text, rows_with_bgcolor,
+    wait_for_ready, wait_for_screen, Harness, ROWS, SELECTION_BGCOLOR,
 };
 
 /// Send enough unknown commands to push the welcome banner off-screen.
@@ -1825,10 +1825,7 @@ fn setup_message_editor_normal_mode(h: &Harness) {
     // The message is highlighted on arrival (selection, no cursor).  The first
     // 'k' finds old==new at index 0 → bubbles, clears selection.  The second
     // 'k' selects fresh from None, calls start_cursor(), and focuses the frame.
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(h);
 }
 
 /// Pressing '0' while in Normal mode on the message editor moves the cursor
@@ -1930,18 +1927,14 @@ fn a_in_message_editor_inserts_after_current_char() {
     let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
     assert!(visible, "injected message 'hello' must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     // Cursor is now at col 0 ('h') in Normal mode.
     h.send_bytes(b"a");
-    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
-    thread::sleep(Duration::from_millis(100));
+    wait_for_screen(&h, "INSERT", Duration::from_secs(2));
 
     h.send_bytes(b"z");
-    thread::sleep(Duration::from_millis(150));
+    wait_for_screen(&h, "hzello", Duration::from_secs(2));
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -1970,17 +1963,13 @@ fn A_in_message_editor_moves_cursor_to_end() {
     let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
     assert!(visible, "injected message 'hello' must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     h.send_bytes(b"A");
-    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
-    thread::sleep(Duration::from_millis(100));
+    wait_for_screen(&h, "INSERT", Duration::from_secs(2));
 
     h.send_bytes(b"z");
-    thread::sleep(Duration::from_millis(150));
+    wait_for_screen(&h, "helloz", Duration::from_secs(2));
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -2033,10 +2022,7 @@ fn message_editor_esc_does_not_commit() {
     let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
     assert!(visible, "injected message 'hello' must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     h.send_bytes(b"A");
     let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
@@ -2083,10 +2069,7 @@ fn message_editor_enter_in_insert_commits() {
     let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
     assert!(visible, "injected message 'hello' must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     h.send_bytes(b"A");
     let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
@@ -2124,10 +2107,7 @@ fn message_editor_enter_in_normal_mode_commits() {
     let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
     assert!(visible, "injected message 'hello' must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     h.send_bytes(b"A");
     let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
@@ -2169,10 +2149,7 @@ fn message_editor_ctrl_c_from_normal_cancels() {
     let visible = wait_for_screen(&h, "hello", Duration::from_secs(5));
     assert!(visible, "injected message 'hello' must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     h.send_bytes(b"A");
     let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
@@ -2220,20 +2197,20 @@ fn message_editor_ctrl_c_in_insert_cancels_edit() {
     assert!(visible, "injected message 'hello' must appear on screen");
 
     h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
     h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
 
     // Enter Insert mode at end of message, append 'z'.
     h.send_bytes(b"A");
-    let _ = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
-    thread::sleep(Duration::from_millis(100));
+    let entered = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    assert!(
+        entered,
+        "must enter INSERT mode after pressing A on selected message"
+    );
     h.send_bytes(b"z");
-    thread::sleep(Duration::from_millis(150));
 
     // Ctrl+C must cancel (discard the edit).
     h.send_bytes(b"\x03");
-    thread::sleep(Duration::from_millis(300));
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(3));
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -2381,9 +2358,7 @@ fn message_editor_caw_types_into_frame_not_input_bar() {
 
     // On "hello world", go to start then 'w' to land on "world".
     h.send_bytes(b"0");
-    thread::sleep(Duration::from_millis(150));
     h.send_bytes(b"w");
-    thread::sleep(Duration::from_millis(150));
 
     // caw deletes "world" (last word, eats leading space) and enters Insert.
     h.send_bytes(b"caw");
@@ -2392,7 +2367,7 @@ fn message_editor_caw_types_into_frame_not_input_bar() {
 
     // Type a sentinel string; it must land in the message frame.
     h.send_bytes(b"xyz");
-    thread::sleep(Duration::from_millis(200));
+    wait_for_screen(&h, "xyz", Duration::from_secs(2));
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -2526,10 +2501,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
     let visible = wait_for_screen(&h, "hello world", Duration::from_secs(5));
     assert!(visible, "injected message must appear on screen");
 
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(150));
-    h.send_bytes(b"k");
-    thread::sleep(Duration::from_millis(200));
+    navigate_to_message_pane(&h);
 
     let before = h.snapshot();
     let (row_before, _) = before.screen().cursor_position();
@@ -2560,7 +2532,15 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
     // Cancel with Escape → back to Normal mode, focus restored to frame.
     h.send_bytes(b"\x1b");
     wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
-    thread::sleep(Duration::from_millis(150));
+    // Poll until the cursor leaves the input bar (cursor position lags text rendering).
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        let s = h.snapshot();
+        if s.screen().cursor_position().0 != ROWS - 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 
     let after = h.snapshot();
     let (row_after, _) = after.screen().cursor_position();
@@ -3281,6 +3261,31 @@ fn ctrl_k_arrow_down_moves_selection_highlight() {
         first_row,
         "highlight must move to a different row after Down\n{}",
         describe(screen)
+    );
+}
+
+/// After Ctrl+K the cursor must be on the popup's prompt row, not at row 0.
+///
+/// Bug: ScreenFrame::set_cursor did not apply the frame's top/left offset, so
+/// the cursor was placed at row 0 of the offscreen buffer regardless of where
+/// the popup was laid out.
+#[test]
+fn ctrl_k_cursor_on_popup_prompt_row() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_bytes(b"\x0b"); // Ctrl+K
+    let visible = wait_for_screen(&h, "> ", Duration::from_secs(3));
+    assert!(visible, "window-switcher popup must appear");
+
+    // Type a character and verify it lands in the popup's filter input, not
+    // somewhere else. This confirms the cursor is inside the popup frame.
+    h.send_bytes(b"q");
+    let typed = wait_for_screen(&h, "> q", Duration::from_secs(2));
+    h.shutdown();
+    assert!(
+        typed,
+        "typed 'q' must appear in the popup filter (cursor must be in popup frame)"
     );
 }
 
