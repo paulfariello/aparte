@@ -858,6 +858,8 @@ where
                 if let Some((bottom, sel)) = self.remembered_position.take() {
                     self.bottom_visible_child_index = bottom;
                     self.selected_child_index = sel;
+                } else {
+                    self.selected_child_index = Some(self.first_visible_child_index);
                 }
             } else {
                 self.remembered_position =
@@ -1861,6 +1863,36 @@ mod tests {
         });
         sw.on_focus_change(true);
         assert!(!fired.get(), "blur handler must not fire on focus gained");
+    }
+
+    #[test]
+    fn position_memory_selects_top_on_first_focus_with_no_remembered_position() {
+        let bg = BgColor(Color::Rgb(0, 0, 0));
+        let mut sw = ScrollWin::<(), MockView>::new()
+            .with_selection_bg(bg)
+            .with_position_memory();
+        sw.insert(MockView {
+            ord: 1,
+            height: 1,
+            ..Default::default()
+        });
+        sw.insert(MockView {
+            ord: 2,
+            height: 1,
+            ..Default::default()
+        });
+        sw.insert(MockView {
+            ord: 3,
+            height: 1,
+            ..Default::default()
+        });
+        // No prior on_focus_change(false) — remembered_position is None.
+        sw.on_focus_change(true);
+        assert_eq!(
+            sw.selected().map(|v| v.ord),
+            Some(1),
+            "first focus with no remembered position must select the top (first visible) child"
+        );
     }
 
     #[test]
