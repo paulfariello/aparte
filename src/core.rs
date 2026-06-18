@@ -842,6 +842,38 @@ Example:
     }
 );
 
+command_def!(inject_contact,
+r":inject_contact <jid>
+
+    jid     Contact JID to inject into the roster
+
+Description:
+    Debug: inject a fake contact without a real XMPP connection.
+    Simulates a connected state so the roster headers appear and :msg works.
+
+Example:
+    :inject_contact contact@server.tld",
+{
+    jid: String
+},
+|aparte, _command| {
+    let fake_account: Account =
+        FullJid::from_str("test@test.localhost/aparte").context("Invalid fake account JID")?;
+    let contact_jid = BareJid::from_str(&jid).context("Invalid contact JID")?;
+    aparte.current_connection = Some(fake_account.clone());
+    aparte.schedule(Event::Connected(fake_account.clone(), fake_account.clone().into()));
+    let contact = contact::Contact {
+        jid: contact_jid,
+        name: None,
+        subscription: xmpp_parsers::roster::Subscription::Both,
+        presence: contact::Presence::Available,
+        groups: vec![],
+    };
+    aparte.schedule(Event::Contact(fake_account, contact));
+    Ok(())
+}
+);
+
 command_def!(help,
 r":help [command]
 
@@ -1157,6 +1189,7 @@ impl Aparte {
     pub fn init(&mut self) -> Result<(), ()> {
         self.add_command(help::new());
         self.add_command(inject_msg::new());
+        self.add_command(inject_contact::new());
         self.add_command(connect::new());
         self.add_command(rekey_archive::new());
         self.add_command(win::new());

@@ -3312,3 +3312,74 @@ fn ctrl_k_esc_closes_window_switcher() {
         describe(screen)
     );
 }
+
+/// After inject_contact simulates a connection, :msg must open a chat window
+/// without a "No connection" error.
+///
+/// Regression: roster Enter used scheduler.current_account() (stale None copy
+/// from init time); the fix dispatches Event::RawCommand so the account lookup
+/// happens at dispatch time on the live Aparte.
+#[test]
+fn msg_after_inject_contact_opens_chat_window() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_command("/inject_contact test-contact@test.localhost");
+    thread::sleep(Duration::from_millis(300));
+
+    // :msg uses current_account() from live Aparte — must succeed after inject_contact.
+    h.send_command("/msg test-contact@test.localhost");
+
+    let visible = wait_for_screen(&h, "test-contact@test.localhost", Duration::from_secs(5));
+    h.shutdown();
+
+    assert!(
+        visible,
+        "chat window must open after :msg with injected connection"
+    );
+}
+
+/// Pressing Enter on a roster Contact opens a chat window for that contact.
+///
+/// Regression: when the roster closure used `scheduler.current_account()`, the
+/// account was always None (stale copy from init time), so the handler logged
+/// "No connection" even when the user was connected.
+#[test]
+fn enter_on_roster_contact_opens_chat_window() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Simulate connection and add a fake contact to the roster.
+    h.send_command("/inject_contact test-contact@test.localhost");
+    thread::sleep(Duration::from_millis(300));
+
+    // Switch to Normal mode, then Ctrl+W l to focus the roster pane.
+    enter_normal(&h);
+    h.send_bytes(b"\x17"); // Ctrl+W leader
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"l"); // focus right (roster)
+    thread::sleep(Duration::from_millis(300));
+
+    // Roster order after inject_contact:
+    //   0: Windows header  (auto-selected on focus)
+    //   1: console
+    //   2: Contacts header
+    //   3: test-contact@test.localhost
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(100));
+    h.send_bytes(b"j");
+    thread::sleep(Duration::from_millis(300));
+
+    // Enter on the contact must open a chat window.
+    h.send_bytes(b"\r");
+
+    let visible = wait_for_screen(&h, "test-contact@test.localhost", Duration::from_secs(5));
+    h.shutdown();
+
+    assert!(
+        visible,
+        "chat window must open for contact after pressing Enter on the roster"
+    );
+}

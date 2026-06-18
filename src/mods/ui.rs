@@ -3336,12 +3336,30 @@ impl ModTrait for UIMod {
                 })) => {
                     if let Some(row) = view.selected() {
                         if let Some(item) = row.as_item() {
-                            let win = match item {
-                                RosterItem::Window(label) => label.clone(),
-                                RosterItem::Contact(c) => c.jid.to_string(),
-                                RosterItem::Bookmark(b) => b.jid.to_string(),
-                            };
-                            scheduler.schedule(Event::Win(win));
+                            match item {
+                                RosterItem::Window(label) => {
+                                    scheduler.schedule(Event::Win(label.clone()));
+                                }
+                                RosterItem::Contact(c) => {
+                                    scheduler.schedule(Event::RawCommand(
+                                        None,
+                                        "console".to_string(),
+                                        format!(":msg {}", c.jid),
+                                    ));
+                                }
+                                RosterItem::Bookmark(b) => {
+                                    let channel = b
+                                        .nick
+                                        .as_deref()
+                                        .and_then(|nick| b.jid.with_resource_str(nick).ok())
+                                        .map_or_else(|| b.jid.to_string(), |full| full.to_string());
+                                    scheduler.schedule(Event::RawCommand(
+                                        None,
+                                        "console".to_string(),
+                                        format!(":join {channel}"),
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
