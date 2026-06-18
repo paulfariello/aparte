@@ -1347,10 +1347,7 @@ impl<E, C> View<E, C> for MessageView {
                 }
                 Message::Log(_) => 0,
             };
-            frame.set_cursor(CursorPos::from((
-                frame.dimensions.left + col,
-                frame.dimensions.top + sep_rows,
-            )));
+            frame.set_cursor(CursorPos::from((col, sep_rows)));
             frame.set_cursor_style(terminus::CursorStyle::SteadyBlock);
         }
 
@@ -1371,8 +1368,10 @@ impl<E, C> View<E, C> for MessageView {
             // to frame width.
             let max_col = frame.dimensions.width.saturating_sub(1);
             let col = std::cmp::min(total_col, max_col);
-            let row = frame.dimensions.top + frame.dimensions.height.saturating_sub(1);
-            frame.set_cursor(CursorPos::from((frame.dimensions.left + col, row)));
+            frame.set_cursor(CursorPos::from((
+                col,
+                frame.dimensions.height.saturating_sub(1),
+            )));
             frame.set_cursor_style(if editor.normal_mode {
                 terminus::CursorStyle::SteadyBlock
             } else {

@@ -230,8 +230,8 @@ impl<E, C> View<E, C> for Input<E> {
                 .map(|g| unicode_display_width::width(g) as u16)
                 .sum();
             frame.set_cursor(CursorPos {
-                top: frame.dimensions.top,
-                left: frame.dimensions.left + cursor_col,
+                top: 0,
+                left: cursor_col,
             });
         }
         frame.set_cursor_style(self.cursor_style);

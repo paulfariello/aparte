@@ -565,7 +565,10 @@ impl<'a> ScreenFrame<'a> {
 
     pub fn set_cursor(&mut self, position: CursorPos) {
         if self.cursor_granted {
-            self.offscreen.set_cursor(position);
+            self.offscreen.set_cursor(CursorPos {
+                top: self.dimensions.top + position.top,
+                left: self.dimensions.left + position.left,
+            });
         }
     }
 

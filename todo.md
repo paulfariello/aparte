@@ -1,4 +1,3 @@
-- [x] add a way to scroll and search in roster and bookmarks view. We want a generic way to handle command dispatch on vertical splits.
 - Add action history so we can keep track of all actions. Might be used for repeating actions, creating macro etc. History must be stored as a tree. Meaning going back in time and doing modification must create a branch.
 - Add u and U action to navigate in history
 - notified window are not cleared if going to it with :win command and not with alt+a
