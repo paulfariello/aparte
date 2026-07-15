@@ -231,15 +231,78 @@ impl OffscreenRenderBuffer {
         diffs
     }
 
-    #[allow(clippy::unused_self)]
-    fn render_diff<W>(&self, screen: &mut W, diffs: &Vec<ContinuousDiff>)
+    #[allow(clippy::cast_possible_truncation)]
+    fn render_diff<W>(&self, screen: &mut W, diffs: &[ContinuousDiff])
     where
         W: std::io::Write,
     {
         log::trace!("Diff render");
+        let width = self.size.width as usize;
+        let height = self.size.height as usize;
         for diff in diffs {
             let _ = write!(screen, "{}", MoveTo(diff.pos.left, diff.pos.top));
-            Self::render_chunk(screen, &diff.charxels);
+            let mut current_bg = None;
+            let mut current_fg = None;
+            let mut current_styles: Option<HashSet<Style>> = None;
+            let mut col_offset = 0usize;
+            let mut reanchor_next = false;
+
+            for charxel in &diff.charxels {
+                if reanchor_next {
+                    let left = diff.pos.left as usize + col_offset;
+                    let row = (diff.pos.top as usize + left / width) as u16;
+                    let col = (left % width) as u16;
+                    let _ = write!(screen, "{}", MoveTo(col, row));
+                    reanchor_next = false;
+                }
+                if current_styles.as_ref() != Some(&charxel.styles) {
+                    let _ = write!(screen, "{}", SetAttribute(Attribute::Reset));
+                    current_bg = None;
+                    current_fg = None;
+                    for style in &charxel.styles {
+                        let _ = write!(screen, "{style}");
+                    }
+                    current_styles = Some(charxel.styles.clone());
+                }
+                if Some(charxel.background) != current_bg {
+                    let _ = write!(screen, "{}", charxel.background);
+                    current_bg = Some(charxel.background);
+                }
+                if Some(charxel.foreground) != current_fg {
+                    let _ = write!(screen, "{}", charxel.foreground);
+                    current_fg = Some(charxel.foreground);
+                }
+                let _ = write!(screen, "{}", charxel.grapheme);
+                let w = charxel.display_width() as usize;
+                col_offset += w;
+                if charxel.grapheme.as_str().contains('\u{200D}') {
+                    let left = diff.pos.left as usize + col_offset;
+                    let overflow_row = diff.pos.top as usize + left / width;
+                    let overflow_col = left % width;
+                    if overflow_row < height && overflow_col < width {
+                        // The ZWJ renders one column wider than its model width,
+                        // overwriting whatever was at the overflow column on the terminal.
+                        // Restore it from the buffer so the surrounding content stays intact.
+                        let overflow_cell = &self[overflow_row as u16][overflow_col as u16];
+                        let _ = write!(
+                            screen,
+                            "{}",
+                            MoveTo(overflow_col as u16, overflow_row as u16)
+                        );
+                        let _ = write!(screen, "{}", SetAttribute(Attribute::Reset));
+                        let _ = write!(screen, "{}", overflow_cell.background);
+                        let _ = write!(screen, "{}", overflow_cell.foreground);
+                        for style in &overflow_cell.styles {
+                            let _ = write!(screen, "{style}");
+                        }
+                        let _ = write!(screen, "{}", overflow_cell.grapheme);
+                        current_bg = None;
+                        current_fg = None;
+                        current_styles = None;
+                    }
+                    reanchor_next = true;
+                }
+            }
         }
     }
 
@@ -271,47 +334,15 @@ impl OffscreenRenderBuffer {
     }
 
     #[allow(clippy::similar_names)]
-    fn render_chunk<W>(screen: &mut W, chunk: &Vec<Charxel>)
+    fn render_line<W>(screen: &mut W, row: u16, line: &[Charxel])
     where
         W: std::io::Write,
     {
-        // TODO try to be smart and avoid setting and resetting style and color
-        let mut current_bg = None;
-        let mut current_fg = None;
-        let mut current_styles: Option<HashSet<Style>> = None;
-        for charxel in chunk {
-            if current_styles.as_ref() != Some(&charxel.styles) {
-                let _ = write!(screen, "{}", SetAttribute(Attribute::Reset));
-                current_bg = None;
-                current_fg = None;
-                for style in &charxel.styles {
-                    let _ = write!(screen, "{style}");
-                }
-                current_styles = Some(charxel.styles.clone());
-            }
-            if Some(charxel.background) != current_bg {
-                let _ = write!(screen, "{}", charxel.background);
-                current_bg = Some(charxel.background);
-            }
-            if Some(charxel.foreground) != current_fg {
-                let _ = write!(screen, "{}", charxel.foreground);
-                current_fg = Some(charxel.foreground);
-            }
-            let _ = write!(screen, "{}", charxel.grapheme);
-        }
-    }
-
-    #[allow(clippy::similar_names)]
-    fn render_line<W>(screen: &mut W, line: &[Charxel])
-    where
-        W: std::io::Write,
-    {
-        // Like render_chunk but skips continuation placeholder cells that were written
-        // by ScreenFrame::write() for wide (multi-column) characters.
         let mut current_bg = None;
         let mut current_fg = None;
         let mut current_styles: Option<HashSet<Style>> = None;
         let mut skip = 0u16;
+        let mut model_col = 0u16;
 
         for charxel in line {
             if skip > 0 {
@@ -338,6 +369,10 @@ impl OffscreenRenderBuffer {
                 current_fg = Some(charxel.foreground);
             }
             let _ = write!(screen, "{}", charxel.grapheme);
+            model_col += w;
+            if charxel.grapheme.as_str().contains('\u{200D}') {
+                let _ = write!(screen, "{}", MoveTo(model_col, row));
+            }
         }
     }
 
@@ -350,8 +385,11 @@ impl OffscreenRenderBuffer {
         let _ = write!(screen, "{}", MoveTo(0, 0));
         let _ = write!(screen, "{}", Clear(ClearType::All));
 
-        for line in &self.lines {
-            Self::render_line(screen, &line.charxels);
+        for (row, line) in self.lines.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let row = row as u16;
+            let _ = write!(screen, "{}", MoveTo(0, row));
+            Self::render_line(screen, row, &line.charxels);
         }
     }
 
@@ -639,6 +677,265 @@ mod tests {
             diffed_cols.contains(&1),
             "continuation col 1 not in diff; diffs: {:?}",
             diffs
+        );
+    }
+
+    fn moveto_bytes(col: u16, row: u16) -> Vec<u8> {
+        // crossterm MoveTo(col, row) emits ESC [ {row+1} ; {col+1} H
+        format!("\x1b[{};{}H", row + 1, col + 1).into_bytes()
+    }
+
+    fn contains_moveto(output: &[u8], col: u16, row: u16) -> bool {
+        let needle = moveto_bytes(col, row);
+        output.windows(needle.len()).any(|w| w == needle)
+    }
+
+    fn first_pos(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    /// Returns true if `needle` appears in `haystack` before any `blocker`.
+    fn appears_before(haystack: &[u8], needle: &[u8], blocker: &[u8]) -> bool {
+        match (first_pos(haystack, needle), first_pos(haystack, blocker)) {
+            (Some(n), Some(b)) => n < b,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn full_render_m_at_correct_column_after_zwj_at_boundary() {
+        // 80-wide, 1-row buffer. ZWJ at col 58 (model width=2). 'M' at col 60.
+        // Terminal renders ZWJ 3-wide (58-60). full_render must:
+        //   1. MoveTo(60,0) after ZWJ to re-anchor
+        //   2. Write 'M' at col 60 (not col 61)
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size((80u16, 1u16).into());
+        buf[0][58].set_grapheme("🙂\u{200D}↔️".to_string());
+        buf[0][59] = Charxel::from(ContinuationCell);
+        buf[0][60].set_grapheme("M".to_string());
+
+        let mut out = Vec::<u8>::new();
+        buf.full_render(&mut out);
+
+        let zwj_bytes = "🙂\u{200D}↔️".as_bytes();
+        let moveto60 = moveto_bytes(60, 0);
+        let moveto61 = moveto_bytes(61, 0);
+        let m_byte = b"M";
+
+        let zwj_pos = first_pos(&out, zwj_bytes).expect("ZWJ must be in output");
+        // MoveTo(60,0) must come after ZWJ
+        let after_zwj = &out[zwj_pos + zwj_bytes.len()..];
+        let moveto60_pos =
+            first_pos(after_zwj, &moveto60).expect("MoveTo(60,0) must appear after ZWJ");
+        // 'M' must appear after MoveTo(60,0) and before any MoveTo(61,0)
+        let after_moveto60 = &after_zwj[moveto60_pos + moveto60.len()..];
+        assert!(
+            appears_before(after_moveto60, m_byte, &moveto61),
+            "'M' must appear after MoveTo(60,0) and before any MoveTo(61,0)"
+        );
+    }
+
+    #[test]
+    fn diff_render_m_restored_when_not_in_diff_and_at_zwj_overflow() {
+        // Simulates: message pane (cols 0-59) + roster pane (cols 60-79).
+        // Reference: all blank except 'M' at col 60 (roster already rendered).
+        // Diff: ZWJ at col 58 appeared in message area (changed from blank).
+        // Col 60 ('M') is UNCHANGED, so it's NOT in the diff.
+        // Terminal renders ZWJ 3-wide (58-60), erasing 'M'. render_diff must
+        // restore 'M' via the overflow restore even though 'M' is not in the diff.
+        let mut reference = OffscreenRenderBuffer::default();
+        reference.set_size((80u16, 1u16).into());
+        reference[0][60].set_grapheme("M".to_string());
+
+        let mut current = OffscreenRenderBuffer::default();
+        current.set_size((80u16, 1u16).into());
+        current[0][58].set_grapheme("🙂\u{200D}↔️".to_string());
+        current[0][59] = Charxel::from(ContinuationCell);
+        current[0][60].set_grapheme("M".to_string()); // same as reference
+
+        let mut out = Vec::<u8>::new();
+        current.render(&mut out, &mut reference);
+
+        let zwj_bytes = "🙂\u{200D}↔️".as_bytes();
+        let moveto60 = moveto_bytes(60, 0);
+        let m_byte = b"M";
+
+        let zwj_pos = first_pos(&out, zwj_bytes).expect("ZWJ must be in diff output");
+        let after_zwj = &out[zwj_pos + zwj_bytes.len()..];
+        // MoveTo(60) must appear after ZWJ (the overflow restore)
+        let moveto60_pos = first_pos(after_zwj, &moveto60)
+            .expect("MoveTo(60,0) must appear after ZWJ in diff output");
+        // 'M' must appear after MoveTo(60,0)
+        let after_moveto60 = &after_zwj[moveto60_pos + moveto60.len()..];
+        assert!(
+            after_moveto60.windows(1).any(|w| w == m_byte),
+            "'M' must be restored at col 60 after ZWJ overflow in diff render"
+        );
+    }
+
+    #[test]
+    fn full_render_emits_moveto_before_each_line() {
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size((4u16, 3u16).into());
+
+        let mut out = Vec::<u8>::new();
+        buf.full_render(&mut out);
+
+        assert!(
+            contains_moveto(&out, 0, 0),
+            "MoveTo(0,0) missing before line 0"
+        );
+        assert!(
+            contains_moveto(&out, 0, 1),
+            "MoveTo(0,1) missing before line 1"
+        );
+        assert!(
+            contains_moveto(&out, 0, 2),
+            "MoveTo(0,2) missing before line 2"
+        );
+    }
+
+    #[test]
+    fn full_render_reanchors_after_zwj() {
+        // ZWJ grapheme at col 0 (model width 2), followed by 'X' at col 2.
+        // full_render must emit MoveTo(2, 0) immediately after the ZWJ so
+        // terminals that advance the cursor too far don't shift 'X'.
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size((4u16, 1u16).into());
+        buf[0][0].set_grapheme("🙂\u{200D}↔️".to_string());
+        buf[0][1] = Charxel::from(ContinuationCell);
+        buf[0][2].set_grapheme("X".to_string());
+
+        let mut out = Vec::<u8>::new();
+        buf.full_render(&mut out);
+
+        let zwj_bytes = "🙂\u{200D}↔️".as_bytes();
+        let moveto_bytes = moveto_bytes(2, 0);
+        let zwj_pos = out
+            .windows(zwj_bytes.len())
+            .position(|w| w == zwj_bytes)
+            .expect("ZWJ grapheme not found in output");
+        let moveto_pos = out
+            .windows(moveto_bytes.len())
+            .position(|w| w == moveto_bytes)
+            .expect("MoveTo(2,0) not found in output");
+        assert!(
+            moveto_pos > zwj_pos,
+            "MoveTo(2,0) must appear after the ZWJ grapheme"
+        );
+    }
+
+    #[test]
+    fn render_diff_reanchors_after_zwj() {
+        // Reference buffer: all blanks.
+        let mut reference = OffscreenRenderBuffer::default();
+        reference.set_size((6u16, 1u16).into());
+
+        // Current buffer: ZWJ at col 0 (model width 2), 'X' at col 2 (overflow position).
+        // Col 3 ('Y') is unchanged from reference (blank) so it is NOT in the diff.
+        // After the ZWJ the diff engine sees: ZWJ changed, col 1 (continuation) skipped,
+        // col 2 ('X') changed. The overflow restore must emit 'X' after MoveTo(2,0).
+        let mut current = OffscreenRenderBuffer::default();
+        current.set_size((6u16, 1u16).into());
+        current[0][0].set_grapheme("🙂\u{200D}↔️".to_string());
+        current[0][1] = Charxel::from(ContinuationCell);
+        current[0][2].set_grapheme("X".to_string());
+
+        let mut out = Vec::<u8>::new();
+        current.render(&mut out, &mut reference);
+
+        let zwj_bytes = "🙂\u{200D}↔️".as_bytes();
+        let x_bytes = b"X";
+        let moveto2_bytes = moveto_bytes(2, 0);
+
+        let zwj_pos = out
+            .windows(zwj_bytes.len())
+            .position(|w| w == zwj_bytes)
+            .expect("ZWJ grapheme not found in diff output");
+        let moveto_pos = out
+            .windows(moveto2_bytes.len())
+            .position(|w| w == moveto2_bytes)
+            .expect("MoveTo(2,0) not found in diff output");
+        assert!(
+            moveto_pos > zwj_pos,
+            "MoveTo(2,0) must appear after ZWJ in diff render"
+        );
+
+        // The overflow restore must emit 'X' after MoveTo(2,0) so the ZWJ's
+        // extra terminal column doesn't erase content that wasn't in the diff.
+        let x_after_moveto = out[moveto_pos..]
+            .windows(x_bytes.len())
+            .any(|w| w == x_bytes);
+        assert!(
+            x_after_moveto,
+            "'X' not emitted after MoveTo(2,0) in diff output"
+        );
+    }
+
+    #[test]
+    fn render_diff_overflow_restore_preserves_unchanged_neighbour() {
+        // The content at the overflow position (col 2) is UNCHANGED from the reference,
+        // so it would normally NOT appear in the diff. The overflow restore must still
+        // emit it so the ZWJ's extra terminal column doesn't erase it.
+        let mut reference = OffscreenRenderBuffer::default();
+        reference.set_size((6u16, 1u16).into());
+        reference[0][2].set_grapheme("M".to_string()); // pre-existing, unchanged
+
+        let mut current = OffscreenRenderBuffer::default();
+        current.set_size((6u16, 1u16).into());
+        current[0][0].set_grapheme("🙂\u{200D}↔️".to_string());
+        current[0][1] = Charxel::from(ContinuationCell);
+        current[0][2].set_grapheme("M".to_string()); // same as reference — NOT in diff
+
+        let mut out = Vec::<u8>::new();
+        current.render(&mut out, &mut reference);
+
+        let zwj_bytes = "🙂\u{200D}↔️".as_bytes();
+        let zwj_pos = out
+            .windows(zwj_bytes.len())
+            .position(|w| w == zwj_bytes)
+            .expect("ZWJ grapheme not found");
+
+        // 'M' must appear in the output after the ZWJ, even though it wasn't in the diff.
+        let m_after = out[zwj_pos..]
+            .windows(1)
+            .position(|w| w == b"M")
+            .expect("'M' must be restored after ZWJ overflow in diff output");
+        assert!(m_after < 100, "M should appear shortly after ZWJ");
+    }
+
+    #[test]
+    fn diff_render_two_zwj_same_line_second_at_boundary() {
+        // Two ZWJ emoji on the same row: one mid-message at col 10, one at the
+        // pane boundary at col 56. 'M' is at col 58 (roster start).
+        // Both must be re-anchored; the second must restore 'M'.
+        let mut reference = OffscreenRenderBuffer::default();
+        reference.set_size((80u16, 1u16).into());
+        reference[0][58].set_grapheme("M".to_string()); // pre-existing
+
+        let mut current = OffscreenRenderBuffer::default();
+        current.set_size((80u16, 1u16).into());
+        current[0][10].set_grapheme("🙂\u{200D}↔️".to_string());
+        current[0][11] = Charxel::from(ContinuationCell);
+        current[0][56].set_grapheme("🙂\u{200D}↔️".to_string());
+        current[0][57] = Charxel::from(ContinuationCell);
+        current[0][58].set_grapheme("M".to_string()); // unchanged
+
+        let mut out = Vec::<u8>::new();
+        current.render(&mut out, &mut reference);
+
+        // 'M' must be emitted somewhere after the second ZWJ
+        let zwj_bytes = "🙂\u{200D}↔️".as_bytes();
+        // Find the second ZWJ occurrence in output
+        let first_zwj = first_pos(&out, zwj_bytes).expect("first ZWJ missing");
+        let second_zwj = first_pos(&out[first_zwj + zwj_bytes.len()..], zwj_bytes)
+            .map(|p| p + first_zwj + zwj_bytes.len())
+            .expect("second ZWJ missing");
+        let m_byte = b"M";
+        assert!(
+            out[second_zwj..].windows(1).any(|w| w == m_byte),
+            "'M' must be restored after the second ZWJ overflow"
         );
     }
 

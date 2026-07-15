@@ -1470,6 +1470,10 @@ impl XmppFixture {
         self.harness.as_ref().unwrap().snapshot()
     }
 
+    pub fn raw_bytes(&self) -> Vec<u8> {
+        self.harness.as_ref().unwrap().bytes.lock().unwrap().clone()
+    }
+
     pub fn send_bytes(&self, bytes: &[u8]) {
         self.harness.as_ref().unwrap().send_bytes(bytes);
     }
