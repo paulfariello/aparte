@@ -1,6 +1,7 @@
-- Add action history so we can keep track of all actions. Might be used for repeating actions, creating macro etc. History must be stored as a tree. Meaning going back in time and doing modification must create a branch.
-- Add u and U action to navigate in history
-- notified window are not cleared if going to it with :win command and not with alt+a
-- there is a memory consumption issue. aparte can easily consume gigs of ram. How can we monitor that and take action to reduce it.
-- is there a way to properly handle ESC key with a timeout (50ms) just like neovim does it?
-- migrate XEP-0333 from manual parsing to xmpp-rs parser
+- [ ] Add action history so we can keep track of all actions. Might be used for repeating actions, creating macro etc. History must be stored as a tree. Meaning going back in time and doing modification must create a branch.
+- [ ] Add u and U action to navigate in history
+- [ ] notified window are not cleared if going to it with :win command and not with alt+a
+- [ ] there is a memory consumption issue. aparte can easily consume gigs of ram. How can we monitor that and take action to reduce it.
+- [ ] is there a way to properly handle ESC key with a timeout (50ms) just like neovim does it?
+- [ ] migrate XEP-0333 from manual parsing to xmpp-rs parser
+- [ ] move the input bar on top of the win bar, so we don't mix :command and messages
