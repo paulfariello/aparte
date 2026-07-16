@@ -50,6 +50,11 @@ Switch windows with `Alt+[1-9]` or `:win <name>`.
 
 ### Screen layout
 
+The top row is a **tab bar** listing every open window in open order: the
+current window is shown emphasized in brackets, and windows with unread
+activity carry their notification count. When the tabs overflow, the
+current window always stays visible and the cut sides show an ellipsis.
+
 The bottom of the screen is a vim-style stack: the **input bar** (message
 composition only), the **status line** (mode, connected account, suspended
 edit indicators), and the **command bar** at the very bottom. `:` commands,

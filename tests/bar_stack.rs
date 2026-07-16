@@ -104,6 +104,62 @@ fn draft_survives_command_escape_and_execution() {
     );
 }
 
+/// The top row is a tab bar: every open window is listed in open order, with
+/// the current one emphasized — not only windows with pending activity.
+#[test]
+fn tab_bar_lists_all_windows_with_current_emphasized() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    // Console is the only window at startup and must appear as a tab even
+    // though it has no pending activity.
+    let parser = h.snapshot();
+    assert!(
+        row_text(parser.screen(), 0).contains("console"),
+        "Tab bar must show the console tab at startup\n{}",
+        describe(parser.screen())
+    );
+
+    // Open a chat window (becomes current); both tabs must be visible.
+    h.send_command("/inject_msg hello");
+    wait_for_screen(&h, "test-contact", Duration::from_secs(5));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    let tabs = row_text(screen, 0);
+    let current_bold = bold_span(screen, 0, "test-contact@test.localhost");
+    let console_bold = bold_span(screen, 0, "console");
+    h.shutdown();
+
+    assert!(
+        tabs.contains("console") && tabs.contains("test-contact@test.localhost"),
+        "Tab bar must list all open windows, got: {:?}",
+        tabs
+    );
+    assert_eq!(
+        current_bold,
+        Some(true),
+        "Current window tab must be emphasized (bold), tabs: {:?}",
+        tabs
+    );
+    assert_eq!(
+        console_bold,
+        Some(false),
+        "Non-current idle tab must not be emphasized, tabs: {:?}",
+        tabs
+    );
+}
+
+/// Whether every cell of `needle`'s span on `row` is bold.
+/// `None` when the needle is not on that row.
+fn bold_span(screen: &vt100::Screen, row: u16, needle: &str) -> Option<bool> {
+    let text = row_text(screen, row);
+    let start = text.find(needle)? as u16;
+    #[allow(clippy::cast_possible_truncation)]
+    let end = start + needle.len() as u16;
+    Some((start..end).all(|c| screen.cell(row, c).is_some_and(vt100::Cell::bold)))
+}
+
 #[test]
 fn search_types_in_command_bar() {
     let h = Harness::spawn("", &[]);

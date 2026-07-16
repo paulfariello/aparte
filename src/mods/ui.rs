@@ -880,56 +880,88 @@ impl View<UIEvent, Theme> for WinBar {
             self.dimensions
         );
 
-        let mut frame_space = frame.width();
-
-        let mut first = true;
-        let mut remaining = self.highlighted.len();
-
-        let mut sorted = self.highlighted.iter().collect::<Vec<_>>();
-        sorted.sort_by(|(_, (_, a)), (_, (_, b))| b.partial_cmp(a).unwrap());
-
-        if !sorted.is_empty() {
-            frame.write(" ");
-            frame_space -= 3; // Subtract space and enclosing []
-
-            for (window, state) in sorted {
-                // Ensure at all time that we can close hl and add remaining info
-                let remaining_charxels = if remaining > 0 {
-                    format!("+{remaining}").into_charxels()
-                } else {
-                    Charxels::default()
-                };
-
-                if !first {
-                    frame.write(" | ");
-                    frame_space -= 2;
-                }
-
+        // One tab per open window, in open order (ADR-0008 tab bar).
+        let tabs: Vec<Charxels> = self
+            .windows
+            .iter()
+            .map(|window| {
                 let label = self
                     .display_names
                     .get(window.as_str())
                     .map_or(window.as_str(), String::as_str);
-                let highlighted = if state.1 > 0 {
-                    let mut highlighted = label.with_style(Style::Bold);
-                    highlighted.append(" (");
-                    highlighted.append(format!("{}", state.1).with_style(Style::Bold));
-                    highlighted.append(format!(", {})", state.0));
-                    highlighted
+                if self.current_window.as_deref() == Some(window.as_str()) {
+                    format!("[{label}]").with_style(Style::Bold)
+                } else if let Some((total, important)) = self.highlighted.get(window.as_str()) {
+                    if *important > 0 {
+                        format!("{label} ({important}, {total})").with_style(Style::Bold)
+                    } else {
+                        format!("{label} ({total})").into_charxels()
+                    }
                 } else {
-                    format!("{} ({})", label, state.0).into_charxels()
-                };
+                    label.into_charxels()
+                }
+            })
+            .collect();
 
-                // Don't write current hl if we can't put remaining info afterward
-                if highlighted.display_width() + remaining_charxels.display_width() >= frame_space {
-                    // We are sure that previous hl has let us enough space for remaining info
-                    frame.write(&remaining_charxels);
+        if !tabs.is_empty() {
+            let width = frame.width();
+            let n = tabs.len();
+            let current = self
+                .current_window
+                .as_deref()
+                .and_then(|c| self.windows.iter().position(|w| w == c))
+                .unwrap_or(0);
+
+            // Width of tabs[lo..=hi] with " | " separators and an ellipsis
+            // marker on each cut side.
+            let total = |lo: usize, hi: usize| -> u16 {
+                let mut w: u16 = 0;
+                for (i, tab) in tabs.iter().enumerate().take(hi + 1).skip(lo) {
+                    if i > lo {
+                        w += 3;
+                    }
+                    w += tab.display_width();
+                }
+                if lo > 0 {
+                    w += 2;
+                }
+                if hi < n - 1 {
+                    w += 2;
+                }
+                w
+            };
+
+            // The current tab is always visible; grow the visible range
+            // around it while it fits, cutting overflow with an ellipsis.
+            let mut lo = current;
+            let mut hi = current;
+            loop {
+                if hi + 1 < n && total(lo, hi + 1) <= width {
+                    hi += 1;
+                } else if lo > 0 && total(lo - 1, hi) <= width {
+                    lo -= 1;
+                } else {
                     break;
                 }
-                frame.write(&highlighted);
-                frame_space -= highlighted.display_width();
+            }
 
-                first = false;
-                remaining -= 1;
+            if lo > 0 {
+                frame.write("… ");
+            }
+            for (i, tab) in tabs.iter().enumerate().take(hi + 1).skip(lo) {
+                if i > lo {
+                    frame.write(" | ");
+                }
+                if lo == hi {
+                    let mut only = tab.clone();
+                    only.truncate(width, "…");
+                    frame.write(only);
+                } else {
+                    frame.write(tab);
+                }
+            }
+            if hi < n - 1 {
+                frame.write(" …");
             }
         }
 
