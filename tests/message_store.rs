@@ -33,7 +33,7 @@ use common::xmpp_fixture::{
     omemo_encrypted_chat_replay, omemo_encrypted_chat_replay_no_from,
     omemo_encrypted_groupchat_echo, room_subject_message, XmppFixture,
 };
-use common::{describe, row_text, ROWS};
+use common::{describe, row_text, INPUT_ROW, ROWS, TITLE_ROW};
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
 const CONTACT_JID: &str = "contact@localhost";
@@ -169,7 +169,7 @@ fn message_store_muc_omemo_echo_not_duplicated() {
     // Wait until the 🔒 appears in the title bar — this confirms that
     // start_session() completed and the Signal session is established.
     // A fixed sleep is not reliable under parallel test load.
-    let title_row = ROWS - 2;
+    let title_row = TITLE_ROW;
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut omemo_ready = false;
     while Instant::now() < deadline {

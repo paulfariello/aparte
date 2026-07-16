@@ -14,6 +14,16 @@ use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 pub const ROWS: u16 = 24;
 pub const COLS: u16 = 80;
 
+/// Row of the message input bar in the ADR-0008 stack
+/// (input bar / status line / command bar at the bottom).
+pub const INPUT_ROW: u16 = ROWS - 3;
+/// Row of the status line (mode, account, edit indicators).
+pub const STATUS_ROW: u16 = ROWS - 2;
+/// Row of the command bar (`:` commands, `/` search, password prompts).
+pub const COMMAND_ROW: u16 = ROWS - 1;
+/// Row of the title bar (directly above the input bar).
+pub const TITLE_ROW: u16 = ROWS - 4;
+
 pub struct Harness {
     pub bytes: Arc<Mutex<Vec<u8>>>,
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -249,7 +259,7 @@ pub fn rows_with_bgcolor(screen: &vt100::Screen, color: vt100::Color) -> Vec<u16
 }
 
 /// Press 'k' twice to navigate Normal-mode cursor onto the message pane, then
-/// poll until the cursor has left the input bar (ROWS - 1).  Use this in place
+/// poll until the cursor has left the input bar (INPUT_ROW).  Use this in place
 /// of the old `k` / `sleep(150ms)` / `k` / `sleep(200ms)` pattern.
 pub fn navigate_to_message_pane(h: &Harness) {
     h.send_bytes(b"k");
@@ -264,7 +274,7 @@ pub fn navigate_to_message_pane(h: &Harness) {
             );
         }
         let parser = h.snapshot();
-        if parser.screen().cursor_position().0 != ROWS - 1 {
+        if parser.screen().cursor_position().0 != INPUT_ROW {
             break;
         }
         thread::sleep(Duration::from_millis(50));

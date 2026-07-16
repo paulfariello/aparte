@@ -306,6 +306,10 @@ enum UIEvent {
         bubbled: bool,
     },
     CommandBufferUpdate(String),
+    /// Enter was consumed by the command bar (command executed or search
+    /// started). Mutated in-event so the mod-level Enter handler can tell,
+    /// even when its own mode state lags behind a fast key burst.
+    CommandExecuted,
     SetInput(String),
     /// Move the cursor in the focused widget by `motion × count`.
     /// Fire-and-forget: no return value.
@@ -538,14 +542,272 @@ impl View<UIEvent, Theme> for TitleBar {
     }
 }
 
+/// Bottom bar with aparte state: mode first, then connected account, then
+/// suspended dirty-edit indicators right-aligned (ADR-0008).
+struct StatusLine {
+    mode: Mode,
+    connection: Option<String>,
+    windows: Vec<String>,
+    display_names: HashMap<String, String>,
+    current_window: Option<String>,
+    editing: HashSet<String>,
+    dimensions: Option<Dimensions>,
+}
+
+impl StatusLine {
+    fn new() -> Self {
+        Self {
+            mode: Mode::Normal,
+            connection: None,
+            windows: Vec::new(),
+            display_names: HashMap::new(),
+            current_window: None,
+            editing: HashSet::new(),
+            dimensions: None,
+        }
+    }
+}
+
+impl View<UIEvent, Theme> for StatusLine {
+    fn focusable(&self) -> bool {
+        false
+    }
+
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        frame.set_background(config.status_line.bg);
+        frame.set_foreground(config.status_line.fg);
+
+        let mut frame_space = frame.width();
+
+        let mode_label = match self.mode {
+            Mode::Insert => " INSERT ",
+            Mode::Normal => " NORMAL ",
+            Mode::Command => " COMMAND ",
+        };
+        let mode_charxels = mode_label
+            .with_style(Style::Bold)
+            .with_color(&config.status_line_mode);
+        let mode_width = mode_charxels.display_width();
+        if frame.width() >= mode_width {
+            frame.write(&mode_charxels);
+            frame_space -= mode_width;
+        }
+
+        if let Some(connection) = &self.connection {
+            let connection = format!(" {connection}")
+                .into_charxels()
+                .with_color(&config.status_line);
+            let connection_width = connection.display_width();
+            if frame_space > connection_width {
+                frame.write(&connection);
+            }
+        }
+
+        // Show [e:name1 name2] for non-current windows with suspended dirty edits.
+        if !self.editing.is_empty() {
+            let names: Vec<&str> = self
+                .windows
+                .iter()
+                .filter(|w| {
+                    self.editing.contains(w.as_str())
+                        && self.current_window.as_deref() != Some(w.as_str())
+                })
+                .map(|w| {
+                    self.display_names
+                        .get(w.as_str())
+                        .map(String::as_str)
+                        .unwrap_or(w.as_str())
+                })
+                .collect();
+            if !names.is_empty() {
+                let indicator = format!(" [e:{}]", names.join(" ")).with_style(Style::Bold);
+                let iw = indicator.display_width();
+                if frame.width() >= iw {
+                    frame.write_at((frame.width() - iw, 0u16), &indicator);
+                }
+            }
+        }
+    }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        match event {
+            UIEvent::ModeChange(mode) => {
+                self.mode = *mode;
+            }
+            UIEvent::Core(Event::Connected(account, _)) => {
+                self.connection = Some(terminus::clean_str(&account.to_string()));
+            }
+            UIEvent::Core(Event::ChangeWindow(name)) => {
+                self.current_window = Some(terminus::clean_str(name));
+            }
+            UIEvent::AddWindow(jid, display_name, _) => {
+                if let Some(name) = display_name {
+                    self.display_names.insert(jid.clone(), name.clone());
+                }
+                self.windows.push(terminus::clean_str(jid));
+            }
+            UIEvent::Core(Event::Close(window)) => {
+                self.windows.retain(|win| win != window);
+                self.editing.remove(window.as_str());
+            }
+            UIEvent::EditIndicator(window, dirty) => {
+                if *dirty {
+                    self.editing.insert(window.clone());
+                } else {
+                    self.editing.remove(window.as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Bottom-most line hosting transient meta-input: `:` commands, `/` search
+/// and masked password prompts. Pending normal-mode keys render right-aligned
+/// (ADR-0008).
+struct CommandBar {
+    input: Input<UIEvent>,
+    active: bool,
+    pending_keys: String,
+    dimensions: Option<Dimensions>,
+}
+
+impl CommandBar {
+    fn new() -> Self {
+        Self {
+            input: Input::new(),
+            active: false,
+            pending_keys: String::new(),
+            dimensions: None,
+        }
+    }
+
+    fn input_changed(&self) -> UIEvent {
+        UIEvent::InputChanged(
+            self.input.editor.buf.clone(),
+            self.input.editor.cursor.clone(),
+            self.input.password,
+        )
+    }
+}
+
+impl View<UIEvent, Theme> for CommandBar {
+    fn insertable(&self) -> bool {
+        self.active
+    }
+
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, frame: ScreenFrame, config: &Theme) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        if self.active {
+            self.input.render(frame, config);
+        } else if !self.pending_keys.is_empty() {
+            let mut frame = frame;
+            let pending = self.pending_keys.as_str().with_style(Style::Bold);
+            let pending_width = pending.display_width();
+            if frame.width() >= pending_width {
+                frame.write_at((frame.width() - pending_width, 0u16), &pending);
+            }
+        }
+    }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        match event {
+            UIEvent::Core(Event::Key(key)) if self.active => {
+                match key.code {
+                    KeyCode::Up => self.input.previous(),
+                    KeyCode::Down => self.input.next(),
+                    _ => {
+                        self.input.editor.handle_key_event(key);
+                    }
+                }
+                *event = self.input_changed();
+            }
+            UIEvent::SetInput(text) => {
+                self.input.editor.cursor =
+                    Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
+                self.input.editor.buf.clone_from(text);
+                *event = self.input_changed();
+            }
+            UIEvent::ClearInput if self.active => {
+                self.input.validate();
+                *event = self.input_changed();
+            }
+            UIEvent::Core(Event::Completed(raw_buf, cursor)) if self.active => {
+                self.input.editor.buf.clone_from(raw_buf);
+                self.input.editor.cursor.clone_from(cursor);
+                *event = self.input_changed();
+            }
+            UIEvent::Core(Event::ReadPassword(_)) => {
+                self.active = true;
+                self.input.password();
+            }
+            UIEvent::ModeChange(Mode::Command) => {
+                self.active = true;
+                self.input.set_cursor_style(CursorStyle::SteadyBar);
+            }
+            UIEvent::ModeChange(Mode::Normal) => {
+                if self.active {
+                    self.active = false;
+                    self.input.clear();
+                }
+            }
+            UIEvent::ModeChange(Mode::Insert) => {
+                // ReadPassword activates after its ModeChange(Insert); a
+                // password prompt must survive being in Insert mode.
+                if self.active && !self.input.password {
+                    self.active = false;
+                    self.input.clear();
+                }
+            }
+            UIEvent::CommandBufferUpdate(buf) => {
+                self.pending_keys.clone_from(buf);
+            }
+            _ => {}
+        }
+    }
+}
+
 struct WinBar {
     windows: Vec<String>,
     display_names: HashMap<String, String>,
     current_window: Option<String>,
     highlighted: HashMap<String, (u64, u64)>,
-    editing: HashSet<String>,
     dimensions: Option<Dimensions>,
-    command_buffer: String,
 }
 
 impl WinBar {
@@ -555,9 +817,7 @@ impl WinBar {
             display_names: HashMap::new(),
             current_window: None,
             highlighted: HashMap::new(),
-            editing: HashSet::new(),
             dimensions: None,
-            command_buffer: String::new(),
         }
     }
 
@@ -673,39 +933,6 @@ impl View<UIEvent, Theme> for WinBar {
             }
         }
 
-        // Show [e:name1 name2] for non-current windows with suspended dirty edits.
-        if !self.editing.is_empty() {
-            let names: Vec<&str> = self
-                .windows
-                .iter()
-                .filter(|w| {
-                    self.editing.contains(w.as_str())
-                        && self.current_window.as_deref() != Some(w.as_str())
-                })
-                .map(|w| {
-                    self.display_names
-                        .get(w.as_str())
-                        .map(String::as_str)
-                        .unwrap_or(w.as_str())
-                })
-                .collect();
-            if !names.is_empty() {
-                let indicator = format!(" [e:{}]", names.join(" ")).with_style(Style::Bold);
-                let iw = indicator.display_width();
-                if frame.width() >= iw {
-                    frame.write_at((frame.width() - iw, 0u16), &indicator);
-                }
-            }
-        }
-
-        if !self.command_buffer.is_empty() {
-            let cmd_buf = self.command_buffer.as_str().with_style(Style::Bold);
-            let cmd_buf_width = cmd_buf.display_width();
-            if frame.width() >= cmd_buf_width {
-                frame.write_at((frame.width() - cmd_buf_width, 0u16), &cmd_buf);
-            }
-        }
-
         frame.set_background(config.win_bar.bg);
         frame.set_foreground(config.win_bar.fg);
     }
@@ -734,16 +961,6 @@ impl View<UIEvent, Theme> for WinBar {
             }
             UIEvent::ReduceHighlight(window, total, important) => {
                 self.reduce_highlight(window, *total, *important);
-            }
-            UIEvent::EditIndicator(window, dirty) => {
-                if *dirty {
-                    self.editing.insert(window.clone());
-                } else {
-                    self.editing.remove(window.as_str());
-                }
-            }
-            UIEvent::CommandBufferUpdate(buf) => {
-                self.command_buffer.clone_from(buf);
             }
             _ => {}
         }
@@ -2120,13 +2337,16 @@ impl UIMod {
     }
 }
 
+// Indices into the root LinearLayout's children (push order in `UIMod::init`).
+const FRAME_LAYOUT_INDEX: usize = 1;
+const INPUT_INDEX: usize = 3;
+const COMMAND_BAR_INDEX: usize = 5;
+
 fn dispatch_nav_command(
     cmd: NormalCommand,
     layout: &mut LinearLayout<UIEvent, Theme>,
     at_nav_bottom: &mut bool,
 ) {
-    const FRAME_LAYOUT_INDEX: usize = 1;
-    const INPUT_INDEX: usize = 3;
     let is_select_next = matches!(cmd, NormalCommand::SelectNext(_));
     let is_select_prev = matches!(cmd, NormalCommand::SelectPrev(_));
 
@@ -2176,7 +2396,6 @@ fn dispatch_action(
     at_nav_bottom: &mut bool,
     current_input: &mut (String, Cursor, bool),
 ) {
-    const FRAME_LAYOUT_INDEX: usize = 1;
     if action.motion.is_navigation() {
         let cmd = match action.motion {
             Motion::Down => NormalCommand::SelectNext(action.count),
@@ -2249,10 +2468,6 @@ fn dispatch_action(
 impl ModTrait for UIMod {
     #[allow(clippy::too_many_lines, clippy::similar_names)]
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
-        // Indices into the root LinearLayout's children (push order below).
-        const FRAME_LAYOUT_INDEX: usize = 1;
-        const INPUT_INDEX: usize = 3;
-
         let (width, height) = crossterm::terminal::size().unwrap();
         log::debug!("Init UI on screen ({width}×{height})");
 
@@ -2260,7 +2475,6 @@ impl ModTrait for UIMod {
         {
             let mut mode = Mode::Normal;
             let mut timeout_generation: u64 = 0;
-            let mut saved_input = String::new();
             let mut action_parser = ActionParser::new();
             let mut registers = Registers::new();
             let mut aparte_proxy = aparte.proxy();
@@ -2271,6 +2485,9 @@ impl ModTrait for UIMod {
             let mut message_cursor_active = false;
             let mut pre_command_focus: Option<usize> = None;
             let mut current_input: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
+            // Command-bar buffer state, tracked separately from the message
+            // input so a draft survives command/search entry (ADR-0008).
+            let mut current_cmd: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
             layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
                 move |layout, event| match event {
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -2484,50 +2701,24 @@ impl ModTrait for UIMod {
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
-                        code: KeyCode::Char(':'),
+                        code: KeyCode::Char(prefix @ (':' | '/')),
                         ..
                     })) if mode == Mode::Normal => {
+                        let prefix = *prefix;
                         mode = Mode::Command;
                         aparte_proxy.schedule(Event::UIMode(Mode::Command));
                         action_parser.reset();
                         pre_command_focus = layout.focused_child_index;
-                        layout.set_focus(INPUT_INDEX);
-                        saved_input = current_input.0.clone();
+                        layout.set_focus(COMMAND_BAR_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Command));
                         }
-                        let mut si_event = UIEvent::SetInput(":".to_string());
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut si_event);
+                        let mut si_event = UIEvent::SetInput(prefix.to_string());
+                        if let Some(cmd_bar) = layout.children.get_mut(COMMAND_BAR_INDEX) {
+                            cmd_bar.child.view.event(&mut si_event);
                         }
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
-                            current_input = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
-                        }
-                    }
-                    UIEvent::Core(Event::Key(KeyEvent {
-                        code: KeyCode::Char('/'),
-                        ..
-                    })) if mode == Mode::Normal => {
-                        mode = Mode::Command;
-                        aparte_proxy.schedule(Event::UIMode(Mode::Command));
-                        action_parser.reset();
-                        pre_command_focus = layout.focused_child_index;
-                        layout.set_focus(INPUT_INDEX);
-                        saved_input = current_input.0.clone();
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut UIEvent::ModeChange(Mode::Command));
-                        }
-                        let mut si_event = UIEvent::SetInput("/".to_string());
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut si_event);
-                        }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
-                            current_input = (buf.clone(), cursor.clone(), password);
+                            current_cmd = (buf.clone(), cursor.clone(), password);
                             aparte_proxy.schedule(Event::InputChanged(
                                 buf.clone(),
                                 cursor.clone(),
@@ -2543,62 +2734,54 @@ impl ModTrait for UIMod {
                         action_parser.reset();
                         if pre_command_focus == Some(FRAME_LAYOUT_INDEX) {
                             layout.set_focus(FRAME_LAYOUT_INDEX);
+                        } else {
+                            layout.set_focus(INPUT_INDEX);
                         }
                         pre_command_focus = None;
-                        let saved = std::mem::take(&mut saved_input);
                         if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                             frame.child.view.event(&mut UIEvent::NormalCommand {
                                 cmd: NormalCommand::SearchCancel,
                                 bubbled: false,
                             });
                         }
+                        // ModeChange(Normal) deactivates and clears the command bar.
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
-                        let mut si_event = UIEvent::SetInput(saved.clone());
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut si_event);
-                        }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
-                            current_input = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
-                        }
+                        current_cmd = (String::new(), Cursor::new(0), false);
+                        // Resync completion/send state to the untouched message input.
+                        let (buf, cursor, password) = current_input.clone();
+                        aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
                     }
                     // Enter in Command mode executes the typed command.
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Enter,
                         ..
                     })) if mode == Mode::Command => {
-                        let cmd = current_input.0.clone();
+                        let cmd = current_cmd.0.clone();
 
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         if pre_command_focus == Some(FRAME_LAYOUT_INDEX) {
                             layout.set_focus(FRAME_LAYOUT_INDEX);
+                        } else {
+                            layout.set_focus(INPUT_INDEX);
                         }
                         pre_command_focus = None;
-                        let saved = std::mem::take(&mut saved_input);
+                        // Push the command to the command bar's own history
+                        // while it is still active, then deactivate it.
+                        if let Some(cmd_bar) = layout.children.get_mut(COMMAND_BAR_INDEX) {
+                            cmd_bar.child.view.event(&mut UIEvent::ClearInput);
+                        }
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
-                        let mut si_event = UIEvent::SetInput(saved.clone());
-                        for child in layout.iter_children_mut() {
-                            child.event(&mut si_event);
-                        }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
-                            current_input = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
-                        }
+                        current_cmd = (String::new(), Cursor::new(0), false);
+                        // Resync completion/send state to the untouched message input.
+                        let (buf, cursor, password) = current_input.clone();
+                        aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
                         if let Some(query) = cmd.strip_prefix('/') {
                             let query = query.to_string();
                             if !query.is_empty() {
@@ -2616,14 +2799,15 @@ impl ModTrait for UIMod {
                                 cmd,
                             ));
                         }
+                        *event = UIEvent::CommandExecuted;
                     }
-                    // All other keys in COMMAND mode go to the focused input widget,
+                    // All other keys in COMMAND mode go to the command bar,
                     // reusing its editing logic (Ctrl+A/B/E/F/H/W/U/K, arrows, Home/End,
                     // Delete, history).
                     UIEvent::Core(Event::Key(_)) if mode == Mode::Command => {
                         layout.route_to_focused(event);
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
-                            current_input = (buf.clone(), cursor.clone(), password);
+                            current_cmd = (buf.clone(), cursor.clone(), password);
                             aparte_proxy.schedule(Event::InputChanged(
                                 buf.clone(),
                                 cursor.clone(),
@@ -2792,10 +2976,15 @@ impl ModTrait for UIMod {
                         }
                     }
                     // All other keys in INSERT mode go only to the focused input.
+                    // Focus may be on the command bar during a password prompt.
                     UIEvent::Core(Event::Key(_)) if mode == Mode::Insert => {
                         layout.route_to_focused(event);
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
-                            current_input = (buf.clone(), cursor.clone(), password);
+                            if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                            } else {
+                                current_input = (buf.clone(), cursor.clone(), password);
+                            }
                             aparte_proxy.schedule(Event::InputChanged(
                                 buf.clone(),
                                 cursor.clone(),
@@ -2814,6 +3003,53 @@ impl ModTrait for UIMod {
                             layout.set_focus(INPUT_INDEX);
                         }
                     }
+                    // ClearInput targets whichever input widget is focused so
+                    // clearing the command bar cannot wipe a message draft.
+                    UIEvent::ClearInput => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                            if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                            } else {
+                                current_input = (buf.clone(), cursor.clone(), password);
+                            }
+                            aparte_proxy.schedule(Event::InputChanged(
+                                buf.clone(),
+                                cursor.clone(),
+                                password,
+                            ));
+                        }
+                    }
+                    // Completion results apply to the widget being edited only.
+                    UIEvent::Core(Event::Completed(_, _)) => {
+                        let target = if mode == Mode::Command {
+                            COMMAND_BAR_INDEX
+                        } else {
+                            INPUT_INDEX
+                        };
+                        if let Some(child) = layout.children.get_mut(target) {
+                            child.child.view.event(event);
+                        }
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                            if mode == Mode::Command {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                            } else {
+                                current_input = (buf.clone(), cursor.clone(), password);
+                            }
+                            aparte_proxy.schedule(Event::InputChanged(
+                                buf.clone(),
+                                cursor.clone(),
+                                password,
+                            ));
+                        }
+                    }
+                    // Password prompts happen in the command bar (ADR-0008).
+                    UIEvent::Core(Event::ReadPassword(_)) => {
+                        layout.set_focus(COMMAND_BAR_INDEX);
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    }
                     UIEvent::ModeChange(new_mode) => match *new_mode {
                         Mode::Normal => {
                             mode = Mode::Normal;
@@ -2821,6 +3057,15 @@ impl ModTrait for UIMod {
                             pre_command_focus = None;
                             aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                             action_parser.reset();
+                            if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
+                                // Leaving a command-bar interaction (e.g. a
+                                // password prompt): hand focus back to the
+                                // input bar and resync the mod-level state.
+                                layout.set_focus(INPUT_INDEX);
+                                current_cmd = (String::new(), Cursor::new(0), false);
+                                let (buf, cursor, password) = current_input.clone();
+                                aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
+                            }
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                                 child.event(&mut UIEvent::ModeChange(Mode::Normal));
@@ -2957,7 +3202,6 @@ impl ModTrait for UIMod {
                     input.password,
                 );
             }
-            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
             UIEvent::SetInput(text) => {
                 input.editor.cursor =
                     Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
@@ -3019,11 +3263,16 @@ impl ModTrait for UIMod {
             _ => {}
         });
 
+        let status_line = StatusLine::new();
+        let command_bar = CommandBar::new();
+
         let mut layout = layout;
         layout.push(win_bar, 0);
         layout.push(frame, 1);
         layout.push(title_bar, 0);
         layout.push(input, 0);
+        layout.push(status_line, 0);
+        layout.push(command_bar, 0);
         layout.set_focus(INPUT_INDEX);
 
         self.root = Root::new(layout).with_event(|root, event| match event {
@@ -3632,7 +3881,12 @@ impl ModTrait for UIMod {
                         self.root.event(&mut enter_evt);
 
                         // Command mode: the layout closure handled everything.
-                        if self.current_mode == Mode::Command {
+                        // The CommandExecuted check is authoritative: in a fast
+                        // key burst self.current_mode can lag behind the
+                        // layout's own mode (UIMode events are still queued).
+                        if self.current_mode == Mode::Command
+                            || matches!(enter_evt, UIEvent::CommandExecuted)
+                        {
                             return;
                         }
 

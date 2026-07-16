@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use common::{
     describe, find_row_with, grid_contains, navigate_to_message_pane, row_text, rows_with_bgcolor,
-    wait_for_ready, wait_for_screen, Harness, ROWS, SELECTION_BGCOLOR,
+    wait_for_ready, wait_for_screen, Harness, COMMAND_ROW, INPUT_ROW, SELECTION_BGCOLOR, TITLE_ROW,
 };
 
 /// Send enough unknown commands to push the welcome banner off-screen.
@@ -717,8 +717,8 @@ fn cursor_steady_bar_in_command_mode() {
     );
 }
 
-/// Cursor should sit on the last row (the input bar) and advance with each
-/// typed character in Command mode.
+/// Cursor should sit on the bottom row (the command bar) and advance with
+/// each typed character in Command mode.
 #[test]
 fn cursor_position_in_command_mode() {
     let h = Harness::spawn("", &[]);
@@ -729,7 +729,7 @@ fn cursor_position_in_command_mode() {
     // Type text after the already-present ':'.
     h.send_bytes(b"hello");
     let visible = wait_for_screen(&h, ":hello", Duration::from_secs(2));
-    assert!(visible, "':hello' should appear in the input bar");
+    assert!(visible, "':hello' should appear in the command bar");
 
     let parser = h.snapshot();
     let (row, col) = parser.screen().cursor_position();
@@ -737,9 +737,8 @@ fn cursor_position_in_command_mode() {
     h.shutdown();
 
     assert_eq!(
-        row,
-        ROWS - 1,
-        "Cursor should be on the last row (input bar)"
+        row, COMMAND_ROW,
+        "Cursor should be on the bottom row (command bar)"
     );
     assert_eq!(
         col,
@@ -751,10 +750,10 @@ fn cursor_position_in_command_mode() {
 }
 
 /// When a message is selected in NORMAL mode and the user enters COMMAND mode
-/// via ':', the cursor must move to the input bar (last row), not stay on the
-/// selected message row.  The scroll_win renders selected children with cursor
-/// priority 2, which beats the input widget's priority 1 — the fix is to clear
-/// the selection on ModeChange(Command).
+/// via ':', the cursor must move to the command bar (bottom row), not stay on
+/// the selected message row.  The scroll_win renders selected children with
+/// cursor priority 2, which beats the input widget's priority 1 — the fix is
+/// to clear the selection on ModeChange(Command).
 #[test]
 fn cursor_position_in_command_mode_after_message_selection() {
     let h = Harness::spawn("", &[]);
@@ -800,9 +799,9 @@ fn cursor_position_in_command_mode_after_message_selection() {
     );
     assert_eq!(
         row,
-        ROWS - 1,
-        "Cursor must be on the input bar (row {}) after entering COMMAND mode from NORMAL with a selected message, got row {}",
-        ROWS - 1,
+        COMMAND_ROW,
+        "Cursor must be on the command bar (row {}) after entering COMMAND mode from NORMAL with a selected message, got row {}",
+        COMMAND_ROW,
         row
     );
 }
@@ -1151,9 +1150,9 @@ fn j_on_last_message_moves_cursor_to_input_bar() {
     let (row, _) = parser.screen().cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "Cursor should be on the input bar (row {}) after j bubbles from the last message, got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen)
     );
@@ -1212,9 +1211,9 @@ fn j_twice_from_input_bar_moves_cursor_to_input_bar() {
     let (row, _) = parser.screen().cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "Cursor should be on input bar (row {}) after j twice; got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen)
     );
@@ -1378,7 +1377,7 @@ fn i_in_command_mode_types_into_buffer() {
 }
 
 #[test]
-fn command_mode_restores_insert_input_on_exit() {
+fn command_mode_preserves_insert_input() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
@@ -1387,19 +1386,25 @@ fn command_mode_restores_insert_input_on_exit() {
     h.send_bytes(b"hello world");
     wait_for_screen(&h, "hello world", Duration::from_secs(2));
 
-    // Enter Normal then Command mode — input bar should show the command, not the saved text.
+    // Enter Normal then Command mode — the command types in the command bar
+    // while the draft stays visible in the input bar (ADR-0008).
     enter_command_colon(&h);
     h.send_bytes(b"foo");
     wait_for_screen(&h, ":foo", Duration::from_secs(2));
 
     let mid = h.snapshot();
     assert!(
-        !grid_contains(mid.screen(), "hello world"),
-        "Saved input should not be visible while in COMMAND mode\n{}",
+        row_text(mid.screen(), COMMAND_ROW).contains(":foo"),
+        "Command must be typed in the command bar\n{}",
+        describe(mid.screen())
+    );
+    assert!(
+        row_text(mid.screen(), INPUT_ROW).contains("hello world"),
+        "Draft must stay visible in the input bar while in COMMAND mode\n{}",
         describe(mid.screen())
     );
 
-    // Esc back to Normal, then 'i' back to Insert — saved text must be restored.
+    // Esc back to Normal, then 'i' back to Insert — the draft is untouched.
     h.send_bytes(b"\x1b");
     wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
     h.send_bytes(b"i");
@@ -1411,7 +1416,7 @@ fn command_mode_restores_insert_input_on_exit() {
 
     assert!(
         found,
-        "Input text typed in INSERT mode should be restored after exiting COMMAND mode\n{}",
+        "Input text typed in INSERT mode must survive COMMAND mode\n{}",
         describe(screen)
     );
 }
@@ -1424,8 +1429,8 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    // Title bar = row ROWS - 2 (WinBar:0, Frame:1..21, TitleBar:22, Input:23).
-    let title_row = ROWS - 2;
+    // Title bar sits directly above the input bar (ADR-0008 stack).
+    let title_row = TITLE_ROW;
 
     // -- NORMAL (startup) --
     {
@@ -1552,7 +1557,7 @@ fn title_bar_mode_label_is_stable_across_transitions() {
 //
 // Pattern: enter Insert, type ASCII text, switch to Normal (Esc moves cursor
 // back one), press a motion key, then verify the terminal cursor column on the
-// input bar (row ROWS-1).  For plain ASCII, grapheme index == screen column.
+// input bar (INPUT_ROW).  For plain ASCII, grapheme index == screen column.
 //
 // "hello world" grapheme map: h=0 e=1 l=2 l=3 o=4 ' '=5 w=6 o=7 r=8 l=9 d=10
 // After Esc, cursor is at 10 (back one from Insert's end position of 11).
@@ -1581,7 +1586,7 @@ fn normal_mode_0_moves_cursor_to_start() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1612,7 +1617,7 @@ fn normal_mode_dollar_moves_cursor_to_end() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1642,7 +1647,7 @@ fn normal_mode_l_moves_cursor_right() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1675,7 +1680,7 @@ fn normal_mode_h_moves_cursor_left() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1705,7 +1710,7 @@ fn normal_mode_w_moves_cursor_to_next_word() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1735,7 +1740,7 @@ fn normal_mode_b_moves_cursor_to_word_start() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1765,7 +1770,7 @@ fn normal_mode_e_moves_cursor_to_word_end() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1797,7 +1802,7 @@ fn normal_mode_count_prefix_multiplies_motion() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar\n{}",
         describe(parser.screen())
     );
@@ -1856,7 +1861,7 @@ fn message_editor_0_moves_cursor_to_start() {
     // Cursor must be on a message row (not the input bar).
     assert_ne!(
         row_before,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the message row, not the input bar\n{}",
         describe(parser_before.screen())
     );
@@ -1900,7 +1905,7 @@ fn message_editor_w_moves_cursor_to_next_word() {
 
     assert_ne!(
         row_after,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must stay on the message row\n{}",
         describe(parser_after.screen())
     );
@@ -2333,9 +2338,9 @@ fn k_then_g_then_j_moves_cursor_to_input_bar() {
     let (row, _) = parser.screen().cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "Cursor must be on the input bar (row {}) after k->G->j, got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen)
     );
@@ -2377,7 +2382,7 @@ fn message_editor_caw_types_into_frame_not_input_bar() {
     // The cursor must be on a message row, not the last row (input bar).
     assert_ne!(
         cursor_row,
-        ROWS - 1,
+        INPUT_ROW,
         "after caw on message editor, typed text must go to the frame, not the input bar\n{}",
         describe(screen)
     );
@@ -2387,7 +2392,7 @@ fn message_editor_caw_types_into_frame_not_input_bar() {
         describe(screen)
     );
     assert!(
-        !row_text(screen, ROWS - 1).contains("xyz"),
+        !row_text(screen, INPUT_ROW).contains("xyz"),
         "typed 'xyz' must NOT appear in the input bar\n{}",
         describe(screen)
     );
@@ -2413,7 +2418,7 @@ fn normal_mode_cw_enters_insert_and_deletes_to_word_end() {
 
     assert!(found, "cw must switch to INSERT mode\n{}", describe(screen));
     assert!(
-        row_text(screen, ROWS - 1).contains("world"),
+        row_text(screen, INPUT_ROW).contains("world"),
         "cw must leave 'world' in the input bar\n{}",
         describe(screen)
     );
@@ -2435,7 +2440,7 @@ fn normal_mode_cc_enters_insert_and_clears_line() {
 
     assert!(found, "cc must switch to INSERT mode\n{}", describe(screen));
     assert!(
-        !row_text(screen, ROWS - 1).contains("hello"),
+        !row_text(screen, INPUT_ROW).contains("hello"),
         "cc must clear the input bar\n{}",
         describe(screen)
     );
@@ -2464,7 +2469,7 @@ fn normal_mode_caw_enters_insert_and_changes_around_word() {
         "caw must switch to INSERT mode\n{}",
         describe(screen)
     );
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("hello"),
         "caw from 'world' must leave 'hello' in the input bar\n{}",
@@ -2486,11 +2491,10 @@ fn normal_mode_caw_enters_insert_and_changes_around_word() {
 /// clears selection.  The second 'k' selects fresh from None → start_cursor()
 /// opens an edit cursor at priority 3.
 ///
-/// In Command mode the input cursor also uses priority 3 and renders last, so
-/// Pressing ':' moves focus to the input bar (Command mode); ESC returns
+/// Pressing ':' moves focus to the command bar (Command mode); ESC returns
 /// focus to where it was before — the message frame when navigating.
 #[test]
-fn command_mode_cursor_moves_to_input_bar_and_back() {
+fn command_mode_cursor_moves_to_command_bar_and_back() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
@@ -2509,34 +2513,34 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
     // Focus on frame → cursor on the message row.
     assert_ne!(
         row_before,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the message row after two 'k' presses\n{}",
         describe(before.screen())
     );
 
-    // Press ':' to enter Command mode — focus moves to input bar.
+    // Press ':' to enter Command mode — focus moves to the command bar.
     h.send_bytes(b":");
     wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
 
     let during = h.snapshot();
     let (row_during, _) = during.screen().cursor_position();
 
-    // Input bar is focused in Command mode → cursor on the bottom row.
+    // Command bar is focused in Command mode → cursor on the bottom row.
     assert_eq!(
         row_during,
-        ROWS - 1,
-        "cursor must be on the input bar while in Command mode\n{}",
+        COMMAND_ROW,
+        "cursor must be on the command bar while in Command mode\n{}",
         describe(during.screen())
     );
 
     // Cancel with Escape → back to Normal mode, focus restored to frame.
     h.send_bytes(b"\x1b");
     wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
-    // Poll until the cursor leaves the input bar (cursor position lags text rendering).
+    // Poll until the cursor leaves the command bar (cursor position lags text rendering).
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         let s = h.snapshot();
-        if s.screen().cursor_position().0 != ROWS - 1 {
+        if s.screen().cursor_position().0 != COMMAND_ROW {
             break;
         }
         thread::sleep(Duration::from_millis(50));
@@ -2550,7 +2554,7 @@ fn command_mode_cursor_moves_to_input_bar_and_back() {
     // pre_command_focus was FRAME → focus returns to frame → cursor on message row.
     assert_ne!(
         row_after,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must return to the message row after ESC from Command mode\n{}",
         describe(after.screen())
     );
@@ -2577,7 +2581,7 @@ fn normal_mode_ciw_enters_insert_and_changes_inner_word() {
         "ciw must switch to INSERT mode\n{}",
         describe(screen)
     );
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         !input.contains("hello"),
         "ciw must delete 'hello' from the input bar\n{}",
@@ -2609,7 +2613,7 @@ fn normal_mode_dw_removes_word_from_input() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         !input.contains("hello"),
         "dw must remove 'hello' from the input bar\n{}",
@@ -2647,7 +2651,7 @@ fn normal_mode_xp_transposes_chars() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("bac"),
         "xp must transpose 'abc' to 'bac'\n{}",
@@ -2684,7 +2688,7 @@ fn normal_mode_named_register_paste() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("abac"),
         "\"ayl then l then \"ap must give 'abac'\n{}",
@@ -2719,7 +2723,7 @@ fn cursor_moves_to_message_row_after_k_navigation_in_normal_mode() {
     );
     assert_ne!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor should be on the message row after 'k', not on the input bar\n{}",
         describe(screen)
     );
@@ -2760,7 +2764,7 @@ fn o_from_frame_focus_moves_visual_cursor_to_input_bar() {
     );
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor should be on input bar after 'o' from frame-focused state\n{}",
         describe(screen)
     );
@@ -2787,9 +2791,9 @@ fn o_in_normal_mode_enters_insert_on_input_bar() {
     );
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "Cursor should be on input bar (row {})\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         describe(screen)
     );
 }
@@ -2818,7 +2822,7 @@ fn o_in_normal_mode_with_frame_focus_moves_to_input() {
     );
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "Cursor must be on input bar\n{}",
         describe(screen)
     );
@@ -2867,7 +2871,7 @@ fn a_in_normal_mode_advances_cursor_one_right() {
     let (row, col) = parser.screen().cursor_position();
     h.shutdown();
 
-    assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
+    assert_eq!(row, INPUT_ROW, "cursor must be on the input bar");
     assert_eq!(col, 3, "'a' from col 2 must advance cursor to col 3");
 }
 
@@ -2888,7 +2892,7 @@ fn a_at_end_of_buffer_positions_cursor_past_last_char() {
     let (row, col) = parser.screen().cursor_position();
     h.shutdown();
 
-    assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
+    assert_eq!(row, INPUT_ROW, "cursor must be on the input bar");
     assert_eq!(
         col, 11,
         "'a' at last char (col 10) must place cursor at col 11"
@@ -2936,7 +2940,7 @@ fn A_in_normal_mode_moves_cursor_to_end() {
     let (row, col) = parser.screen().cursor_position();
     h.shutdown();
 
-    assert_eq!(row, ROWS - 1, "cursor must be on the input bar");
+    assert_eq!(row, INPUT_ROW, "cursor must be on the input bar");
     assert_eq!(col, 11, "'A' must move cursor to end of buffer (col 11)");
 }
 
@@ -2963,7 +2967,7 @@ fn a_at_last_char_inserts_after_not_before() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("hello worldX"),
         "'a' at last char must produce \"hello worldX\" (after 'd'), not \"hello worlXd\" (before 'd'), got: {input:?}\n{}",
@@ -2995,7 +2999,7 @@ fn a_at_first_char_inserts_after_not_before() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("hXello world"),
         "'a' at first char must produce \"hXello world\" (after 'h'), not \"Xhello world\" (before 'h'), got: {input:?}\n{}",
@@ -3026,7 +3030,7 @@ fn a_in_normal_mode_typing_inserts_after_cursor() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("helXlo world"),
         "'a' from col 2 then 'X' must produce \"helXlo world\", got: {input:?}\n{}",
@@ -3058,7 +3062,7 @@ fn A_in_normal_mode_typing_inserts_at_end() {
     let screen = parser.screen();
     h.shutdown();
 
-    let input = row_text(screen, ROWS - 1);
+    let input = row_text(screen, INPUT_ROW);
     assert!(
         input.contains("hello worldX"),
         "'A' from col 0 then 'X' must produce \"hello worldX\", got: {input:?}\n{}",
@@ -3068,7 +3072,7 @@ fn A_in_normal_mode_typing_inserts_at_end() {
 
 /// Regression: after `:msg contact@domain.tld` opens a 1-1 chat window and
 /// delivers the first message, the visual cursor must land on the input bar
-/// (row ROWS-1), not on the incoming message.
+/// (INPUT_ROW), not on the incoming message.
 ///
 /// Root cause: when a message arrives with `current_mode == Normal && follow_bottom`,
 /// the handler calls `start_cursor()` (priority 3) on the auto-selected message and
@@ -3099,9 +3103,9 @@ fn cursor_on_input_bar_after_msg_opens_chat_window() {
 
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar (row {}) after opening a 1-1 chat window via :msg, got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen)
     );

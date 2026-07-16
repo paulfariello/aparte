@@ -57,6 +57,13 @@ fn default_popup() -> ColorTuple {
     }
 }
 
+fn default_status_line() -> ColorTuple {
+    ColorTuple {
+        bg: BgColor(Color::Named(NamedColor::Blue)),
+        fg: FgColor(Color::Named(NamedColor::Black)),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -102,6 +109,10 @@ pub struct Theme {
     pub title_bar: ColorTuple,
     pub win_bar: ColorTuple,
     pub title_bar_mode: ColorTuple,
+    #[serde(default = "default_status_line")]
+    pub status_line: ColorTuple,
+    #[serde(default = "default_status_line")]
+    pub status_line_mode: ColorTuple,
     pub roster: ColorTuple,
     pub occupants: ColorTuple,
     #[serde(default = "default_selected_message")]
@@ -167,6 +178,14 @@ fn profanity() -> Theme {
             fg: FgColor(Color::Named(NamedColor::Black)),
         },
         title_bar_mode: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
+        status_line: ColorTuple {
+            bg: BgColor(Color::Named(NamedColor::Blue)),
+            fg: FgColor(Color::Named(NamedColor::Black)),
+        },
+        status_line_mode: ColorTuple {
             bg: BgColor(Color::Named(NamedColor::Blue)),
             fg: FgColor(Color::Named(NamedColor::Black)),
         },
@@ -261,6 +280,14 @@ fn catppuccin_mocha() -> Theme {
             bg: BgColor(lavender),
             fg: FgColor(base),
         },
+        status_line: ColorTuple {
+            bg: BgColor(surface_0),
+            fg: FgColor(lavender),
+        },
+        status_line_mode: ColorTuple {
+            bg: BgColor(lavender),
+            fg: FgColor(base),
+        },
         roster: ColorTuple {
             bg: BgColor(mantle),
             fg: FgColor(text),
@@ -349,6 +376,14 @@ fn catppuccin_latte() -> Theme {
             fg: FgColor(text),
         },
         title_bar_mode: ColorTuple {
+            bg: BgColor(surface_0),
+            fg: FgColor(text),
+        },
+        status_line: ColorTuple {
+            bg: BgColor(base),
+            fg: FgColor(text),
+        },
+        status_line_mode: ColorTuple {
             bg: BgColor(surface_0),
             fg: FgColor(text),
         },
@@ -443,6 +478,14 @@ fn catppuccin_frappe() -> Theme {
             bg: BgColor(surface_0),
             fg: FgColor(text),
         },
+        status_line: ColorTuple {
+            bg: BgColor(base),
+            fg: FgColor(text),
+        },
+        status_line_mode: ColorTuple {
+            bg: BgColor(surface_0),
+            fg: FgColor(text),
+        },
         roster: ColorTuple {
             bg: BgColor(mantle),
             fg: FgColor(text),
@@ -531,6 +574,14 @@ fn catppuccin_macchiato() -> Theme {
             fg: FgColor(lavender),
         },
         title_bar_mode: ColorTuple {
+            bg: BgColor(lavender),
+            fg: FgColor(base),
+        },
+        status_line: ColorTuple {
+            bg: BgColor(surface_0),
+            fg: FgColor(lavender),
+        },
+        status_line_mode: ColorTuple {
             bg: BgColor(lavender),
             fg: FgColor(base),
         },

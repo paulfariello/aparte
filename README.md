@@ -48,6 +48,17 @@ Join a room:
 
 Switch windows with `Alt+[1-9]` or `:win <name>`.
 
+### Screen layout
+
+The bottom of the screen is a vim-style stack: the **input bar** (message
+composition only), the **status line** (mode, connected account, suspended
+edit indicators), and the **command bar** at the very bottom. `:` commands,
+`/` searches and password prompts are typed in the command bar, so a
+half-typed message never mixes with a command — the draft stays visible in
+the input bar and is untouched when the command runs or is cancelled.
+Pending Normal-mode keys (e.g. `2j`) show at the right of the command bar.
+The input bar and the command bar each keep their own history (`↑`/`↓`).
+
 ### Modal interface
 
 | From    | Key        | To / Action                       |

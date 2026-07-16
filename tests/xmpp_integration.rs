@@ -26,7 +26,7 @@ use common::xmpp_fixture::{
     contact_offline_presence, contact_presence, corrected_chat_message, groupchat_message,
     muc_join_presence, xmpp, xmpp_with_contact, XmppFixture,
 };
-use common::{ROWS, SELECTION_BGCOLOR};
+use common::{INPUT_ROW, ROWS, SELECTION_BGCOLOR};
 
 /// Verify that carbon stanzas can be built and round-trip through xmpp-parsers.
 #[test]
@@ -779,9 +779,9 @@ fn i_on_outgoing_message_puts_cursor_at_message_not_input_bar(xmpp_with_contact:
 
     assert_ne!(
         cursor_row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must NOT be on the input bar (row {}) after pressing 'i' on a selected outgoing message; got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         cursor_row,
         describe(screen),
     );
@@ -857,9 +857,9 @@ fn i_on_last_message_after_j_navigation_starts_in_place_edit(xmpp_with_contact: 
 
     assert_ne!(
         cursor_row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must NOT jump to the input bar (row {}) when pressing 'i' on the last message; got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         cursor_row,
         describe(screen),
     );
@@ -921,9 +921,9 @@ fn escape_from_insert_in_chat_stays_on_input_bar(xmpp_with_contact: XmppFixture)
     let (row, _) = screen.cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must remain on the input bar (row {}) after Escape from INSERT mode, got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen),
     );
@@ -983,9 +983,9 @@ fn mam_messages_do_not_leave_orphaned_cursors_after_k_g_j() {
     let (row, _) = screen.cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "cursor must be on the input bar (row {}) after k->G->j with MAM messages, got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen)
     );
@@ -1026,9 +1026,9 @@ fn new_window_with_history_cursor_on_input_bar(xmpp: XmppFixture) {
     let (row, _) = screen.cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "first visit with history: cursor should be on input bar (row {}), got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen),
     );
@@ -1063,9 +1063,9 @@ fn new_window_first_visit_cursor_on_input_bar(xmpp_with_contact: XmppFixture) {
     let (row, _) = screen.cursor_position();
     assert_eq!(
         row,
-        ROWS - 1,
+        INPUT_ROW,
         "first visit: cursor should be on input bar (row {}), got row {}\n{}",
-        ROWS - 1,
+        INPUT_ROW,
         row,
         describe(screen),
     );
@@ -1306,7 +1306,7 @@ fn mid_message_cursor_column_preserved_through_command_escape(xmpp: XmppFixture)
 
     assert_ne!(
         message_row,
-        ROWS - 1,
+        INPUT_ROW,
         "Cursor must be on a message row before entering command mode\n{}",
         describe(screen)
     );

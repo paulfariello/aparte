@@ -14,7 +14,7 @@ use xmpp_parsers::{
 
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{muc_join_presence_with_jid, room_subject_message, XmppFixture};
-use common::{describe, row_text, ROWS};
+use common::{describe, row_text, INPUT_ROW, ROWS, TITLE_ROW};
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
 
@@ -246,7 +246,7 @@ fn omemo_enabled_shows_lock_in_titlebar() {
     // Poll the title-bar row (ROWS-2) until 🔒 appears, up to 10 seconds.
     // start_session() is async so the OmemoEvent::Enabled fires after
     // the bundle fetch completes, not immediately.
-    let title_row = ROWS - 2;
+    let title_row = TITLE_ROW;
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut found = false;
     while Instant::now() < deadline {
@@ -282,7 +282,7 @@ fn omemo_lock_persists_in_command_mode() {
     fixture.send_command(&format!("/msg {contact_jid}"));
     fixture.send_command(&format!("/omemo enable {contact_jid}"));
 
-    let title_row = ROWS - 2;
+    let title_row = TITLE_ROW;
 
     // Wait for 🔒 in INSERT mode.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -329,7 +329,7 @@ fn omemo_lock_persists_in_normal_mode() {
     fixture.send_command(&format!("/msg {contact_jid}"));
     fixture.send_command(&format!("/omemo enable {contact_jid}"));
 
-    let title_row = ROWS - 2;
+    let title_row = TITLE_ROW;
 
     // Wait for 🔒 to appear in the title bar while still in INSERT mode.
     let deadline = Instant::now() + Duration::from_secs(10);
