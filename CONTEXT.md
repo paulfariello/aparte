@@ -37,5 +37,20 @@ The single currency of the event loop. Everything — key presses, XMPP stanzas,
 ## Terminus
 The in-tree TUI layout and rendering library. Provides `View`, `ScreenFrame`, `ScrollWin`, and related primitives. Intended for eventual extraction as a standalone crate once its API stabilises.
 
+## Tab Bar
+The single top bar listing all open windows in order, with the current window emphasized and per-window activity/notification counts. Purely a window switcher aid; carries no per-conversation detail.
+
+## Topic Bar
+A per-Channel bar at the top of a Channel window showing the channel's full name and subject (XEP-0045 "subject"). Chat windows have no Topic Bar.
+
+## Input Bar
+The line where the user composes Message text. Dedicated to message composition; Commands are not typed here.
+
+## Status Line
+A bar below the Input Bar showing aparte state: current mode first, then connected Account, then indicators such as suspended dirty Edit Sessions.
+
+## Command Bar
+The bottom-most line, hosting all transient meta-input: Command entry (`:`), search entry (`/`), and masked password prompts. Pending normal-mode keys render right-aligned. Command errors are echoed here until the next keypress (and are also logged to the console window). Otherwise empty except while a Command or search is being typed.
+
 ## ConnectionInfo
 Configuration for connecting an Account: JID, optional server override, optional port, autoconnect flag. Distinct from `Account` (which is the live identity after connection).
