@@ -4,4 +4,4 @@
 - [ ] there is a memory consumption issue. aparte can easily consume gigs of ram. How can we monitor that and take action to reduce it.
 - [ ] is there a way to properly handle ESC key with a timeout (50ms) just like neovim does it?
 - [ ] migrate XEP-0333 from manual parsing to xmpp-rs parser
-- [ ] move the input bar on top of the win bar, so we don't mix :command and messages
+- [x] move the input bar on top of the win bar, so we don't mix :command and messages — done as the vim-style bar stack, see docs/adr/0008-vim-style-bar-stack.md
