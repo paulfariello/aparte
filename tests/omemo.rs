@@ -14,7 +14,7 @@ use xmpp_parsers::{
 
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{muc_join_presence_with_jid, room_subject_message, XmppFixture};
-use common::{describe, row_text, INPUT_ROW, ROWS, TITLE_ROW};
+use common::{describe, row_text, ROWS, STATUS_ROW};
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
 
@@ -227,7 +227,7 @@ fn omemo_muc_outgoing_encrypted() {
     );
 }
 
-/// After `/omemo enable`, the title bar (row ROWS-2) shows 🔒 for that conversation.
+/// After `/omemo enable`, the status line shows 🔒 for that conversation.
 #[test]
 fn omemo_enabled_shows_lock_in_titlebar() {
     let contact_jid = "contact@localhost";
@@ -243,15 +243,15 @@ fn omemo_enabled_shows_lock_in_titlebar() {
     fixture.send_command(&format!("/msg {contact_jid}"));
     fixture.send_command(&format!("/omemo enable {contact_jid}"));
 
-    // Poll the title-bar row (ROWS-2) until 🔒 appears, up to 10 seconds.
+    // Poll the status line until 🔒 appears, up to 10 seconds.
     // start_session() is async so the OmemoEvent::Enabled fires after
     // the bundle fetch completes, not immediately.
-    let title_row = TITLE_ROW;
+    let status_row = STATUS_ROW;
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut found = false;
     while Instant::now() < deadline {
         let parser = fixture.snapshot();
-        if row_text(parser.screen(), title_row).contains("🔒") {
+        if row_text(parser.screen(), status_row).contains("🔒") {
             found = true;
             break;
         }
@@ -262,10 +262,10 @@ fn omemo_enabled_shows_lock_in_titlebar() {
         let parser = fixture.snapshot();
         eprintln!("{}", describe(parser.screen()));
     }
-    assert!(found, "🔒 not shown in title bar after /omemo enable");
+    assert!(found, "🔒 not shown in status line after /omemo enable");
 }
 
-/// 🔒 must persist in the title bar after entering COMMAND mode (`:` key).
+/// 🔒 must persist in the status line after entering COMMAND mode (`:` key).
 /// COMMAND mode uses a 9-char label vs the 8-char INSERT/NORMAL labels, which
 /// shifts the title one column right.  A stale wide-char continuation in the
 /// reference screen used to cause a false match so 🔒 was never re-emitted.
@@ -282,13 +282,13 @@ fn omemo_lock_persists_in_command_mode() {
     fixture.send_command(&format!("/msg {contact_jid}"));
     fixture.send_command(&format!("/omemo enable {contact_jid}"));
 
-    let title_row = TITLE_ROW;
+    let status_row = STATUS_ROW;
 
     // Wait for 🔒 in INSERT mode.
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut found = false;
     while Instant::now() < deadline {
-        if row_text(fixture.snapshot().screen(), title_row).contains("🔒") {
+        if row_text(fixture.snapshot().screen(), status_row).contains("🔒") {
             found = true;
             break;
         }
@@ -306,16 +306,16 @@ fn omemo_lock_persists_in_command_mode() {
     assert!(cmd_shown, "did not enter COMMAND mode");
 
     let parser = fixture.snapshot();
-    let bar = row_text(parser.screen(), title_row);
+    let bar = row_text(parser.screen(), status_row);
     assert!(
         bar.contains("🔒"),
-        "🔒 disappeared from title bar after entering COMMAND mode; got: {:?}\n{}",
+        "🔒 disappeared from status line after entering COMMAND mode; got: {:?}\n{}",
         bar,
         describe(parser.screen())
     );
 }
 
-/// 🔒 must persist in the title bar after switching to NORMAL mode (Escape).
+/// 🔒 must persist in the status line after switching to NORMAL mode (Escape).
 #[test]
 fn omemo_lock_persists_in_normal_mode() {
     let contact_jid = "contact@localhost";
@@ -329,13 +329,13 @@ fn omemo_lock_persists_in_normal_mode() {
     fixture.send_command(&format!("/msg {contact_jid}"));
     fixture.send_command(&format!("/omemo enable {contact_jid}"));
 
-    let title_row = TITLE_ROW;
+    let status_row = STATUS_ROW;
 
-    // Wait for 🔒 to appear in the title bar while still in INSERT mode.
+    // Wait for 🔒 to appear in the status line while still in INSERT mode.
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut found = false;
     while Instant::now() < deadline {
-        if row_text(fixture.snapshot().screen(), title_row).contains("🔒") {
+        if row_text(fixture.snapshot().screen(), status_row).contains("🔒") {
             found = true;
             break;
         }
@@ -345,16 +345,16 @@ fn omemo_lock_persists_in_normal_mode() {
 
     // Press Escape → NORMAL mode.
     fixture.send_bytes(b"\x1b");
-    // Wait until the title bar shows NORMAL.
+    // Wait until the status line shows NORMAL.
     let normal_shown = fixture.wait_for("NORMAL", Duration::from_secs(3));
     assert!(normal_shown, "did not enter NORMAL mode");
 
-    // 🔒 must still be visible in the title bar.
+    // 🔒 must still be visible in the status line.
     let parser = fixture.snapshot();
-    let bar = row_text(parser.screen(), title_row);
+    let bar = row_text(parser.screen(), status_row);
     assert!(
         bar.contains("🔒"),
-        "🔒 disappeared from title bar after entering NORMAL mode; got: {:?}\n{}",
+        "🔒 disappeared from status line after entering NORMAL mode; got: {:?}\n{}",
         bar,
         describe(parser.screen())
     );

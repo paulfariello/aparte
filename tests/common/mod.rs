@@ -21,8 +21,6 @@ pub const INPUT_ROW: u16 = ROWS - 3;
 pub const STATUS_ROW: u16 = ROWS - 2;
 /// Row of the command bar (`:` commands, `/` search, password prompts).
 pub const COMMAND_ROW: u16 = ROWS - 1;
-/// Row of the title bar (directly above the input bar).
-pub const TITLE_ROW: u16 = ROWS - 4;
 
 pub struct Harness {
     pub bytes: Arc<Mutex<Vec<u8>>>,

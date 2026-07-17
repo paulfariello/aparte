@@ -33,7 +33,7 @@ use common::xmpp_fixture::{
     omemo_encrypted_chat_replay, omemo_encrypted_chat_replay_no_from,
     omemo_encrypted_groupchat_echo, room_subject_message, XmppFixture,
 };
-use common::{describe, row_text, INPUT_ROW, ROWS, TITLE_ROW};
+use common::{describe, row_text, ROWS, STATUS_ROW};
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
 const CONTACT_JID: &str = "contact@localhost";
@@ -166,23 +166,20 @@ fn message_store_muc_omemo_echo_not_duplicated() {
     fixture.switch_window(ROOM);
     fixture.send_command(&format!("/omemo enable {ROOM}"));
 
-    // Wait until the 🔒 appears in the title bar — this confirms that
+    // Wait until the 🔒 appears in the status line — this confirms that
     // start_session() completed and the Signal session is established.
     // A fixed sleep is not reliable under parallel test load.
-    let title_row = TITLE_ROW;
+    let status_row = STATUS_ROW;
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut omemo_ready = false;
     while Instant::now() < deadline {
-        if row_text(fixture.snapshot().screen(), title_row).contains('\u{1f512}') {
+        if row_text(fixture.snapshot().screen(), status_row).contains('\u{1f512}') {
             omemo_ready = true;
             break;
         }
         thread::sleep(Duration::from_millis(200));
     }
-    assert!(
-        omemo_ready,
-        "🔒 did not appear in room title bar within 15s"
-    );
+    assert!(omemo_ready, "🔒 did not appear in status line within 15s");
 
     fixture.send_command("mstore-muc-echo-4f9z");
 

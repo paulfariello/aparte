@@ -8,10 +8,10 @@ use std::time::Duration;
 use rstest::rstest;
 use xmpp_parsers::muc::user::{Affiliation, Role};
 
-use common::describe;
 use common::xmpp_fixture::{
     groupchat_message, muc_join_presence, room_subject_message, xmpp, XmppFixture,
 };
+use common::{describe, row_text};
 
 const ROOM: &str = "dev@conference.localhost";
 const BOUND_JID: &str = "user@localhost/aparte_test";
@@ -61,6 +61,38 @@ fn muc_incoming_groupchat_message(xmpp: XmppFixture) {
         found,
         "groupchat message not visible in MUC window\n{}",
         describe(parser.screen()),
+    );
+}
+
+/// A Channel window carries a topic bar as its first row (directly under the
+/// tab bar) showing the room name and subject (ADR-0008). Chat windows and
+/// the console have no topic bar.
+#[rstest]
+fn muc_topic_bar_shows_room_and_subject(xmpp: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    join_room(&xmpp, ROOM, "user");
+    xmpp.switch_window(ROOM);
+    thread::sleep(Duration::from_millis(200));
+    xmpp.inject(room_subject_message(
+        &format!("{ROOM}/owner"),
+        "user@localhost",
+        "subj-topic",
+        "Development channel",
+    ));
+    let found = xmpp.wait_for("Development channel", Duration::from_secs(5));
+    let parser = xmpp.snapshot();
+    let screen = parser.screen();
+    assert!(
+        found,
+        "room subject not visible in UI\n{}",
+        describe(screen),
+    );
+    let topic_row = row_text(screen, 1);
+    assert!(
+        topic_row.contains(ROOM) && topic_row.contains("Development channel"),
+        "topic bar (row 1) must show the room name and subject, got: {:?}\n{}",
+        topic_row,
+        describe(screen),
     );
 }
 

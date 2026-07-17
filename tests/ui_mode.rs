@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use common::{
     describe, find_row_with, grid_contains, navigate_to_message_pane, row_text, rows_with_bgcolor,
-    wait_for_ready, wait_for_screen, Harness, COMMAND_ROW, INPUT_ROW, SELECTION_BGCOLOR, TITLE_ROW,
+    wait_for_ready, wait_for_screen, Harness, COMMAND_ROW, INPUT_ROW, SELECTION_BGCOLOR,
+    STATUS_ROW,
 };
 
 /// Send enough unknown commands to push the welcome banner off-screen.
@@ -1421,25 +1422,24 @@ fn command_mode_preserves_insert_input() {
     );
 }
 
-// The title bar (second-to-last row) must show exactly the active mode label.
+// The status line must show exactly the active mode label.
 // Regression test for a rendering bug where incremental diffing could leave a
-// stray character from a previous mode at column 0 of the title bar.
+// stray character from a previous mode at column 0 of the bar.
 #[test]
-fn title_bar_mode_label_is_stable_across_transitions() {
+fn status_line_mode_label_is_stable_across_transitions() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    // Title bar sits directly above the input bar (ADR-0008 stack).
-    let title_row = TITLE_ROW;
+    let status_row = STATUS_ROW;
 
     // -- NORMAL (startup) --
     {
         let parser = h.snapshot();
         let screen = parser.screen();
-        let bar = row_text(screen, title_row);
+        let bar = row_text(screen, status_row);
         assert!(
             bar.contains("NORMAL"),
-            "Title bar must show NORMAL at startup; got: {:?}\n{}",
+            "Status line must show NORMAL at startup; got: {:?}\n{}",
             bar,
             describe(screen)
         );
@@ -1451,16 +1451,16 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     {
         let parser = h.snapshot();
         let screen = parser.screen();
-        let bar = row_text(screen, title_row);
+        let bar = row_text(screen, status_row);
         assert!(
             bar.contains("INSERT"),
-            "Title bar must show INSERT after 'i'; got: {:?}\n{}",
+            "Status line must show INSERT after 'i'; got: {:?}\n{}",
             bar,
             describe(screen)
         );
         assert!(
             !bar.contains("NORMAL"),
-            "Stray NORMAL in title bar after switching to INSERT; got: {:?}\n{}",
+            "Stray NORMAL in status line after switching to INSERT; got: {:?}\n{}",
             bar,
             describe(screen)
         );
@@ -1472,16 +1472,16 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     {
         let parser = h.snapshot();
         let screen = parser.screen();
-        let bar = row_text(screen, title_row);
+        let bar = row_text(screen, status_row);
         assert!(
             bar.contains("NORMAL"),
-            "Title bar must show NORMAL after Esc; got: {:?}\n{}",
+            "Status line must show NORMAL after Esc; got: {:?}\n{}",
             bar,
             describe(screen)
         );
         assert!(
             !bar.contains("INSERT"),
-            "Stray INSERT in title bar after switching to NORMAL; got: {:?}\n{}",
+            "Stray INSERT in status line after switching to NORMAL; got: {:?}\n{}",
             bar,
             describe(screen)
         );
@@ -1493,16 +1493,16 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     {
         let parser = h.snapshot();
         let screen = parser.screen();
-        let bar = row_text(screen, title_row);
+        let bar = row_text(screen, status_row);
         assert!(
             bar.contains("COMMAND"),
-            "Title bar must show COMMAND after ':'; got: {:?}\n{}",
+            "Status line must show COMMAND after ':'; got: {:?}\n{}",
             bar,
             describe(screen)
         );
         assert!(
             !bar.contains("NORMAL"),
-            "Stray NORMAL in title bar after switching to COMMAND; got: {:?}\n{}",
+            "Stray NORMAL in status line after switching to COMMAND; got: {:?}\n{}",
             bar,
             describe(screen)
         );
@@ -1514,10 +1514,10 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     {
         let parser = h.snapshot();
         let screen = parser.screen();
-        let bar = row_text(screen, title_row);
+        let bar = row_text(screen, status_row);
         assert!(
             bar.contains("NORMAL"),
-            "Title bar must show NORMAL after Esc from COMMAND; got: {:?}\n{}",
+            "Status line must show NORMAL after Esc from COMMAND; got: {:?}\n{}",
             bar,
             describe(screen)
         );
@@ -1535,10 +1535,10 @@ fn title_bar_mode_label_is_stable_across_transitions() {
     {
         let parser = h.snapshot();
         let screen = parser.screen();
-        let bar = row_text(screen, title_row);
+        let bar = row_text(screen, status_row);
         assert!(
             bar.contains("INSERT"),
-            "Title bar must show INSERT after 'i'; got: {:?}\n{}",
+            "Status line must show INSERT after 'i'; got: {:?}\n{}",
             bar,
             describe(screen)
         );

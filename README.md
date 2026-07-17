@@ -55,6 +55,10 @@ current window is shown emphasized in brackets, and windows with unread
 activity carry their notification count. When the tabs overflow, the
 current window always stays visible and the cut sides show an ellipsis.
 
+Channel (MUC) windows carry a **topic bar** as their first row showing the
+room name and subject; 1-on-1 chat windows have none. The status line shows
+`🔒` when the current conversation is OMEMO-encrypted.
+
 The bottom of the screen is a vim-style stack: the **input bar** (message
 composition only), the **status line** (mode, connected account, suspended
 edit indicators), and the **command bar** at the very bottom. `:` commands,

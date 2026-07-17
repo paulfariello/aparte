@@ -106,9 +106,9 @@ pub fn builtin_theme(name: &str) -> Option<Theme> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
-    pub title_bar: ColorTuple,
     pub win_bar: ColorTuple,
-    pub title_bar_mode: ColorTuple,
+    #[serde(default = "default_status_line")]
+    pub topic_bar: ColorTuple,
     #[serde(default = "default_status_line")]
     pub status_line: ColorTuple,
     #[serde(default = "default_status_line")]
@@ -169,15 +169,11 @@ impl Default for Theme {
 
 fn profanity() -> Theme {
     Theme {
-        title_bar: ColorTuple {
+        topic_bar: ColorTuple {
             bg: BgColor(Color::Named(NamedColor::Blue)),
             fg: FgColor(Color::Named(NamedColor::Black)),
         },
         win_bar: ColorTuple {
-            bg: BgColor(Color::Named(NamedColor::Blue)),
-            fg: FgColor(Color::Named(NamedColor::Black)),
-        },
-        title_bar_mode: ColorTuple {
             bg: BgColor(Color::Named(NamedColor::Blue)),
             fg: FgColor(Color::Named(NamedColor::Black)),
         },
@@ -272,13 +268,9 @@ fn catppuccin_mocha() -> Theme {
             bg: BgColor(surface_0),
             fg: FgColor(lavender),
         },
-        title_bar: ColorTuple {
+        topic_bar: ColorTuple {
             bg: BgColor(surface_0),
             fg: FgColor(lavender),
-        },
-        title_bar_mode: ColorTuple {
-            bg: BgColor(lavender),
-            fg: FgColor(base),
         },
         status_line: ColorTuple {
             bg: BgColor(surface_0),
@@ -367,15 +359,11 @@ fn catppuccin_latte() -> Theme {
     let crust = Color::Rgb(220, 224, 232);
 
     Theme {
-        title_bar: ColorTuple {
+        topic_bar: ColorTuple {
             bg: BgColor(base),
             fg: FgColor(text),
         },
         win_bar: ColorTuple {
-            bg: BgColor(surface_0),
-            fg: FgColor(text),
-        },
-        title_bar_mode: ColorTuple {
             bg: BgColor(surface_0),
             fg: FgColor(text),
         },
@@ -466,15 +454,11 @@ fn catppuccin_frappe() -> Theme {
     let crust = Color::Rgb(35, 38, 52);
 
     Theme {
-        title_bar: ColorTuple {
+        topic_bar: ColorTuple {
             bg: BgColor(base),
             fg: FgColor(text),
         },
         win_bar: ColorTuple {
-            bg: BgColor(surface_0),
-            fg: FgColor(text),
-        },
-        title_bar_mode: ColorTuple {
             bg: BgColor(surface_0),
             fg: FgColor(text),
         },
@@ -569,13 +553,9 @@ fn catppuccin_macchiato() -> Theme {
             bg: BgColor(surface_0),
             fg: FgColor(lavender),
         },
-        title_bar: ColorTuple {
+        topic_bar: ColorTuple {
             bg: BgColor(surface_0),
             fg: FgColor(lavender),
-        },
-        title_bar_mode: ColorTuple {
-            bg: BgColor(lavender),
-            fg: FgColor(base),
         },
         status_line: ColorTuple {
             bg: BgColor(surface_0),

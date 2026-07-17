@@ -379,49 +379,30 @@ fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: M
     view.replace(msg_view);
 }
 
-struct TitleBar {
-    current_jid: Option<String>,
-    display_name: Option<String>,
-    display_names: HashMap<String, String>,
-    mode: Mode,
-    connection: Option<String>,
-    subjects: HashMap<String, HashMap<String, String>>,
-    dimensions: Option<Dimensions>,
+/// Per-Channel bar at the top of the Channel window showing the channel's
+/// name and XEP-0045 subject (ADR-0008). Chat windows and the console have
+/// no topic bar.
+struct TopicBar {
+    jid: String,
+    name: Option<String>,
+    subjects: HashMap<String, String>,
     preferred_langs: Vec<String>,
-    encrypted_jids: HashSet<String>,
+    dimensions: Option<Dimensions>,
 }
 
-impl TitleBar {
-    fn new(preferred_langs: Vec<String>) -> Self {
+impl TopicBar {
+    fn new(jid: String, name: Option<String>, preferred_langs: Vec<String>) -> Self {
         Self {
-            current_jid: None,
-            display_name: None,
-            display_names: HashMap::new(),
-            mode: Mode::Normal,
-            connection: None,
+            jid,
+            name,
             subjects: HashMap::new(),
-            dimensions: None,
             preferred_langs,
-            encrypted_jids: HashSet::new(),
+            dimensions: None,
         }
     }
-
-    fn set_window(&mut self, jid: &str) {
-        self.current_jid = Some(jid.to_string());
-        self.display_name = self
-            .display_names
-            .get(jid)
-            .cloned()
-            .or_else(|| Some(jid.to_string()));
-        self.subjects.entry(jid.to_string()).or_default();
-    }
-
-    fn add_subjects(&mut self, jid: String, subjects: HashMap<String, String>) {
-        self.subjects.insert(jid, subjects);
-    }
 }
 
-impl View<UIEvent, Theme> for TitleBar {
+impl View<UIEvent, Theme> for TopicBar {
     fn focusable(&self) -> bool {
         false
     }
@@ -445,99 +426,39 @@ impl View<UIEvent, Theme> for TitleBar {
             self.dimensions
         );
 
-        frame.set_background(config.title_bar.bg);
-        frame.set_foreground(config.title_bar.fg);
+        frame.set_background(config.topic_bar.bg);
+        frame.set_foreground(config.topic_bar.fg);
 
-        let mut frame_space = frame.width();
-
-        let mode_label = match self.mode {
-            Mode::Insert => " INSERT ",
-            Mode::Normal => " NORMAL ",
-            Mode::Command => " COMMAND ",
-        };
-        let mode_charxels = mode_label
-            .with_style(Style::Bold)
-            .with_color(&config.title_bar_mode);
-        let mode_width = mode_charxels.display_width();
-        if frame.width() >= mode_width {
-            frame.write(&mode_charxels);
-            frame_space -= mode_width;
-        }
-
-        if let Some(connection) = &self.connection {
-            let connection = format!(" {connection} |")
-                .into_charxels()
-                .with_color(&config.title_bar);
-            let connection_width = connection.display_width();
-            if frame_space > connection_width {
-                frame.write(&connection);
-                frame_space -= connection_width;
+        let label = self.name.as_deref().unwrap_or(self.jid.as_str());
+        let mut title = format!(" {label}").into_charxels();
+        if let Some((_lang, subject)) = i18n::get_best(
+            &self.subjects,
+            self.preferred_langs
+                .iter()
+                .map(std::string::String::as_str)
+                .collect(),
+        ) {
+            if let Some(subject) = subject.lines().next() {
+                title.append(" – ");
+                title.append(subject);
             }
         }
 
-        if let Some(display) = &self.display_name {
-            let is_encrypted = self
-                .current_jid
-                .as_deref()
-                .is_some_and(|jid| self.encrypted_jids.contains(jid));
-            let prefix = if is_encrypted { " 🔒 " } else { " " };
-            let mut title = format!("{prefix}{display}").into_charxels();
-
-            let subjects = self
-                .current_jid
-                .as_deref()
-                .and_then(|jid| self.subjects.get(jid));
-            if let Some(subjects) = subjects {
-                if let Some((_lang, subject)) = i18n::get_best(
-                    subjects,
-                    self.preferred_langs
-                        .iter()
-                        .map(std::string::String::as_str)
-                        .collect(),
-                ) {
-                    if let Some(subject) = subject.lines().next() {
-                        title.append(" – ");
-                        title.append(subject);
-                    }
-                }
-            }
-
-            title.truncate(frame_space, "…");
-            title = title
-                .with_styles(&[Style::Bold])
-                .with_color(&config.title_bar);
-            frame.write(title);
-        }
+        title.truncate(frame.width(), "…");
+        title = title
+            .with_styles(&[Style::Bold])
+            .with_color(&config.topic_bar);
+        frame.write(title);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
-        match event {
-            UIEvent::Core(Event::Connected(account, _)) => {
-                self.connection = Some(terminus::clean_str(&account.to_string()));
+        if let UIEvent::Core(Event::Subject(_, jid, subjects)) = event {
+            if jid.to_bare().to_string() == self.jid {
+                self.subjects = subjects
+                    .iter()
+                    .map(|(lang, subject)| (lang.clone(), terminus::clean_str(subject)))
+                    .collect();
             }
-            UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_window(name);
-            }
-            UIEvent::AddWindow(jid, Some(name), _) => {
-                self.display_names.insert(jid.clone(), name.clone());
-            }
-            UIEvent::Core(Event::Subject(_, jid, subjects)) => {
-                let window: BareJid = jid.to_bare();
-                self.add_subjects(
-                    window.to_string(),
-                    subjects
-                        .iter()
-                        .map(|(lang, subject)| (lang.clone(), terminus::clean_str(subject)))
-                        .collect(),
-                );
-            }
-            UIEvent::ModeChange(mode) => {
-                self.mode = *mode;
-            }
-            UIEvent::Core(Event::Omemo(OmemoEvent::Enabled { jid, .. })) => {
-                self.encrypted_jids.insert(jid.to_string());
-            }
-            _ => {}
         }
     }
 }
@@ -551,6 +472,7 @@ struct StatusLine {
     display_names: HashMap<String, String>,
     current_window: Option<String>,
     editing: HashSet<String>,
+    encrypted_jids: HashSet<String>,
     dimensions: Option<Dimensions>,
 }
 
@@ -563,6 +485,7 @@ impl StatusLine {
             display_names: HashMap::new(),
             current_window: None,
             editing: HashSet::new(),
+            encrypted_jids: HashSet::new(),
             dimensions: None,
         }
     }
@@ -618,6 +541,19 @@ impl View<UIEvent, Theme> for StatusLine {
             let connection_width = connection.display_width();
             if frame_space > connection_width {
                 frame.write(&connection);
+                frame_space -= connection_width;
+            }
+        }
+
+        // OMEMO indicator for the current conversation.
+        let is_encrypted = self
+            .current_window
+            .as_deref()
+            .is_some_and(|jid| self.encrypted_jids.contains(jid));
+        if is_encrypted {
+            let lock = " 🔒".into_charxels();
+            if frame_space > lock.display_width() {
+                frame.write(&lock);
             }
         }
 
@@ -674,6 +610,9 @@ impl View<UIEvent, Theme> for StatusLine {
                 } else {
                     self.editing.remove(window.as_str());
                 }
+            }
+            UIEvent::Core(Event::Omemo(OmemoEvent::Enabled { jid, .. })) => {
+                self.encrypted_jids.insert(jid.to_string());
             }
             _ => {}
         }
@@ -2278,7 +2217,20 @@ impl UIMod {
                 if let Some(name) = &channel.name {
                     self.jid_to_name.insert(channel.jid.clone(), name.clone());
                 }
-                self.add_window(jid_str.clone(), channel.name.clone(), Box::new(layout));
+                let topic_bar = TopicBar::new(
+                    jid_str.clone(),
+                    channel.name.clone(),
+                    aparte.config.preferred_langs.clone(),
+                );
+                let mut window = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)
+                    .with_event(|layout, event| {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    });
+                window.push(topic_bar, 0);
+                window.push(layout, 1);
+                self.add_window(jid_str.clone(), channel.name.clone(), Box::new(window));
                 self.conversations.insert(jid_str, conversation.clone());
             }
         }
@@ -2371,8 +2323,8 @@ impl UIMod {
 
 // Indices into the root LinearLayout's children (push order in `UIMod::init`).
 const FRAME_LAYOUT_INDEX: usize = 1;
-const INPUT_INDEX: usize = 3;
-const COMMAND_BAR_INDEX: usize = 5;
+const INPUT_INDEX: usize = 2;
+const COMMAND_BAR_INDEX: usize = 4;
 
 fn dispatch_nav_command(
     cmd: NormalCommand,
@@ -3198,7 +3150,6 @@ impl ModTrait for UIMod {
                     }
                 }
             });
-        let title_bar = TitleBar::new(aparte.config.preferred_langs.clone());
         let input = Input::new().with_event(|input, event| match event {
             UIEvent::Core(Event::Key(key)) => {
                 log::debug!("Input event: {:?}", key);
@@ -3301,7 +3252,6 @@ impl ModTrait for UIMod {
         let mut layout = layout;
         layout.push(win_bar, 0);
         layout.push(frame, 1);
-        layout.push(title_bar, 0);
         layout.push(input, 0);
         layout.push(status_line, 0);
         layout.push(command_bar, 0);
