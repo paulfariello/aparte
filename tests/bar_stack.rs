@@ -150,6 +150,71 @@ fn tab_bar_lists_all_windows_with_current_emphasized() {
     );
 }
 
+/// Password prompts render on the command bar; Esc cancels the prompt,
+/// hands focus back to the input bar (Insert mode must work again), and the
+/// aborted partial password is never submitted.
+#[test]
+fn password_prompt_on_command_bar_esc_cancels() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b":connect esc-test@localhost\r");
+    let prompted = wait_for_screen(&h, "password:", Duration::from_secs(5));
+    let parser = h.snapshot();
+    assert!(
+        prompted,
+        "password prompt must appear\n{}",
+        describe(parser.screen())
+    );
+    assert!(
+        row_text(parser.screen(), COMMAND_ROW).contains("password:"),
+        "password prompt must render on the command bar\n{}",
+        describe(parser.screen())
+    );
+
+    // Type part of a password, then abort with Esc.
+    h.send_bytes(b"secr");
+    thread::sleep(Duration::from_millis(200));
+    h.send_bytes(b"\x1b");
+    wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(200));
+
+    let parser = h.snapshot();
+    assert!(
+        !row_text(parser.screen(), COMMAND_ROW).contains("password:"),
+        "password prompt must clear on Esc\n{}",
+        describe(parser.screen())
+    );
+
+    // Focus must be back on the input bar: Insert mode works again.
+    h.send_bytes(b"i");
+    let insert = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let parser = h.snapshot();
+    assert!(
+        insert,
+        "'i' must re-enter INSERT after a cancelled password prompt\n{}",
+        describe(parser.screen())
+    );
+    h.send_bytes(b"after prompt");
+    let typed = wait_for_screen(&h, "after prompt", Duration::from_secs(2));
+    let parser = h.snapshot();
+    assert!(
+        typed && row_text(parser.screen(), INPUT_ROW).contains("after prompt"),
+        "typing must reach the input bar after a cancelled password prompt\n{}",
+        describe(parser.screen())
+    );
+
+    // Enter must not submit the aborted password (and must not crash).
+    h.send_bytes(b"\r");
+    thread::sleep(Duration::from_millis(300));
+    assert!(
+        !h.exited.load(std::sync::atomic::Ordering::Relaxed),
+        "app must survive Enter after a cancelled password prompt"
+    );
+    h.shutdown();
+}
+
 /// A failed command echoes its error on the command bar (also logged to the
 /// console window) and the echo clears on the next keypress.
 #[test]

@@ -2522,6 +2522,27 @@ impl ModTrait for UIMod {
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                     }
+                    // Esc with focus on the command bar in Insert mode cancels
+                    // a password prompt: hand focus back to the input bar and
+                    // resync, exactly like leaving Command mode (the plain
+                    // Insert-Esc arm below would leave focus stranded on the
+                    // deactivated command bar).
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Insert
+                        && layout.focused_child_index == Some(COMMAND_BAR_INDEX) =>
+                    {
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        layout.set_focus(INPUT_INDEX);
+                        current_cmd = (String::new(), Cursor::new(0), false);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                        let (buf, cursor, password) = current_input.clone();
+                        aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
+                    }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Esc, ..
                     })) if mode == Mode::Insert => {
@@ -3809,6 +3830,11 @@ impl ModTrait for UIMod {
             }
             Event::Key(key) => {
                 self.root.event(&mut UIEvent::ClearCommandError);
+                if key.code == KeyCode::Esc {
+                    // Esc cancels a pending password prompt; the aborted
+                    // input must never reach the command.
+                    self.password_command = None;
+                }
                 match key {
                     KeyEvent {
                         code: KeyCode::Tab, ..
@@ -3920,9 +3946,12 @@ impl ModTrait for UIMod {
 
                         if password {
                             self.root.event(&mut UIEvent::ClearInput);
-                            let mut command = self.password_command.take().unwrap();
-                            command.args.push(raw_buf);
-                            aparte.schedule(Event::Command(command));
+                            // None when the prompt was cancelled but state has
+                            // not resynced yet (fast key burst): drop silently.
+                            if let Some(mut command) = self.password_command.take() {
+                                command.args.push(raw_buf);
+                                aparte.schedule(Event::Command(command));
+                            }
                             self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
                         } else if looks_like_cmd && !self.slash_warned {
                             self.slash_warned = true;
