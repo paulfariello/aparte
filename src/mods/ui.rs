@@ -23,7 +23,7 @@ use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
-use terminus::color::{BgColor, Color};
+use terminus::color::{BgColor, Color, FgColor, NamedColor};
 use terminus::linear_layout::LayoutChild;
 use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
 use terminus::Style;
@@ -310,6 +310,8 @@ enum UIEvent {
     /// started). Mutated in-event so the mod-level Enter handler can tell,
     /// even when its own mode state lags behind a fast key burst.
     CommandExecuted,
+    /// Drop the command-error echo (sent on every keypress).
+    ClearCommandError,
     SetInput(String),
     /// Move the cursor in the focused widget by `motion × count`.
     /// Fire-and-forget: no return value.
@@ -626,6 +628,7 @@ struct CommandBar {
     input: Input<UIEvent>,
     active: bool,
     pending_keys: String,
+    error: Option<String>,
     dimensions: Option<Dimensions>,
 }
 
@@ -635,6 +638,7 @@ impl CommandBar {
             input: Input::new(),
             active: false,
             pending_keys: String::new(),
+            error: None,
             dimensions: None,
         }
     }
@@ -674,8 +678,18 @@ impl View<UIEvent, Theme> for CommandBar {
 
         if self.active {
             self.input.render(frame, config);
-        } else if !self.pending_keys.is_empty() {
-            let mut frame = frame;
+            return;
+        }
+        let mut frame = frame;
+        if let Some(error) = &self.error {
+            let error = error
+                .as_str()
+                .with_foreground(FgColor(Color::Named(NamedColor::Red)));
+            let mut error = error.with_style(Style::Bold);
+            error.truncate(frame.width(), "…");
+            frame.write(error);
+        }
+        if !self.pending_keys.is_empty() {
             let pending = self.pending_keys.as_str().with_style(Style::Bold);
             let pending_width = pending.display_width();
             if frame.width() >= pending_width {
@@ -735,6 +749,12 @@ impl View<UIEvent, Theme> for CommandBar {
             }
             UIEvent::CommandBufferUpdate(buf) => {
                 self.pending_keys.clone_from(buf);
+            }
+            UIEvent::Core(Event::CommandError(text)) => {
+                self.error = Some(text.clone());
+            }
+            UIEvent::ClearCommandError => {
+                self.error = None;
             }
             _ => {}
         }
@@ -3635,6 +3655,10 @@ impl ModTrait for UIMod {
                 self.root
                     .event(&mut UIEvent::Core(Event::ReadPassword(command.clone())));
             }
+            Event::CommandError(text) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::CommandError(text.clone())));
+            }
             Event::Connected(account, jid) => {
                 self.root.event(&mut UIEvent::Core(Event::Connected(
                     account.clone(),
@@ -3784,6 +3808,7 @@ impl ModTrait for UIMod {
                 self.send_correction(aparte, &oid, nb);
             }
             Event::Key(key) => {
+                self.root.event(&mut UIEvent::ClearCommandError);
                 match key {
                     KeyEvent {
                         code: KeyCode::Tab, ..

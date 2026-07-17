@@ -150,6 +150,56 @@ fn tab_bar_lists_all_windows_with_current_emphasized() {
     );
 }
 
+/// A failed command echoes its error on the command bar (also logged to the
+/// console window) and the echo clears on the next keypress.
+#[test]
+fn command_error_echoes_in_command_bar_until_keypress() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    enter_normal(&h);
+    h.send_bytes(b":nosuchcmd\r");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut echoed = false;
+    while std::time::Instant::now() < deadline {
+        let parser = h.snapshot();
+        if row_text(parser.screen(), COMMAND_ROW).contains("Unknown command nosuchcmd") {
+            echoed = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let parser = h.snapshot();
+    assert!(
+        echoed,
+        "Command error must echo on the command bar\n{}",
+        describe(parser.screen())
+    );
+
+    // Any keypress clears the echo.
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b"i");
+    wait_for_screen(&h, "INSERT", Duration::from_secs(2));
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut cleared = false;
+    while std::time::Instant::now() < deadline {
+        let parser = h.snapshot();
+        if !row_text(parser.screen(), COMMAND_ROW).contains("Unknown command") {
+            cleared = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let parser = h.snapshot();
+    h.shutdown();
+    assert!(
+        cleared,
+        "Command error echo must clear on the next keypress\n{}",
+        describe(parser.screen())
+    );
+}
+
 /// Whether every cell of `needle`'s span on `row` is bold.
 /// `None` when the needle is not on that row.
 fn bold_span(screen: &vt100::Screen, row: u16, needle: &str) -> Option<bool> {

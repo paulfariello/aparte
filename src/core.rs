@@ -100,6 +100,8 @@ pub enum Event {
     },
     RawCommand(Option<Account>, String, String),
     Command(Command),
+    /// A command failed; the UI echoes the message in the command bar.
+    CommandError(String),
     SendMessage(Account, Message),
     Message(Option<Account>, Message),
     Chat {
@@ -1637,11 +1639,13 @@ impl Aparte {
             Event::Command(command) => {
                 self.read_password.swap(false, Relaxed);
                 if let Err(err) = self.handle_command(command) {
+                    self.schedule(Event::CommandError(format!("{err:#}")));
                     self.log(err);
                 }
             }
             Event::RawCommand(account, context, buf) => {
                 if let Err(err) = self.handle_raw_command(&account, &context, &buf) {
+                    self.schedule(Event::CommandError(format!("{err:#}")));
                     self.log(err);
                 }
             }

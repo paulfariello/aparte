@@ -67,6 +67,8 @@ half-typed message never mixes with a command — the draft stays visible in
 the input bar and is untouched when the command runs or is cancelled.
 Pending Normal-mode keys (e.g. `2j`) show at the right of the command bar.
 The input bar and the command bar each keep their own history (`↑`/`↓`).
+Failed commands echo their error on the command bar until the next
+keypress (and are also logged to the console window).
 
 ### Modal interface
 
