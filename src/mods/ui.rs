@@ -338,6 +338,10 @@ enum UIEvent {
     /// In-event mutation: the popup layout sends this to the focused WindowSwitcher
     /// to retrieve the selected window key. The switcher writes back into the Option.
     WindowSwitcherPick(Option<String>),
+    /// Focus the current window's input bar.
+    /// Chat/Channel window handles it by setting focus to their Input child.
+    /// Console ignores it (no Input child).
+    FocusInputBar,
 }
 
 impl FocusRouted for UIEvent {
@@ -1817,7 +1821,58 @@ impl UIMod {
                         }
                     });
 
-                self.add_window(chat.contact.to_string(), None, Box::new(chatwin));
+                let chat_input = Input::new()
+                    .with_prompt("> ", aparte.config.get_theme().input_prompt)
+                    .with_event(window_input_event_handler);
+
+                let mut chat_window = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)
+                    .with_event(|layout, event| match event {
+                        UIEvent::FocusInputBar => {
+                            // Input is at index 1
+                            layout.set_focus(1);
+                        }
+                        UIEvent::NormalCommand { .. } => {
+                            if let Some(scrollwin) = layout.children.get_mut(0) {
+                                scrollwin.child.view.event(event);
+                            }
+                            if !matches!(event, UIEvent::NormalCommand { bubbled: true, .. }) {
+                                layout.set_focus(0);
+                            }
+                        }
+                        UIEvent::StartEdit | UIEvent::AppendEdit | UIEvent::AppendEndEdit => {
+                            if let Some(scrollwin) = layout.children.get_mut(0) {
+                                scrollwin.child.view.event(event);
+                            }
+                        }
+                        // PageUp/PageDown always scroll the message window, even
+                        // when the input bar (index 1) has focus in Insert mode.
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp | KeyCode::PageDown,
+                            ..
+                        })) => {
+                            if let Some(scrollwin) = layout.children.get_mut(0) {
+                                scrollwin.child.view.event(event);
+                            }
+                        }
+                        UIEvent::Core(Event::Key(_))
+                        | UIEvent::ApplyTextAction(..)
+                        | UIEvent::MoveCursor(..)
+                        | UIEvent::SetInputState(..)
+                        | UIEvent::SetInput(..)
+                        | UIEvent::Paste(..)
+                        | UIEvent::ClearInput => {
+                            layout.route_to_focused(event);
+                        }
+                        _ => {
+                            for child in layout.iter_children_mut() {
+                                child.event(event);
+                            }
+                        }
+                    });
+                chat_window.push(chatwin, 1);
+                chat_window.push(chat_input, 0);
+                chat_window.set_focus(1); // default focus: Input
+                self.add_window(chat.contact.to_string(), None, Box::new(chat_window));
                 self.conversations
                     .insert(chat.contact.to_string(), conversation.clone());
             }
@@ -2242,14 +2297,58 @@ impl UIMod {
                     channel.name.clone(),
                     aparte.config.preferred_langs.clone(),
                 );
+                let channel_input = Input::new()
+                    .with_prompt("> ", aparte.config.get_theme().input_prompt)
+                    .with_event(window_input_event_handler);
+
                 let mut window = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)
-                    .with_event(|layout, event| {
-                        for child in layout.iter_children_mut() {
-                            child.event(event);
+                    .with_event(|win_layout, event| match event {
+                        UIEvent::FocusInputBar => {
+                            // Input is last child; topic_bar(0), h_layout(1), input(2)
+                            win_layout.set_focus(2);
+                        }
+                        UIEvent::NormalCommand { .. } => {
+                            if let Some(h_layout) = win_layout.children.get_mut(1) {
+                                h_layout.child.view.event(event);
+                            }
+                            if !matches!(event, UIEvent::NormalCommand { bubbled: true, .. }) {
+                                win_layout.set_focus(1);
+                            }
+                        }
+                        UIEvent::StartEdit | UIEvent::AppendEdit | UIEvent::AppendEndEdit => {
+                            if let Some(h_layout) = win_layout.children.get_mut(1) {
+                                h_layout.child.view.event(event);
+                            }
+                        }
+                        // PageUp/PageDown always scroll the message window, even
+                        // when the input bar has focus in Insert mode.
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp | KeyCode::PageDown,
+                            ..
+                        })) => {
+                            if let Some(h_layout) = win_layout.children.get_mut(1) {
+                                h_layout.child.view.event(event);
+                            }
+                        }
+                        UIEvent::Core(Event::Key(_))
+                        | UIEvent::ApplyTextAction(..)
+                        | UIEvent::MoveCursor(..)
+                        | UIEvent::SetInputState(..)
+                        | UIEvent::SetInput(..)
+                        | UIEvent::Paste(..)
+                        | UIEvent::ClearInput => {
+                            win_layout.route_to_focused(event);
+                        }
+                        _ => {
+                            for child in win_layout.iter_children_mut() {
+                                child.event(event);
+                            }
                         }
                     });
                 window.push(topic_bar, 0);
                 window.push(layout, 1);
+                window.push(channel_input, 0);
+                window.set_focus(2); // default focus: Input
                 self.add_window(jid_str.clone(), channel.name.clone(), Box::new(window));
                 self.conversations.insert(jid_str, conversation.clone());
             }
@@ -2342,14 +2441,15 @@ impl UIMod {
 }
 
 // Indices into the root LinearLayout's children (push order in `UIMod::init`).
+// 0: win_bar, 1: frame, 2: status_line, 3: command_bar
 const FRAME_LAYOUT_INDEX: usize = 1;
-const INPUT_INDEX: usize = 2;
-const COMMAND_BAR_INDEX: usize = 4;
+const COMMAND_BAR_INDEX: usize = 3;
 
 fn dispatch_nav_command(
     cmd: NormalCommand,
     layout: &mut LinearLayout<UIEvent, Theme>,
     at_nav_bottom: &mut bool,
+    input_bar_focused: &mut bool,
 ) {
     let is_select_next = matches!(cmd, NormalCommand::SelectNext(_));
     let is_select_prev = matches!(cmd, NormalCommand::SelectPrev(_));
@@ -2371,22 +2471,17 @@ fn dispatch_nav_command(
     }
     let bubbled = matches!(event, UIEvent::NormalCommand { bubbled: true, .. });
     if bubbled {
+        // Navigation hit the message boundary; return focus to the window's input bar.
+        let mut fib = UIEvent::FocusInputBar;
+        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+            frame.child.view.event(&mut fib);
+        }
+        *input_bar_focused = true;
         if is_select_next {
-            if let Some(next) = layout
-                .children
-                .iter()
-                .enumerate()
-                .skip(FRAME_LAYOUT_INDEX + 1)
-                .find(|(_, lc)| lc.child.view.insertable())
-                .map(|(i, _)| i)
-            {
-                layout.set_focus(next);
-                *at_nav_bottom = true;
-            }
-        } else if is_select_prev {
-            layout.set_focus(INPUT_INDEX);
+            *at_nav_bottom = true;
         }
     } else if is_select_next || is_select_prev {
+        *input_bar_focused = false;
         layout.set_focus(FRAME_LAYOUT_INDEX);
     }
 }
@@ -2398,6 +2493,7 @@ fn dispatch_action(
     mode: &mut Mode,
     aparte_proxy: &mut AparteAsync,
     at_nav_bottom: &mut bool,
+    input_bar_focused: &mut bool,
     current_input: &mut (String, Cursor, bool),
 ) {
     if action.motion.is_navigation() {
@@ -2412,7 +2508,7 @@ fn dispatch_action(
             Motion::FocusPaneRight => NormalCommand::FocusPaneRight,
             _ => return,
         };
-        dispatch_nav_command(cmd, layout, at_nav_bottom);
+        dispatch_nav_command(cmd, layout, at_nav_bottom, input_bar_focused);
     } else if matches!(action.motion, Motion::PasteAfter | Motion::PasteBefore) {
         let reg_name = action.register.unwrap_or(Registers::UNNAMED);
         if let Some(rv) = registers.get(reg_name) {
@@ -2428,33 +2524,22 @@ fn dispatch_action(
                 child.event(&mut paste_event);
             }
             if let UIEvent::InputChanged(ref buf, ref cursor, password) = paste_event {
-                *current_input = (buf.clone(), cursor.clone(), password);
                 aparte_proxy.schedule(Event::InputChanged(buf.clone(), cursor.clone(), password));
             }
         }
     } else {
-        let frame_has_cursor = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
         let mut evt = UIEvent::ApplyTextAction(action.clone(), None);
-        if frame_has_cursor {
-            // Frame is focused: route to frame only.
-            if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
-                child.child.view.event(&mut evt);
-            }
-        } else {
-            // Focus on the input bar: send to non-frame children only.
-            for (i, child) in layout.children.iter_mut().enumerate() {
-                if i != FRAME_LAYOUT_INDEX {
-                    child.child.view.event(&mut evt);
-                }
-            }
+        if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+            child.child.view.event(&mut evt);
         }
         if let UIEvent::ApplyTextAction(_, Some(ref rv)) = evt {
             registers.yank(action.register, rv.clone());
         }
-        if !frame_has_cursor {
-            if let UIEvent::InputChanged(ref buf, ref cursor, password) = evt {
-                *current_input = (buf.clone(), cursor.clone(), password);
-            }
+        // Motion commands cause the Input widget to mutate evt → InputChanged.
+        // Sync current_input so subsequent handlers (e.g. `a`) see the new cursor.
+        if let UIEvent::InputChanged(ref buf, ref cursor, password) = evt {
+            *current_input = (buf.clone(), cursor.clone(), password);
+            aparte_proxy.schedule(Event::InputChanged(buf.clone(), cursor.clone(), password));
         }
         if matches!(action.operator, Operator::Change) {
             *mode = Mode::Insert;
@@ -2462,10 +2547,99 @@ fn dispatch_action(
             for child in layout.iter_children_mut() {
                 child.event(&mut UIEvent::ModeChange(Mode::Insert));
             }
-            if frame_has_cursor {
-                layout.set_focus(FRAME_LAYOUT_INDEX);
+        }
+    }
+}
+
+fn window_input_event_handler(input: &mut Input<UIEvent>, event: &mut UIEvent) {
+    match event {
+        UIEvent::Core(Event::Key(key)) => {
+            match key.code {
+                KeyCode::Up => input.previous(),
+                KeyCode::Down => input.next(),
+                _ => {
+                    input.editor.handle_key_event(key);
+                }
+            }
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::ClearInput => {
+            input.validate();
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+            input.editor.buf.clone_from(raw_buf);
+            input.editor.cursor.clone_from(cursor);
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::SetInput(text) => {
+            input.editor.cursor =
+                Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
+            input.editor.buf.clone_from(text);
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::MoveCursor(motion, count) => {
+            input.editor.apply_action(&Action {
+                count: *count,
+                register: None,
+                operator: Operator::Move,
+                motion: motion.clone(),
+            });
+        }
+        UIEvent::ApplyTextAction(action, slot) => {
+            if let Some(rv) = input.editor.apply_action(action) {
+                *slot = Some(rv);
+            }
+            if matches!(action.operator, Operator::Move) {
+                *event = UIEvent::InputChanged(
+                    input.editor.buf.clone(),
+                    input.editor.cursor.clone(),
+                    input.password,
+                );
             }
         }
+        UIEvent::SetInputState(content, cursor_pos) => {
+            input.editor.buf = content.clone();
+            input.editor.cursor = Cursor::new(*cursor_pos);
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::Paste(text) => {
+            for c in text.chars() {
+                input.key(c);
+            }
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::ModeChange(Mode::Normal) => {
+            input.set_cursor_style(CursorStyle::SteadyBlock);
+        }
+        UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
+            input.set_cursor_style(CursorStyle::SteadyBar);
+        }
+        _ => {}
     }
 }
 
@@ -2483,11 +2657,11 @@ impl ModTrait for UIMod {
             let mut registers = Registers::new();
             let mut aparte_proxy = aparte.proxy();
             let mut current_window = String::new();
-            let mut visited_windows: HashSet<String> = HashSet::new();
             let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
             let mut at_nav_bottom = false;
             let mut message_cursor_active = false;
-            let mut pre_command_focus: Option<usize> = None;
+            let mut input_bar_focused = true;
+            let mut pre_command_input_bar_focused = true;
             let mut current_input: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
             // Command-bar buffer state, tracked separately from the message
             // input so a draft survives command/search entry (ADR-0008).
@@ -2535,7 +2709,12 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
-                        layout.set_focus(INPUT_INDEX);
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        input_bar_focused = true;
+                        let mut fib = UIEvent::FocusInputBar;
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut fib);
+                        }
                         current_cmd = (String::new(), Cursor::new(0), false);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
@@ -2549,21 +2728,15 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
-                        let focus_on_frame = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
-                        if focus_on_frame {
-                            for child in layout.iter_children_mut() {
-                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
-                            }
-                        } else {
-                            // Vim: when leaving Insert on the input bar, cursor
-                            // moves back one if at the end of a non-empty buffer.
+                        if input_bar_focused {
+                            // Vim: when leaving Insert on the input bar, cursor moves back one
                             let (buf, cursor, _) = current_input.clone();
                             let len = buf.graphemes(true).count();
                             if cursor.get() == len && len > 0 {
                                 let new_pos = len - 1;
                                 let mut sis_event = UIEvent::SetInputState(buf.clone(), new_pos);
-                                for child in layout.iter_children_mut() {
-                                    child.event(&mut sis_event);
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut sis_event);
                                 }
                                 if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
                                     sis_event
@@ -2576,9 +2749,9 @@ impl ModTrait for UIMod {
                                     ));
                                 }
                             }
-                            for child in layout.iter_children_mut() {
-                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
-                            }
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
                         }
                     }
                     // Esc in Normal mode: if focus is on the message frame,
@@ -2602,14 +2775,9 @@ impl ModTrait for UIMod {
                             .map(|c| c.insertable())
                             .unwrap_or(false);
                         if focused_is_insertable {
-                            // Only request an in-place edit when focus is on
-                            // the message frame. Otherwise (focus on input
-                            // bar), `i` just enters INSERT for typing — even
-                            // if the auto-selection on NORMAL highlighted an
-                            // outgoing message.
-                            let focus_on_frame =
-                                layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
-                            if focus_on_frame {
+                            // Only request an in-place edit when not on the input bar.
+                            // Otherwise, `i` just enters INSERT for typing.
+                            if !input_bar_focused {
                                 if let Some(focused) = layout.focused_child_mut() {
                                     focused.event(&mut UIEvent::StartEdit);
                                 }
@@ -2634,9 +2802,7 @@ impl ModTrait for UIMod {
                             .map(|c| c.insertable())
                             .unwrap_or(false);
                         if focused_is_insertable {
-                            let focus_on_frame =
-                                layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
-                            if focus_on_frame {
+                            if !input_bar_focused {
                                 if let Some(focused) = layout.focused_child_mut() {
                                     focused.event(&mut UIEvent::AppendEdit);
                                 }
@@ -2646,8 +2812,8 @@ impl ModTrait for UIMod {
                                 let len = buf.graphemes(true).count();
                                 let new_pos = (cursor.get() + 1).min(len);
                                 let mut sis_event = UIEvent::SetInputState(buf.clone(), new_pos);
-                                for child in layout.iter_children_mut() {
-                                    child.event(&mut sis_event);
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut sis_event);
                                 }
                                 if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
                                     sis_event
@@ -2678,9 +2844,7 @@ impl ModTrait for UIMod {
                             .map(|c| c.insertable())
                             .unwrap_or(false);
                         if focused_is_insertable {
-                            let focus_on_frame =
-                                layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
-                            if focus_on_frame {
+                            if !input_bar_focused {
                                 if let Some(focused) = layout.focused_child_mut() {
                                     focused.event(&mut UIEvent::AppendEndEdit);
                                 }
@@ -2689,8 +2853,8 @@ impl ModTrait for UIMod {
                                 let (buf, _, _) = current_input.clone();
                                 let len = buf.graphemes(true).count();
                                 let mut sis_event = UIEvent::SetInputState(buf.clone(), len);
-                                for child in layout.iter_children_mut() {
-                                    child.event(&mut sis_event);
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut sis_event);
                                 }
                                 if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
                                     sis_event
@@ -2717,7 +2881,11 @@ impl ModTrait for UIMod {
                         ..
                     })) if mode == Mode::Normal && !action_parser.is_pending() => {
                         action_parser.reset();
-                        layout.set_focus(INPUT_INDEX);
+                        input_bar_focused = true;
+                        let mut fib = UIEvent::FocusInputBar;
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut fib);
+                        }
                         mode = Mode::Insert;
                         aparte_proxy.schedule(Event::UIMode(Mode::Insert));
                         for child in layout.iter_children_mut() {
@@ -2733,7 +2901,7 @@ impl ModTrait for UIMod {
                         mode = Mode::Command;
                         aparte_proxy.schedule(Event::UIMode(Mode::Command));
                         action_parser.reset();
-                        pre_command_focus = layout.focused_child_index;
+                        pre_command_input_bar_focused = input_bar_focused;
                         layout.set_focus(COMMAND_BAR_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Command));
@@ -2757,17 +2925,22 @@ impl ModTrait for UIMod {
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                         action_parser.reset();
-                        if pre_command_focus == Some(FRAME_LAYOUT_INDEX) {
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
-                        } else {
-                            layout.set_focus(INPUT_INDEX);
-                        }
-                        pre_command_focus = None;
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        input_bar_focused = pre_command_input_bar_focused;
+                        // SearchCancel first, then FocusInputBar — so the input bar
+                        // focus is not overwritten by the NormalCommand handler calling
+                        // set_focus(0) when pre_command_input_bar_focused is true.
                         if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                             frame.child.view.event(&mut UIEvent::NormalCommand {
                                 cmd: NormalCommand::SearchCancel,
                                 bubbled: false,
                             });
+                        }
+                        if pre_command_input_bar_focused {
+                            let mut fib = UIEvent::FocusInputBar;
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(&mut fib);
+                            }
                         }
                         // ModeChange(Normal) deactivates and clears the command bar.
                         for child in layout.iter_children_mut() {
@@ -2788,12 +2961,14 @@ impl ModTrait for UIMod {
 
                         mode = Mode::Normal;
                         aparte_proxy.schedule(Event::UIMode(Mode::Normal));
-                        if pre_command_focus == Some(FRAME_LAYOUT_INDEX) {
-                            layout.set_focus(FRAME_LAYOUT_INDEX);
-                        } else {
-                            layout.set_focus(INPUT_INDEX);
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        input_bar_focused = pre_command_input_bar_focused;
+                        if pre_command_input_bar_focused {
+                            let mut fib = UIEvent::FocusInputBar;
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(&mut fib);
+                            }
                         }
-                        pre_command_focus = None;
                         // Push the command to the command bar's own history
                         // while it is still active, then deactivate it.
                         if let Some(cmd_bar) = layout.children.get_mut(COMMAND_BAR_INDEX) {
@@ -2873,6 +3048,7 @@ impl ModTrait for UIMod {
                                     &mut mode,
                                     &mut aparte_proxy,
                                     &mut at_nav_bottom,
+                                    &mut input_bar_focused,
                                     &mut current_input,
                                 );
                             }
@@ -2916,6 +3092,7 @@ impl ModTrait for UIMod {
                                     &mut mode,
                                     &mut aparte_proxy,
                                     &mut at_nav_bottom,
+                                    &mut input_bar_focused,
                                     &mut current_input,
                                 );
                             }
@@ -2933,6 +3110,7 @@ impl ModTrait for UIMod {
                             NormalCommand::SelectPrev(1),
                             layout,
                             &mut at_nav_bottom,
+                            &mut input_bar_focused,
                         );
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -2943,6 +3121,7 @@ impl ModTrait for UIMod {
                             NormalCommand::SelectNext(1),
                             layout,
                             &mut at_nav_bottom,
+                            &mut input_bar_focused,
                         );
                     }
                     UIEvent::Core(Event::CommandTimeout(gen)) => {
@@ -3019,13 +3198,16 @@ impl ModTrait for UIMod {
                     }
                     UIEvent::Core(Event::ChangeWindow(name)) => {
                         let clean = terminus::clean_str(name);
-                        let first_visit = visited_windows.insert(clean.clone());
                         current_window = clean;
                         for child in layout.iter_children_mut() {
                             child.event(event);
                         }
-                        if first_visit {
-                            layout.set_focus(INPUT_INDEX);
+                        // Each window owns its Input; always reset to input bar focus on window change.
+                        input_bar_focused = true;
+                        at_nav_bottom = false;
+                        let mut fib = UIEvent::FocusInputBar;
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut fib);
                         }
                     }
                     // ClearInput targets whichever input widget is focused so
@@ -3047,46 +3229,64 @@ impl ModTrait for UIMod {
                     }
                     // Completion results apply to the widget being edited only.
                     UIEvent::Core(Event::Completed(_, _)) => {
-                        let target = if mode == Mode::Command {
-                            COMMAND_BAR_INDEX
-                        } else {
-                            INPUT_INDEX
-                        };
-                        if let Some(child) = layout.children.get_mut(target) {
-                            child.child.view.event(event);
-                        }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
-                            if mode == Mode::Command {
-                                current_cmd = (buf.clone(), cursor.clone(), password);
-                            } else {
-                                current_input = (buf.clone(), cursor.clone(), password);
+                        if mode == Mode::Command {
+                            if let Some(child) = layout.children.get_mut(COMMAND_BAR_INDEX) {
+                                child.child.view.event(event);
                             }
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
+                            if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                                aparte_proxy.schedule(Event::InputChanged(
+                                    buf.clone(),
+                                    cursor.clone(),
+                                    password,
+                                ));
+                            }
+                        } else {
+                            // Route completion to the frame so the focused window's Input handles it.
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(event);
+                            }
+                            if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                                current_input = (buf.clone(), cursor.clone(), password);
+                                aparte_proxy.schedule(Event::InputChanged(
+                                    buf.clone(),
+                                    cursor.clone(),
+                                    password,
+                                ));
+                            }
                         }
                     }
                     // Password prompts happen in the command bar (ADR-0008).
+                    // Focus must be set to COMMAND_BAR before broadcasting so the
+                    // command bar is insertable when ModeChange(Insert) fires.
                     UIEvent::Core(Event::ReadPassword(_)) => {
                         layout.set_focus(COMMAND_BAR_INDEX);
                         for child in layout.iter_children_mut() {
                             child.event(event);
+                        }
+                        // The command bar is now active (insertable); enter Insert mode.
+                        mode = Mode::Insert;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
                         }
                     }
                     UIEvent::ModeChange(new_mode) => match *new_mode {
                         Mode::Normal => {
                             mode = Mode::Normal;
                             message_cursor_active = false;
-                            pre_command_focus = None;
                             aparte_proxy.schedule(Event::UIMode(Mode::Normal));
                             action_parser.reset();
                             if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
                                 // Leaving a command-bar interaction (e.g. a
-                                // password prompt): hand focus back to the
-                                // input bar and resync the mod-level state.
-                                layout.set_focus(INPUT_INDEX);
+                                // password prompt): hand focus back to the frame
+                                // and resync the mod-level state.
+                                layout.set_focus(FRAME_LAYOUT_INDEX);
+                                input_bar_focused = true;
+                                let mut fib = UIEvent::FocusInputBar;
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut fib);
+                                }
                                 current_cmd = (String::new(), Cursor::new(0), false);
                                 let (buf, cursor, password) = current_input.clone();
                                 aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
@@ -3178,12 +3378,17 @@ impl ModTrait for UIMod {
                 // set `bubbled = true` on the shared event, making the outer
                 // layout think navigation failed when it actually succeeded.
                 | UIEvent::NormalCommand { .. }
+                | UIEvent::FocusInputBar
                 | UIEvent::StartEdit
                 | UIEvent::AppendEdit
                 | UIEvent::AppendEndEdit
-                // Text actions and cursor moves go to the focused window only.
+                // Text actions, cursor moves, and input state changes go to the focused window only.
                 | UIEvent::MoveCursor(..)
-                | UIEvent::ApplyTextAction(..) => frame.route_to_focused(event),
+                | UIEvent::ApplyTextAction(..)
+                | UIEvent::SetInputState(..)
+                | UIEvent::SetInput(..)
+                | UIEvent::Paste(..)
+                | UIEvent::ClearInput => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {
@@ -3191,112 +3396,15 @@ impl ModTrait for UIMod {
                     }
                 }
             });
-        let input = Input::new().with_event(|input, event| match event {
-            UIEvent::Core(Event::Key(key)) => {
-                log::debug!("Input event: {:?}", key);
-                match key.code {
-                    KeyCode::Up => input.previous(),
-                    KeyCode::Down => input.next(),
-                    _ => {
-                        input.editor.handle_key_event(key);
-                    }
-                }
-                *event = UIEvent::InputChanged(
-                    input.editor.buf.clone(),
-                    input.editor.cursor.clone(),
-                    input.password,
-                );
-            }
-            UIEvent::ClearInput => {
-                // validate() pushes to history and clears the buffer.
-                // Emit InputChanged so the layout closure updates current_input.
-                input.validate();
-                *event = UIEvent::InputChanged(
-                    input.editor.buf.clone(),
-                    input.editor.cursor.clone(),
-                    input.password,
-                );
-            }
-            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                input.editor.buf.clone_from(raw_buf);
-                input.editor.cursor.clone_from(cursor);
-                *event = UIEvent::InputChanged(
-                    input.editor.buf.clone(),
-                    input.editor.cursor.clone(),
-                    input.password,
-                );
-            }
-            UIEvent::SetInput(text) => {
-                input.editor.cursor =
-                    Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
-                input.editor.buf.clone_from(text);
-                *event = UIEvent::InputChanged(
-                    input.editor.buf.clone(),
-                    input.editor.cursor.clone(),
-                    input.password,
-                );
-            }
-            UIEvent::MoveCursor(motion, count) => {
-                input.editor.apply_action(&Action {
-                    count: *count,
-                    register: None,
-                    operator: Operator::Move,
-                    motion: motion.clone(),
-                });
-            }
-            UIEvent::ApplyTextAction(action, slot) => {
-                if let Some(rv) = input.editor.apply_action(action) {
-                    *slot = Some(rv);
-                }
-                if matches!(action.operator, Operator::Move) {
-                    *event = UIEvent::InputChanged(
-                        input.editor.buf.clone(),
-                        input.editor.cursor.clone(),
-                        input.password,
-                    );
-                }
-            }
-            UIEvent::SetInputState(content, cursor_pos) => {
-                input.editor.buf = content.clone();
-                input.editor.cursor = Cursor::new(*cursor_pos);
-                *event = UIEvent::InputChanged(
-                    input.editor.buf.clone(),
-                    input.editor.cursor.clone(),
-                    input.password,
-                );
-            }
-            UIEvent::Paste(text) => {
-                for c in text.chars() {
-                    input.key(c);
-                }
-                *event = UIEvent::InputChanged(
-                    input.editor.buf.clone(),
-                    input.editor.cursor.clone(),
-                    input.password,
-                );
-            }
-            UIEvent::ModeChange(Mode::Normal) => {
-                input.set_cursor_style(CursorStyle::SteadyBlock);
-            }
-            UIEvent::ModeChange(Mode::Command) => {
-                input.set_cursor_style(CursorStyle::SteadyBar);
-            }
-            UIEvent::ModeChange(Mode::Insert) => {
-                input.set_cursor_style(CursorStyle::SteadyBar);
-            }
-            _ => {}
-        });
-
         let status_line = StatusLine::new();
         let command_bar = CommandBar::new();
 
         let mut layout = layout;
         layout.push(win_bar, 0);
         layout.push(frame, 1);
-        layout.push(input, 0);
         layout.push(status_line, 0);
         layout.push(command_bar, 0);
-        layout.set_focus(INPUT_INDEX);
+        layout.set_focus(FRAME_LAYOUT_INDEX);
 
         self.root = Root::new(layout).with_event(|root, event| match event {
             UIEvent::ShowPopup { title, lines } => {

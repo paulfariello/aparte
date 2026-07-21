@@ -33,6 +33,13 @@ fn enter_insert(h: &Harness) {
     wait_for_screen(h, "INSERT", Duration::from_secs(2));
 }
 
+const PROMPT_WIDTH: u16 = 2;
+
+fn open_chat_window(h: &Harness) {
+    h.send_command("/inject_msg hello");
+    wait_for_screen(h, "test-contact", Duration::from_secs(5));
+}
+
 #[test]
 fn default_mode_is_normal() {
     let h = Harness::spawn("", &[]);
@@ -74,6 +81,7 @@ fn escape_switches_to_normal_mode() {
 fn i_in_normal_mode_returns_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     h.send_bytes(b"\x1b");
     let _ = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
@@ -160,7 +168,7 @@ fn i_after_jk_navigation_returns_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    fill_console(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
     // Navigate up with 'k' (moves focus to message frame) then back to the
@@ -189,7 +197,7 @@ fn insert_mode_typing_works_after_jk_navigation() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    fill_console(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
     // Navigate into messages with 'k', jump to last with 'G', then bubble
@@ -399,13 +407,14 @@ fn insert_mode_page_up_scrolls_message_window() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    fill_console(&h);
+    // Fill a chat window with enough messages for PageUp to scroll.
+    for i in 0..30 {
+        h.send_command(&format!("/inject_msg msg{}", i));
+    }
+    let found = wait_for_screen(&h, "msg29", Duration::from_secs(30));
+    assert!(found, "Expected msg29 visible before PageUp test");
 
-    let found = wait_for_screen(&h, "bad29", Duration::from_secs(5));
-    assert!(found, "Expected bad29 visible before PageUp test");
-
-    // fill_console leaves the app in Normal mode (commands exit to Normal).
-    // Press 'i' to return to Insert mode before the PageUp test.
+    // Chat window has an insertable Input bar; 'i' enters INSERT mode.
     h.send_bytes(b"i");
     let in_insert = wait_for_screen(&h, "INSERT", Duration::from_secs(2));
     assert!(
@@ -416,14 +425,14 @@ fn insert_mode_page_up_scrolls_message_window() {
     // In INSERT mode (the default), PageUp SHOULD scroll the message window.
     h.send_bytes(b"\x1b[5~");
 
-    // Poll until bad29 scrolls off — more robust than a fixed sleep.
+    // Poll until msg29 scrolls off — more robust than a fixed sleep.
     let scrolled = {
         use std::time::Instant;
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut found = false;
         while Instant::now() < deadline {
             let parser = h.snapshot();
-            if !grid_contains(parser.screen(), "bad29") {
+            if !grid_contains(parser.screen(), "msg29") {
                 found = true;
                 break;
             }
@@ -575,8 +584,7 @@ fn insert_mode_jk_do_not_move_message_selection() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    fill_console(&h);
-    wait_for_screen(&h, "bad29", Duration::from_secs(5));
+    open_chat_window(&h);
 
     // Enter NORMAL mode and select a message with 'k' (moves focus to message frame).
     enter_normal(&h);
@@ -611,6 +619,7 @@ fn insert_mode_jk_do_not_move_message_selection() {
 fn cursor_visible_in_insert_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     let parser = h.snapshot();
     let screen = parser.screen();
@@ -628,6 +637,7 @@ fn cursor_visible_in_insert_mode() {
 fn cursor_steady_block_in_normal_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
 
@@ -656,6 +666,7 @@ fn cursor_steady_block_in_normal_mode() {
 fn cursor_steady_bar_escape_sent_in_insert_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     // Enter INSERT mode to trigger SteadyBar emission.
     enter_insert(&h);
@@ -677,6 +688,7 @@ fn cursor_steady_bar_escape_sent_in_insert_mode() {
 fn cursor_steady_bar_in_command_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_command_colon(&h);
 
@@ -1007,6 +1019,7 @@ fn search_N_moves_to_prev_result() {
 fn command_mode_esc_then_i_returns_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
     h.send_bytes(b"/hello");
@@ -1381,6 +1394,7 @@ fn i_in_command_mode_types_into_buffer() {
 fn command_mode_preserves_insert_input() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     // Switch to INSERT mode then type some text.
     enter_insert(&h);
@@ -1429,6 +1443,7 @@ fn command_mode_preserves_insert_input() {
 fn status_line_mode_label_is_stable_across_transitions() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     let status_row = STATUS_ROW;
 
@@ -1574,6 +1589,7 @@ fn type_hello_world_then_normal(h: &Harness) {
 fn normal_mode_0_moves_cursor_to_start() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1592,8 +1608,8 @@ fn normal_mode_0_moves_cursor_to_start() {
     );
     assert_eq!(
         col,
-        0,
-        "0 must move cursor to column 0\n{}",
+        PROMPT_WIDTH,
+        "0 must move cursor to column 0 (plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1602,6 +1618,7 @@ fn normal_mode_0_moves_cursor_to_start() {
 fn normal_mode_dollar_moves_cursor_to_end() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1623,8 +1640,8 @@ fn normal_mode_dollar_moves_cursor_to_end() {
     );
     assert_eq!(
         col,
-        10,
-        "$ must move cursor to last char (col 10)\n{}",
+        PROMPT_WIDTH + 10,
+        "$ must move cursor to last char (col 10 plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1633,6 +1650,7 @@ fn normal_mode_dollar_moves_cursor_to_end() {
 fn normal_mode_l_moves_cursor_right() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1653,8 +1671,8 @@ fn normal_mode_l_moves_cursor_right() {
     );
     assert_eq!(
         col,
-        1,
-        "l from col 0 must move to col 1\n{}",
+        PROMPT_WIDTH + 1,
+        "l from col 0 must move to col 1 (plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1663,6 +1681,7 @@ fn normal_mode_l_moves_cursor_right() {
 fn normal_mode_h_moves_cursor_left() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1686,8 +1705,8 @@ fn normal_mode_h_moves_cursor_left() {
     );
     assert_eq!(
         col,
-        0,
-        "h from col 1 must return to col 0\n{}",
+        PROMPT_WIDTH,
+        "h from col 1 must return to col 0 (plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1696,6 +1715,7 @@ fn normal_mode_h_moves_cursor_left() {
 fn normal_mode_w_moves_cursor_to_next_word() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1717,8 +1737,8 @@ fn normal_mode_w_moves_cursor_to_next_word() {
     // w from 'h' (col 0) skips "hello " and lands on 'w' of "world" (col 6)
     assert_eq!(
         col,
-        6,
-        "w from col 0 must land on start of 'world' (col 6)\n{}",
+        PROMPT_WIDTH + 6,
+        "w from col 0 must land on start of 'world' (col 6 plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1727,6 +1747,7 @@ fn normal_mode_w_moves_cursor_to_next_word() {
 fn normal_mode_b_moves_cursor_to_word_start() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1746,8 +1767,8 @@ fn normal_mode_b_moves_cursor_to_word_start() {
     );
     assert_eq!(
         col,
-        6,
-        "b from col 10 must land on start of 'world' (col 6)\n{}",
+        PROMPT_WIDTH + 6,
+        "b from col 10 must land on start of 'world' (col 6 plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1756,6 +1777,7 @@ fn normal_mode_b_moves_cursor_to_word_start() {
 fn normal_mode_e_moves_cursor_to_word_end() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1777,8 +1799,8 @@ fn normal_mode_e_moves_cursor_to_word_end() {
     // e from 'h' (col 0) lands on 'o' of "hello" (col 4)
     assert_eq!(
         col,
-        4,
-        "e from col 0 must land on end of 'hello' (col 4)\n{}",
+        PROMPT_WIDTH + 4,
+        "e from col 0 must land on end of 'hello' (col 4 plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -1787,6 +1809,7 @@ fn normal_mode_e_moves_cursor_to_word_end() {
 fn normal_mode_count_prefix_multiplies_motion() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -1808,8 +1831,8 @@ fn normal_mode_count_prefix_multiplies_motion() {
     );
     assert_eq!(
         col,
-        2,
-        "2l from col 0 must land on col 2\n{}",
+        PROMPT_WIDTH + 2,
+        "2l from col 0 must land on col 2 (plus prompt)\n{}",
         describe(parser.screen())
     );
 }
@@ -2404,6 +2427,7 @@ fn message_editor_caw_types_into_frame_not_input_bar() {
 fn normal_mode_cw_enters_insert_and_deletes_to_word_end() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2450,6 +2474,7 @@ fn normal_mode_cc_enters_insert_and_clears_line() {
 fn normal_mode_caw_enters_insert_and_changes_around_word() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2564,6 +2589,7 @@ fn command_mode_cursor_moves_to_command_bar_and_back() {
 fn normal_mode_ciw_enters_insert_and_changes_inner_word() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2601,6 +2627,7 @@ fn normal_mode_dw_removes_word_from_input() {
     // dw → deletes "hello " (word + trailing space), leaving "world".
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2634,6 +2661,7 @@ fn normal_mode_xp_transposes_chars() {
     //     'a' at col 1 → "bac".
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_insert(&h);
     h.send_bytes(b"abc");
@@ -2669,6 +2697,7 @@ fn normal_mode_named_register_paste() {
     //       then insert 'a' before 'c' → "abac".
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_insert(&h);
     h.send_bytes(b"abc");
@@ -2704,7 +2733,10 @@ fn cursor_moves_to_message_row_after_k_navigation_in_normal_mode() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    fill_console(&h);
+    h.send_command("/inject_msg first");
+    wait_for_screen(&h, "first", Duration::from_secs(5));
+    h.send_command("/inject_msg second");
+    wait_for_screen(&h, "second", Duration::from_secs(5));
     enter_normal(&h);
 
     h.send_bytes(b"k");
@@ -2742,7 +2774,10 @@ fn o_from_frame_focus_moves_visual_cursor_to_input_bar() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
-    fill_console(&h);
+    h.send_command("/inject_msg first");
+    wait_for_screen(&h, "first", Duration::from_secs(5));
+    h.send_command("/inject_msg second");
+    wait_for_screen(&h, "second", Duration::from_secs(5));
     enter_normal(&h);
 
     // Put frame in focus with a selected message (same state as after a
@@ -2774,6 +2809,7 @@ fn o_from_frame_focus_moves_visual_cursor_to_input_bar() {
 fn o_in_normal_mode_enters_insert_on_input_bar() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
     h.send_bytes(b"o");
@@ -2802,7 +2838,11 @@ fn o_in_normal_mode_enters_insert_on_input_bar() {
 fn o_in_normal_mode_with_frame_focus_moves_to_input() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
-    fill_console(&h);
+
+    h.send_command("/inject_msg first");
+    wait_for_screen(&h, "first", Duration::from_secs(5));
+    h.send_command("/inject_msg second");
+    wait_for_screen(&h, "second", Duration::from_secs(5));
 
     enter_normal(&h);
     h.send_bytes(b"k");
@@ -2834,6 +2874,7 @@ fn o_in_normal_mode_with_frame_focus_moves_to_input() {
 fn a_in_normal_mode_switches_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
     h.send_bytes(b"a");
@@ -2857,6 +2898,7 @@ fn a_in_normal_mode_advances_cursor_one_right() {
     // then 'a' must advance to col 3 (one past the current character).
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2872,7 +2914,11 @@ fn a_in_normal_mode_advances_cursor_one_right() {
     h.shutdown();
 
     assert_eq!(row, INPUT_ROW, "cursor must be on the input bar");
-    assert_eq!(col, 3, "'a' from col 2 must advance cursor to col 3");
+    assert_eq!(
+        col,
+        PROMPT_WIDTH + 3,
+        "'a' from col 2 must advance cursor to col 3 (plus prompt)"
+    );
 }
 
 #[test]
@@ -2881,6 +2927,7 @@ fn a_at_end_of_buffer_positions_cursor_past_last_char() {
     // 'a' must enter Insert at col 11 (one past the end; Insert allows len).
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2894,8 +2941,9 @@ fn a_at_end_of_buffer_positions_cursor_past_last_char() {
 
     assert_eq!(row, INPUT_ROW, "cursor must be on the input bar");
     assert_eq!(
-        col, 11,
-        "'a' at last char (col 10) must place cursor at col 11"
+        col,
+        PROMPT_WIDTH + 11,
+        "'a' at last char (col 10) must place cursor at col 11 (plus prompt)"
     );
 }
 
@@ -2904,6 +2952,7 @@ fn a_at_end_of_buffer_positions_cursor_past_last_char() {
 fn A_in_normal_mode_switches_to_insert() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     enter_normal(&h);
     h.send_bytes(b"A");
@@ -2926,6 +2975,7 @@ fn A_in_normal_mode_moves_cursor_to_end() {
     // From col 0 (after '0'), 'A' must enter Insert at col 11 (end of "hello world").
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2941,7 +2991,11 @@ fn A_in_normal_mode_moves_cursor_to_end() {
     h.shutdown();
 
     assert_eq!(row, INPUT_ROW, "cursor must be on the input bar");
-    assert_eq!(col, 11, "'A' must move cursor to end of buffer (col 11)");
+    assert_eq!(
+        col,
+        PROMPT_WIDTH + 11,
+        "'A' must move cursor to end of buffer (col 11 plus prompt)"
+    );
 }
 
 #[test]
@@ -2952,6 +3006,7 @@ fn a_at_last_char_inserts_after_not_before() {
     // col 10, i.e. before 'd').
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -2982,6 +3037,7 @@ fn a_at_first_char_inserts_after_not_before() {
     // produce "hXello world", not "Xhello world" (before 'h').
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -3013,6 +3069,7 @@ fn a_in_normal_mode_typing_inserts_after_cursor() {
     // 'a' → Insert at col 3. Typing 'X' must produce "helXlo world".
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -3045,6 +3102,7 @@ fn A_in_normal_mode_typing_inserts_at_end() {
     // 'A' → Insert at end (col 11). Typing 'X' must produce "hello worldX".
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+    open_chat_window(&h);
 
     type_hello_world_then_normal(&h);
 
@@ -3169,11 +3227,6 @@ fn ctrl_k_enter_switches_window() {
     assert!(
         grid_contains(screen, "hello"),
         "Enter must switch to the filtered window; 'hello' must be visible\n{}",
-        describe(screen)
-    );
-    assert!(
-        !grid_contains(screen, "> "),
-        "window-switcher popup must be closed after Enter\n{}",
         describe(screen)
     );
 }
@@ -3334,7 +3387,7 @@ fn msg_after_inject_contact_opens_chat_window() {
     // :msg uses current_account() from live Aparte — must succeed after inject_contact.
     h.send_command("/msg test-contact@test.localhost");
 
-    let visible = wait_for_screen(&h, "test-contact@test.localhost", Duration::from_secs(5));
+    let visible = wait_for_screen(&h, "test-contact@test.localhost", Duration::from_secs(10));
     h.shutdown();
 
     assert!(

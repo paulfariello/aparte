@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use crate::charxel::IntoCharxels;
+use crate::color::ColorTuple;
 use crate::rendering::ScreenFrame;
 use crate::text_editor::TextEditor;
 use crate::CursorPos;
@@ -23,6 +25,7 @@ pub struct Input<E> {
     pub event_handler: Option<EventHandler<Self, E>>,
     pub cursor_style: CursorStyle,
     dimensions: Option<Dimensions>,
+    prompt: Option<(String, ColorTuple)>,
 }
 
 impl<E> Default for Input<E> {
@@ -43,7 +46,14 @@ impl<E> Input<E> {
             event_handler: None,
             cursor_style: CursorStyle::SteadyBar,
             dimensions: None,
+            prompt: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_prompt(mut self, text: impl Into<String>, color: ColorTuple) -> Self {
+        self.prompt = Some((text.into(), color));
+        self
     }
 
     pub fn set_cursor_style(&mut self, style: CursorStyle) {
@@ -196,8 +206,15 @@ impl<E, C> View<E, C> for Input<E> {
             frame.write(prompt);
             // No cursor in password mode — leave it hidden.
         } else {
-            // Max displayable size is view width less 1 for cursor
-            let max_size = (frame.dimensions.width - 1) as usize;
+            #[allow(clippy::cast_possible_truncation)]
+            let prompt_width: u16 = self
+                .prompt
+                .as_ref()
+                .map(|(text, _)| unicode_display_width::width(text.as_str()) as u16)
+                .unwrap_or(0);
+
+            // Max displayable size is view width less prompt width less 1 for cursor
+            let max_size = (frame.dimensions.width.saturating_sub(prompt_width + 1)) as usize;
 
             // cursor must always be inside the view
             if self.editor.cursor < self.editor.view {
@@ -217,6 +234,10 @@ impl<E, C> View<E, C> for Input<E> {
             assert!(self.editor.cursor >= self.editor.view);
             assert!(self.editor.cursor <= &self.editor.view + (max_size + 1));
 
+            if let Some((text, color)) = &self.prompt {
+                frame.write(text.as_str().with_color(color));
+            }
+
             let start_index = self.editor.view.index(&self.editor.buf);
             let end_index = (&self.editor.view + max_size).index(&self.editor.buf);
             let buf = &self.editor.buf[start_index..end_index];
@@ -225,13 +246,13 @@ impl<E, C> View<E, C> for Input<E> {
 
             let cursor_byte_index = self.editor.cursor.index(&self.editor.buf);
             #[allow(clippy::cast_possible_truncation)]
-            let cursor_col: u16 = self.editor.buf[start_index..cursor_byte_index]
+            let text_cursor_col: u16 = self.editor.buf[start_index..cursor_byte_index]
                 .graphemes(true)
                 .map(|g| unicode_display_width::width(g) as u16)
                 .sum();
             frame.set_cursor(CursorPos {
                 top: 0,
-                left: cursor_col,
+                left: prompt_width + text_cursor_col,
             });
         }
         frame.set_cursor_style(self.cursor_style);

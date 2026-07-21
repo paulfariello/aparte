@@ -57,6 +57,13 @@ fn default_popup() -> ColorTuple {
     }
 }
 
+fn default_input_prompt() -> ColorTuple {
+    ColorTuple {
+        bg: BgColor(Color::Default),
+        fg: FgColor(Color::Named(NamedColor::Green)),
+    }
+}
+
 fn default_status_line() -> ColorTuple {
     ColorTuple {
         bg: BgColor(Color::Named(NamedColor::Blue)),
@@ -153,6 +160,8 @@ pub struct Theme {
     pub date_separator_bg: BgColor,
     #[serde(default = "default_popup")]
     pub popup: ColorTuple,
+    #[serde(default = "default_input_prompt")]
+    pub input_prompt: ColorTuple,
 }
 
 impl PopupColors for Theme {
@@ -206,6 +215,7 @@ fn profanity() -> Theme {
             bg: BgColor(Color::Named(NamedColor::Black)),
             fg: FgColor(Color::Named(NamedColor::White)),
         },
+        input_prompt: default_input_prompt(),
     }
 }
 
@@ -300,6 +310,10 @@ fn catppuccin_mocha() -> Theme {
         popup: ColorTuple {
             fg: FgColor(lavender),
             ..ColorTuple::default()
+        },
+        input_prompt: ColorTuple {
+            bg: BgColor(Color::Default),
+            fg: FgColor(green),
         },
     }
 }
@@ -396,6 +410,10 @@ fn catppuccin_latte() -> Theme {
             bg: BgColor(surface_2),
             fg: FgColor(text),
         },
+        input_prompt: ColorTuple {
+            bg: BgColor(Color::Default),
+            fg: FgColor(green),
+        },
     }
 }
 
@@ -491,6 +509,10 @@ fn catppuccin_frappe() -> Theme {
             bg: BgColor(surface_1),
             fg: FgColor(text),
         },
+        input_prompt: ColorTuple {
+            bg: BgColor(Color::Default),
+            fg: FgColor(green),
+        },
     }
 }
 
@@ -585,6 +607,10 @@ fn catppuccin_macchiato() -> Theme {
         popup: ColorTuple {
             fg: FgColor(lavender),
             ..ColorTuple::default()
+        },
+        input_prompt: ColorTuple {
+            bg: BgColor(Color::Default),
+            fg: FgColor(green),
         },
     }
 }

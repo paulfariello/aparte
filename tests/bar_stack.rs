@@ -29,6 +29,10 @@ fn command_types_in_command_bar_while_draft_stays_in_input_bar() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
+    // Console has no input bar; open a chat window first.
+    h.send_command("/inject_msg hello");
+    wait_for_screen(&h, "test-contact", Duration::from_secs(5));
+
     type_draft(&h, "hello draft");
     enter_normal(&h);
     h.send_bytes(b":win");
@@ -66,6 +70,10 @@ fn draft_survives_command_escape_and_execution() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
 
+    // Console has no input bar; open a chat window first.
+    h.send_command("/inject_msg hello");
+    wait_for_screen(&h, "test-contact", Duration::from_secs(5));
+
     type_draft(&h, "still here");
 
     // Cancelled command.
@@ -88,9 +96,13 @@ fn draft_survives_command_escape_and_execution() {
         describe(screen)
     );
 
-    // Executed command.
+    // Executed command: switch away and back — draft must still be on the chat window.
     thread::sleep(Duration::from_millis(150));
     h.send_bytes(b":win console\r");
+    wait_for_screen(&h, "console", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(150));
+    h.send_bytes(b":win test-contact@test.localhost\r");
+    wait_for_screen(&h, "test-contact", Duration::from_secs(2));
     thread::sleep(Duration::from_millis(300));
 
     let parser = h.snapshot();
@@ -157,6 +169,10 @@ fn tab_bar_lists_all_windows_with_current_emphasized() {
 fn password_prompt_on_command_bar_esc_cancels() {
     let h = Harness::spawn("", &[]);
     wait_for_ready(&h);
+
+    // Console has no input bar; open a chat window so 'i' works after cancel.
+    h.send_command("/inject_msg hello");
+    wait_for_screen(&h, "test-contact", Duration::from_secs(5));
 
     enter_normal(&h);
     h.send_bytes(b":connect esc-test@localhost\r");

@@ -59,12 +59,15 @@ Channel (MUC) windows carry a **topic bar** as their first row showing the
 room name and subject; 1-on-1 chat windows have none. The status line shows
 `🔒` when the current conversation is OMEMO-encrypted.
 
-The bottom of the screen is a vim-style stack: the **input bar** (message
-composition only), the **status line** (mode, connected account, suspended
-edit indicators), and the **command bar** at the very bottom. `:` commands,
-`/` searches and password prompts are typed in the command bar, so a
-half-typed message never mixes with a command — the draft stays visible in
-the input bar and is untouched when the command runs or is cancelled.
+The bottom of the screen is a vim-style stack: the **status line** (mode,
+connected account, suspended edit indicators) and the **command bar** at the
+very bottom. Each chat and channel window has its own **input bar** at the
+bottom of the window frame, identified by a `> ` prompt. The console window
+has no input bar — it is read-only. `:` commands, `/` searches and password
+prompts are typed in the command bar, so a half-typed message never mixes
+with a command — the draft stays visible in the input bar and is untouched
+when the command runs or is cancelled. Because each window owns its input,
+drafts also survive switching to another window and back.
 Pending Normal-mode keys (e.g. `2j`) show at the right of the command bar.
 The input bar and the command bar each keep their own history (`↑`/`↓`).
 Failed commands echo their error on the command bar until the next
