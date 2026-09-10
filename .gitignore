@@ -5,4 +5,7 @@ result
 result-*
 
 .claude
+.claude-auth
 flake.lock
+/aparte-dev-var.img
+/aparte-dev.sock
