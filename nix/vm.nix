@@ -89,7 +89,7 @@ in
     volumes = [{
       image = "aparte-dev-var.img";
       mountPoint = "/var";
-      size = 8192;
+      size = 32768;
     }];
   };
 
