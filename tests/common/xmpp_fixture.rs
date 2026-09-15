@@ -49,12 +49,26 @@ pub struct OmemoMockConfig {
     pub bundle_tx: mpsc::UnboundedSender<(u32, legacy_omemo::Bundle)>,
     /// Receives Message stanzas sent by aparte (for checking encryption)
     pub stanza_tx: mpsc::UnboundedSender<Message>,
+    /// When true, the mock responds to the own device-list fetch with
+    /// `item-not-found` (simulating a fresh account with no PEP node yet)
+    /// instead of an (empty) items result.
+    pub own_devicelist_missing: bool,
+    /// Receives the device list + publish-options whenever aparte publishes
+    /// its own device list.
+    pub devicelist_tx: mpsc::UnboundedSender<(
+        legacy_omemo::DeviceList,
+        Option<pubsub::pubsub::PublishOptions>,
+    )>,
 }
 
 /// Receive-side handles returned to the test when using OMEMO fixtures.
 pub struct OmemoCapture {
     pub bundle_rx: mpsc::UnboundedReceiver<(u32, legacy_omemo::Bundle)>,
     pub stanza_rx: mpsc::UnboundedReceiver<Message>,
+    pub devicelist_rx: mpsc::UnboundedReceiver<(
+        legacy_omemo::DeviceList,
+        Option<pubsub::pubsub::PublishOptions>,
+    )>,
 }
 
 impl OmemoCapture {
@@ -87,6 +101,26 @@ impl OmemoCapture {
             if std::time::Instant::now() >= deadline {
                 return None;
             }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    pub fn recv_devicelist_publish(
+        &mut self,
+        timeout: Duration,
+    ) -> (
+        legacy_omemo::DeviceList,
+        Option<pubsub::pubsub::PublishOptions>,
+    ) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Ok(published) = self.devicelist_rx.try_recv() {
+                return published;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for own device list publish"
+            );
             thread::sleep(Duration::from_millis(50));
         }
     }
@@ -276,7 +310,13 @@ async fn run_mock_server(
                                         let node = items.node.0.as_str();
                                         let target = to.as_ref().map(|j| j.to_string()).unwrap_or_default();
                                         if node == ns::LEGACY_OMEMO_DEVICELIST {
-                                            let resp = omemo_devicelist_iq(id, &items.node, &target, &omemo_cfg);
+                                            let missing_own_list = target == user_bare_jid.to_string()
+                                                && omemo_cfg.as_ref().is_some_and(|c| c.own_devicelist_missing);
+                                            let resp = if missing_own_list {
+                                                omemo_item_not_found_iq(id, &target)
+                                            } else {
+                                                omemo_devicelist_iq(id, &items.node, &target, &omemo_cfg)
+                                            };
                                             let _ = stream.send(&resp).await;
                                         } else if node.starts_with(ns::LEGACY_OMEMO_BUNDLES) {
                                             let device_id: u32 = node.rsplit(':').next()
@@ -364,6 +404,21 @@ async fn run_mock_server(
                                                 let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
                                                 let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
                                             }
+                                            PubSub::Publish { ref publish, ref publish_options }
+                                                if publish.node.0 == ns::LEGACY_OMEMO_DEVICELIST =>
+                                            {
+                                                if let Some(cfg) = &omemo_cfg {
+                                                    if let Some(item) = publish.items.first() {
+                                                        if let Some(ref pl) = item.payload {
+                                                            if let Ok(list) = legacy_omemo::DeviceList::try_from(pl.clone()) {
+                                                                let _ = cfg.devicelist_tx.send((list, publish_options.clone()));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
+                                                let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
+                                            }
                                             _ => {
                                                 // Ack all other pubsub Sets
                                                 let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
@@ -436,6 +491,26 @@ fn start_mock_server(
 // ---------------------------------------------------------------------------
 // OMEMO IQ response builders
 // ---------------------------------------------------------------------------
+
+/// Simulates a PEP node that doesn't exist yet (fresh account): XEP-0060 has
+/// the service reply with `<error><item-not-found/></error>` to an items fetch.
+fn omemo_item_not_found_iq(req_id: &str, target_jid: &str) -> XmppStreamElement {
+    let from = Jid::new(target_jid).ok();
+    let error = xmpp_parsers::stanza_error::StanzaError::new(
+        xmpp_parsers::stanza_error::ErrorType::Cancel,
+        xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound,
+        "en",
+        "Item not found",
+    );
+    let iq = Iq::Error {
+        from,
+        to: None,
+        id: req_id.to_string(),
+        error,
+        payload: None,
+    };
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+}
 
 fn omemo_devicelist_iq(
     req_id: &str,
@@ -1295,10 +1370,13 @@ impl XmppFixture {
     pub fn new_with_omemo(roster: &[&str]) -> (Self, OmemoCapture) {
         let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
         let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
+        let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
         let cfg = OmemoMockConfig {
             contact_devices: HashMap::new(),
             bundle_tx,
             stanza_tx,
+            own_devicelist_missing: false,
+            devicelist_tx,
         };
         let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
         (
@@ -1306,6 +1384,32 @@ impl XmppFixture {
             OmemoCapture {
                 bundle_rx,
                 stanza_rx,
+                devicelist_rx,
+            },
+        )
+    }
+
+    /// Create fixture with OMEMO-aware mock server simulating a fresh account:
+    /// the own device-list PEP node doesn't exist yet, so the initial fetch
+    /// returns `item-not-found`.
+    pub fn new_with_omemo_fresh_account(roster: &[&str]) -> (Self, OmemoCapture) {
+        let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
+        let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
+        let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
+        let cfg = OmemoMockConfig {
+            contact_devices: HashMap::new(),
+            bundle_tx,
+            stanza_tx,
+            own_devicelist_missing: true,
+            devicelist_tx,
+        };
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
+        (
+            fixture,
+            OmemoCapture {
+                bundle_rx,
+                stanza_rx,
+                devicelist_rx,
             },
         )
     }
@@ -1320,10 +1424,13 @@ impl XmppFixture {
         contact_devices.insert(contact_jid.to_string(), vec![(device_id, bundle)]);
         let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
         let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
+        let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
         let cfg = OmemoMockConfig {
             contact_devices,
             bundle_tx,
             stanza_tx,
+            own_devicelist_missing: false,
+            devicelist_tx,
         };
         let roster = [contact_jid];
         let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
@@ -1332,6 +1439,7 @@ impl XmppFixture {
             OmemoCapture {
                 bundle_rx,
                 stanza_rx,
+                devicelist_rx,
             },
         )
     }

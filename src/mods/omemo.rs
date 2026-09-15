@@ -22,6 +22,7 @@ use rand::{random, seq::SliceRandom, thread_rng};
 use tokio_xmpp::IqResponse;
 
 //use xmpp_parsers::ns;
+use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::jid::{BareJid, Jid};
 use xmpp_parsers::legacy_omemo;
@@ -1411,6 +1412,13 @@ impl OmemoMod {
             .await
         {
             Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
+            Ok(IqResponse::Error(error))
+                if error.defined_condition
+                    == xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
+            {
+                log::info!("No device list on the server yet, creating it");
+                Self::register_device(aparte, account, device_id, None).await
+            }
             Ok(IqResponse::Error(error)) => {
                 let text = match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs())
                 {
@@ -1704,9 +1712,19 @@ impl OmemoMod {
                 node: pubsub::NodeName::from_str(ns::LEGACY_OMEMO_DEVICELIST).unwrap(),
                 items: vec![item],
             },
-            publish_options: None,
+            publish_options: Some(Self::open_access_publish_options()),
         };
         Iq::from_set("", pubsub).with_to(Jid::from(jid.clone()))
+    }
+
+    fn open_access_publish_options() -> pubsub::pubsub::PublishOptions {
+        pubsub::pubsub::PublishOptions {
+            form: Some(DataForm::new(
+                DataFormType::Submit,
+                &format!("{}#publish-options", ns::PUBSUB),
+                vec![Field::new("pubsub#access_model", FieldType::TextSingle).with_value("open")],
+            )),
+        }
     }
 
     fn subscribe_to_device_list_iq(contact: &BareJid, subscriber: &BareJid) -> Iq {
@@ -1776,7 +1794,7 @@ impl OmemoMod {
                 .unwrap(),
                 items: vec![item],
             },
-            publish_options: None,
+            publish_options: Some(Self::open_access_publish_options()),
         };
         Iq::from_set("", pubsub).with_to(Jid::from(jid.clone()))
     }
@@ -2025,5 +2043,58 @@ impl ModTrait for OmemoMod {
 impl fmt::Display for OmemoMod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "XEP-0384: OMEMO")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn published_access_model(iq: &Iq) -> Option<String> {
+        let Iq::Set { payload, .. } = iq else {
+            panic!("expected an iq set");
+        };
+        let PubSub::Publish {
+            publish_options, ..
+        } = PubSub::try_from(payload.clone()).expect("valid pubsub publish payload")
+        else {
+            panic!("expected a pubsub publish");
+        };
+        let form = publish_options
+            .expect("publish request must carry publish-options")
+            .form
+            .expect("publish-options must carry a form");
+        form.fields
+            .iter()
+            .find(|f| f.var.as_deref() == Some("pubsub#access_model"))
+            .and_then(|f| f.values.first().cloned())
+    }
+
+    #[test]
+    fn device_list_publish_uses_open_access_model() {
+        let jid = BareJid::new("user@localhost").unwrap();
+        let list = legacy_omemo::DeviceList {
+            devices: vec![legacy_omemo::Device { id: 1 }],
+        };
+        let iq = OmemoMod::set_devices_iq(&jid, list);
+        assert_eq!(published_access_model(&iq).as_deref(), Some("open"));
+    }
+
+    #[test]
+    fn bundle_publish_uses_open_access_model() {
+        let jid = BareJid::new("user@localhost").unwrap();
+        let identity_key_pair = IdentityKeyPair::generate(&mut thread_rng());
+        let signed_pre_key = KeyPair::generate(&mut thread_rng());
+
+        let iq = OmemoMod::publish_bundle_iq(
+            &jid,
+            1,
+            identity_key_pair,
+            0,
+            signed_pre_key.public_key,
+            &[0u8; 64],
+            vec![],
+        );
+        assert_eq!(published_access_model(&iq).as_deref(), Some("open"));
     }
 }

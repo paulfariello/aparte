@@ -24,6 +24,40 @@ fn message_has_omemo(msg: &xmpp_parsers::message::Message) -> bool {
         .any(|p| p.is("encrypted", "eu.siacs.conversations.axolotl"))
 }
 
+/// On a fresh account, the own device-list PEP node doesn't exist yet: the
+/// initial fetch comes back `item-not-found`. Aparté must still create the
+/// node by publishing a device list containing its own device id, with
+/// publish-options requesting an open access model so any contact can fetch it.
+#[test]
+fn omemo_creates_device_list_when_missing() {
+    let (fixture, mut capture) = XmppFixture::new_with_omemo_fresh_account(&[]);
+
+    let (device_list, publish_options) = capture.recv_devicelist_publish(Duration::from_secs(15));
+
+    assert_eq!(
+        device_list.devices.len(),
+        1,
+        "expected exactly the own device to be registered, got {:?}",
+        device_list.devices
+    );
+
+    let access_model = publish_options
+        .expect("device list publish must carry publish-options")
+        .form
+        .expect("publish-options must carry a form")
+        .fields
+        .iter()
+        .find(|f| f.var.as_deref() == Some("pubsub#access_model"))
+        .and_then(|f| f.values.first().cloned());
+    assert_eq!(
+        access_model.as_deref(),
+        Some("open"),
+        "device list must be published with an open access model"
+    );
+
+    let _ = fixture;
+}
+
 /// `/omemo fingerprint` shows the own device's fingerprint in the UI.
 #[test]
 fn omemo_fingerprint_shown() {
