@@ -31,6 +31,7 @@ use xmpp_parsers::message_correct::Replace as XmppParsersReplace;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub;
 use xmpp_parsers::pubsub::{ItemId, PubSub};
+use xmpp_parsers::stanza_error::DefinedCondition;
 //use xmpp_parsers::omemo;
 
 use crate::account::Account;
@@ -942,11 +943,31 @@ impl OmemoMod {
         Aparte::spawn({
             let mut signal_store = SignalStorage::clone(signal_store);
             async move {
+                if let Err(err) = Self::ensure_node_access_is_open(
+                    &mut aparte,
+                    &account,
+                    ns::LEGACY_OMEMO_DEVICELIST,
+                )
+                .await
+                {
+                    log::warn!(
+                        "OMEMO node access check failed node={} error={err}",
+                        ns::LEGACY_OMEMO_DEVICELIST
+                    );
+                }
+
                 if let Err(err) =
                     Self::ensure_device_is_registered(&mut aparte, &account, device_id).await
                 {
                     crate::error!(aparte, err, "Cannot configure OMEMO");
                     return;
+                }
+
+                let bundle_node = format!("{}:{device_id}", ns::LEGACY_OMEMO_BUNDLES);
+                if let Err(err) =
+                    Self::ensure_node_access_is_open(&mut aparte, &account, &bundle_node).await
+                {
+                    log::warn!("OMEMO node access check failed node={bundle_node} error={err}");
                 }
 
                 if let Err(err) = Self::ensure_device_bundle_is_published(
@@ -1401,6 +1422,88 @@ impl OmemoMod {
     //    cache.extend(devices.devices.iter().cloned());
     //}
 
+    /// Nodes keep the config they were created with, so a node created before aparte
+    /// asked for an open access model stays closed and rejects contacts' fetches.
+    async fn ensure_node_access_is_open(
+        aparte: &mut AparteAsync,
+        account: &Account,
+        node: &str,
+    ) -> Result<()> {
+        let bare = account.to_bare();
+        let configure = pubsub::owner::Owner {
+            payload: pubsub::owner::Payload::Configure {
+                node: Some(pubsub::NodeName(node.to_string())),
+                form: None,
+            },
+        };
+        let current = match aparte
+            .iq(
+                account,
+                Iq::from_get("", configure).with_to(Jid::from(bare.clone())),
+            )
+            .await
+        {
+            Ok(IqResponse::Result(Some(payload))) => {
+                match pubsub::owner::Owner::try_from(payload)?.payload {
+                    pubsub::owner::Payload::Configure { form, .. } => form,
+                    _ => return Err(anyhow!("Unexpected owner response for node {node}")),
+                }
+            }
+            Ok(IqResponse::Result(None)) => {
+                return Err(anyhow!("Empty config response for node {node}"))
+            }
+            Ok(IqResponse::Error(error))
+                if error.defined_condition == DefinedCondition::ItemNotFound =>
+            {
+                log::debug!("Node {node} doesn't exist yet, publish will create it open");
+                return Ok(());
+            }
+            Ok(IqResponse::Error(error)) => {
+                return Err(anyhow!(
+                    "Cannot read config of node {node}: {:?}",
+                    error.defined_condition
+                ))
+            }
+            Err(e) => return Err(anyhow!("IQ failed: {e}")),
+        };
+
+        let access_model = current
+            .iter()
+            .flat_map(|form| form.fields.iter())
+            .find(|field| field.var.as_deref() == Some("pubsub#access_model"))
+            .and_then(|field| field.values.first());
+        if access_model.map(String::as_str) == Some("open") {
+            return Ok(());
+        }
+
+        log::info!(
+            "Node {node} has access model {:?}, reconfiguring to open",
+            access_model
+        );
+        let form = DataForm::new(
+            DataFormType::Submit,
+            &format!("{}#node_config", ns::PUBSUB),
+            vec![Field::new("pubsub#access_model", FieldType::ListSingle).with_value("open")],
+        );
+        let submit = pubsub::owner::Owner {
+            payload: pubsub::owner::Payload::Configure {
+                node: Some(pubsub::NodeName(node.to_string())),
+                form: Some(form),
+            },
+        };
+        match aparte
+            .iq(account, Iq::from_set("", submit).with_to(Jid::from(bare)))
+            .await
+        {
+            Ok(IqResponse::Result(_)) => Ok(()),
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
+                "Cannot reconfigure node {node}: {:?}",
+                error.defined_condition
+            )),
+            Err(e) => Err(anyhow!("IQ failed: {e}")),
+        }
+    }
+
     async fn ensure_device_is_registered(
         aparte: &mut AparteAsync,
         account: &Account,
@@ -1413,8 +1516,7 @@ impl OmemoMod {
         {
             Ok(IqResponse::Result(None)) => Err(anyhow!("Empty iq response")),
             Ok(IqResponse::Error(error))
-                if error.defined_condition
-                    == xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
+                if error.defined_condition == DefinedCondition::ItemNotFound =>
             {
                 log::info!("No device list on the server yet, creating it");
                 Self::register_device(aparte, account, device_id, None).await
@@ -1653,8 +1755,7 @@ impl OmemoMod {
         {
             Ok(IqResponse::Result(None)) => Ok(None),
             Ok(IqResponse::Error(error))
-                if error.defined_condition
-                    == xmpp_parsers::stanza_error::DefinedCondition::ItemNotFound =>
+                if error.defined_condition == DefinedCondition::ItemNotFound =>
             {
                 Ok(None)
             }

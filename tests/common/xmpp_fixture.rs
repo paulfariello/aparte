@@ -15,6 +15,7 @@ use xmpp_parsers::{
     bind::{BindFeature, BindResponse},
     bookmarks::{Conference, Storage},
     carbons::{Received, Sent},
+    data_forms::{DataForm, DataFormType, Field, FieldType},
     disco,
     forwarding::Forwarded,
     iq::Iq,
@@ -59,6 +60,12 @@ pub struct OmemoMockConfig {
         legacy_omemo::DeviceList,
         Option<pubsub::pubsub::PublishOptions>,
     )>,
+    /// `pubsub#access_model` reported to the owner for the own PEP nodes.
+    pub node_access_model: String,
+    /// Receives (node, form) whenever aparte submits an owner node configuration.
+    pub configure_tx: mpsc::UnboundedSender<(String, DataForm)>,
+    /// Receives the node name whenever aparte reads an owner node configuration.
+    pub configure_get_tx: mpsc::UnboundedSender<String>,
 }
 
 /// Receive-side handles returned to the test when using OMEMO fixtures.
@@ -69,6 +76,8 @@ pub struct OmemoCapture {
         legacy_omemo::DeviceList,
         Option<pubsub::pubsub::PublishOptions>,
     )>,
+    pub configure_rx: mpsc::UnboundedReceiver<(String, DataForm)>,
+    pub configure_get_rx: mpsc::UnboundedReceiver<String>,
 }
 
 impl OmemoCapture {
@@ -96,6 +105,36 @@ impl OmemoCapture {
             while let Ok(msg) = self.stanza_rx.try_recv() {
                 if predicate(&msg) {
                     return Some(msg);
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    pub fn saw_configure_get_for(&mut self, node: &str, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            while let Ok(read) = self.configure_get_rx.try_recv() {
+                if read == node {
+                    return true;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    pub fn recv_configure_for(&mut self, node: &str, timeout: Duration) -> Option<DataForm> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            while let Ok((configured, form)) = self.configure_rx.try_recv() {
+                if configured == node {
+                    return Some(form);
                 }
             }
             if std::time::Instant::now() >= deadline {
@@ -326,6 +365,26 @@ async fn run_mock_server(
                                         }
                                         // else: ignore other pubsub Gets
                                     }
+                                } else if payload.is("pubsub", ns::PUBSUB_OWNER) {
+                                    if let (Some(cfg), Ok(owner)) = (
+                                        &omemo_cfg,
+                                        pubsub::owner::Owner::try_from(payload.clone()),
+                                    ) {
+                                        if let pubsub::owner::Payload::Configure { node, .. } = owner.payload {
+                                            let name = node.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+                                            let _ = cfg.configure_get_tx.send(name.clone());
+                                            let target = to.as_ref().map(|j| j.to_string()).unwrap_or_default();
+                                            let missing = cfg.own_devicelist_missing
+                                                && name == ns::LEGACY_OMEMO_DEVICELIST
+                                                && target == user_bare_jid.to_string();
+                                            let resp = if missing {
+                                                omemo_item_not_found_iq(id, &target)
+                                            } else {
+                                                owner_configure_iq(id, to.as_ref(), node, &cfg.node_access_model)
+                                            };
+                                            let _ = stream.send(&resp).await;
+                                        }
+                                    }
                                 }
                                 // else: silently ignore other unrecognised IQ-gets
                             }
@@ -429,6 +488,17 @@ async fn run_mock_server(
                                         let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
                                         let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
                                     }
+                                } else if payload.is("pubsub", ns::PUBSUB_OWNER) {
+                                    if let (Some(cfg), Ok(owner)) = (
+                                        &omemo_cfg,
+                                        pubsub::owner::Owner::try_from(payload.clone()),
+                                    ) {
+                                        if let pubsub::owner::Payload::Configure { node: Some(node), form: Some(form) } = owner.payload {
+                                            let _ = cfg.configure_tx.send((node.0, form));
+                                        }
+                                    }
+                                    let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
+                                    let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
                                 } else {
                                     // Ack all other IQ-sets so the client doesn't stall
                                     let ack = Iq::Result {
@@ -491,6 +561,32 @@ fn start_mock_server(
 // ---------------------------------------------------------------------------
 // OMEMO IQ response builders
 // ---------------------------------------------------------------------------
+
+fn owner_configure_iq(
+    req_id: &str,
+    to: Option<&Jid>,
+    node: Option<NodeName>,
+    access_model: &str,
+) -> XmppStreamElement {
+    let form = DataForm::new(
+        DataFormType::Form,
+        &format!("{}#node_config", ns::PUBSUB),
+        vec![Field::new("pubsub#access_model", FieldType::ListSingle).with_value(access_model)],
+    );
+    let resp = pubsub::owner::Owner {
+        payload: pubsub::owner::Payload::Configure {
+            node,
+            form: Some(form),
+        },
+    };
+    let iq = Iq::Result {
+        from: to.cloned(),
+        to: None,
+        id: req_id.to_string(),
+        payload: Some(resp.into()),
+    };
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(iq))
+}
 
 /// Simulates a PEP node that doesn't exist yet (fresh account): XEP-0060 has
 /// the service reply with `<error><item-not-found/></error>` to an items fetch.
@@ -1368,50 +1464,59 @@ impl XmppFixture {
 
     /// Create fixture with OMEMO-aware mock server (empty contact devices).
     pub fn new_with_omemo(roster: &[&str]) -> (Self, OmemoCapture) {
+        let (cfg, capture) = Self::omemo_mock(HashMap::new(), false, "open");
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
+        (fixture, capture)
+    }
+
+    fn omemo_mock(
+        contact_devices: HashMap<String, Vec<(u32, legacy_omemo::Bundle)>>,
+        own_devicelist_missing: bool,
+        node_access_model: &str,
+    ) -> (OmemoMockConfig, OmemoCapture) {
         let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
         let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
         let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
+        let (configure_tx, configure_rx) = mpsc::unbounded_channel();
+        let (configure_get_tx, configure_get_rx) = mpsc::unbounded_channel();
         let cfg = OmemoMockConfig {
-            contact_devices: HashMap::new(),
+            contact_devices,
             bundle_tx,
             stanza_tx,
-            own_devicelist_missing: false,
+            own_devicelist_missing,
             devicelist_tx,
+            node_access_model: node_access_model.to_string(),
+            configure_tx,
+            configure_get_tx,
         };
-        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
-        (
-            fixture,
-            OmemoCapture {
-                bundle_rx,
-                stanza_rx,
-                devicelist_rx,
-            },
-        )
+        let capture = OmemoCapture {
+            bundle_rx,
+            stanza_rx,
+            devicelist_rx,
+            configure_rx,
+            configure_get_rx,
+        };
+        (cfg, capture)
     }
 
     /// Create fixture with OMEMO-aware mock server simulating a fresh account:
     /// the own device-list PEP node doesn't exist yet, so the initial fetch
     /// returns `item-not-found`.
     pub fn new_with_omemo_fresh_account(roster: &[&str]) -> (Self, OmemoCapture) {
-        let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
-        let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
-        let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
-        let cfg = OmemoMockConfig {
-            contact_devices: HashMap::new(),
-            bundle_tx,
-            stanza_tx,
-            own_devicelist_missing: true,
-            devicelist_tx,
-        };
+        let (cfg, capture) = Self::omemo_mock(HashMap::new(), true, "open");
         let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
-        (
-            fixture,
-            OmemoCapture {
-                bundle_rx,
-                stanza_rx,
-                devicelist_rx,
-            },
-        )
+        (fixture, capture)
+    }
+
+    /// Create fixture with OMEMO-aware mock server whose own PEP nodes already
+    /// exist with the given `pubsub#access_model` (reported to the owner).
+    pub fn new_with_omemo_node_access_model(
+        roster: &[&str],
+        access_model: &str,
+    ) -> (Self, OmemoCapture) {
+        let (cfg, capture) = Self::omemo_mock(HashMap::new(), false, access_model);
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
+        (fixture, capture)
     }
 
     /// Create fixture with OMEMO support and one fake contact device+bundle.
@@ -1422,26 +1527,10 @@ impl XmppFixture {
     ) -> (Self, OmemoCapture) {
         let mut contact_devices = HashMap::new();
         contact_devices.insert(contact_jid.to_string(), vec![(device_id, bundle)]);
-        let (bundle_tx, bundle_rx) = mpsc::unbounded_channel();
-        let (stanza_tx, stanza_rx) = mpsc::unbounded_channel();
-        let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
-        let cfg = OmemoMockConfig {
-            contact_devices,
-            bundle_tx,
-            stanza_tx,
-            own_devicelist_missing: false,
-            devicelist_tx,
-        };
+        let (cfg, capture) = Self::omemo_mock(contact_devices, false, "open");
         let roster = [contact_jid];
         let (fixture, _) = Self::new_impl(&roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
-        (
-            fixture,
-            OmemoCapture {
-                bundle_rx,
-                stanza_rx,
-                devicelist_rx,
-            },
-        )
+        (fixture, capture)
     }
 
     /// Create a fixture whose mock server responds to XEP-0030 disco#info queries for
