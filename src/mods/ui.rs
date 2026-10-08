@@ -3922,12 +3922,7 @@ impl ModTrait for UIMod {
                             return;
                         };
 
-                        if password {
-                            aparte.schedule(Event::Key(KeyEvent::new(
-                                KeyCode::Tab,
-                                KeyModifiers::NONE,
-                            )));
-                        } else {
+                        if !password {
                             match input_mode {
                                 Mode::Normal => {}
                                 Mode::Insert => {
