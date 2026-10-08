@@ -1335,3 +1335,20 @@ fn mid_message_cursor_column_preserved_through_command_escape(xmpp: XmppFixture)
         describe(screen)
     );
 }
+
+/// Regression: text and Enter in a single PTY write send the whole message.
+#[rstest]
+fn enter_right_after_long_burst_sends_full_body(mut xmpp_with_contact: XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+
+    let body = "burst-".repeat(40);
+    xmpp_with_contact.send_command(&body);
+
+    let sent = xmpp_with_contact.recv_outgoing_message_matching(
+        |msg| msg.bodies.values().any(|b| *b == body),
+        Duration::from_secs(5),
+    );
+    assert!(sent.is_some(), "full burst body was not sent");
+}

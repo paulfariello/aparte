@@ -291,9 +291,12 @@ enum UIEvent {
     /// Discard the in-place edit on the selected message without sending a correction.
     CancelEdit,
     /// Clears the input bar (pushes to history then blanks the buffer).
-    /// Fire-and-forget: the caller reads `self.current_input` before
-    /// dispatching, then dispatches this to let the widget clear itself.
+    /// Fire-and-forget: the caller reads the input via `RequestInputState`
+    /// before dispatching, then dispatches this to let the widget clear itself.
     ClearInput,
+    /// Synchronously answered by the focused input widget as `InputChanged`,
+    /// because the mod-level `current_input` lags behind queued key bursts.
+    RequestInputState,
     InputChanged(String, Cursor, bool),
     AddWindow(
         String,
@@ -355,6 +358,7 @@ impl UIEvent {
                 | UIEvent::SetInputState(..)
                 | UIEvent::SetInput(..)
                 | UIEvent::Paste(..)
+                | UIEvent::RequestInputState
                 | UIEvent::ClearInput
         )
     }
@@ -734,6 +738,9 @@ impl View<UIEvent, Theme> for CommandBar {
                 self.input.editor.cursor =
                     Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
                 self.input.editor.buf.clone_from(text);
+                *event = self.input_changed();
+            }
+            UIEvent::RequestInputState if self.active => {
                 *event = self.input_changed();
             }
             UIEvent::ClearInput if self.active => {
@@ -1332,6 +1339,16 @@ pub struct UIMod {
 }
 
 impl UIMod {
+    /// Ask the focused widget rather than read `current_input`, which lags behind queued key bursts.
+    fn focused_input_state(&mut self) -> (String, Cursor, bool) {
+        let mut state = UIEvent::RequestInputState;
+        self.root.event(&mut state);
+        match state {
+            UIEvent::InputChanged(buf, cursor, password) => (buf, cursor, password),
+            _ => self.current_input.clone(),
+        }
+    }
+
     pub fn new(_config: &Config) -> Self {
         let screen = Arc::new(RwLock::new(OffscreenRenderBuffer::default()));
         let panic_handler = PanicHandler::new();
@@ -2577,6 +2594,13 @@ fn window_input_event_handler(input: &mut Input<UIEvent>, event: &mut UIEvent) {
                 input.password,
             );
         }
+        UIEvent::RequestInputState => {
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
         UIEvent::ClearInput => {
             input.validate();
             *event = UIEvent::InputChanged(
@@ -3220,6 +3244,7 @@ impl ModTrait for UIMod {
                             frame.child.view.event(&mut fib);
                         }
                     }
+                    UIEvent::RequestInputState => layout.route_to_focused(event),
                     // ClearInput targets whichever input widget is focused so
                     // clearing the command bar cannot wipe a message draft.
                     UIEvent::ClearInput => {
@@ -4013,9 +4038,7 @@ impl ModTrait for UIMod {
                         }
                         aparte.schedule(Event::ResetCompletion);
 
-                        // Snapshot the current input before the layout routing
-                        // may clear it via ClearInput.
-                        let (raw_buf, _cursor, password) = self.current_input.clone();
+                        let (raw_buf, _cursor, password) = self.focused_input_state();
 
                         // Route Enter into the layout tree as a UIEvent::Core(Key).
                         // The layout closure handles:
