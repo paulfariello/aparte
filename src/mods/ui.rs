@@ -297,6 +297,8 @@ enum UIEvent {
     /// Answered synchronously by the focused input widget as `InputChanged`.
     RequestInputState,
     InputChanged(String, Cursor, bool),
+    /// `InputChanged` completed with the layout's own mode, which the mod's copy lags behind.
+    FocusedInputState(String, Cursor, bool, Mode),
     AddWindow(
         String,
         Option<String>,
@@ -1336,19 +1338,30 @@ pub struct UIMod {
     slash_warned: bool,
 }
 
-fn input_state_answer(answer: UIEvent) -> (String, Cursor, bool) {
-    match answer {
-        UIEvent::InputChanged(buf, cursor, password) => (buf, cursor, password),
-        _ => (String::new(), Cursor::new(0), false),
-    }
-}
-
 impl UIMod {
-    // Focus outside an input yields an empty buffer: nothing to send or complete.
-    fn focused_input_state(&mut self) -> (String, Cursor, bool) {
+    // None when focus is outside an input.
+    fn focused_input_state(&mut self) -> Option<(String, Cursor, bool, Mode)> {
         let mut state = UIEvent::RequestInputState;
         self.root.event(&mut state);
-        input_state_answer(state)
+        match state {
+            UIEvent::FocusedInputState(buf, cursor, password, mode) => {
+                Some((buf, cursor, password, mode))
+            }
+            _ => None,
+        }
+    }
+
+    fn finish_event(&mut self, aparte: &mut Aparte, before: Instant) {
+        log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
+
+        // Mark UI as needing a render; actual render happens once per event batch
+        // in the main loop via render_if_dirty().
+        self.dirty = true;
+
+        // Handle queued outgoing event
+        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
+            aparte.schedule(event);
+        }
     }
 
     pub fn new(_config: &Config) -> Self {
@@ -2519,7 +2532,14 @@ fn frame_input_state(layout: &mut LinearLayout<UIEvent, Theme>) -> (String, Curs
     if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
         frame.child.view.event(&mut state);
     }
-    input_state_answer(state)
+    match state {
+        UIEvent::InputChanged(buf, cursor, password) => (buf, cursor, password),
+        // Callers run only with the message input focused, so this is never expected.
+        _ => {
+            log::warn!("event=frame_input_state_unanswered fallback=empty");
+            (String::new(), Cursor::new(0), false)
+        }
+    }
 }
 
 fn dispatch_action(
@@ -3185,7 +3205,17 @@ impl ModTrait for UIMod {
                             frame.child.view.event(&mut fib);
                         }
                     }
-                    UIEvent::RequestInputState => layout.route_to_focused(event),
+                    UIEvent::RequestInputState => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(buf, cursor, password) = event {
+                            *event = UIEvent::FocusedInputState(
+                                buf.clone(),
+                                cursor.clone(),
+                                *password,
+                                mode,
+                            );
+                        }
+                    }
                     // ClearInput targets whichever input widget is focused so
                     // clearing the command bar cannot wipe a message draft.
                     UIEvent::ClearInput => {
@@ -3885,7 +3915,12 @@ impl ModTrait for UIMod {
                     KeyEvent {
                         code: KeyCode::Tab, ..
                     } => {
-                        let (raw_buf, cursor, password) = self.focused_input_state();
+                        let Some((raw_buf, cursor, password, input_mode)) =
+                            self.focused_input_state()
+                        else {
+                            self.finish_event(aparte, before);
+                            return;
+                        };
 
                         if password {
                             aparte.schedule(Event::Key(KeyEvent::new(
@@ -3893,7 +3928,7 @@ impl ModTrait for UIMod {
                                 KeyModifiers::NONE,
                             )));
                         } else {
-                            match self.current_mode {
+                            match input_mode {
                                 Mode::Normal => {}
                                 Mode::Insert => {
                                     // Nick completion only — skip if the buffer looks like a command.
@@ -3946,7 +3981,10 @@ impl ModTrait for UIMod {
                         }
                         aparte.schedule(Event::ResetCompletion);
 
-                        let (raw_buf, _cursor, password) = self.focused_input_state();
+                        let (raw_buf, _cursor, password, _mode) =
+                            self.focused_input_state().unwrap_or_else(|| {
+                                (String::new(), Cursor::new(0), false, Mode::Normal)
+                            });
 
                         // Route Enter into the layout tree as a UIEvent::Core(Key).
                         // The layout closure handles:
@@ -4231,16 +4269,7 @@ impl ModTrait for UIMod {
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
-        log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
-
-        // Mark UI as needing a render; actual render happens once per event batch
-        // in the main loop via render_if_dirty().
-        self.dirty = true;
-
-        // Handle queued outgoing event
-        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
-            aparte.schedule(event);
-        }
+        self.finish_event(aparte, before);
     }
 }
 
