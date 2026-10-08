@@ -94,18 +94,6 @@ To reproduce a rendering glitch deterministically:
 
 ---
 
-## Ask before
-
-Stop and confirm before any of these. Read-only inspection is fine; state-changing actions are not.
-
-- `git push --force` or `--force-with-lease` to shared branches
-- Modifying CI/CD config
-- Generating, rotating, or committing any credential, key, or cert
-- `rm -rf` outside the current repo working tree
-- Adding a new third-party dependency — justify in the commit body
-
----
-
 ## Orchestration
 
 ### Subagents to preserve context
@@ -170,10 +158,8 @@ Bad `/loop` targets: anything where "done" is subjective at the spec level (styl
 
 - Conventional commits, explaining _why_ not _what_: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`.
 - Small, focused, atomic, tested. Each commit must be `git bisect`-safe.
-- Always on a dedicated branch.
-- Use `git pushdev` instead of plain `git push`.
-- Pre-commit hook should reject strings matching common secret patterns (`AKIA*`, `ghp_*`, `eyJ*`, `-----BEGIN`). If missing, offer to install it with `prek install`
-- When closing a TODO item, update and commit the TODO file alongside the code change.
+- Always on a dedicated branch and in a dedicated worktree.
+- Semi-linear commit history. Always rebase a branch before merging it. Aways merge with --no-ff to keep branch history.
 
 ---
 
