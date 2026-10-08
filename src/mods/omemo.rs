@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::str::FromStr;
@@ -40,11 +40,11 @@ use crate::conversation::Conversation;
 use crate::core::{Aparte, AparteAsync, Event, ModTrait};
 use crate::crypto::CryptoEngineTrait;
 use crate::i18n;
-//use crate::mods::disco::DiscoMod;
 use crate::message::Message;
 use crate::mods::conversation::ConversationMod;
+use crate::mods::disco::DiscoMod;
 use crate::mods::ui::UIMod;
-use crate::storage::{OmemoOwnDevice, SignalStorage};
+use crate::storage::{OmemoOwnDevice, SignalStorage, Storage};
 
 use libsignal_protocol::{
     message_decrypt, message_encrypt, IdentityKeyPair, IdentityKeyStore, KeyPair, PreKeyStore,
@@ -181,6 +181,11 @@ pub enum OmemoEvent {
         account: Account,
         jid: BareJid,
     },
+    NewDevice {
+        account: Account,
+        jid: BareJid,
+        device_id: DeviceId,
+    },
     ShowFingerprints {
         account: Account,
         jid: Option<BareJid>,
@@ -206,7 +211,7 @@ impl OmemoEngine {
         }
     }
 
-    fn update_bundle(&mut self, device_id: u32, bundle: &legacy_omemo::Bundle) -> Result<()> {
+    fn update_bundle(&mut self, device_id: DeviceId, bundle: &legacy_omemo::Bundle) -> Result<()> {
         let address = ProtocolAddress::new(self.contact.to_string(), device_id.into());
 
         let signed_pre_key = PublicKey::deserialize(
@@ -298,7 +303,7 @@ fn sync_bundle_for(aparte: &Aparte, account: &Account) -> Result<()> {
         .get_omemo_own_device(account)?
         .context("OMEMO isn't configured")?;
 
-    let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
+    let device_id: DeviceId = device.id.try_into().context("Corrupted own device id")?;
     let identity = device.identity.context("Missing own identity")?;
     let identity_key_pair =
         IdentityKeyPair::try_from(identity.as_ref()).context("Corrupted own identity")?;
@@ -863,12 +868,35 @@ impl CryptoEngineTrait for OmemoEngine {
     }
 }
 
+type DeviceId = u32;
 type NickToJid = Arc<std::sync::RwLock<HashMap<String, BareJid>>>;
 
 #[derive(Default)]
 pub struct OmemoMod {
     signal_stores: HashMap<Account, SignalStorage>,
     muc_occupant_maps: HashMap<(Account, BareJid), NickToJid>,
+}
+
+fn new_device_ids(known: &HashSet<DeviceId>, received: &[DeviceId]) -> Vec<DeviceId> {
+    received
+        .iter()
+        .copied()
+        .filter(|id| !known.contains(id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn known_device_ids(
+    storage: &Storage,
+    account: &Account,
+    jid: &BareJid,
+) -> Result<HashSet<DeviceId>> {
+    Ok(storage
+        .get_omemo_contact_devices(account, jid)?
+        .iter()
+        .filter_map(|device| DeviceId::try_from(device.id).ok())
+        .collect())
 }
 
 fn fingerprint(pub_key: &PublicKey) -> String {
@@ -908,7 +936,7 @@ impl OmemoMod {
         };
 
         log::debug!("Retrieve crypto assets");
-        let device_id: u32 = device.id.try_into().context("Corrupted own device id")?;
+        let device_id: DeviceId = device.id.try_into().context("Corrupted own device id")?;
         log::info!("Device id: {device_id}");
         let identity = device.identity.context("Missing own identity")?;
         let identity_key_pair =
@@ -1011,7 +1039,7 @@ impl OmemoMod {
             .context("Missing signal store")?;
 
         // XEP 0384 4.1 The Device ID is a randomly generated integer between 1 and 2^31 - 1.
-        let device_id: u32 = random::<u32>() % (2u32.pow(31) - 1) + 1;
+        let device_id: DeviceId = random::<u32>() % (2u32.pow(31) - 1) + 1;
         let identity_key_pair = IdentityKeyPair::generate(&mut thread_rng());
         let own_device = aparte.storage.set_omemo_current_device(
             account,
@@ -1123,7 +1151,7 @@ impl OmemoMod {
             .storage
             .get_omemo_own_device(account)?
             .context("OMEMO not configured")?;
-        let device_id: u32 = own_device
+        let device_id: DeviceId = own_device
             .id
             .try_into()
             .context("Corrupted own device id")?;
@@ -1290,7 +1318,7 @@ impl OmemoMod {
         signal_store: &SignalStorage,
         account: &Account,
         jid: &BareJid,
-    ) -> Result<()> {
+    ) -> Result<Vec<DeviceId>> {
         log::info!("Start OMEMO session on {account} with {jid}");
         let mut omemo_engine = OmemoEngine::new(account, signal_store.clone(), jid);
 
@@ -1307,6 +1335,20 @@ impl OmemoMod {
             .await
             .context("Cannot get device list")?;
         log::info!("Got {jid}'s OMEMO device list");
+
+        let received: Vec<DeviceId> = device_list
+            .devices
+            .iter()
+            .map(|device| device.id)
+            .filter(|id| *id != own_device)
+            .collect();
+        let known = known_device_ids(&aparte.storage, account, jid)?;
+        // The first fetch is the baseline: nothing is new until a device list was learned before
+        let added = if known.is_empty() {
+            Vec::new()
+        } else {
+            new_device_ids(&known, &received)
+        };
 
         for device in device_list
             .devices
@@ -1347,7 +1389,7 @@ impl OmemoMod {
             jid: jid.clone(),
         }));
 
-        Ok(())
+        Ok(added)
     }
 
     async fn subscribe_to_device_list(
@@ -1413,6 +1455,62 @@ impl OmemoMod {
                 _ => Err(anyhow!("Invalid pubsub response")),
             },
             Err(e) => Err(anyhow!("IQ failed: {e}")),
+        }
+    }
+
+    fn new_device_event(account: &Account, jid: &BareJid, device_id: DeviceId) -> Event {
+        log::info!("event=omemo_new_device account={account} jid={jid} device_id={device_id}");
+        Event::Omemo(OmemoEvent::NewDevice {
+            account: account.clone(),
+            jid: jid.clone(),
+            device_id,
+        })
+    }
+
+    fn handle_device_list_push(
+        &self,
+        aparte: &mut Aparte,
+        account: &Account,
+        jid: &BareJid,
+        items: &[pubsub::event::Item],
+    ) {
+        if *jid == account.to_bare() || !aparte.has_crypto_engine(account, jid) {
+            log::debug!("event=omemo_device_list_push_ignored account={account} jid={jid}");
+            return;
+        }
+
+        let Some(device_list) = items
+            .iter()
+            .rev()
+            .filter_map(|item| item.payload.clone())
+            .find_map(|payload| legacy_omemo::DeviceList::try_from(payload).ok())
+        else {
+            log::warn!("event=omemo_device_list_push_malformed account={account} jid={jid}");
+            return;
+        };
+
+        let received: Vec<DeviceId> = device_list.devices.iter().map(|d| d.id).collect();
+        let known = match known_device_ids(&aparte.storage, account, jid) {
+            Ok(known) => known,
+            Err(err) => {
+                crate::error!(aparte, err, "Cannot read {jid}'s known OMEMO devices");
+                return;
+            }
+        };
+
+        for device_id in new_device_ids(&known, &received) {
+            if let Err(err) = aparte
+                .storage
+                .upsert_omemo_contact_device(account, jid, device_id)
+            {
+                crate::error!(
+                    aparte,
+                    err,
+                    "Cannot record {jid}'s OMEMO device {device_id}"
+                );
+                continue;
+            }
+            aparte.schedule(Self::new_device_event(account, jid, device_id));
         }
     }
 
@@ -1507,7 +1605,7 @@ impl OmemoMod {
     async fn ensure_device_is_registered(
         aparte: &mut AparteAsync,
         account: &Account,
-        device_id: u32,
+        device_id: DeviceId,
     ) -> Result<()> {
         log::info!("Ensure device {device_id} is registered");
         match aparte
@@ -1570,7 +1668,7 @@ impl OmemoMod {
     async fn ensure_device_bundle_is_published(
         aparte: &mut AparteAsync,
         account: &Account,
-        device_id: u32,
+        device_id: DeviceId,
         identity_key_pair: IdentityKeyPair,
         signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
@@ -1660,7 +1758,7 @@ impl OmemoMod {
     async fn publish_bundle(
         aparte: &mut AparteAsync,
         account: &Account,
-        device_id: u32,
+        device_id: DeviceId,
         identity_key_pair: IdentityKeyPair,
         signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
@@ -1706,7 +1804,7 @@ impl OmemoMod {
     async fn register_device(
         aparte: &mut AparteAsync,
         account: &Account,
-        device_id: u32,
+        device_id: DeviceId,
         list: Option<legacy_omemo::DeviceList>,
     ) -> Result<()> {
         log::info!("Registering device {device_id}");
@@ -1747,7 +1845,7 @@ impl OmemoMod {
         aparte: &mut AparteAsync,
         account: &Account,
         contact: &BareJid,
-        device_id: u32,
+        device_id: DeviceId,
     ) -> Result<Option<legacy_omemo::Bundle>> {
         match aparte
             .iq(account, Self::get_bundle_iq(contact, device_id))
@@ -1839,7 +1937,7 @@ impl OmemoMod {
         Iq::from_set("", pubsub).with_to(Jid::from(contact.clone()))
     }
 
-    fn get_bundle_iq(contact: &BareJid, device_id: u32) -> Iq {
+    fn get_bundle_iq(contact: &BareJid, device_id: DeviceId) -> Iq {
         let items = pubsub::pubsub::Items {
             max_items: None,
             node: pubsub::NodeName(format!("{}:{device_id}", ns::LEGACY_OMEMO_BUNDLES)),
@@ -1852,7 +1950,7 @@ impl OmemoMod {
 
     fn publish_bundle_iq(
         jid: &BareJid,
-        device_id: u32,
+        device_id: DeviceId,
         identity_key_pair: IdentityKeyPair,
         signed_pre_key_id: u32,
         signed_pre_key_pub: PublicKey,
@@ -1904,9 +2002,8 @@ impl OmemoMod {
 impl ModTrait for OmemoMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         aparte.add_command(omemo::new());
-        //let mut disco = aparte.get_mod_mut::<DiscoMod>();
-        //disco.add_feature(ns::OMEMO_DEVICES);
-        //disco.add_feature(format!("{ns::OMEMO_DEVICES}+notify"));
+        let mut disco = aparte.get_mod_mut::<DiscoMod>();
+        disco.add_feature(format!("{}+notify", ns::LEGACY_OMEMO_DEVICELIST));
 
         Ok(())
     }
@@ -2041,7 +2138,7 @@ impl ModTrait for OmemoMod {
                                 Aparte::spawn({
                                     let signal_store = SignalStorage::clone(signal_store);
                                     async move {
-                                        if let Err(err) = Self::start_session(
+                                        match Self::start_session(
                                             &mut async_aparte,
                                             &signal_store,
                                             &account,
@@ -2049,11 +2146,18 @@ impl ModTrait for OmemoMod {
                                         )
                                         .await
                                         {
-                                            crate::error!(
+                                            Ok(added) => {
+                                                for device_id in added {
+                                                    async_aparte.schedule(Self::new_device_event(
+                                                        &account, &jid, device_id,
+                                                    ));
+                                                }
+                                            }
+                                            Err(err) => crate::error!(
                                                 async_aparte,
                                                 err,
                                                 "Can't start OMEMO session with {jid}",
-                                            );
+                                            ),
                                         }
                                     }
                                 });
@@ -2061,7 +2165,7 @@ impl ModTrait for OmemoMod {
                         }
                     }
                 }
-                OmemoEvent::Enabled { .. } => {}
+                OmemoEvent::Enabled { .. } | OmemoEvent::NewDevice { .. } => {}
                 OmemoEvent::ShowFingerprints { account, jid } => {
                     let account = account.clone();
 
@@ -2099,22 +2203,16 @@ impl ModTrait for OmemoMod {
                     }
                 },
             },
-            //Event::PubSub { account: _, from: Some(from), event } => match event {
-            //    pubsub::PubSubEvent::PublishedItems { node, items } => {
-            //        if node == &pubsub::NodeName::from_str(ns::OMEMO_DEVICES).unwrap() {
-            //            for item in items {
-            //                if item.id == pubsub::ItemId::from_str("current").ok() {
-            //                    if let Some(payload) = item.payload.clone() {
-            //                        if let Ok(devices) = legacy_omemo::Devices::try_from(payload) {
-            //                            self.handle_devices(&from.clone().into(), &devices);
-            //                        }
-            //                    }
-            //                }
-            //            }
-            //        }
-            //    }
-            //    _ => {}
-            //}
+            Event::PubSub {
+                account,
+                from: Some(from),
+                event:
+                    pubsub::event::Payload::Items {
+                        node, published, ..
+                    },
+            } if node.0 == ns::LEGACY_OMEMO_DEVICELIST => {
+                self.handle_device_list_push(aparte, account, &from.to_bare(), published);
+            }
             //Event::IqResult { account: _, uuid, from, payload } => {
             //    if let Some(jid) = self.pending_device_query.remove(&uuid) {
             //        if &Some(Jid::Bare(jid.clone())) != from {
@@ -2197,5 +2295,25 @@ mod tests {
             vec![],
         );
         assert_eq!(published_access_model(&iq).as_deref(), Some("open"));
+    }
+
+    #[test]
+    fn new_device_ids_returns_unseen_devices() {
+        assert_eq!(new_device_ids(&HashSet::from([1, 2]), &[1, 2, 3]), vec![3]);
+    }
+
+    #[test]
+    fn new_device_ids_is_empty_for_same_list() {
+        assert!(new_device_ids(&HashSet::from([1, 2]), &[2, 1]).is_empty());
+    }
+
+    #[test]
+    fn new_device_ids_ignores_removed_devices() {
+        assert!(new_device_ids(&HashSet::from([1, 2]), &[1]).is_empty());
+    }
+
+    #[test]
+    fn new_device_ids_dedups_and_sorts() {
+        assert_eq!(new_device_ids(&HashSet::from([]), &[5, 3, 5]), vec![3, 5]);
     }
 }

@@ -13,7 +13,10 @@ use xmpp_parsers::{
 };
 
 use common::omemo::ContactKeys;
-use common::xmpp_fixture::{muc_join_presence_with_jid, room_subject_message, XmppFixture};
+use common::xmpp_fixture::{
+    chat_message, muc_join_presence_with_jid, omemo_devicelist_push_event, room_subject_message,
+    XmppFixture,
+};
 use common::{describe, row_text, ROWS, STATUS_ROW};
 
 const BOUND_JID: &str = "user@localhost/aparte_test";
@@ -448,4 +451,126 @@ fn omemo_leaves_open_nodes_untouched() {
             node
         );
     }
+}
+
+const NEW_DEVICE_NOTICE: &str = "new OMEMO device";
+const CONTACT_JID: &str = "contact@localhost";
+
+/// Opens a chat with `CONTACT_JID` (one known device) and, when `enable`,
+/// turns OMEMO on for it. Returns the fixture and the contact's known device id.
+fn chat_with_contact(enable: bool) -> (XmppFixture, u32) {
+    let contact = ContactKeys::generate();
+    let device_id = contact.device_id;
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(CONTACT_JID, device_id, contact.bundle);
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {CONTACT_JID}"));
+    if enable {
+        fixture.send_command(&format!("/omemo enable {CONTACT_JID}"));
+        thread::sleep(Duration::from_secs(3));
+    }
+    (fixture, device_id)
+}
+
+/// Injects a plain message and waits for it, proving earlier injected
+/// stanzas were processed, then counts the notices on screen.
+fn notice_count_after_sync(fixture: &XmppFixture, sync_body: &str) -> usize {
+    fixture.inject(chat_message(
+        &format!("{CONTACT_JID}/desktop"),
+        "user@localhost",
+        "sync-1",
+        sync_body,
+    ));
+    assert!(
+        fixture.wait_for(sync_body, Duration::from_secs(5)),
+        "sync message not displayed"
+    );
+    common::describe(fixture.snapshot().screen())
+        .matches(NEW_DEVICE_NOTICE)
+        .count()
+}
+
+/// A device-list push adding an unseen device shows a notice in that contact's window.
+#[test]
+fn omemo_new_device_push_shows_notice_in_chat() {
+    let (fixture, known_device) = chat_with_contact(true);
+    let new_device = known_device.wrapping_add(1).max(1);
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &[known_device, new_device],
+    ));
+
+    let found = fixture.wait_for(
+        &format!("added a new OMEMO device {new_device}"),
+        Duration::from_secs(5),
+    );
+    if !found {
+        eprintln!("{}", common::describe(fixture.snapshot().screen()));
+    }
+    assert!(found, "new device notice not shown in the contact's window");
+}
+
+/// Learning the device list when enabling OMEMO is the baseline, not an addition.
+#[test]
+fn omemo_first_device_list_fetch_shows_no_notice() {
+    let (fixture, _known_device) = chat_with_contact(true);
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-first-fetch"), 0);
+}
+
+/// A push repeating the known list adds nothing new.
+#[test]
+fn omemo_unchanged_device_list_push_shows_no_notice() {
+    let (fixture, known_device) = chat_with_contact(true);
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &[known_device],
+    ));
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-unchanged"), 0);
+}
+
+/// The same new device announced twice is only reported once.
+#[test]
+fn omemo_new_device_is_announced_once() {
+    let (fixture, known_device) = chat_with_contact(true);
+    let new_device = known_device.wrapping_add(1).max(1);
+    let list = [known_device, new_device];
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &list,
+    ));
+    assert!(fixture.wait_for(
+        &format!("OMEMO device {new_device}"),
+        Duration::from_secs(5)
+    ));
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &list,
+    ));
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-once"), 1);
+}
+
+/// Without OMEMO enabled for the conversation, device list pushes stay silent.
+#[test]
+fn omemo_new_device_push_without_omemo_enabled_shows_no_notice() {
+    let (fixture, known_device) = chat_with_contact(false);
+    let new_device = known_device.wrapping_add(1).max(1);
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &[known_device, new_device],
+    ));
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-disabled"), 0);
 }

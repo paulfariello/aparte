@@ -1500,6 +1500,18 @@ impl UIMod {
                         let mut first_visit = true;
                         move |view, event| {
                             match event {
+                                UIEvent::Core(Event::Omemo(OmemoEvent::NewDevice {
+                                    jid,
+                                    device_id,
+                                    ..
+                                })) if *jid == chat_for_event.contact => {
+                                    let notice =
+                                        format!("{jid} added a new OMEMO device {device_id}");
+                                    insert_message(
+                                        view,
+                                        MessageView::new(&mut aparte, Message::log(notice)),
+                                    );
+                                }
                                 UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
                                     match message.direction {
                                         // TODO check to == us
@@ -3771,6 +3783,10 @@ impl ModTrait for UIMod {
                     account.clone(),
                     jid.clone(),
                 )));
+            }
+            Event::Omemo(event @ OmemoEvent::NewDevice { .. }) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::Omemo(event.clone())));
             }
             Event::Message(account, message) => {
                 match message {
