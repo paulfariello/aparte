@@ -30,7 +30,7 @@ fn message_has_omemo(msg: &xmpp_parsers::message::Message) -> bool {
 /// publish-options requesting an open access model so any contact can fetch it.
 #[test]
 fn omemo_creates_device_list_when_missing() {
-    let (fixture, mut capture) = XmppFixture::new_with_omemo_fresh_account(&[]);
+    let (_fixture, mut capture) = XmppFixture::new_with_omemo_fresh_account(&[]);
 
     let (device_list, publish_options) = capture.recv_devicelist_publish(Duration::from_secs(15));
 
@@ -54,8 +54,6 @@ fn omemo_creates_device_list_when_missing() {
         Some("open"),
         "device list must be published with an open access model"
     );
-
-    let _ = fixture;
 }
 
 /// `/omemo fingerprint` shows the own device's fingerprint in the UI.
@@ -392,4 +390,62 @@ fn omemo_lock_persists_in_normal_mode() {
         bar,
         describe(parser.screen())
     );
+}
+
+fn form_access_model(form: &xmpp_parsers::data_forms::DataForm) -> Option<String> {
+    form.fields
+        .iter()
+        .find(|f| f.var.as_deref() == Some("pubsub#access_model"))
+        .and_then(|f| f.values.first().cloned())
+}
+
+/// PEP nodes keep the config they were created with: nodes created before aparte
+/// asked for an open access model stay closed, so contacts get `not-authorized`
+/// on fetch. Aparté must reconfigure the existing nodes it owns.
+#[test]
+fn omemo_reopens_closed_nodes() {
+    let (_fixture, mut capture) = XmppFixture::new_with_omemo_node_access_model(&[], "presence");
+
+    let (device_id, _bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    for node in [
+        "eu.siacs.conversations.axolotl.devicelist".to_string(),
+        format!("eu.siacs.conversations.axolotl.bundles:{device_id}"),
+    ] {
+        let form = capture
+            .recv_configure_for(&node, Duration::from_secs(5))
+            .unwrap_or_else(|| panic!("node {} was not reconfigured", node));
+        assert_eq!(form.type_, xmpp_parsers::data_forms::DataFormType::Submit);
+        assert_eq!(
+            form.form_type(),
+            Some("http://jabber.org/protocol/pubsub#node_config")
+        );
+        assert_eq!(form_access_model(&form).as_deref(), Some("open"));
+    }
+}
+
+/// Nodes that are already open must be left alone.
+#[test]
+fn omemo_leaves_open_nodes_untouched() {
+    let (_fixture, mut capture) = XmppFixture::new_with_omemo_node_access_model(&[], "open");
+
+    let (device_id, _bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    for node in [
+        "eu.siacs.conversations.axolotl.devicelist".to_string(),
+        format!("eu.siacs.conversations.axolotl.bundles:{device_id}"),
+    ] {
+        assert!(
+            capture.saw_configure_get_for(&node, Duration::from_secs(5)),
+            "node {} config was never read",
+            node
+        );
+        assert!(
+            capture
+                .recv_configure_for(&node, Duration::from_secs(3))
+                .is_none(),
+            "node {} was reconfigured although already open",
+            node
+        );
+    }
 }
