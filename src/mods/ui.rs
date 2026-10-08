@@ -344,6 +344,22 @@ enum UIEvent {
     FocusInputBar,
 }
 
+impl UIEvent {
+    /// Addressed to the focused input widget only; broadcasting would act on every window.
+    /// Edit events are excluded on purpose: they act on the selected message, not the input.
+    fn targets_focused_input_widget(&self) -> bool {
+        matches!(
+            self,
+            UIEvent::ApplyTextAction(..)
+                | UIEvent::MoveCursor(..)
+                | UIEvent::SetInputState(..)
+                | UIEvent::SetInput(..)
+                | UIEvent::Paste(..)
+                | UIEvent::ClearInput
+        )
+    }
+}
+
 impl FocusRouted for UIEvent {
     fn is_focus_routed(&self) -> bool {
         match self {
@@ -1854,13 +1870,10 @@ impl UIMod {
                                 scrollwin.child.view.event(event);
                             }
                         }
-                        UIEvent::Core(Event::Key(_))
-                        | UIEvent::ApplyTextAction(..)
-                        | UIEvent::MoveCursor(..)
-                        | UIEvent::SetInputState(..)
-                        | UIEvent::SetInput(..)
-                        | UIEvent::Paste(..)
-                        | UIEvent::ClearInput => {
+                        UIEvent::Core(Event::Key(_)) => {
+                            layout.route_to_focused(event);
+                        }
+                        _ if event.targets_focused_input_widget() => {
                             layout.route_to_focused(event);
                         }
                         _ => {
@@ -2330,13 +2343,10 @@ impl UIMod {
                                 h_layout.child.view.event(event);
                             }
                         }
-                        UIEvent::Core(Event::Key(_))
-                        | UIEvent::ApplyTextAction(..)
-                        | UIEvent::MoveCursor(..)
-                        | UIEvent::SetInputState(..)
-                        | UIEvent::SetInput(..)
-                        | UIEvent::Paste(..)
-                        | UIEvent::ClearInput => {
+                        UIEvent::Core(Event::Key(_)) => {
+                            win_layout.route_to_focused(event);
+                        }
+                        _ if event.targets_focused_input_widget() => {
                             win_layout.route_to_focused(event);
                         }
                         _ => {
@@ -3382,13 +3392,8 @@ impl ModTrait for UIMod {
                 | UIEvent::StartEdit
                 | UIEvent::AppendEdit
                 | UIEvent::AppendEndEdit
-                // Text actions, cursor moves, and input state changes go to the focused window only.
-                | UIEvent::MoveCursor(..)
-                | UIEvent::ApplyTextAction(..)
-                | UIEvent::SetInputState(..)
-                | UIEvent::SetInput(..)
-                | UIEvent::Paste(..)
-                | UIEvent::ClearInput => frame.route_to_focused(event),
+                => frame.route_to_focused(event),
+                _ if event.targets_focused_input_widget() => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {
