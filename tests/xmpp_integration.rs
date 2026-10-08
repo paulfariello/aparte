@@ -1586,3 +1586,79 @@ fn enter_during_in_place_edit_sends_only_the_correction(mut xmpp_with_contact: X
         describe(screen.screen())
     );
 }
+
+/// Switching window while the slash warning is shown discards it, so the next Enter warns afresh.
+#[rstest]
+fn window_switch_discards_slash_warning(mut xmpp_with_contact: XmppFixture) {
+    open_chat_with_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"/foo");
+    assert!(xmpp_with_contact.wait_for("/foo", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert!(xmpp_with_contact.wait_for("looks like a command", Duration::from_secs(3)));
+
+    xmpp_with_contact.inject(chat_message(
+        "other@localhost/res",
+        "user@localhost/aparte_test",
+        "other-1",
+        "ping from other",
+    ));
+    thread::sleep(Duration::from_millis(500));
+    xmpp_with_contact.send_bytes(b"\x1ba");
+    assert!(xmpp_with_contact.wait_for("ping from other", Duration::from_secs(3)));
+    thread::sleep(Duration::from_millis(300));
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        !grid_contains(screen.screen(), "looks like a command"),
+        "popup must close on window switch\n{}",
+        describe(screen.screen())
+    );
+
+    xmpp_with_contact.send_bytes(b"/baz");
+    assert!(xmpp_with_contact.wait_for("/baz", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert!(
+        xmpp_with_contact.wait_for("looks like a command", Duration::from_secs(3)),
+        "first Enter in the new window must warn again"
+    );
+    assert_nothing_sent(&mut xmpp_with_contact, "first Enter after window switch");
+}
+
+/// Pins the slash_warned-set, popup-already-closed branch of the change_window reset: the next Enter warns afresh.
+#[rstest]
+fn window_switch_after_esc_on_slash_warning_warns_afresh(mut xmpp_with_contact: XmppFixture) {
+    open_chat_with_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"/foo");
+    assert!(xmpp_with_contact.wait_for("/foo", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert!(xmpp_with_contact.wait_for("looks like a command", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\x1b");
+    thread::sleep(Duration::from_millis(500));
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        !grid_contains(screen.screen(), "looks like a command"),
+        "Esc must close the popup\n{}",
+        describe(screen.screen())
+    );
+
+    xmpp_with_contact.inject(chat_message(
+        "other@localhost/res",
+        "user@localhost/aparte_test",
+        "other-1",
+        "ping from other",
+    ));
+    thread::sleep(Duration::from_millis(500));
+    xmpp_with_contact.send_bytes(b"\x1ba");
+    assert!(xmpp_with_contact.wait_for("ping from other", Duration::from_secs(3)));
+    thread::sleep(Duration::from_millis(300));
+
+    xmpp_with_contact.send_bytes(b"/baz");
+    assert!(xmpp_with_contact.wait_for("/baz", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert!(
+        xmpp_with_contact.wait_for("looks like a command", Duration::from_secs(3)),
+        "first Enter in the new window must warn again"
+    );
+    assert_nothing_sent(&mut xmpp_with_contact, "first Enter after window switch");
+}

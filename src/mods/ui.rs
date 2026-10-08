@@ -2408,6 +2408,13 @@ impl UIMod {
     }
 
     pub fn change_window(&mut self, window: &str) {
+        if self.slash_warned {
+            self.slash_warned = false;
+            self.root.event(&mut UIEvent::ClosePopup);
+            if let Some(saved) = self.popup_saved_mode.take() {
+                self.root.event(&mut UIEvent::ModeChange(saved));
+            }
+        }
         self.root
             .event(&mut UIEvent::Core(Event::ChangeWindow(window.to_string())));
         self.current_window = Some(window.to_string());
