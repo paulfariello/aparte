@@ -1394,6 +1394,26 @@ fn assert_nothing_sent(xmpp: &mut XmppFixture, what: &str) {
     );
 }
 
+/// Enter in Normal mode with the input bar still focused must not send the draft.
+#[rstest]
+fn enter_in_normal_mode_does_not_send_draft(mut xmpp_with_contact: XmppFixture) {
+    open_chat_with_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"stale draft");
+    assert!(xmpp_with_contact.wait_for("stale draft", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert_nothing_sent(&mut xmpp_with_contact, "Enter in Normal mode");
+
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        grid_contains(screen.screen(), "stale draft"),
+        "draft must stay in the input bar\n{}",
+        describe(screen.screen())
+    );
+}
+
 /// The second Enter after the slash warning sends the draft as plain text although the popup forced Normal mode.
 #[rstest]
 fn second_enter_after_slash_warning_sends_plain_text(mut xmpp_with_contact: XmppFixture) {
@@ -1452,6 +1472,117 @@ fn esc_on_slash_warning_restores_insert_with_draft(mut xmpp_with_contact: XmppFi
     assert!(
         grid_contains(screen.screen(), "/foo"),
         "draft must survive\n{}",
+        describe(screen.screen())
+    );
+}
+
+const MUC_ROOM: &str = "dev@conference.localhost";
+
+/// Joins a MUC with occupant "alice" and two sent messages, so the draft "ali" completes in Insert mode.
+fn open_muc_with_occupant_and_sent_messages(xmpp: &mut XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp.send_command(&format!("/join {MUC_ROOM}"));
+    thread::sleep(Duration::from_millis(400));
+    for nick in ["user", "alice"] {
+        xmpp.inject(muc_join_presence(
+            &format!("{MUC_ROOM}/{nick}"),
+            "user@localhost/aparte_test",
+            xmpp_parsers::muc::user::Affiliation::Member,
+            xmpp_parsers::muc::user::Role::Participant,
+        ));
+        thread::sleep(Duration::from_millis(300));
+    }
+    xmpp.switch_window(MUC_ROOM);
+    thread::sleep(Duration::from_millis(300));
+    xmpp.send_command("First sent");
+    xmpp.send_command("Second sent");
+    assert!(
+        xmpp.wait_for("Second sent", Duration::from_secs(5)),
+        "sent messages not visible"
+    );
+    for body in ["First sent", "Second sent"] {
+        let sent = xmpp
+            .recv_outgoing_message_matching(
+                |msg| msg.bodies.values().any(|b| b == body),
+                Duration::from_secs(5),
+            )
+            .unwrap_or_else(|| panic!("{body} was not sent"));
+        let id = sent.id.expect("sent stanza has an id").0;
+        xmpp.inject(groupchat_message(
+            &format!("{MUC_ROOM}/user"),
+            "user@localhost/aparte_test",
+            &id,
+            body,
+        ));
+    }
+    thread::sleep(Duration::from_millis(500));
+}
+
+/// Control for the Normal-mode Tab test: the nick draft does complete in Insert mode.
+#[rstest]
+fn tab_in_insert_mode_completes_nick(mut xmpp_with_contact: XmppFixture) {
+    open_muc_with_occupant_and_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"ali");
+    assert!(xmpp_with_contact.wait_for("ali", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\t");
+    assert!(
+        xmpp_with_contact.wait_for("alice:", Duration::from_secs(3)),
+        "Tab in Insert mode should complete the occupant nick"
+    );
+}
+
+/// Tab in Normal mode with the input bar still focused must not complete the draft.
+#[rstest]
+fn tab_in_normal_mode_does_not_complete_draft(mut xmpp_with_contact: XmppFixture) {
+    open_muc_with_occupant_and_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"ali");
+    assert!(xmpp_with_contact.wait_for("ali", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b"\t");
+    thread::sleep(Duration::from_millis(800));
+
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        !grid_contains(screen.screen(), "alice:"),
+        "Tab in Normal mode must not complete the draft\n{}",
+        describe(screen.screen())
+    );
+}
+
+/// Enter during an in-place edit sends only the correction and leaves the draft (Tab is unobservable: no edit in a MUC).
+#[rstest]
+fn enter_during_in_place_edit_sends_only_the_correction(mut xmpp_with_contact: XmppFixture) {
+    open_chat_with_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"stale draft");
+    assert!(xmpp_with_contact.wait_for("stale draft", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\x1b");
+    assert!(xmpp_with_contact.wait_for("NORMAL", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b"k");
+    thread::sleep(Duration::from_millis(300));
+    xmpp_with_contact.send_bytes(b"A");
+    assert!(xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)));
+    xmpp_with_contact.send_bytes(b" plus");
+    assert!(xmpp_with_contact.wait_for("Second sent plus", Duration::from_secs(5)));
+
+    xmpp_with_contact.send_bytes(b"\r");
+    let sent = xmpp_with_contact
+        .recv_outgoing_message_matching(|_| true, Duration::from_secs(5))
+        .expect("expected the correction stanza");
+    assert!(
+        sent.payloads
+            .iter()
+            .any(|p| p.is("replace", "urn:xmpp:message-correct:0")),
+        "Enter during in-place edit must send a correction, got {sent:?}",
+    );
+    assert_nothing_sent(&mut xmpp_with_contact, "draft after correction");
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        grid_contains(screen.screen(), "stale draft"),
+        "draft must survive the correction\n{}",
         describe(screen.screen())
     );
 }

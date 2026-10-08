@@ -3980,16 +3980,19 @@ impl ModTrait for UIMod {
                             }
                         }
 
-                        // The confirming Enter keeps the warning until the plain-text send clears it.
-                        if !confirming_slash_warning && !self.root.is_visible() {
-                            self.slash_warned = false;
+                        // Normal mode never exposes an input: Enter there must not read, send or clear the draft.
+                        let input = self.focused_input_state().and_then(
+                            |(buf, _cursor, password, mode)| {
+                                (mode != Mode::Normal).then_some((buf, password))
+                            },
+                        );
+                        if input.is_some() {
+                            // The confirming Enter keeps the warning until the plain-text send clears it.
+                            if !confirming_slash_warning && !self.root.is_visible() {
+                                self.slash_warned = false;
+                            }
+                            aparte.schedule(Event::ResetCompletion);
                         }
-                        aparte.schedule(Event::ResetCompletion);
-
-                        let (raw_buf, _cursor, password, _mode) =
-                            self.focused_input_state().unwrap_or_else(|| {
-                                (String::new(), Cursor::new(0), false, Mode::Normal)
-                            });
 
                         // Route Enter into the layout tree as a UIEvent::Core(Key).
                         // The layout closure handles:
@@ -4024,6 +4027,11 @@ impl ModTrait for UIMod {
                             }
                             return;
                         }
+
+                        let Some((raw_buf, password)) = input else {
+                            self.finish_event(aparte, before);
+                            return;
+                        };
 
                         // Normal Insert mode send path.
                         let looks_like_cmd = !password
