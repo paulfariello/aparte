@@ -38,7 +38,7 @@ The input bar spans the full window width (under both messages and roster in Cha
 
 **Per-window drafts:** Each window's `Input` widget owns its own buffer. No draft `HashMap` is needed; the widget state is the draft.
 
-**`current_input` removed:** The mod-level `current_input` field is dropped. Any arm that needs the current input state sends `UIEvent::RequestInputState` to the frame; the window's `Input` responds synchronously with `InputChanged(buf, cursor, password)`.
+**`current_input` removed:** The mod-level `current_input` field is dropped. Any arm that needs the current input state sends `UIEvent::RequestInputState` to the frame; the window's `Input` responds synchronously with `InputChanged(buf, cursor, password)`. The layout closure wraps the answer as `FocusedInputState(buf, cursor, password, mode)` so callers also get its accurate mode instead of the lagging mod-level copy; Tab picks nick or command completion from that mode. Enter and Tab ignore the input when the carried mode is Normal. Esc, `a` and `A` read the frame directly through `frame_input_state` (plain `InputChanged`, no mode) because they only run when the message input is focused.
 
 **`dispatch_action` simplified:** The non-frame path (text motions sent to non-frame root children) is removed. All text actions route to `FRAME_LAYOUT_INDEX`; the window routes them internally to whichever child is focused.
 

@@ -16,6 +16,8 @@ default = []
 strict = []
 image = ["dep:image", "dep:sixel-image", "dep:reqwest", "terminus/image"]
 insecure-xmpp = ["tokio-xmpp/insecure-tcp"]
+# Enables tests that read /proc (Linux only) to measure CPU time.
+proc-cpu-tests = []
 
 [dependencies]
 aes-gcm = "0.10.3"
@@ -58,6 +60,10 @@ unicode-display-width = "0.3.0"
 unicode-segmentation = "^1.6"
 uuid = { version = "^1.7", features = ["v4"]  }
 xmpp-parsers = "0.22"
+
+[[test]]
+name = "password_prompt_spin"
+required-features = ["proc-cpu-tests"]
 
 [[test]]
 name = "xmpp_integration"

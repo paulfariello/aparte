@@ -291,10 +291,14 @@ enum UIEvent {
     /// Discard the in-place edit on the selected message without sending a correction.
     CancelEdit,
     /// Clears the input bar (pushes to history then blanks the buffer).
-    /// Fire-and-forget: the caller reads `self.current_input` before
-    /// dispatching, then dispatches this to let the widget clear itself.
+    /// Fire-and-forget: the caller reads the input via `RequestInputState`
+    /// before dispatching, then dispatches this to let the widget clear itself.
     ClearInput,
+    /// Answered synchronously by the focused input widget as `InputChanged`.
+    RequestInputState,
     InputChanged(String, Cursor, bool),
+    /// `InputChanged` completed with the layout's own mode, which the mod's copy lags behind.
+    FocusedInputState(String, Cursor, bool, Mode),
     AddWindow(
         String,
         Option<String>,
@@ -342,6 +346,23 @@ enum UIEvent {
     /// Chat/Channel window handles it by setting focus to their Input child.
     /// Console ignores it (no Input child).
     FocusInputBar,
+}
+
+impl UIEvent {
+    /// Addressed to the focused input widget only; broadcasting would act on every window.
+    /// Edit events are excluded on purpose: they act on the selected message, not the input.
+    fn targets_focused_input_widget(&self) -> bool {
+        matches!(
+            self,
+            UIEvent::ApplyTextAction(..)
+                | UIEvent::MoveCursor(..)
+                | UIEvent::SetInputState(..)
+                | UIEvent::SetInput(..)
+                | UIEvent::Paste(..)
+                | UIEvent::RequestInputState
+                | UIEvent::ClearInput
+        )
+    }
 }
 
 impl FocusRouted for UIEvent {
@@ -718,6 +739,9 @@ impl View<UIEvent, Theme> for CommandBar {
                 self.input.editor.cursor =
                     Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
                 self.input.editor.buf.clone_from(text);
+                *event = self.input_changed();
+            }
+            UIEvent::RequestInputState if self.active => {
                 *event = self.input_changed();
             }
             UIEvent::ClearInput if self.active => {
@@ -1312,10 +1336,34 @@ pub struct UIMod {
     dimensions: Dimensions,
     /// Set after the first Enter press on a /command input. The next Enter send is allowed.
     slash_warned: bool,
-    current_input: (String, Cursor, bool),
 }
 
 impl UIMod {
+    // None when focus is outside an input.
+    fn focused_input_state(&mut self) -> Option<(String, Cursor, bool, Mode)> {
+        let mut state = UIEvent::RequestInputState;
+        self.root.event(&mut state);
+        match state {
+            UIEvent::FocusedInputState(buf, cursor, password, mode) => {
+                Some((buf, cursor, password, mode))
+            }
+            _ => None,
+        }
+    }
+
+    fn finish_event(&mut self, aparte: &mut Aparte, before: Instant) {
+        log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
+
+        // Mark UI as needing a render; actual render happens once per event batch
+        // in the main loop via render_if_dirty().
+        self.dirty = true;
+
+        // Handle queued outgoing event
+        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
+            aparte.schedule(event);
+        }
+    }
+
     pub fn new(_config: &Config) -> Self {
         let screen = Arc::new(RwLock::new(OffscreenRenderBuffer::default()));
         let panic_handler = PanicHandler::new();
@@ -1339,7 +1387,6 @@ impl UIMod {
             _panic_handler: panic_handler,
             dirty: true,
             slash_warned: false,
-            current_input: (String::new(), Cursor::new(0), false),
             dimensions: Dimensions {
                 top: 1,
                 left: 1,
@@ -1854,13 +1901,10 @@ impl UIMod {
                                 scrollwin.child.view.event(event);
                             }
                         }
-                        UIEvent::Core(Event::Key(_))
-                        | UIEvent::ApplyTextAction(..)
-                        | UIEvent::MoveCursor(..)
-                        | UIEvent::SetInputState(..)
-                        | UIEvent::SetInput(..)
-                        | UIEvent::Paste(..)
-                        | UIEvent::ClearInput => {
+                        UIEvent::Core(Event::Key(_)) => {
+                            layout.route_to_focused(event);
+                        }
+                        _ if event.targets_focused_input_widget() => {
                             layout.route_to_focused(event);
                         }
                         _ => {
@@ -2330,13 +2374,10 @@ impl UIMod {
                                 h_layout.child.view.event(event);
                             }
                         }
-                        UIEvent::Core(Event::Key(_))
-                        | UIEvent::ApplyTextAction(..)
-                        | UIEvent::MoveCursor(..)
-                        | UIEvent::SetInputState(..)
-                        | UIEvent::SetInput(..)
-                        | UIEvent::Paste(..)
-                        | UIEvent::ClearInput => {
+                        UIEvent::Core(Event::Key(_)) => {
+                            win_layout.route_to_focused(event);
+                        }
+                        _ if event.targets_focused_input_widget() => {
                             win_layout.route_to_focused(event);
                         }
                         _ => {
@@ -2367,6 +2408,13 @@ impl UIMod {
     }
 
     pub fn change_window(&mut self, window: &str) {
+        if self.slash_warned {
+            self.slash_warned = false;
+            self.root.event(&mut UIEvent::ClosePopup);
+            if let Some(saved) = self.popup_saved_mode.take() {
+                self.root.event(&mut UIEvent::ModeChange(saved));
+            }
+        }
         self.root
             .event(&mut UIEvent::Core(Event::ChangeWindow(window.to_string())));
         self.current_window = Some(window.to_string());
@@ -2486,6 +2534,21 @@ fn dispatch_nav_command(
     }
 }
 
+fn frame_input_state(layout: &mut LinearLayout<UIEvent, Theme>) -> (String, Cursor, bool) {
+    let mut state = UIEvent::RequestInputState;
+    if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+        frame.child.view.event(&mut state);
+    }
+    match state {
+        UIEvent::InputChanged(buf, cursor, password) => (buf, cursor, password),
+        // Callers run only with the message input focused, so this is never expected.
+        _ => {
+            log::warn!("event=frame_input_state_unanswered fallback=empty");
+            (String::new(), Cursor::new(0), false)
+        }
+    }
+}
+
 fn dispatch_action(
     action: Action,
     layout: &mut LinearLayout<UIEvent, Theme>,
@@ -2494,7 +2557,6 @@ fn dispatch_action(
     aparte_proxy: &mut AparteAsync,
     at_nav_bottom: &mut bool,
     input_bar_focused: &mut bool,
-    current_input: &mut (String, Cursor, bool),
 ) {
     if action.motion.is_navigation() {
         let cmd = match action.motion {
@@ -2523,9 +2585,6 @@ fn dispatch_action(
             for child in layout.iter_children_mut() {
                 child.event(&mut paste_event);
             }
-            if let UIEvent::InputChanged(ref buf, ref cursor, password) = paste_event {
-                aparte_proxy.schedule(Event::InputChanged(buf.clone(), cursor.clone(), password));
-            }
         }
     } else {
         let mut evt = UIEvent::ApplyTextAction(action.clone(), None);
@@ -2534,12 +2593,6 @@ fn dispatch_action(
         }
         if let UIEvent::ApplyTextAction(_, Some(ref rv)) = evt {
             registers.yank(action.register, rv.clone());
-        }
-        // Motion commands cause the Input widget to mutate evt → InputChanged.
-        // Sync current_input so subsequent handlers (e.g. `a`) see the new cursor.
-        if let UIEvent::InputChanged(ref buf, ref cursor, password) = evt {
-            *current_input = (buf.clone(), cursor.clone(), password);
-            aparte_proxy.schedule(Event::InputChanged(buf.clone(), cursor.clone(), password));
         }
         if matches!(action.operator, Operator::Change) {
             *mode = Mode::Insert;
@@ -2561,6 +2614,13 @@ fn window_input_event_handler(input: &mut Input<UIEvent>, event: &mut UIEvent) {
                     input.editor.handle_key_event(key);
                 }
             }
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::RequestInputState => {
             *event = UIEvent::InputChanged(
                 input.editor.buf.clone(),
                 input.editor.cursor.clone(),
@@ -2662,7 +2722,6 @@ impl ModTrait for UIMod {
             let mut message_cursor_active = false;
             let mut input_bar_focused = true;
             let mut pre_command_input_bar_focused = true;
-            let mut current_input: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
             // Command-bar buffer state, tracked separately from the message
             // input so a draft survives command/search entry (ADR-0008).
             let mut current_cmd: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
@@ -2719,8 +2778,6 @@ impl ModTrait for UIMod {
                         for child in layout.iter_children_mut() {
                             child.event(&mut UIEvent::ModeChange(Mode::Normal));
                         }
-                        let (buf, cursor, password) = current_input.clone();
-                        aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
                         code: KeyCode::Esc, ..
@@ -2730,23 +2787,13 @@ impl ModTrait for UIMod {
                         action_parser.reset();
                         if input_bar_focused {
                             // Vim: when leaving Insert on the input bar, cursor moves back one
-                            let (buf, cursor, _) = current_input.clone();
+                            let (buf, cursor, _) = frame_input_state(layout);
                             let len = buf.graphemes(true).count();
                             if cursor.get() == len && len > 0 {
                                 let new_pos = len - 1;
-                                let mut sis_event = UIEvent::SetInputState(buf.clone(), new_pos);
+                                let mut sis_event = UIEvent::SetInputState(buf, new_pos);
                                 if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                                     frame.child.view.event(&mut sis_event);
-                                }
-                                if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
-                                    sis_event
-                                {
-                                    current_input = (buf2.clone(), cursor2.clone(), password);
-                                    aparte_proxy.schedule(Event::InputChanged(
-                                        buf2.clone(),
-                                        cursor2.clone(),
-                                        password,
-                                    ));
                                 }
                             }
                         }
@@ -2808,22 +2855,12 @@ impl ModTrait for UIMod {
                                 }
                                 message_cursor_active = true;
                             } else {
-                                let (buf, cursor, _) = current_input.clone();
+                                let (buf, cursor, _) = frame_input_state(layout);
                                 let len = buf.graphemes(true).count();
                                 let new_pos = (cursor.get() + 1).min(len);
-                                let mut sis_event = UIEvent::SetInputState(buf.clone(), new_pos);
+                                let mut sis_event = UIEvent::SetInputState(buf, new_pos);
                                 if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                                     frame.child.view.event(&mut sis_event);
-                                }
-                                if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
-                                    sis_event
-                                {
-                                    current_input = (buf2.clone(), cursor2.clone(), password);
-                                    aparte_proxy.schedule(Event::InputChanged(
-                                        buf2.clone(),
-                                        cursor2.clone(),
-                                        password,
-                                    ));
                                 }
                             }
                             action_parser.reset();
@@ -2850,21 +2887,11 @@ impl ModTrait for UIMod {
                                 }
                                 message_cursor_active = true;
                             } else {
-                                let (buf, _, _) = current_input.clone();
+                                let (buf, _, _) = frame_input_state(layout);
                                 let len = buf.graphemes(true).count();
-                                let mut sis_event = UIEvent::SetInputState(buf.clone(), len);
+                                let mut sis_event = UIEvent::SetInputState(buf, len);
                                 if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                                     frame.child.view.event(&mut sis_event);
-                                }
-                                if let UIEvent::InputChanged(ref buf2, ref cursor2, password) =
-                                    sis_event
-                                {
-                                    current_input = (buf2.clone(), cursor2.clone(), password);
-                                    aparte_proxy.schedule(Event::InputChanged(
-                                        buf2.clone(),
-                                        cursor2.clone(),
-                                        password,
-                                    ));
                                 }
                             }
                             action_parser.reset();
@@ -2912,11 +2939,6 @@ impl ModTrait for UIMod {
                         }
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
                             current_cmd = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
                         }
                     }
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -2948,9 +2970,6 @@ impl ModTrait for UIMod {
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                         current_cmd = (String::new(), Cursor::new(0), false);
-                        // Resync completion/send state to the untouched message input.
-                        let (buf, cursor, password) = current_input.clone();
-                        aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
                     }
                     // Enter in Command mode executes the typed command.
                     UIEvent::Core(Event::Key(KeyEvent {
@@ -2979,9 +2998,6 @@ impl ModTrait for UIMod {
                             child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
                         }
                         current_cmd = (String::new(), Cursor::new(0), false);
-                        // Resync completion/send state to the untouched message input.
-                        let (buf, cursor, password) = current_input.clone();
-                        aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
                         if let Some(query) = cmd.strip_prefix('/') {
                             let query = query.to_string();
                             if !query.is_empty() {
@@ -3008,11 +3024,6 @@ impl ModTrait for UIMod {
                         layout.route_to_focused(event);
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
                             current_cmd = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
                         }
                     }
                     // Ctrl+W is the leader key for split navigation (^Wh / ^Wl).
@@ -3049,7 +3060,6 @@ impl ModTrait for UIMod {
                                     &mut aparte_proxy,
                                     &mut at_nav_bottom,
                                     &mut input_bar_focused,
-                                    &mut current_input,
                                 );
                             }
                             ParseResult::Invalid => {
@@ -3093,7 +3103,6 @@ impl ModTrait for UIMod {
                                     &mut aparte_proxy,
                                     &mut at_nav_bottom,
                                     &mut input_bar_focused,
-                                    &mut current_input,
                                 );
                             }
                             ParseResult::Invalid => {
@@ -3186,14 +3195,7 @@ impl ModTrait for UIMod {
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
                             if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
                                 current_cmd = (buf.clone(), cursor.clone(), password);
-                            } else {
-                                current_input = (buf.clone(), cursor.clone(), password);
                             }
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
                         }
                     }
                     UIEvent::Core(Event::ChangeWindow(name)) => {
@@ -3210,6 +3212,17 @@ impl ModTrait for UIMod {
                             frame.child.view.event(&mut fib);
                         }
                     }
+                    UIEvent::RequestInputState => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(buf, cursor, password) = event {
+                            *event = UIEvent::FocusedInputState(
+                                buf.clone(),
+                                cursor.clone(),
+                                *password,
+                                mode,
+                            );
+                        }
+                    }
                     // ClearInput targets whichever input widget is focused so
                     // clearing the command bar cannot wipe a message draft.
                     UIEvent::ClearInput => {
@@ -3217,14 +3230,7 @@ impl ModTrait for UIMod {
                         if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
                             if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
                                 current_cmd = (buf.clone(), cursor.clone(), password);
-                            } else {
-                                current_input = (buf.clone(), cursor.clone(), password);
                             }
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
                         }
                     }
                     // Completion results apply to the widget being edited only.
@@ -3235,24 +3241,11 @@ impl ModTrait for UIMod {
                             }
                             if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
                                 current_cmd = (buf.clone(), cursor.clone(), password);
-                                aparte_proxy.schedule(Event::InputChanged(
-                                    buf.clone(),
-                                    cursor.clone(),
-                                    password,
-                                ));
                             }
                         } else {
                             // Route completion to the frame so the focused window's Input handles it.
                             if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
                                 frame.child.view.event(event);
-                            }
-                            if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
-                                current_input = (buf.clone(), cursor.clone(), password);
-                                aparte_proxy.schedule(Event::InputChanged(
-                                    buf.clone(),
-                                    cursor.clone(),
-                                    password,
-                                ));
                             }
                         }
                     }
@@ -3288,8 +3281,6 @@ impl ModTrait for UIMod {
                                     frame.child.view.event(&mut fib);
                                 }
                                 current_cmd = (String::new(), Cursor::new(0), false);
-                                let (buf, cursor, password) = current_input.clone();
-                                aparte_proxy.schedule(Event::InputChanged(buf, cursor, password));
                             }
                             for child in layout.iter_children_mut() {
                                 child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
@@ -3319,14 +3310,6 @@ impl ModTrait for UIMod {
                     _ => {
                         for child in layout.iter_children_mut() {
                             child.event(event);
-                        }
-                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
-                            current_input = (buf.clone(), cursor.clone(), password);
-                            aparte_proxy.schedule(Event::InputChanged(
-                                buf.clone(),
-                                cursor.clone(),
-                                password,
-                            ));
                         }
                     }
                 },
@@ -3382,13 +3365,8 @@ impl ModTrait for UIMod {
                 | UIEvent::StartEdit
                 | UIEvent::AppendEdit
                 | UIEvent::AppendEndEdit
-                // Text actions, cursor moves, and input state changes go to the focused window only.
-                | UIEvent::MoveCursor(..)
-                | UIEvent::ApplyTextAction(..)
-                | UIEvent::SetInputState(..)
-                | UIEvent::SetInput(..)
-                | UIEvent::Paste(..)
-                | UIEvent::ClearInput => frame.route_to_focused(event),
+                => frame.route_to_focused(event),
+                _ if event.targets_focused_input_widget() => frame.route_to_focused(event),
                 // Global events (Message, Notification, Subject, etc.) → all windows
                 _ => {
                     for child in frame.iter_children_mut() {
@@ -3925,9 +3903,6 @@ impl ModTrait for UIMod {
             Event::UIMode(mode) => {
                 self.current_mode = *mode;
             }
-            Event::InputChanged(buf, cursor, password) => {
-                self.current_input = (buf.clone(), cursor.clone(), *password);
-            }
             Event::SendCorrection {
                 original_id,
                 new_body,
@@ -3947,15 +3922,15 @@ impl ModTrait for UIMod {
                     KeyEvent {
                         code: KeyCode::Tab, ..
                     } => {
-                        let (raw_buf, cursor, password) = self.current_input.clone();
+                        let Some((raw_buf, cursor, password, input_mode)) =
+                            self.focused_input_state()
+                        else {
+                            self.finish_event(aparte, before);
+                            return;
+                        };
 
-                        if password {
-                            aparte.schedule(Event::Key(KeyEvent::new(
-                                KeyCode::Tab,
-                                KeyModifiers::NONE,
-                            )));
-                        } else {
-                            match self.current_mode {
+                        if !password {
+                            match input_mode {
                                 Mode::Normal => {}
                                 Mode::Insert => {
                                     // Nick completion only — skip if the buffer looks like a command.
@@ -4003,14 +3978,28 @@ impl ModTrait for UIMod {
                         code: KeyCode::Enter,
                         ..
                     } => {
-                        if !self.root.is_visible() {
-                            self.slash_warned = false;
+                        // The slash warning popup forced Normal mode; restore it so the draft is readable.
+                        let confirming_slash_warning = self.slash_warned && self.root.is_visible();
+                        if confirming_slash_warning {
+                            self.root.event(&mut UIEvent::ClosePopup);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
                         }
-                        aparte.schedule(Event::ResetCompletion);
 
-                        // Snapshot the current input before the layout routing
-                        // may clear it via ClearInput.
-                        let (raw_buf, _cursor, password) = self.current_input.clone();
+                        // Normal mode never exposes an input: Enter there must not read, send or clear the draft.
+                        let input = self.focused_input_state().and_then(
+                            |(buf, _cursor, password, mode)| {
+                                (mode != Mode::Normal).then_some((buf, password))
+                            },
+                        );
+                        if input.is_some() {
+                            // The confirming Enter keeps the warning until the plain-text send clears it.
+                            if !confirming_slash_warning && !self.root.is_visible() {
+                                self.slash_warned = false;
+                            }
+                            aparte.schedule(Event::ResetCompletion);
+                        }
 
                         // Route Enter into the layout tree as a UIEvent::Core(Key).
                         // The layout closure handles:
@@ -4025,9 +4014,7 @@ impl ModTrait for UIMod {
                         // The CommandExecuted check is authoritative: in a fast
                         // key burst self.current_mode can lag behind the
                         // layout's own mode (UIMode events are still queued).
-                        if self.current_mode == Mode::Command
-                            || matches!(enter_evt, UIEvent::CommandExecuted)
-                        {
+                        if matches!(enter_evt, UIEvent::CommandExecuted) {
                             return;
                         }
 
@@ -4045,6 +4032,11 @@ impl ModTrait for UIMod {
                             }
                             return;
                         }
+
+                        let Some((raw_buf, password)) = input else {
+                            self.finish_event(aparte, before);
+                            return;
+                        };
 
                         // Normal Insert mode send path.
                         let looks_like_cmd = !password
@@ -4295,16 +4287,7 @@ impl ModTrait for UIMod {
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
-        log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
-
-        // Mark UI as needing a render; actual render happens once per event batch
-        // in the main loop via render_if_dirty().
-        self.dirty = true;
-
-        // Handle queued outgoing event
-        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
-            aparte.schedule(event);
-        }
+        self.finish_event(aparte, before);
     }
 }
 

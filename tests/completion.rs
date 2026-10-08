@@ -73,3 +73,53 @@ fn abbreviated_command_completes_and_executes() {
         describe(parser.screen())
     );
 }
+
+/// Regression: Tab in the same PTY write as the text it completes sees that text.
+#[test]
+fn tab_right_after_typed_text_completes_it() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_bytes(b"\x1b");
+    let in_normal = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    assert!(in_normal, "Expected NORMAL mode after Esc");
+
+    h.send_bytes(b":");
+    let in_command = wait_for_screen(&h, "COMMAND", Duration::from_secs(2));
+    assert!(in_command, "Expected COMMAND mode after :");
+
+    h.send_bytes(b"win con\t");
+
+    let found = wait_for_screen(&h, ":win console", Duration::from_secs(2));
+    let parser = h.snapshot();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Tab sent with the text did not complete :win con\n{}",
+        describe(parser.screen())
+    );
+}
+
+/// Regression: Tab in the same write as the colon and text completes using the layout's mode.
+#[test]
+fn tab_in_same_write_as_command_mode_entry_completes_it() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+
+    h.send_bytes(b"\x1b");
+    let in_normal = wait_for_screen(&h, "NORMAL", Duration::from_secs(2));
+    assert!(in_normal, "Expected NORMAL mode after Esc");
+
+    h.send_bytes(b":win con\t");
+
+    let found = wait_for_screen(&h, ":win console", Duration::from_secs(2));
+    let parser = h.snapshot();
+    h.shutdown();
+
+    assert!(
+        found,
+        "Tab sent with the colon and text did not complete :win con\n{}",
+        describe(parser.screen())
+    );
+}
