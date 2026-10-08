@@ -3440,3 +3440,109 @@ fn enter_on_roster_contact_opens_chat_window() {
         "chat window must open for contact after pressing Enter on the roster"
     );
 }
+
+#[test]
+fn a_after_typed_text_reads_the_live_buffer() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+    open_chat_window(&h);
+
+    // Esc cannot share a write with the following bytes: crossterm would parse them as Alt+key.
+    h.send_bytes(b"ihello\x1b");
+    assert!(wait_for_screen(&h, "NORMAL", Duration::from_secs(2)));
+    h.send_bytes(b"0aX");
+    assert!(wait_for_screen(&h, "hXello", Duration::from_secs(2)));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, INPUT_ROW);
+    assert!(
+        input.contains("hXello"),
+        "'a' right after a typed text must append after the cursor char, got: {input:?}\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn A_after_typed_text_reads_the_live_buffer() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+    open_chat_window(&h);
+
+    h.send_bytes(b"ihello\x1b");
+    assert!(wait_for_screen(&h, "NORMAL", Duration::from_secs(2)));
+    h.send_bytes(b"0A");
+    assert!(wait_for_screen(&h, "INSERT", Duration::from_secs(2)));
+    h.send_bytes(b"!");
+    assert!(wait_for_screen(&h, "hello!", Duration::from_secs(2)));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, INPUT_ROW);
+    assert!(
+        input.contains("hello!"),
+        "'A' right after a typed text must append at the end, got: {input:?}\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn esc_from_insert_on_empty_buffer_enters_normal_with_sane_cursor() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+    open_chat_window(&h);
+
+    h.send_bytes(b"\x1b");
+    assert!(wait_for_screen(&h, "NORMAL", Duration::from_secs(2)));
+    let (_, col) = h.snapshot().screen().cursor_position();
+    h.send_bytes(b"iX");
+    assert!(wait_for_screen(&h, "> X", Duration::from_secs(2)));
+
+    let parser = h.snapshot();
+    let screen = parser.screen();
+    h.shutdown();
+
+    let input = row_text(screen, INPUT_ROW);
+    assert_eq!(
+        col, PROMPT_WIDTH,
+        "cursor must stay at the start of an empty buffer"
+    );
+    assert!(
+        input.contains('X'),
+        "typing after Esc, i on an empty buffer must work, got: {input:?}\n{}",
+        describe(screen)
+    );
+}
+
+#[test]
+fn esc_from_insert_on_one_char_buffer_moves_cursor_onto_the_char() {
+    let h = Harness::spawn("", &[]);
+    wait_for_ready(&h);
+    open_chat_window(&h);
+
+    h.send_bytes(b"ix");
+    assert!(wait_for_screen(&h, "> x", Duration::from_secs(2)));
+    h.send_bytes(b"\x1b");
+    assert!(wait_for_screen(&h, "NORMAL", Duration::from_secs(2)));
+
+    let parser = h.snapshot();
+    let (_, col) = parser.screen().cursor_position();
+    h.send_bytes(b"aY");
+    assert!(wait_for_screen(&h, "xY", Duration::from_secs(2)));
+    let parser2 = h.snapshot();
+    let screen = parser2.screen();
+    let input = row_text(screen, INPUT_ROW);
+    let described = describe(screen);
+    h.shutdown();
+
+    assert_eq!(col, PROMPT_WIDTH, "cursor must sit on the single char");
+    assert!(
+        input.contains("xY"),
+        "'a' on a one-char buffer must append, got: {input:?}\n{described}"
+    );
+}
