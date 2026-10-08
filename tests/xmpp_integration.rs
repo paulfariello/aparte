@@ -665,9 +665,10 @@ fn enter_in_correction_edit_sends_replace_stanza(mut xmpp_with_contact: XmppFixt
     thread::sleep(Duration::from_millis(100));
     xmpp_with_contact.send_bytes(b"k");
     thread::sleep(Duration::from_millis(200));
-    xmpp_with_contact.send_bytes(b"i");
+    xmpp_with_contact.send_bytes(b"A");
     assert!(xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)));
 
+    // `A` (not `i`) appends at the end of the body.
     // Append " plus" to the in-place edit and commit. We wait for the edited
     // text to actually render before pressing Enter; otherwise the keys can
     // race the PTY/renderer and the correction is sent before the edit is
@@ -1162,13 +1163,21 @@ fn insert_mode_in_active_window_preserves_inactive_selection(xmpp_with_contact: 
         "expected a selected message in chat window",
     );
 
-    // Switch to console and enter Insert mode there.
-    xmpp_with_contact.switch_window("console");
-    xmpp_with_contact.wait_for("Connected as", Duration::from_secs(3));
+    // The console has no input bar (ADR-0009): enter Insert mode in a second chat window.
+    xmpp_with_contact.send_command("/msg other@localhost");
+    assert!(
+        xmpp_with_contact.wait_for("[other@localhost]", Duration::from_secs(3)),
+        "second chat window did not open",
+    );
     xmpp_with_contact.send_bytes(b"i");
     assert!(
         xmpp_with_contact.wait_for("INSERT", Duration::from_secs(2)),
-        "did not enter INSERT mode in console",
+        "did not enter INSERT mode in the second chat window",
+    );
+    assert!(
+        row_text(xmpp_with_contact.snapshot().screen(), 0).contains("[other@localhost]"),
+        "Insert mode must be in the second chat window (active in window bar)\n{}",
+        describe(xmpp_with_contact.snapshot().screen()),
     );
 
     // Return to Normal mode and go back to the chat window.
@@ -1191,7 +1200,7 @@ fn insert_mode_in_active_window_preserves_inactive_selection(xmpp_with_contact: 
     assert_eq!(
         selection_in_chat,
         selection_after,
-        "Insert mode in console must not clear the chat window's selection\n{}",
+        "Insert mode in another window must not clear the chat window's selection\n{}",
         describe(screen),
     );
 }
