@@ -217,22 +217,13 @@ impl<E, C> View<E, C> for Input<E> {
             let max_size = (frame.dimensions.width.saturating_sub(prompt_width + 1)) as usize;
 
             // cursor must always be inside the view
-            if self.editor.cursor < self.editor.view {
-                if self.editor.cursor < max_size {
-                    self.editor.view.set(0);
-                } else {
-                    self.editor
-                        .view
-                        .update(&self.editor.cursor - (frame.dimensions.width as usize - 1));
-                }
-            } else if self.editor.cursor > &self.editor.view + (frame.dimensions.width as usize - 1)
-            {
-                self.editor
-                    .view
-                    .update(&self.editor.cursor - (frame.dimensions.width as usize - 1));
+            let cursor = self.editor.cursor.get();
+            let view = self.editor.view.get();
+            if cursor < view || cursor > view + max_size {
+                self.editor.view.set(cursor.saturating_sub(max_size));
             }
             assert!(self.editor.cursor >= self.editor.view);
-            assert!(self.editor.cursor <= &self.editor.view + (max_size + 1));
+            assert!(self.editor.cursor <= &self.editor.view + max_size);
 
             if let Some((text, color)) = &self.prompt {
                 frame.write(text.as_str().with_color(color));
@@ -284,5 +275,40 @@ mod tests {
 
         // Then
         assert_eq!(input.editor.buf, "ab".to_string());
+    }
+
+    fn render_input(input: &Input<()>, width: u16) -> crate::rendering::OffscreenRenderBuffer {
+        use crate::rendering::{OffscreenRenderBuffer, ScreenSize};
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size(ScreenSize::from((width, 1u16)));
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width,
+            height: 1,
+        };
+        let frame = ScreenFrame::new(&mut buf, &dims, true);
+        View::<(), ()>::render(input, frame, &());
+        buf
+    }
+
+    #[test]
+    fn typing_past_the_view_width_with_prompt_does_not_panic() {
+        let width = 80;
+        let mut input = Input::<()>::new().with_prompt("> ", ColorTuple::default());
+        for _ in 0..(width as usize * 3) {
+            input.key('a');
+            render_input(&input, width);
+        }
+    }
+
+    #[test]
+    fn typing_in_a_burst_past_the_view_width_with_prompt_does_not_panic() {
+        let width = 80;
+        let mut input = Input::<()>::new().with_prompt("> ", ColorTuple::default());
+        for _ in 0..240 {
+            input.key('a');
+        }
+        render_input(&input, width);
     }
 }
