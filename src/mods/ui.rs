@@ -4014,9 +4014,7 @@ impl ModTrait for UIMod {
                         // The CommandExecuted check is authoritative: in a fast
                         // key burst self.current_mode can lag behind the
                         // layout's own mode (UIMode events are still queued).
-                        if self.current_mode == Mode::Command
-                            || matches!(enter_evt, UIEvent::CommandExecuted)
-                        {
+                        if matches!(enter_evt, UIEvent::CommandExecuted) {
                             return;
                         }
 
