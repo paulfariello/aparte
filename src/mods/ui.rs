@@ -3971,7 +3971,17 @@ impl ModTrait for UIMod {
                         code: KeyCode::Enter,
                         ..
                     } => {
-                        if !self.root.is_visible() {
+                        // The slash warning popup forced Normal mode; restore it so the draft is readable.
+                        let confirming_slash_warning = self.slash_warned && self.root.is_visible();
+                        if confirming_slash_warning {
+                            self.root.event(&mut UIEvent::ClosePopup);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
+                        }
+
+                        // The confirming Enter keeps the warning until the plain-text send clears it.
+                        if !confirming_slash_warning && !self.root.is_visible() {
                             self.slash_warned = false;
                         }
                         aparte.schedule(Event::ResetCompletion);

@@ -1361,3 +1361,97 @@ fn enter_right_after_long_burst_sends_full_body(mut xmpp_with_contact: XmppFixtu
     );
     assert!(sent.is_some(), "full burst body was not sent");
 }
+
+fn open_chat_with_sent_messages(xmpp: &mut XmppFixture) {
+    thread::sleep(Duration::from_millis(300));
+    xmpp.send_command("/msg contact@localhost");
+    thread::sleep(Duration::from_millis(400));
+    xmpp.send_command("First sent");
+    xmpp.send_command("Second sent");
+    assert!(
+        xmpp.wait_for("Second sent", Duration::from_secs(5)),
+        "sent messages not visible"
+    );
+    for body in ["First sent", "Second sent"] {
+        assert!(
+            xmpp.recv_outgoing_message_matching(
+                |msg| msg.bodies.values().any(|b| b == body),
+                Duration::from_secs(5),
+            )
+            .is_some(),
+            "{body} was not sent",
+        );
+    }
+}
+
+fn assert_nothing_sent(xmpp: &mut XmppFixture, what: &str) {
+    let stray = xmpp.recv_outgoing_message_matching(|_| true, Duration::from_secs(2));
+    assert!(
+        stray.is_none(),
+        "{}: unexpected outgoing stanza {:?}",
+        what,
+        stray
+    );
+}
+
+/// The second Enter after the slash warning sends the draft as plain text although the popup forced Normal mode.
+#[rstest]
+fn second_enter_after_slash_warning_sends_plain_text(mut xmpp_with_contact: XmppFixture) {
+    open_chat_with_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"/foo");
+    assert!(xmpp_with_contact.wait_for("/foo", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert!(
+        xmpp_with_contact.wait_for("looks like a command", Duration::from_secs(3)),
+        "slash warning popup not shown"
+    );
+    assert_nothing_sent(&mut xmpp_with_contact, "first Enter");
+
+    xmpp_with_contact.send_bytes(b"\r");
+    let sent = xmpp_with_contact.recv_outgoing_message_matching(
+        |msg| msg.bodies.values().any(|b| b == "/foo"),
+        Duration::from_secs(5),
+    );
+    assert!(
+        sent.is_some(),
+        "second Enter did not send /foo as plain text"
+    );
+    thread::sleep(Duration::from_millis(300));
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        !grid_contains(screen.screen(), "looks like a command"),
+        "popup must close after sending\n{}",
+        describe(screen.screen())
+    );
+}
+
+/// Esc on the slash warning popup closes it and leaves the draft editable.
+#[rstest]
+fn esc_on_slash_warning_restores_insert_with_draft(mut xmpp_with_contact: XmppFixture) {
+    open_chat_with_sent_messages(&mut xmpp_with_contact);
+
+    xmpp_with_contact.send_bytes(b"/foo");
+    assert!(xmpp_with_contact.wait_for("/foo", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\r");
+    assert!(xmpp_with_contact.wait_for("looks like a command", Duration::from_secs(3)));
+    xmpp_with_contact.send_bytes(b"\x1b");
+    thread::sleep(Duration::from_millis(500));
+
+    let screen = xmpp_with_contact.snapshot();
+    assert!(
+        !grid_contains(screen.screen(), "looks like a command"),
+        "popup must close on Esc\n{}",
+        describe(screen.screen())
+    );
+    assert!(
+        grid_contains(screen.screen(), "INSERT"),
+        "Esc on the popup must restore Insert mode\n{}",
+        describe(screen.screen())
+    );
+    assert!(
+        grid_contains(screen.screen(), "/foo"),
+        "draft must survive\n{}",
+        describe(screen.screen())
+    );
+}
