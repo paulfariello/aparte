@@ -3977,7 +3977,7 @@ impl ModTrait for UIMod {
                     KeyEvent {
                         code: KeyCode::Tab, ..
                     } => {
-                        let (raw_buf, cursor, password) = self.current_input.clone();
+                        let (raw_buf, cursor, password) = self.focused_input_state();
 
                         if password {
                             aparte.schedule(Event::Key(KeyEvent::new(
