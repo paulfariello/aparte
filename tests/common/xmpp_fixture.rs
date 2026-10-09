@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -66,6 +68,12 @@ pub struct OmemoMockConfig {
     pub configure_tx: mpsc::UnboundedSender<(String, DataForm)>,
     /// Receives the node name whenever aparte reads an owner node configuration.
     pub configure_get_tx: mpsc::UnboundedSender<String>,
+    /// When set, the own device list is served from (and updated by) this
+    /// shared state instead of `contact_devices`, so a published list is
+    /// visible to the next fetch like on a real server.
+    pub own_devices: Option<Arc<Mutex<Vec<u32>>>>,
+    /// While true, device list publishes are answered with an IQ error.
+    pub fail_devicelist_publish: Arc<AtomicBool>,
 }
 
 /// Receive-side handles returned to the test when using OMEMO fixtures.
@@ -78,9 +86,26 @@ pub struct OmemoCapture {
     )>,
     pub configure_rx: mpsc::UnboundedReceiver<(String, DataForm)>,
     pub configure_get_rx: mpsc::UnboundedReceiver<String>,
+    fail_devicelist_publish: Arc<AtomicBool>,
+    own_devices: Option<Arc<Mutex<Vec<u32>>>>,
 }
 
 impl OmemoCapture {
+    /// Make the mock answer device list publishes with an IQ error (or stop doing so).
+    pub fn fail_devicelist_publish(&self, fail: bool) {
+        self.fail_devicelist_publish.store(fail, Ordering::SeqCst);
+    }
+
+    /// Ids currently held by the mock for the own device list (stateful fixtures only).
+    pub fn server_own_devices(&self) -> Vec<u32> {
+        self.own_devices
+            .as_ref()
+            .expect("fixture has no stateful own device list")
+            .lock()
+            .unwrap()
+            .clone()
+    }
+
     pub fn recv_bundle(&mut self, timeout: Duration) -> (u32, legacy_omemo::Bundle) {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -354,7 +379,7 @@ async fn run_mock_server(
                                             let resp = if missing_own_list {
                                                 omemo_item_not_found_iq(id, &target)
                                             } else {
-                                                omemo_devicelist_iq(id, &items.node, &target, &omemo_cfg)
+                                                omemo_devicelist_iq(id, &items.node, &target, &user_bare_jid.to_string(), &omemo_cfg)
                                             };
                                             let _ = stream.send(&resp).await;
                                         } else if node.starts_with(ns::LEGACY_OMEMO_BUNDLES) {
@@ -470,13 +495,27 @@ async fn run_mock_server(
                                                     if let Some(item) = publish.items.first() {
                                                         if let Some(ref pl) = item.payload {
                                                             if let Ok(list) = legacy_omemo::DeviceList::try_from(pl.clone()) {
+                                                                if let Some(own) = cfg.own_devices.as_ref().filter(|_| !cfg.fail_devicelist_publish.load(Ordering::SeqCst)) {
+                                                                    *own.lock().unwrap() = list.devices.iter().map(|d| d.id).collect();
+                                                                }
                                                                 let _ = cfg.devicelist_tx.send((list, publish_options.clone()));
                                                             }
                                                         }
                                                     }
                                                 }
-                                                let ack = Iq::Result { from, to: None, id: id.to_string(), payload: None };
-                                                let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(ack))).await;
+                                                let failing = omemo_cfg.as_ref().is_some_and(|c| c.fail_devicelist_publish.load(Ordering::SeqCst));
+                                                let resp = if failing {
+                                                    let error = xmpp_parsers::stanza_error::StanzaError::new(
+                                                        xmpp_parsers::stanza_error::ErrorType::Auth,
+                                                        xmpp_parsers::stanza_error::DefinedCondition::Forbidden,
+                                                        "en",
+                                                        "Publish refused",
+                                                    );
+                                                    Iq::Error { from, to: None, id: id.to_string(), error, payload: None }
+                                                } else {
+                                                    Iq::Result { from, to: None, id: id.to_string(), payload: None }
+                                                };
+                                                let _ = stream.send(&XmppStreamElement::Stanza(tokio_xmpp::Stanza::Iq(resp))).await;
                                             }
                                             _ => {
                                                 // Ack all other pubsub Sets
@@ -612,17 +651,30 @@ fn omemo_devicelist_iq(
     req_id: &str,
     node: &NodeName,
     target_jid: &str,
+    own_jid: &str,
     omemo_cfg: &Option<OmemoMockConfig>,
 ) -> XmppStreamElement {
-    let devices: Vec<legacy_omemo::Device> = omemo_cfg
+    let stateful_own = omemo_cfg
         .as_ref()
-        .and_then(|c| c.contact_devices.get(target_jid))
-        .map(|devs| {
-            devs.iter()
-                .map(|(id, _)| legacy_omemo::Device { id: *id })
-                .collect()
-        })
-        .unwrap_or_default();
+        .and_then(|c| c.own_devices.as_ref())
+        .filter(|_| target_jid == own_jid);
+    let devices: Vec<legacy_omemo::Device> = match stateful_own {
+        Some(own) => own
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|id| legacy_omemo::Device { id: *id })
+            .collect(),
+        None => omemo_cfg
+            .as_ref()
+            .and_then(|c| c.contact_devices.get(target_jid))
+            .map(|devs| {
+                devs.iter()
+                    .map(|(id, _)| legacy_omemo::Device { id: *id })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
     let device_list = legacy_omemo::DeviceList { devices };
     let item = pubsub::pubsub::Item {
         id: Some(ItemId("current".into())),
@@ -1507,6 +1559,7 @@ impl XmppFixture {
         let (devicelist_tx, devicelist_rx) = mpsc::unbounded_channel();
         let (configure_tx, configure_rx) = mpsc::unbounded_channel();
         let (configure_get_tx, configure_get_rx) = mpsc::unbounded_channel();
+        let fail_devicelist_publish = Arc::new(AtomicBool::new(false));
         let cfg = OmemoMockConfig {
             contact_devices,
             bundle_tx,
@@ -1516,6 +1569,8 @@ impl XmppFixture {
             node_access_model: node_access_model.to_string(),
             configure_tx,
             configure_get_tx,
+            own_devices: None,
+            fail_devicelist_publish: fail_devicelist_publish.clone(),
         };
         let capture = OmemoCapture {
             bundle_rx,
@@ -1523,8 +1578,22 @@ impl XmppFixture {
             devicelist_rx,
             configure_rx,
             configure_get_rx,
+            fail_devicelist_publish,
+            own_devices: None,
         };
         (cfg, capture)
+    }
+
+    /// Create fixture with OMEMO-aware mock server whose own device list
+    /// already holds `seeded` ids. The list is stateful: Aparté's registration
+    /// and any later publish replace it.
+    pub fn new_with_omemo_own_devices(roster: &[&str], seeded: &[u32]) -> (Self, OmemoCapture) {
+        let (mut cfg, mut capture) = Self::omemo_mock(HashMap::new(), false, "open");
+        let own = Arc::new(Mutex::new(seeded.to_vec()));
+        cfg.own_devices = Some(own.clone());
+        capture.own_devices = Some(own);
+        let (fixture, _) = Self::new_impl(roster, true, vec![], Some(cfg), vec![], vec![], vec![]);
+        (fixture, capture)
     }
 
     /// Create fixture with OMEMO-aware mock server simulating a fresh account:
