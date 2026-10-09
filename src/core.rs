@@ -1958,6 +1958,11 @@ impl Aparte {
         command_parsers.insert(command_parser.name.to_string(), command_parser);
     }
 
+    pub fn has_crypto_engine(&self, account: &Account, recipient: &BareJid) -> bool {
+        let crypto_engines = self.crypto_engines.lock().unwrap();
+        crypto_engines.contains_key(&(account.clone(), recipient.clone()))
+    }
+
     // Common function for AparteAsync and Aparte, maybe share it in Trait
     pub fn add_crypto_engine(
         &mut self,

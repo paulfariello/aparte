@@ -1037,6 +1037,34 @@ pub fn bookmarks_v1_push_event(
     XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
 }
 
+/// A PEP headline carrying a contact's new `eu.siacs.conversations.axolotl.devicelist`.
+pub fn omemo_devicelist_push_event(from: &str, to: &str, device_ids: &[u32]) -> XmppStreamElement {
+    let device_list = legacy_omemo::DeviceList {
+        devices: device_ids
+            .iter()
+            .map(|id| legacy_omemo::Device { id: *id })
+            .collect(),
+    };
+    let item = pubsub_event::Item {
+        id: Some(ItemId("current".into())),
+        publisher: None,
+        payload: Some(device_list.into()),
+    };
+    let event = pubsub_event::Event {
+        payload: pubsub_event::Payload::Items {
+            node: NodeName(ns::LEGACY_OMEMO_DEVICELIST.to_string()),
+            published: vec![item],
+            retracted: vec![],
+        },
+    };
+    let event_elem: Element = event.into();
+
+    let mut msg = Message::new_with_type(MessageType::Headline, Some(Jid::new(to).unwrap()));
+    msg.from = Some(Jid::new(from).unwrap());
+    msg.payloads.push(event_elem);
+    XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg))
+}
+
 fn mam_result_message(
     queryid: &str,
     archive_id: &str,
