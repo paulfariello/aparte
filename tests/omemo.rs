@@ -15,7 +15,7 @@ use xmpp_parsers::{
 use common::omemo::ContactKeys;
 use common::xmpp_fixture::{
     chat_message, muc_join_presence_with_jid, omemo_devicelist_push_event, room_subject_message,
-    XmppFixture,
+    OmemoCapture, XmppFixture,
 };
 use common::{describe, row_text, ROWS, STATUS_ROW};
 
@@ -573,4 +573,133 @@ fn omemo_new_device_push_without_omemo_enabled_shows_no_notice() {
     ));
 
     assert_eq!(notice_count_after_sync(&fixture, "sync-disabled"), 0);
+}
+
+const STALE_DEVICE: u32 = 111_111;
+const OTHER_DEVICE: u32 = 222_222;
+
+fn own_fixture_after_registration() -> (XmppFixture, OmemoCapture, u32) {
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_own_devices(&[], &[STALE_DEVICE, OTHER_DEVICE]);
+    let (own_id, _) = capture.recv_bundle(Duration::from_secs(15));
+    let (registered, _) = capture.recv_devicelist_publish(Duration::from_secs(15));
+    let ids: Vec<u32> = registered.devices.iter().map(|d| d.id).collect();
+    assert!(
+        ids.contains(&own_id) && ids.contains(&STALE_DEVICE) && ids.contains(&OTHER_DEVICE),
+        "registration must keep seeded ids, got {:?}",
+        ids
+    );
+    (fixture, capture, own_id)
+}
+
+fn assert_no_further_publish(capture: &mut OmemoCapture) {
+    thread::sleep(Duration::from_secs(2));
+    assert!(
+        capture.devicelist_rx.try_recv().is_err(),
+        "no device list must be published"
+    );
+}
+
+/// `/omemo revoke <id>` republishes the own device list without that id.
+#[test]
+fn omemo_revoke_removes_other_device() {
+    let (fixture, mut capture, own_id) = own_fixture_after_registration();
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+
+    let (list, publish_options) = capture.recv_devicelist_publish(Duration::from_secs(10));
+    let mut ids: Vec<u32> = list.devices.iter().map(|d| d.id).collect();
+    ids.sort_unstable();
+    let mut expected = vec![own_id, OTHER_DEVICE];
+    expected.sort_unstable();
+    assert_eq!(ids, expected);
+    let form = publish_options
+        .expect("revoke must republish with publish-options")
+        .form
+        .expect("publish-options must carry a form");
+    assert_eq!(form_access_model(&form).as_deref(), Some("open"));
+    assert_screen_shows(&fixture, "Revoked OMEMO device");
+}
+
+/// The device Aparté itself uses can never be revoked.
+#[test]
+fn omemo_revoke_refuses_own_device() {
+    let (fixture, mut capture, own_id) = own_fixture_after_registration();
+
+    fixture.send_command(&format!("/omemo revoke {own_id}"));
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert_no_further_publish(&mut capture);
+}
+
+/// Revoking an id absent from the published list is refused.
+#[test]
+fn omemo_revoke_refuses_unknown_device() {
+    let (fixture, mut capture, _own_id) = own_fixture_after_registration();
+
+    fixture.send_command("/omemo revoke 987654");
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert_no_further_publish(&mut capture);
+}
+
+/// A non-numeric device id is refused without touching the server.
+#[test]
+fn omemo_revoke_refuses_invalid_device_id() {
+    let (fixture, mut capture, _own_id) = own_fixture_after_registration();
+
+    fixture.send_command("/omemo revoke abc");
+
+    assert_screen_shows(&fixture, "invalid digit found in string");
+    assert_no_further_publish(&mut capture);
+}
+
+fn assert_screen_shows(fixture: &XmppFixture, needle: &str) {
+    if !fixture.wait_for(needle, Duration::from_secs(5)) {
+        eprintln!("{}", describe(fixture.snapshot().screen()));
+        panic!("{:?} not shown in the UI", needle);
+    }
+}
+
+/// A server error on the republish is reported as a failure, never as success.
+#[test]
+fn omemo_revoke_reports_publish_error() {
+    let (fixture, capture, _own_id) = own_fixture_after_registration();
+    capture.fail_devicelist_publish(true);
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert!(
+        !fixture.wait_for("Revoked OMEMO device", Duration::from_secs(1)),
+        "success must not be reported when the publish failed"
+    );
+}
+
+/// A missing own device list node is an error, and nothing is published.
+#[test]
+fn omemo_revoke_refuses_when_device_list_missing() {
+    let (fixture, mut capture) = XmppFixture::new_with_omemo_fresh_account(&[]);
+    let _ = capture.recv_devicelist_publish(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert_no_further_publish(&mut capture);
+}
+
+/// After a successful revoke the server's own device list no longer holds the id.
+#[test]
+fn omemo_revoke_is_visible_to_later_fetches() {
+    let (fixture, mut capture, own_id) = own_fixture_after_registration();
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+    let _ = capture.recv_devicelist_publish(Duration::from_secs(10));
+    assert_screen_shows(&fixture, "Revoked OMEMO device");
+
+    let mut server_ids = capture.server_own_devices();
+    server_ids.sort_unstable();
+    let mut expected = vec![own_id, OTHER_DEVICE];
+    expected.sort_unstable();
+    assert_eq!(server_ids, expected);
 }

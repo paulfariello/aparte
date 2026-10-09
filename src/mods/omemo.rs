@@ -31,7 +31,7 @@ use xmpp_parsers::message_correct::Replace as XmppParsersReplace;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub;
 use xmpp_parsers::pubsub::{ItemId, PubSub};
-use xmpp_parsers::stanza_error::DefinedCondition;
+use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
 //use xmpp_parsers::omemo;
 
 use crate::account::Account;
@@ -159,6 +159,31 @@ Examples:
     }
 );
 
+command_def!(
+    omemo_revoke,
+    r":omemo revoke <device_id>
+
+    device_id    Numeric id of one of your own OMEMO devices
+
+Description:
+    Remove one of your own devices from your published OMEMO device list so
+    contacts stop encrypting to it. The device used by this Aparté instance
+    cannot be revoked. Use :omemo status to see the ids on the server.
+
+Examples:
+    :omemo revoke 1234567890
+",
+    {
+        device_id: DeviceId,
+    },
+    |aparte, _command| {
+        if let Some(account) = aparte.current_account() {
+            aparte.schedule(Event::Omemo(OmemoEvent::Revoke { account, device_id }));
+        }
+        Ok(())
+    }
+);
+
 command_def!(omemo,
 r":omemo enable",
 {
@@ -167,6 +192,7 @@ r":omemo enable",
             "enable": omemo_enable,
             "fingerprint": omemo_fingerprint,
             "status": omemo_status,
+            "revoke": omemo_revoke,
         }
     },
 });
@@ -189,6 +215,10 @@ pub enum OmemoEvent {
     ShowFingerprints {
         account: Account,
         jid: Option<BareJid>,
+    },
+    Revoke {
+        account: Account,
+        device_id: DeviceId,
     },
     Status {
         account: Account,
@@ -899,6 +929,29 @@ fn known_device_ids(
         .collect())
 }
 
+fn ensure_not_own_device(own_device_id: DeviceId, device_id: DeviceId) -> Result<()> {
+    if device_id == own_device_id {
+        return Err(anyhow!("Cannot revoke the current device {device_id}"));
+    }
+    Ok(())
+}
+
+fn without_device(
+    list: legacy_omemo::DeviceList,
+    device_id: DeviceId,
+) -> Result<legacy_omemo::DeviceList> {
+    if !list.devices.iter().any(|d| d.id == device_id) {
+        return Err(anyhow!("Device {device_id} is not in your device list"));
+    }
+    Ok(legacy_omemo::DeviceList {
+        devices: list
+            .devices
+            .into_iter()
+            .filter(|d| d.id != device_id)
+            .collect(),
+    })
+}
+
 fn fingerprint(pub_key: &PublicKey) -> String {
     // TODO fallback to standard library when intersperse will be added
     itertools::Itertools::intersperse(
@@ -1135,6 +1188,49 @@ impl OmemoMod {
         }
 
         Ok(())
+    }
+
+    fn iq_error_text(aparte: &AparteAsync, error: &StanzaError) -> String {
+        match i18n::get_best(&error.texts, aparte.config.preferred_langs_strs()) {
+            Some((_, text)) => text.clone(),
+            None => format!("{:?}", error.defined_condition),
+        }
+    }
+
+    async fn revoke_device(
+        aparte: &mut AparteAsync,
+        signal_store: &SignalStorage,
+        account: &Account,
+        device_id: DeviceId,
+    ) -> Result<()> {
+        let own_device_id: DeviceId = signal_store
+            .storage
+            .get_omemo_own_device(account)?
+            .context("OMEMO not configured")?
+            .id
+            .try_into()
+            .context("Corrupted own device id")?;
+        ensure_not_own_device(own_device_id, device_id)?;
+
+        let list = Self::get_device_list(aparte, account, &account.to_bare()).await?;
+        let list = without_device(list, device_id)?;
+        log::info!("Revoking device account={account} device_id={device_id}");
+
+        match aparte
+            .iq(account, Self::set_devices_iq(&account.to_bare(), list))
+            .await
+        {
+            Ok(IqResponse::Result(_)) => {
+                crate::info!(aparte, "Revoked OMEMO device {device_id}");
+                Ok(())
+            }
+            Ok(IqResponse::Error(error)) => Err(anyhow!(
+                "Iq error {}: {}",
+                error.type_,
+                Self::iq_error_text(aparte, &error)
+            )),
+            Err(e) => Err(anyhow!("IQ failed: {e}")),
+        }
     }
 
     async fn debug_info(
@@ -2173,6 +2269,34 @@ impl ModTrait for OmemoMod {
                         crate::error!(aparte, e, "Cannot get own OMEMO fingerprint");
                     }
                 }
+                OmemoEvent::Revoke { account, device_id } => {
+                    let device_id = *device_id;
+                    match self.signal_stores.get(account) {
+                        None => crate::info!(aparte, "OMEMO not configured for {account}"),
+                        Some(signal_store) => {
+                            let mut async_aparte = aparte.proxy();
+                            let account = account.clone();
+                            Aparte::spawn({
+                                let signal_store = SignalStorage::clone(signal_store);
+                                async move {
+                                    if let Err(err) = Self::revoke_device(
+                                        &mut async_aparte,
+                                        &signal_store,
+                                        &account,
+                                        device_id,
+                                    )
+                                    .await
+                                    {
+                                        log::error!(
+                                            "OMEMO revoke failed account={account} device_id={device_id} err={err:#}"
+                                        );
+                                        async_aparte.error("OMEMO revoke failed", err);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
                 OmemoEvent::Status { account, context } => match self.signal_stores.get(account) {
                     None => crate::info!(aparte, "OMEMO not configured for {account}"),
                     Some(signal_store) => {
@@ -2315,5 +2439,32 @@ mod tests {
     #[test]
     fn new_device_ids_dedups_and_sorts() {
         assert_eq!(new_device_ids(&HashSet::from([]), &[5, 3, 5]), vec![3, 5]);
+    }
+
+    fn list_of(ids: &[DeviceId]) -> legacy_omemo::DeviceList {
+        legacy_omemo::DeviceList {
+            devices: ids
+                .iter()
+                .map(|id| legacy_omemo::Device { id: *id })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn without_device_keeps_other_ids() {
+        let list = without_device(list_of(&[1, 2, 3]), 2).unwrap();
+        let ids: Vec<DeviceId> = list.devices.iter().map(|d| d.id).collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn ensure_not_own_device_refuses_own_device() {
+        assert!(ensure_not_own_device(1, 1).is_err());
+        assert!(ensure_not_own_device(1, 2).is_ok());
+    }
+
+    #[test]
+    fn without_device_refuses_unknown_device() {
+        assert!(without_device(list_of(&[1, 2]), 9).is_err());
     }
 }
