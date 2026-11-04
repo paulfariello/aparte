@@ -3764,8 +3764,8 @@ dependencies = [
 
 [[package]]
 name = "sixel-image"
-version = "0.1.0"
-source = "git+https://github.com/paulfariello/sixel-image.git?branch=patch-1#4ad04e5dd124f0aa3784c636e39ed6088af09d01"
+version = "0.2.1"
+source = "git+https://github.com/paulfariello/sixel-image.git?branch=feat%2Ffrom-parts#4e3948841cfb2870f020660f19072e1d2afe26b6"
 dependencies = [
  "sixel-tokenizer",
 ]

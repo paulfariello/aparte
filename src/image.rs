@@ -335,8 +335,8 @@ pub fn convert_to_sixel(image: DynamicImage) -> Result<SixelImage> {
     let pixels: Vec<Rgb<u8>> = rgb8.pixels().cloned().collect();
     let (colors, pixels) = adaptative_spatial_subdivision(pixels, palette_size);
 
-    Ok(SixelImage {
-        color_registers: colors
+    Ok(SixelImage::from_parts(
+        colors
             .into_iter()
             .enumerate()
             .map(|(index, pixel)| {
@@ -350,7 +350,7 @@ pub fn convert_to_sixel(image: DynamicImage) -> Result<SixelImage> {
                 )
             })
             .collect(),
-        pixels: pixels
+        pixels
             .into_iter()
             .map(|index| Pixel {
                 on: true,
@@ -360,7 +360,7 @@ pub fn convert_to_sixel(image: DynamicImage) -> Result<SixelImage> {
             .chunks(image.width() as usize)
             .map(|line| line.to_vec())
             .collect(),
-    })
+    ))
 }
 
 #[cfg(test)]
@@ -632,5 +632,22 @@ mod tests {
         );
         assert_eq!(node.avg, [0x0, 0x0, 0b010]);
         assert_eq!(node.error, (4f64 * 4f64) * 5f64);
+    }
+
+    #[test]
+    fn test_convert_to_sixel_keeps_dimensions_and_colors() {
+        // Given
+        let image =
+            DynamicImage::ImageRgb8(image::RgbImage::from_pixel(3, 2, Rgb::<u8>([255, 0, 0])));
+
+        // When
+        let sixel = convert_to_sixel(image).unwrap();
+
+        // Then
+        assert_eq!(sixel.pixels.len(), 2);
+        assert!(sixel.pixels.iter().all(|line| line.len() == 3));
+        assert!(sixel.pixels.iter().flatten().all(|pixel| pixel.on));
+        let color = sixel.color_registers[&sixel.pixels[0][0].color];
+        assert!(matches!(color, SixelColor::Rgb(100, 0, 0)));
     }
 }
