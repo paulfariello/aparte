@@ -6,30 +6,34 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use uuid::Uuid;
-use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
+use xmpp_parsers::data_forms::{DataForm, DataFormType, Field};
 use xmpp_parsers::delay::Delay;
-use xmpp_parsers::iq::{Iq, IqType};
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::jid::{BareJid, Jid};
 use xmpp_parsers::mam;
 use xmpp_parsers::message::Message as XmppParsersMessage;
 use xmpp_parsers::ns;
 use xmpp_parsers::rsm::SetQuery;
-use xmpp_parsers::{BareJid, Jid};
 
 use crate::account::Account;
+use crate::conversation::Conversation;
 use crate::core::{Aparte, Event, ModTrait};
+use crate::mods::conversation::ConversationMod;
 
 struct Query {
     jid: BareJid,
     with: Option<BareJid>,
     from: Option<DateTime<FixedOffset>>,
     count: usize,
+    is_muc_join: bool,
+    last_stanza_id: Option<String>,
 }
 
 impl Query {
     pub fn start(&self) -> (String, Iq) {
         // Start with before set to empty string in order to force xmpp_parser to generate a
         // <before/> element and to ensure we get last page first
-        self.query(Some("".to_string()))
+        self.query(Some(String::new()))
     }
 
     pub fn cont(&self, before: String) -> (String, Iq) {
@@ -40,37 +44,14 @@ impl Query {
         let mut fields = Vec::new();
 
         if let Some(end) = self.from {
-            let datetime = end.to_rfc3339();
-            fields.push(Field {
-                var: "end".to_string(),
-                type_: FieldType::default(),
-                label: None,
-                required: false,
-                options: vec![],
-                values: vec![datetime],
-                media: vec![],
-            });
+            fields.push(Field::text_single("end", &end.to_rfc3339()));
         }
 
         if let Some(with) = &self.with {
-            fields.push(Field {
-                var: "with".to_string(),
-                type_: FieldType::default(),
-                label: None,
-                required: false,
-                options: vec![],
-                values: vec![with.to_string()],
-                media: vec![],
-            });
+            fields.push(Field::text_single("with", &with.to_string()));
         }
 
-        let form = DataForm {
-            type_: DataFormType::Submit,
-            form_type: Some(String::from(ns::MAM)),
-            title: None,
-            instructions: None,
-            fields: fields,
-        };
+        let form = DataForm::new(DataFormType::Submit, ns::MAM, fields);
 
         let set = SetQuery {
             max: Some(self.count),
@@ -79,22 +60,24 @@ impl Query {
             index: None,
         };
 
-        let queryid = Uuid::new_v4().to_hyphenated().to_string();
+        let queryid = Uuid::new_v4().hyphenated().to_string();
         let query = mam::Query {
             queryid: Some(mam::QueryId(queryid.clone())),
             node: None,
             form: Some(form),
             set: Some(set),
+            flip_page: false,
         };
 
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+        let id = Uuid::new_v4().hyphenated().to_string();
         (
             queryid,
-            Iq::from_set(id, query).with_to(Jid::Bare(self.jid.clone())),
+            Iq::from_set(id, query).with_to(Jid::from(self.jid.clone())),
         )
     }
 }
 
+#[derive(Default)]
 pub struct MamMod {
     /// Queries indexed by queryid
     queries: HashMap<String, Query>,
@@ -104,48 +87,85 @@ pub struct MamMod {
 }
 
 impl MamMod {
-    pub fn new() -> Self {
-        Self {
-            queries: HashMap::new(),
-            iq2id: HashMap::new(),
-        }
-    }
-
     fn query(&mut self, aparte: &mut Aparte, account: &Account, query: Query) {
         let (queryid, iq) = query.start();
         self.queries.insert(queryid.clone(), query);
-        self.iq2id.insert(iq.id.clone(), queryid);
-        aparte.send(account, iq.into());
+        self.iq2id.insert(iq.id().to_string(), queryid);
+        aparte.send(account, iq);
     }
 
     fn handle_result(&mut self, aparte: &mut Aparte, account: &Account, result: mam::Result_) {
         if let Some(id) = &result.queryid {
             if let Some(query) = self.queries.get_mut(&id.0) {
                 query.count -= 1;
-                match (result.forwarded.delay, result.forwarded.stanza) {
-                    (Some(delay), Some(message)) => {
-                        aparte.schedule(Event::RawMessage(account.clone(), message, Some(delay)));
+
+                if query.is_muc_join && query.last_stanza_id.is_none() {
+                    let stanza_id = result
+                        .forwarded
+                        .message
+                        .payloads
+                        .iter()
+                        .find(|p| p.is("stanza-id", ns::SID))
+                        .and_then(|p| p.attr("id").map(str::to_string));
+
+                    if let Some(sid) = stanza_id {
+                        let sender_nick = result
+                            .forwarded
+                            .message
+                            .from
+                            .as_ref()
+                            .and_then(|j| j.clone().try_into_full().ok())
+                            .map(|fj| fj.resource().to_string());
+
+                        let our_nick = {
+                            let conv_mod = aparte.get_mod::<ConversationMod>();
+                            match conv_mod.get(account, &query.jid) {
+                                Some(Conversation::Channel(ch)) => Some(ch.nick.clone()),
+                                _ => None,
+                            }
+                        };
+
+                        let is_self = matches!(
+                            (sender_nick, our_nick),
+                            (Some(sender), Some(ours)) if sender == ours
+                        );
+
+                        if !is_self {
+                            query.last_stanza_id = Some(sid);
+                        }
                     }
-                    _ => {}
                 }
+
+                aparte.schedule(Event::RawMessage {
+                    account: account.clone(),
+                    message: result.forwarded.message,
+                    delay: result.forwarded.delay,
+                    archive: true,
+                });
             }
         }
     }
 
     fn handle_fin(&mut self, aparte: &mut Aparte, account: &Account, query: Query, fin: mam::Fin) {
-        if fin.complete == mam::Complete::False {
+        if !fin.complete {
             if let Some(start) = fin.set.first {
-                info!(
+                log::info!(
                     "Continuing MAM retrieval for {} with {:?} from {:?}",
                     query.jid,
                     query.with.clone().map(|jid| jid.to_string()),
                     query.from
                 );
-                let (queryid, iq) = query.cont(start);
+                let (queryid, iq) = query.cont(start.item);
                 self.queries.insert(queryid.clone(), query);
-                self.iq2id.insert(iq.id.clone(), queryid);
-                aparte.send(account, iq.into());
+                self.iq2id.insert(iq.id().to_string(), queryid);
+                aparte.send(account, iq);
             }
+        } else if query.is_muc_join {
+            aparte.schedule(Event::MucMamComplete {
+                account: account.clone(),
+                jid: query.jid.clone(),
+                last_stanza_id: query.last_stanza_id,
+            });
         }
     }
 }
@@ -162,12 +182,12 @@ impl ModTrait for MamMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter().cloned() {
+        for payload in &message.payloads {
             if mam::Result_::try_from(payload.clone()).is_ok() {
                 return 1f64;
             }
         }
-        return 0f64;
+        0f64
     }
 
     fn handle_xmpp_message(
@@ -176,8 +196,9 @@ impl ModTrait for MamMod {
         account: &Account,
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
+        _archive: bool,
     ) {
-        for payload in message.payloads.iter().cloned() {
+        for payload in &message.payloads {
             if let Ok(result) = mam::Result_::try_from(payload.clone()) {
                 self.handle_result(aparte, account, result);
             }
@@ -187,22 +208,28 @@ impl ModTrait for MamMod {
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Join {
-                account, channel, ..
-            } => {
+                account,
+                channel,
+                user_request,
+            } if *user_request => {
                 let query = Query {
-                    jid: channel.clone().into(),
+                    jid: channel.to_bare(),
                     with: None,
                     from: None,
                     count: 100,
+                    is_muc_join: true,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
             Event::Chat { account, contact } => {
                 let query = Query {
-                    jid: account.clone().into(),
+                    jid: account.to_bare(),
                     with: Some(contact.clone()),
                     from: None,
                     count: 100,
+                    is_muc_join: false,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
@@ -210,8 +237,10 @@ impl ModTrait for MamMod {
                 let query = Query {
                     jid: jid.clone(),
                     with: None,
-                    from: from.clone(),
+                    from: *from,
                     count: 100,
+                    is_muc_join: false,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
@@ -221,21 +250,27 @@ impl ModTrait for MamMod {
                 from,
             } => {
                 let query = Query {
-                    jid: account.clone().into(),
+                    jid: account.to_bare(),
                     with: Some(contact.clone()),
-                    from: from.clone(),
+                    from: *from,
                     count: 100,
+                    is_muc_join: false,
+                    last_stanza_id: None,
                 };
                 self.query(aparte, account, query);
             }
             Event::Iq(account, iq) => {
-                if let Some(id) = self.iq2id.remove(&iq.id) {
+                if let Some(id) = self.iq2id.remove(iq.id()) {
                     if let Some(query) = self.queries.remove(&id) {
-                        if let IqType::Result(Some(payload)) = &iq.payload {
-                            if let Ok(fin) = mam::Fin::try_from(payload.clone()) {
+                        if let Iq::Result {
+                            payload: Some(payload),
+                            ..
+                        } = iq.clone()
+                        {
+                            if let Ok(fin) = mam::Fin::try_from(payload) {
                                 self.handle_fin(aparte, account, query, fin);
                             } else {
-                                warn!("Incorrect IQ response for MAM query");
+                                log::warn!("Incorrect IQ response for MAM query");
                             }
                         }
                     }

@@ -1,0 +1,705 @@
+mod common;
+
+use std::convert::TryFrom;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use tokio_xmpp::xmlstream::XmppStreamElement;
+use xmpp_parsers::{
+    jid::{BareJid, Jid},
+    legacy_omemo,
+    message::{Id, Message},
+    muc::user::{Affiliation, Role},
+};
+
+use common::omemo::ContactKeys;
+use common::xmpp_fixture::{
+    chat_message, muc_join_presence_with_jid, omemo_devicelist_push_event, room_subject_message,
+    OmemoCapture, XmppFixture,
+};
+use common::{describe, row_text, ROWS, STATUS_ROW};
+
+const BOUND_JID: &str = "user@localhost/aparte_test";
+
+fn message_has_omemo(msg: &xmpp_parsers::message::Message) -> bool {
+    msg.payloads
+        .iter()
+        .any(|p| p.is("encrypted", "eu.siacs.conversations.axolotl"))
+}
+
+/// On a fresh account, the own device-list PEP node doesn't exist yet: the
+/// initial fetch comes back `item-not-found`. Aparté must still create the
+/// node by publishing a device list containing its own device id, with
+/// publish-options requesting an open access model so any contact can fetch it.
+#[test]
+fn omemo_creates_device_list_when_missing() {
+    let (_fixture, mut capture) = XmppFixture::new_with_omemo_fresh_account(&[]);
+
+    let (device_list, publish_options) = capture.recv_devicelist_publish(Duration::from_secs(15));
+
+    assert_eq!(
+        device_list.devices.len(),
+        1,
+        "expected exactly the own device to be registered, got {:?}",
+        device_list.devices
+    );
+
+    let access_model = publish_options
+        .expect("device list publish must carry publish-options")
+        .form
+        .expect("publish-options must carry a form")
+        .fields
+        .iter()
+        .find(|f| f.var.as_deref() == Some("pubsub#access_model"))
+        .and_then(|f| f.values.first().cloned());
+    assert_eq!(
+        access_model.as_deref(),
+        Some("open"),
+        "device list must be published with an open access model"
+    );
+}
+
+/// `/omemo fingerprint` shows the own device's fingerprint in the UI.
+#[test]
+fn omemo_fingerprint_shown() {
+    let (fixture, _capture) = XmppFixture::new_with_omemo(&[]);
+    // configure() stores the identity synchronously before the spawn,
+    // so the fingerprint is readable immediately after connection.
+    fixture.send_command("/omemo fingerprint");
+    let found = fixture.wait_for("\u{1f6e1}", Duration::from_secs(5));
+    if !found {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(found, "fingerprint emoji not found in UI");
+}
+
+/// Sending a message to an OMEMO-enabled contact produces an encrypted stanza on the wire.
+#[test]
+fn omemo_outgoing_encrypted() {
+    let contact = ContactKeys::generate();
+    let contact_jid = "contact@localhost";
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    // Wait for aparte to publish its own bundle (confirm configure finished)
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+    // start_session is async; give it time to download the bundle and set up a session
+    thread::sleep(Duration::from_secs(3));
+
+    fixture.send_command("hello encrypted world");
+
+    let encrypted_msg = capture.recv_message_matching(message_has_omemo, Duration::from_secs(5));
+
+    if encrypted_msg.is_none() {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(
+        encrypted_msg.is_some(),
+        "no OMEMO-encrypted message stanza was sent"
+    );
+
+    // The outgoing message displayed in the UI must carry the lock emoji.
+    let lock_shown = fixture.wait_for("\u{1f512}", Duration::from_secs(5));
+    if !lock_shown {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(lock_shown, "🔒 not shown for outgoing OMEMO message");
+}
+
+/// Injecting an OMEMO-encrypted message from a contact results in decrypted plaintext in the UI.
+#[test]
+fn omemo_incoming_decrypted() {
+    let mut contact = ContactKeys::generate();
+    let contact_jid = "contact@localhost";
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle.clone());
+
+    // Capture aparte's own bundle so we can encrypt for its device
+    let (aparte_device_id, aparte_bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+    // Wait for start_session to download contact's bundle + establish Signal session
+    thread::sleep(Duration::from_secs(3));
+
+    // Build an OMEMO-encrypted message from contact to aparte
+    let aparte_jid = BareJid::new("user@localhost").expect("bare jid");
+    let encrypted =
+        contact.encrypt_for(&aparte_jid, aparte_device_id, &aparte_bundle, "secret text");
+
+    let mut msg = Message::chat(Some(Jid::new("user@localhost").expect("jid")));
+    msg.from = Some(Jid::new(&format!("{contact_jid}/desktop")).expect("from jid"));
+    msg.id = Some(Id("omemo-test-1".into()));
+    msg.payloads
+        .push(xmpp_parsers::minidom::Element::from(encrypted));
+
+    fixture.inject(XmppStreamElement::Stanza(tokio_xmpp::Stanza::Message(msg)));
+
+    let found = fixture.wait_for("secret text", Duration::from_secs(5));
+    if !found {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(found, "decrypted message body not found in UI");
+
+    // Encrypted incoming message must show the lock emoji in the header.
+    let lock_shown = fixture.wait_for("\u{1f512}", Duration::from_secs(5));
+    if !lock_shown {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(lock_shown, "🔒 not shown for incoming OMEMO message");
+}
+
+/// Sending an OMEMO message in a MUC produces an encrypted stanza that includes a key
+/// for each occupant's device and that the occupant can actually decrypt.
+#[test]
+fn omemo_muc_outgoing_encrypted() {
+    let mut contact = ContactKeys::generate();
+    let contact_jid_str = "contact@localhost";
+
+    let (fixture, mut capture) = XmppFixture::new_with_omemo_contact(
+        contact_jid_str,
+        contact.device_id,
+        contact.bundle.clone(),
+    );
+
+    // Wait for aparte to publish its own bundle so we know configure() finished.
+    let (aparte_device_id, _aparte_bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    let room = "room@conference.localhost";
+
+    // Join the MUC.
+    fixture.send_command(&format!("/join {room}"));
+    thread::sleep(Duration::from_millis(400));
+
+    // Self-presence (real JID must be a full JID so conversation.rs converts it to bare).
+    fixture.inject(muc_join_presence_with_jid(
+        &format!("{room}/user"),
+        BOUND_JID,
+        Affiliation::Member,
+        Role::Participant,
+        "user@localhost/aparte",
+    ));
+
+    // Contact's presence with their real JID — this is what OMEMO uses to look up their bundle.
+    fixture.inject(muc_join_presence_with_jid(
+        &format!("{room}/contact"),
+        BOUND_JID,
+        Affiliation::Member,
+        Role::Participant,
+        &format!("{contact_jid_str}/desktop"),
+    ));
+
+    // Room subject marks the join as complete in the UI.
+    fixture.inject(room_subject_message(
+        &format!("{room}/user"),
+        BOUND_JID,
+        "subj-1",
+        "Test room",
+    ));
+    thread::sleep(Duration::from_millis(300));
+
+    // Enable OMEMO — this triggers start_session() for each occupant with a known real JID.
+    fixture.send_command(&format!("/omemo enable {room}"));
+    // Give start_session() time to fetch the contact's device list + bundle and build a session.
+    thread::sleep(Duration::from_secs(4));
+
+    fixture.switch_window(room);
+    fixture.send_command("hello encrypted muc");
+
+    let encrypted_msg = capture.recv_message_matching(message_has_omemo, Duration::from_secs(5));
+
+    if encrypted_msg.is_none() {
+        let screen = fixture.snapshot();
+        eprintln!("{}", common::describe(screen.screen()));
+    }
+    assert!(
+        encrypted_msg.is_some(),
+        "no OMEMO-encrypted groupchat message was sent"
+    );
+
+    let msg = encrypted_msg.unwrap();
+    let encrypted = msg
+        .payloads
+        .iter()
+        .find_map(|p| legacy_omemo::Encrypted::try_from(p.clone()).ok())
+        .expect("no <encrypted> element in the groupchat stanza");
+
+    // The encrypted message must include a key for the contact's device.
+    assert!(
+        encrypted
+            .header
+            .keys
+            .iter()
+            .any(|k| k.rid == contact.device_id),
+        "encrypted groupchat message has no key for contact device {}; keys present: {:?}",
+        contact.device_id,
+        encrypted
+            .header
+            .keys
+            .iter()
+            .map(|k| k.rid)
+            .collect::<Vec<_>>(),
+    );
+
+    // The contact must be able to decrypt the message end-to-end.
+    let aparte_bare = BareJid::new("user@localhost").expect("bare jid");
+    let plaintext = contact
+        .decrypt_from(&aparte_bare, aparte_device_id, &encrypted)
+        .expect("contact could not decrypt the MUC message");
+    assert_eq!(
+        plaintext, "hello encrypted muc",
+        "decrypted MUC message body mismatch"
+    );
+}
+
+/// After `/omemo enable`, the status line shows 🔒 for that conversation.
+#[test]
+fn omemo_enabled_shows_lock_in_titlebar() {
+    let contact_jid = "contact@localhost";
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    // Wait for aparte to publish its own bundle — confirms configure() has run.
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    // Open the chat window with the contact, then enable OMEMO.
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+
+    // Poll the status line until 🔒 appears, up to 10 seconds.
+    // start_session() is async so the OmemoEvent::Enabled fires after
+    // the bundle fetch completes, not immediately.
+    let status_row = STATUS_ROW;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = false;
+    while Instant::now() < deadline {
+        let parser = fixture.snapshot();
+        if row_text(parser.screen(), status_row).contains("🔒") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    if !found {
+        let parser = fixture.snapshot();
+        eprintln!("{}", describe(parser.screen()));
+    }
+    assert!(found, "🔒 not shown in status line after /omemo enable");
+}
+
+/// 🔒 must persist in the status line after entering COMMAND mode (`:` key).
+/// COMMAND mode uses a 9-char label vs the 8-char INSERT/NORMAL labels, which
+/// shifts the title one column right.  A stale wide-char continuation in the
+/// reference screen used to cause a false match so 🔒 was never re-emitted.
+#[test]
+fn omemo_lock_persists_in_command_mode() {
+    let contact_jid = "contact@localhost";
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+
+    let status_row = STATUS_ROW;
+
+    // Wait for 🔒 in INSERT mode.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = false;
+    while Instant::now() < deadline {
+        if row_text(fixture.snapshot().screen(), status_row).contains("🔒") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    assert!(found, "🔒 not shown in INSERT mode — prerequisite failed");
+
+    // Press ':' → COMMAND mode (mode label expands from 8 to 9 chars, shifting
+    // every subsequent column right by one, including the 🔒 position).
+    fixture.send_bytes(b"\x1b");
+    let normal_shown = fixture.wait_for("NORMAL", Duration::from_secs(3));
+    assert!(normal_shown, "did not enter NORMAL mode before ':'");
+    fixture.send_bytes(b":");
+    let cmd_shown = fixture.wait_for("COMMAND", Duration::from_secs(3));
+    assert!(cmd_shown, "did not enter COMMAND mode");
+
+    let parser = fixture.snapshot();
+    let bar = row_text(parser.screen(), status_row);
+    assert!(
+        bar.contains("🔒"),
+        "🔒 disappeared from status line after entering COMMAND mode; got: {:?}\n{}",
+        bar,
+        describe(parser.screen())
+    );
+}
+
+/// 🔒 must persist in the status line after switching to NORMAL mode (Escape).
+#[test]
+fn omemo_lock_persists_in_normal_mode() {
+    let contact_jid = "contact@localhost";
+    let contact = ContactKeys::generate();
+
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(contact_jid, contact.device_id, contact.bundle);
+
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {contact_jid}"));
+    fixture.send_command(&format!("/omemo enable {contact_jid}"));
+
+    let status_row = STATUS_ROW;
+
+    // Wait for 🔒 to appear in the status line while still in INSERT mode.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = false;
+    while Instant::now() < deadline {
+        if row_text(fixture.snapshot().screen(), status_row).contains("🔒") {
+            found = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    assert!(found, "🔒 not shown in INSERT mode — prerequisite failed");
+
+    // Press Escape → NORMAL mode.
+    fixture.send_bytes(b"\x1b");
+    // Wait until the status line shows NORMAL.
+    let normal_shown = fixture.wait_for("NORMAL", Duration::from_secs(3));
+    assert!(normal_shown, "did not enter NORMAL mode");
+
+    // 🔒 must still be visible in the status line.
+    let parser = fixture.snapshot();
+    let bar = row_text(parser.screen(), status_row);
+    assert!(
+        bar.contains("🔒"),
+        "🔒 disappeared from status line after entering NORMAL mode; got: {:?}\n{}",
+        bar,
+        describe(parser.screen())
+    );
+}
+
+fn form_access_model(form: &xmpp_parsers::data_forms::DataForm) -> Option<String> {
+    form.fields
+        .iter()
+        .find(|f| f.var.as_deref() == Some("pubsub#access_model"))
+        .and_then(|f| f.values.first().cloned())
+}
+
+/// PEP nodes keep the config they were created with: nodes created before aparte
+/// asked for an open access model stay closed, so contacts get `not-authorized`
+/// on fetch. Aparté must reconfigure the existing nodes it owns.
+#[test]
+fn omemo_reopens_closed_nodes() {
+    let (_fixture, mut capture) = XmppFixture::new_with_omemo_node_access_model(&[], "presence");
+
+    let (device_id, _bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    for node in [
+        "eu.siacs.conversations.axolotl.devicelist".to_string(),
+        format!("eu.siacs.conversations.axolotl.bundles:{device_id}"),
+    ] {
+        let form = capture
+            .recv_configure_for(&node, Duration::from_secs(5))
+            .unwrap_or_else(|| panic!("node {} was not reconfigured", node));
+        assert_eq!(form.type_, xmpp_parsers::data_forms::DataFormType::Submit);
+        assert_eq!(
+            form.form_type(),
+            Some("http://jabber.org/protocol/pubsub#node_config")
+        );
+        assert_eq!(form_access_model(&form).as_deref(), Some("open"));
+    }
+}
+
+/// Nodes that are already open must be left alone.
+#[test]
+fn omemo_leaves_open_nodes_untouched() {
+    let (_fixture, mut capture) = XmppFixture::new_with_omemo_node_access_model(&[], "open");
+
+    let (device_id, _bundle) = capture.recv_bundle(Duration::from_secs(15));
+
+    for node in [
+        "eu.siacs.conversations.axolotl.devicelist".to_string(),
+        format!("eu.siacs.conversations.axolotl.bundles:{device_id}"),
+    ] {
+        assert!(
+            capture.saw_configure_get_for(&node, Duration::from_secs(5)),
+            "node {} config was never read",
+            node
+        );
+        assert!(
+            capture
+                .recv_configure_for(&node, Duration::from_secs(3))
+                .is_none(),
+            "node {} was reconfigured although already open",
+            node
+        );
+    }
+}
+
+const NEW_DEVICE_NOTICE: &str = "new OMEMO device";
+const CONTACT_JID: &str = "contact@localhost";
+
+/// Opens a chat with `CONTACT_JID` (one known device) and, when `enable`,
+/// turns OMEMO on for it. Returns the fixture and the contact's known device id.
+fn chat_with_contact(enable: bool) -> (XmppFixture, u32) {
+    let contact = ContactKeys::generate();
+    let device_id = contact.device_id;
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_contact(CONTACT_JID, device_id, contact.bundle);
+    let _ = capture.recv_bundle(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/msg {CONTACT_JID}"));
+    if enable {
+        fixture.send_command(&format!("/omemo enable {CONTACT_JID}"));
+        thread::sleep(Duration::from_secs(3));
+    }
+    (fixture, device_id)
+}
+
+/// Injects a plain message and waits for it, proving earlier injected
+/// stanzas were processed, then counts the notices on screen.
+fn notice_count_after_sync(fixture: &XmppFixture, sync_body: &str) -> usize {
+    fixture.inject(chat_message(
+        &format!("{CONTACT_JID}/desktop"),
+        "user@localhost",
+        "sync-1",
+        sync_body,
+    ));
+    assert!(
+        fixture.wait_for(sync_body, Duration::from_secs(5)),
+        "sync message not displayed"
+    );
+    common::describe(fixture.snapshot().screen())
+        .matches(NEW_DEVICE_NOTICE)
+        .count()
+}
+
+/// A device-list push adding an unseen device shows a notice in that contact's window.
+#[test]
+fn omemo_new_device_push_shows_notice_in_chat() {
+    let (fixture, known_device) = chat_with_contact(true);
+    let new_device = known_device.wrapping_add(1).max(1);
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &[known_device, new_device],
+    ));
+
+    let found = fixture.wait_for(
+        &format!("added a new OMEMO device {new_device}"),
+        Duration::from_secs(5),
+    );
+    if !found {
+        eprintln!("{}", common::describe(fixture.snapshot().screen()));
+    }
+    assert!(found, "new device notice not shown in the contact's window");
+}
+
+/// Learning the device list when enabling OMEMO is the baseline, not an addition.
+#[test]
+fn omemo_first_device_list_fetch_shows_no_notice() {
+    let (fixture, _known_device) = chat_with_contact(true);
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-first-fetch"), 0);
+}
+
+/// A push repeating the known list adds nothing new.
+#[test]
+fn omemo_unchanged_device_list_push_shows_no_notice() {
+    let (fixture, known_device) = chat_with_contact(true);
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &[known_device],
+    ));
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-unchanged"), 0);
+}
+
+/// The same new device announced twice is only reported once.
+#[test]
+fn omemo_new_device_is_announced_once() {
+    let (fixture, known_device) = chat_with_contact(true);
+    let new_device = known_device.wrapping_add(1).max(1);
+    let list = [known_device, new_device];
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &list,
+    ));
+    assert!(fixture.wait_for(
+        &format!("OMEMO device {new_device}"),
+        Duration::from_secs(5)
+    ));
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &list,
+    ));
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-once"), 1);
+}
+
+/// Without OMEMO enabled for the conversation, device list pushes stay silent.
+#[test]
+fn omemo_new_device_push_without_omemo_enabled_shows_no_notice() {
+    let (fixture, known_device) = chat_with_contact(false);
+    let new_device = known_device.wrapping_add(1).max(1);
+
+    fixture.inject(omemo_devicelist_push_event(
+        CONTACT_JID,
+        "user@localhost",
+        &[known_device, new_device],
+    ));
+
+    assert_eq!(notice_count_after_sync(&fixture, "sync-disabled"), 0);
+}
+
+const STALE_DEVICE: u32 = 111_111;
+const OTHER_DEVICE: u32 = 222_222;
+
+fn own_fixture_after_registration() -> (XmppFixture, OmemoCapture, u32) {
+    let (fixture, mut capture) =
+        XmppFixture::new_with_omemo_own_devices(&[], &[STALE_DEVICE, OTHER_DEVICE]);
+    let (own_id, _) = capture.recv_bundle(Duration::from_secs(15));
+    let (registered, _) = capture.recv_devicelist_publish(Duration::from_secs(15));
+    let ids: Vec<u32> = registered.devices.iter().map(|d| d.id).collect();
+    assert!(
+        ids.contains(&own_id) && ids.contains(&STALE_DEVICE) && ids.contains(&OTHER_DEVICE),
+        "registration must keep seeded ids, got {:?}",
+        ids
+    );
+    (fixture, capture, own_id)
+}
+
+fn assert_no_further_publish(capture: &mut OmemoCapture) {
+    thread::sleep(Duration::from_secs(2));
+    assert!(
+        capture.devicelist_rx.try_recv().is_err(),
+        "no device list must be published"
+    );
+}
+
+/// `/omemo revoke <id>` republishes the own device list without that id.
+#[test]
+fn omemo_revoke_removes_other_device() {
+    let (fixture, mut capture, own_id) = own_fixture_after_registration();
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+
+    let (list, publish_options) = capture.recv_devicelist_publish(Duration::from_secs(10));
+    let mut ids: Vec<u32> = list.devices.iter().map(|d| d.id).collect();
+    ids.sort_unstable();
+    let mut expected = vec![own_id, OTHER_DEVICE];
+    expected.sort_unstable();
+    assert_eq!(ids, expected);
+    let form = publish_options
+        .expect("revoke must republish with publish-options")
+        .form
+        .expect("publish-options must carry a form");
+    assert_eq!(form_access_model(&form).as_deref(), Some("open"));
+    assert_screen_shows(&fixture, "Revoked OMEMO device");
+}
+
+/// The device Aparté itself uses can never be revoked.
+#[test]
+fn omemo_revoke_refuses_own_device() {
+    let (fixture, mut capture, own_id) = own_fixture_after_registration();
+
+    fixture.send_command(&format!("/omemo revoke {own_id}"));
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert_no_further_publish(&mut capture);
+}
+
+/// Revoking an id absent from the published list is refused.
+#[test]
+fn omemo_revoke_refuses_unknown_device() {
+    let (fixture, mut capture, _own_id) = own_fixture_after_registration();
+
+    fixture.send_command("/omemo revoke 987654");
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert_no_further_publish(&mut capture);
+}
+
+/// A non-numeric device id is refused without touching the server.
+#[test]
+fn omemo_revoke_refuses_invalid_device_id() {
+    let (fixture, mut capture, _own_id) = own_fixture_after_registration();
+
+    fixture.send_command("/omemo revoke abc");
+
+    assert_screen_shows(&fixture, "invalid digit found in string");
+    assert_no_further_publish(&mut capture);
+}
+
+fn assert_screen_shows(fixture: &XmppFixture, needle: &str) {
+    if !fixture.wait_for(needle, Duration::from_secs(5)) {
+        eprintln!("{}", describe(fixture.snapshot().screen()));
+        panic!("{:?} not shown in the UI", needle);
+    }
+}
+
+/// A server error on the republish is reported as a failure, never as success.
+#[test]
+fn omemo_revoke_reports_publish_error() {
+    let (fixture, capture, _own_id) = own_fixture_after_registration();
+    capture.fail_devicelist_publish(true);
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert!(
+        !fixture.wait_for("Revoked OMEMO device", Duration::from_secs(1)),
+        "success must not be reported when the publish failed"
+    );
+}
+
+/// A missing own device list node is an error, and nothing is published.
+#[test]
+fn omemo_revoke_refuses_when_device_list_missing() {
+    let (fixture, mut capture) = XmppFixture::new_with_omemo_fresh_account(&[]);
+    let _ = capture.recv_devicelist_publish(Duration::from_secs(15));
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+
+    assert_screen_shows(&fixture, "OMEMO revoke failed");
+    assert_no_further_publish(&mut capture);
+}
+
+/// After a successful revoke the server's own device list no longer holds the id.
+#[test]
+fn omemo_revoke_is_visible_to_later_fetches() {
+    let (fixture, mut capture, own_id) = own_fixture_after_registration();
+
+    fixture.send_command(&format!("/omemo revoke {STALE_DEVICE}"));
+    let _ = capture.recv_devicelist_publish(Duration::from_secs(10));
+    assert_screen_shows(&fixture, "Revoked OMEMO device");
+
+    let mut server_ids = capture.server_own_devices();
+    server_ids.sort_unstable();
+    let mut expected = vec![own_id, OTHER_DEVICE];
+    expected.sort_unstable();
+    assert_eq!(server_ids, expected);
+}

@@ -1,44 +1,118 @@
+workspace = { members = ["terminus"] }
 [package]
 name = "aparte"
-version = "0.2.0"
+version = "0.4.0-dev"
 description = "Simple XMPP console client written in Rust and inspired by Profanity."
 authors = ["Paul Fariello <paul@fariello.eu>"]
 edition = "2018"
 license = "MPL-2.0"
 repository = "https://github.com/paulfariello/aparte"
+exclude = [
+    ".travis.yml",
+]
 
 [features]
-no-cursor-save = []
+default = []
 strict = []
+image = ["dep:image", "dep:sixel-image", "dep:reqwest", "terminus/image"]
+insecure-xmpp = ["tokio-xmpp/insecure-tcp"]
+# Enables tests that read /proc (Linux only) to measure CPU time.
+proc-cpu-tests = []
 
 [dependencies]
-log = "^0.4"
-flexi_logger = "^0.15"
+aes-gcm = "0.10.3"
+argon2 = "0.5"
+anyhow = "^1.0"
+async-trait = "0.1.41" # same as libsignal
 backtrace = "^0.3"
-futures = "^0.3"
-tokio = { version = "^1.0", features = ["full"] }
-tokio-xmpp = "^3.0"
-xmpp-parsers = "^0.18"
-rpassword = "^3.0"
-uuid = { version = "^0.7", features = ["v4"]  }
-termion = "1.5"
-derive-error = "0.0.4"
+base64 = "0.21.7"
 bytes = "^0.5"
+chrono = { version = "^0.4", features = ["unstable-locales"] }
+clap = { version = "4.0.32", features = ["derive"] }
+derive-error = "0.0.4"
+diesel = { version = "^2.0", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "r2d2"] }
+diesel_migrations = "^2.0"
 dirs = "^2.0"
-chrono = "^0.4"
-serde = { version = "^1.0", features = ["derive"] }
-toml = "^0.5"
-unicode-segmentation = "^1.6"
-rand = "^0.8"
-linked_hash_set = "^0.1"
-textwrap = "^0.12"
-linked-hash-map = "^0.5"
-rust-crypto = "^0.2"
-hsluv = "^0.1"
+flexi_logger = "^0.27"
+futures = "^0.3"
 fuzzy-matcher = "^0.3"
+hsluv = "^0.1"
+image = { version = "0.25.1", optional = true }
+itertools = "0.12.1"
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.20.0" }
+linked_hash_set = "^0.1"
+log = "^0.4"
+radix_trie = "0.3.0"
+rand = "0.7.3" # same as libsignal
+reqwest = { version = "0.12.3", optional = true }
+rpassword = "^3.0"
+secrecy = { version = "0.8.0", features = ["serde"] }
+serde = { version = "^1.0", features = ["derive"] }
+sha1 = "0.10.6"
+sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1", optional = true }
+terminus = { path = "terminus" }
+crossterm = { version = "0.28", features = ["event-stream"] }
+textwrap = "^0.12"
+tokio = { version = "^1.10", features = ["full"] }
+tokio-xmpp = { version = "5.0", features = ["starttls", "direct-tls"] }
+toml = "^0.5"
+unicode-display-width = "0.3.0"
+unicode-segmentation = "^1.6"
+uuid = { version = "^1.7", features = ["v4"]  }
+xmpp-parsers = "0.22"
+
+[[test]]
+name = "password_prompt_spin"
+required-features = ["proc-cpu-tests"]
+
+[[test]]
+name = "xmpp_integration"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "muc"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "mam"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "bookmarks"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "omemo"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "displayed_markers"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "reactions"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "date_separator"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "delivery"
+required-features = ["insecure-xmpp"]
+
+[[test]]
+name = "message_store"
+required-features = ["insecure-xmpp"]
 
 [dev-dependencies]
 mockall = "^0.9"
+rstest = "0.22"
+test-log = "*"
+portable-pty = "0.8"
+vt100 = "0.15"
+tempfile = "3"
+tokio = { version = "^1.10", features = ["full"] }
 
 [profile.release]
 debug = true

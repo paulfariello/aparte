@@ -3,8 +3,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::cmp;
 use std::hash::{Hash, Hasher};
+use xmpp_parsers::jid::BareJid;
+use xmpp_parsers::minidom::Element;
 use xmpp_parsers::roster::Subscription;
-use xmpp_parsers::{BareJid, Element};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum Presence {

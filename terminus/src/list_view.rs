@@ -1,0 +1,332 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use linked_hash_map::{Entry, LinkedHashMap};
+use std::cell::RefCell;
+use std::cmp;
+use std::collections::HashSet;
+use std::fmt::{self};
+use std::hash::Hash;
+use std::rc::Rc;
+
+use crate::charxel::{CharxelDisplay, IntoCharxels};
+use crate::ScreenFrame;
+
+use super::{
+    Dimensions, EventHandler, LayoutParam, LayoutParams, MeasureSpec, MeasureSpecs,
+    RequestedDimension, RequestedDimensions, View,
+};
+
+type SortItemHandler<V> = Box<dyn Fn(&V, &V) -> cmp::Ordering>;
+type SortGroupHandler<G> = Box<dyn FnMut(&G, &G) -> cmp::Ordering>;
+
+#[derive(Debug)]
+pub struct NonExistentGroup;
+
+impl fmt::Display for NonExistentGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Non-existent group")
+    }
+}
+
+impl std::error::Error for NonExistentGroup {}
+
+pub struct ListView<E, G, V, C = ()>
+where
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
+{
+    items: LinkedHashMap<Option<G>, HashSet<V>>,
+    unique: bool,
+    sort_item: Option<SortItemHandler<V>>,
+    sort_group: Option<SortGroupHandler<G>>,
+    event_handler: Option<EventHandler<Self, E>>,
+    layouts: LayoutParams,
+    dimensions: Option<Dimensions>,
+}
+
+impl<E, G, V, C> Default for ListView<E, G, V, C>
+where
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<E, G, V, C> ListView<E, G, V, C>
+where
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
+{
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            items: LinkedHashMap::new(),
+            unique: false,
+            sort_item: None,
+            sort_group: None,
+            event_handler: None,
+            layouts: LayoutParams {
+                width: LayoutParam::MatchParent,
+                height: LayoutParam::MatchParent,
+            },
+            dimensions: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_event<F>(mut self, event_handler: F) -> Self
+    where
+        F: FnMut(&mut Self, &mut E) + 'static,
+    {
+        self.event_handler = Some(Rc::new(RefCell::new(Box::new(event_handler))));
+        self
+    }
+
+    #[must_use]
+    pub fn with_layout(mut self, layout: LayoutParams) -> Self {
+        self.layouts = layout;
+        self
+    }
+
+    #[must_use]
+    pub fn with_none_group(mut self) -> Self {
+        if let Entry::Vacant(vacant) = self.items.entry(None) {
+            vacant.insert(HashSet::new());
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn with_unique_item(mut self) -> Self {
+        self.unique = true;
+        self
+    }
+
+    #[must_use]
+    #[allow(clippy::redundant_closure_for_method_calls)]
+    pub fn with_sort_item(mut self) -> Self
+    where
+        V: Ord,
+    {
+        self.sort_item = Some(Box::new(|a, b| a.cmp(b)));
+        self
+    }
+
+    #[must_use]
+    pub fn with_sort_item_by<F>(mut self, compare: F) -> Self
+    where
+        F: Fn(&V, &V) -> cmp::Ordering + 'static,
+    {
+        self.sort_item = Some(Box::new(compare));
+        self
+    }
+
+    #[must_use]
+    #[allow(clippy::redundant_closure_for_method_calls)]
+    pub fn with_sort_group(mut self) -> Self
+    where
+        G: Ord,
+    {
+        self.sort_group = Some(Box::new(|a, b| a.cmp(b)));
+        self
+    }
+
+    #[must_use]
+    pub fn with_sort_group_by<F>(mut self, compare: F) -> Self
+    where
+        F: FnMut(&G, &G) -> cmp::Ordering + 'static,
+    {
+        self.sort_group = Some(Box::new(compare));
+        self
+    }
+
+    pub fn add_group(&mut self, group: G) {
+        if let Entry::Vacant(vacant) = self.items.entry(Some(group)) {
+            vacant.insert(HashSet::new());
+        }
+    }
+
+    pub fn insert(&mut self, item: V, group: Option<G>) {
+        if self.unique {
+            for (_, items) in &mut self.items {
+                items.remove(&item);
+            }
+        }
+        match self.items.entry(group) {
+            Entry::Vacant(vacant) => {
+                let mut items = HashSet::new();
+                items.insert(item);
+                vacant.insert(items);
+            }
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().replace(item);
+            }
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns `NonExistentGroup` if the group does not exist.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn remove(&mut self, item: V, group: Option<G>) -> Result<(), NonExistentGroup> {
+        match self.items.entry(group) {
+            Entry::Vacant(_) => Err(NonExistentGroup),
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().remove(&item);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<E, G, V, C> View<E, C> for ListView<E, G, V, C>
+where
+    G: CharxelDisplay<C> + Hash + Eq,
+    V: CharxelDisplay<C> + Hash + Eq,
+    C: Default + Clone,
+{
+    fn measure(&self, measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        let max_width = match self.layouts.width {
+            LayoutParam::MatchParent | LayoutParam::WrapContent => self
+                .items
+                .iter()
+                .flat_map(|(group, items)| {
+                    let indent = match group {
+                        Some(_) => "  ",
+                        None => "",
+                    };
+                    let config = C::default();
+
+                    group
+                        .iter()
+                        .map(|group| group.colored_fmt(&C::default()).display_width())
+                        .chain(items.iter().map(move |item| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let indent_w = indent.len() as u16;
+                            item.colored_fmt(&config).display_width() + indent_w
+                        }))
+                })
+                .max()
+                .unwrap_or(0),
+            LayoutParam::Absolute(_) => 0, // We don't care,
+        };
+
+        #[allow(clippy::cast_possible_truncation)]
+        let max_height = match self.layouts.height {
+            LayoutParam::MatchParent | LayoutParam::WrapContent => self
+                .items
+                .iter()
+                .flat_map(|(group, items)| group.iter().map(|_| ()).chain(items.iter().map(|_| ())))
+                .count() as u16,
+            LayoutParam::Absolute(_) => 0, // We don't care,
+        };
+
+        RequestedDimensions {
+            width: RequestedDimension::Absolute(match (self.layouts.width, measure_specs.width) {
+                (LayoutParam::MatchParent | LayoutParam::WrapContent, MeasureSpec::Unspecified) => {
+                    max_width
+                }
+                (LayoutParam::MatchParent, MeasureSpec::AtMost(at_most_width)) => at_most_width,
+                (LayoutParam::WrapContent, MeasureSpec::AtMost(at_most_width)) => {
+                    std::cmp::min(max_width, at_most_width)
+                }
+                (LayoutParam::Absolute(absolute_width), MeasureSpec::Unspecified) => absolute_width,
+                (LayoutParam::Absolute(absolute_width), MeasureSpec::AtMost(at_most_width)) => {
+                    cmp::min(absolute_width, at_most_width)
+                }
+            }),
+            height: RequestedDimension::Absolute(
+                match (self.layouts.height, measure_specs.height) {
+                    (
+                        LayoutParam::MatchParent | LayoutParam::WrapContent,
+                        MeasureSpec::Unspecified,
+                    ) => max_height,
+                    (LayoutParam::MatchParent, MeasureSpec::AtMost(at_most_height)) => {
+                        at_most_height
+                    }
+                    (LayoutParam::WrapContent, MeasureSpec::AtMost(at_most_height)) => {
+                        std::cmp::min(max_height, at_most_height)
+                    }
+                    (LayoutParam::Absolute(absolute_height), MeasureSpec::Unspecified) => {
+                        absolute_height
+                    }
+                    (
+                        LayoutParam::Absolute(absolute_height),
+                        MeasureSpec::AtMost(at_most_height),
+                    ) => cmp::min(absolute_height, at_most_height),
+                },
+            ),
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        if self.dimensions.as_ref() != Some(dimensions) {
+            self.dimensions.replace(dimensions.clone());
+        }
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &C) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        // Draw items
+        let mut top = 0;
+        let max_width = frame.dimensions.width;
+
+        for (group, items) in &self.items {
+            if top >= frame.dimensions.height {
+                break;
+            }
+
+            if let Some(group) = group {
+                let mut disp = group.colored_fmt(config);
+                disp.truncate(max_width, "…");
+
+                frame.write_at((0, top), disp);
+                top += 1;
+            }
+
+            let mut items = items.iter().collect::<Vec<&V>>();
+            if let Some(sort) = &self.sort_item {
+                items.sort_by(|a, b| sort(*a, *b));
+            }
+
+            for item in items {
+                if top >= frame.dimensions.height {
+                    break;
+                }
+
+                let mut disp = match group {
+                    Some(_) => {
+                        let mut indent = "  ".into_charxels();
+                        indent.append(item.colored_fmt(config));
+                        indent
+                    }
+                    None => item.colored_fmt(config),
+                };
+                disp.truncate(max_width, "…");
+                frame.write_at((0, top), disp);
+
+                top += 1;
+            }
+        }
+    }
+
+    fn event(&mut self, event: &mut E) {
+        if let Some(handler) = &self.event_handler {
+            let handler = Rc::clone(handler);
+            let handler = &mut *handler.borrow_mut();
+            handler(self, event);
+        }
+    }
+}

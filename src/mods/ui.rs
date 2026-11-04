@@ -2,460 +2,993 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use backtrace::Backtrace;
-use chrono::offset::{Local, TimeZone};
-use chrono::Local as LocalTz;
-use futures::task::{AtomicWaker, Context, Poll};
+use chrono::{DateTime, FixedOffset, Local as LocalTz};
+use crossterm::event::{
+    Event as CrosstermEvent, EventStream as CrosstermEventStream, KeyCode, KeyEvent, KeyModifiers,
+};
+use crossterm::{execute, terminal};
+use futures::task::{Context, Poll};
 use futures::Stream;
-use linked_hash_set::LinkedHashSet;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-use std::io::{Read, Stdout, Write};
 use std::panic;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::str::FromStr;
+use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use termion::color;
-use termion::event::{parse_event as termion_parse_event, Event as TermionEvent, Key};
-use termion::get_tty;
-use termion::raw::IntoRawMode;
-use termion::screen::AlternateScreen;
+use std::time::Instant;
+use terminus::charxel::{CharxelDisplay, Charxels, IntoCharxels};
+use terminus::color::{BgColor, Color, FgColor, NamedColor};
+use terminus::linear_layout::LayoutChild;
+use terminus::rendering::{OffscreenRenderBuffer, ScreenFrame};
+use terminus::Style;
+use terminus::{
+    self,
+    cursor::Cursor,
+    frame_layout::FrameLayout,
+    input::Input,
+    linear_layout::{LinearLayout, Orientation},
+    list_view::ListView,
+    root::Root,
+    scroll_win::{ScrollWin, Searchable},
+    Action, ActionParser, CursorStyle, Dimensions, FocusRouted, LayoutParam, LayoutParams,
+    MeasureSpec, MeasureSpecs, Motion, Operator, ParseResult, RegisterValue, Registers,
+    RequestedDimension, RequestedDimensions, View,
+};
+use unicode_segmentation::UnicodeSegmentation;
 use uuid::Uuid;
-use xmpp_parsers::{BareJid, Jid};
+use xmpp_parsers::jid::{BareJid, Jid};
 
+use crate::account::Account;
 use crate::color::id_to_rgb;
 use crate::command::Command;
+use crate::config::{Config, Theme};
 use crate::conversation::{Channel, Chat, Conversation};
-use crate::core::{Aparte, Event, ModTrait};
-use crate::cursor::Cursor;
+use crate::core::{Aparte, AparteAsync, Event, ModTrait, UIMode as Mode};
 use crate::i18n;
-use crate::message::{Direction, Message, XmppMessageType};
-use crate::terminus::{
-    self, BufferedWin, Dimension, FrameLayout, Input, Layout, Layouts, LinearLayout, ListView,
-    Orientation, Screen, View, Window as _,
-};
+use crate::message::{Direction, Message, MessageView, XmppMessageType};
+use crate::mods::bookmarks::BookmarksMod;
+use crate::mods::messages::MessagesMod;
+use crate::mods::omemo::OmemoEvent;
 use crate::{contact, conversation};
 
-enum UIEvent {
-    Core(Event),
-    Validate(Rc<RefCell<Option<(String, bool)>>>),
-    GetInput(Rc<RefCell<Option<(String, Cursor, bool)>>>),
-    AddWindow(String, Option<Box<dyn View<UIEvent, Stdout>>>),
+#[derive(Clone, Debug)]
+enum NormalCommand {
+    SelectNext(usize),
+    SelectPrev(usize),
+    ScrollToTop,
+    ScrollToBottom,
+    SearchFirst(String),
+    SearchNext,
+    SearchPrev,
+    SearchCancel,
+    FocusPaneLeft,
+    FocusPaneRight,
 }
 
-struct TitleBar {
-    name: Option<String>,
-    subjects: HashMap<String, HashMap<String, String>>,
-    dirty: bool,
+/// A single line in the popup, keyed by insertion index so duplicates are preserved.
+#[derive(Debug, Clone)]
+struct PopupLine {
+    index: usize,
+    text: String,
 }
 
-impl TitleBar {
-    fn new() -> Self {
-        Self {
-            name: None,
-            subjects: HashMap::new(),
-            dirty: true,
+impl PartialEq for PopupLine {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+impl Eq for PopupLine {}
+impl PartialOrd for PopupLine {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for PopupLine {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.index.cmp(&other.index)
+    }
+}
+impl Hash for PopupLine {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+    }
+}
+impl<E, C> View<E, C> for PopupLine {
+    fn measure(&self, _: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            width: RequestedDimension::Absolute(self.text.as_str().into_charxels().display_width()),
+            height: RequestedDimension::Absolute(1),
+        }
+    }
+    fn layout(&mut self, _: &Dimensions) {}
+    fn render(&self, mut frame: ScreenFrame<'_>, _: &C) {
+        frame.write_at((0u16, 0u16), &self.text);
+    }
+    fn event(&mut self, _: &mut E) {}
+}
+
+/// An entry in the Ctrl+K window-switcher popup.
+#[derive(Clone)]
+struct WinEntry {
+    /// Internal key (JID string) used to send `:win`.
+    key: String,
+    /// Human-readable label shown in the popup.
+    label: String,
+    /// Unread count used for sorting when the query is empty.
+    unread: u64,
+}
+
+/// Interactive window-switcher popup triggered by Ctrl+K.
+///
+/// Cursor always stays in the search input (fzf style). Up/Down move the
+/// selection in the filtered list. Enter switches to the selected window.
+struct WindowSwitcher {
+    editor: terminus::text_editor::TextEditor,
+    /// All windows in insertion order (populated once at construction).
+    all: Vec<WinEntry>,
+    /// Filtered & sorted subset of `all` matching the current query.
+    filtered: Vec<WinEntry>,
+    /// Selected index into `filtered`.
+    selected: usize,
+}
+
+impl WindowSwitcher {
+    fn new(all: Vec<WinEntry>) -> Self {
+        let mut sw = Self {
+            editor: terminus::text_editor::TextEditor::new(),
+            filtered: all.clone(),
+            all,
+            selected: 0,
+        };
+        sw.refilter();
+        sw
+    }
+
+    /// Re-run fuzzy filter + sort and reset selection to 0.
+    fn refilter(&mut self) {
+        let query = self.editor.buf.clone();
+        let matcher = SkimMatcherV2::default();
+        if query.is_empty() {
+            // Default order: unread count descending, then insertion order.
+            let mut v = self.all.clone();
+            v.sort_by(|a, b| b.unread.cmp(&a.unread));
+            self.filtered = v;
+        } else {
+            let mut scored: Vec<(i64, u64, WinEntry)> = self
+                .all
+                .iter()
+                .filter_map(|e| {
+                    matcher
+                        .fuzzy_match(&e.label, &query)
+                        .map(|s| (s, e.unread, e.clone()))
+                })
+                .collect();
+            // Score desc, unread desc as tie-break.
+            scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+            self.filtered = scored.into_iter().map(|(_, _, e)| e).collect();
+        }
+        self.selected = 0;
+    }
+
+    fn select_prev(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
         }
     }
 
-    fn set_name(&mut self, name: &str) {
-        self.name = Some(name.to_string());
-        self.subjects
-            .entry(name.to_string())
-            .or_insert(HashMap::new());
-        self.dirty = true;
+    fn select_next(&mut self) {
+        if !self.filtered.is_empty() && self.selected + 1 < self.filtered.len() {
+            self.selected += 1;
+        }
     }
 
-    fn add_subjects(&mut self, jid: String, subjects: HashMap<String, String>) {
-        if Some(&jid) == self.name.as_ref() {
-            self.dirty = true;
-        }
-        self.subjects.insert(jid, subjects);
+    /// Return the key of the currently selected entry, if any.
+    fn selected_key(&self) -> Option<&str> {
+        self.filtered.get(self.selected).map(|e| e.key.as_str())
     }
 }
 
-impl<W> View<UIEvent, W> for TitleBar
-where
-    W: Write,
-{
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
-        save_cursor!(screen);
+impl View<UIEvent, Theme> for WindowSwitcher {
+    fn measure(&self, specs: &MeasureSpecs) -> RequestedDimensions {
+        // Width: fill available (capped to popup width by PopupLayout).
+        // Height: 1 (prompt line) + up to 10 result rows.
+        let rows = (self.filtered.len().min(10) as u16) + 1;
+        RequestedDimensions {
+            width: match specs.width {
+                terminus::MeasureSpec::AtMost(w) => RequestedDimension::Absolute(w),
+                terminus::MeasureSpec::Unspecified => RequestedDimension::Absolute(40),
+            },
+            height: RequestedDimension::Absolute(rows.max(2)),
+        }
+    }
 
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
-        vprint!(
-            screen,
-            "{}{}{}",
-            color::Bg(color::Blue),
-            color::Fg(color::White),
-            termion::style::Bold,
-        );
+    fn layout(&mut self, _: &Dimensions) {}
 
-        vprint!(screen, "{}", " ".repeat(dimension.w.unwrap().into()));
+    fn render(&self, mut frame: ScreenFrame<'_>, config: &Theme) {
+        let w = frame.width();
 
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
+        // Reset background to terminal default so the popup interior doesn't
+        // inherit the popup border's fill color. The selected row overrides below.
+        frame.set_background(BgColor(Color::Default));
 
-        if let Some(name) = &self.name {
-            let clean_name = terminus::term_string_visible_truncate(
-                name,
-                dimension.w.unwrap().into(),
-                Some("…"),
-            );
-            vprint!(screen, "{}", clean_name);
+        // Prompt line: "> <query>"
+        let prompt = format!("> {}", self.editor.buf);
+        frame.write_at((0u16, 0u16), prompt.as_str());
 
-            let remaining = dimension.w.unwrap()
-                - terminus::term_string_visible_len(&clean_name) as u16
-                - " – ".len() as u16;
-            if remaining > 0 {
-                let subjects = self.subjects.get(name).unwrap();
-                if !subjects.is_empty() {
-                    if let Some((_lang, subject)) = i18n::get_best(subjects, vec![]) {
-                        let clean_subject = terminus::term_string_visible_truncate(
-                            subject,
-                            remaining.into(),
-                            Some("…"),
-                        );
-                        vprint!(screen, " — {}", clean_subject);
-                    }
-                }
+        // Place the cursor at the end of the typed query.
+        let cursor_col = (2 + self.editor.buf.graphemes(true).count()) as u16;
+        frame.set_cursor((cursor_col.min(w.saturating_sub(1)), 0u16).into());
+        frame.set_cursor_style(terminus::CursorStyle::SteadyBar);
+        frame.set_cursor_visible(true);
+
+        // Result rows.
+        for (i, entry) in self.filtered.iter().enumerate().take(10) {
+            let row = (i + 1) as u16;
+            let label = if entry.unread > 0 {
+                format!("{} ({})", entry.label, entry.unread)
+            } else {
+                entry.label.clone()
+            };
+            if i == self.selected {
+                frame.set_background_row(row, config.selected_message);
+                frame.write_at(
+                    (0u16, row),
+                    label.as_str().with_background(config.selected_message),
+                );
+            } else {
+                frame.write_at((0u16, row), label.as_str());
             }
         }
-
-        vprint!(
-            screen,
-            "{}{}{}",
-            color::Bg(color::Reset),
-            color::Fg(color::Reset),
-            termion::style::NoBold
-        );
-
-        restore_cursor!(screen);
-        flush!(screen);
-        self.dirty = false;
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty
     }
 
     fn event(&mut self, event: &mut UIEvent) {
         match event {
-            UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_name(name);
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Up, ..
+            })) => self.select_prev(),
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                ..
+            })) => self.select_next(),
+            UIEvent::Core(Event::Key(key)) => {
+                self.editor.handle_key_event(key);
+                self.refilter();
             }
-            UIEvent::Core(Event::Subject(_, jid, subjects)) => {
-                let window: BareJid = jid.clone().into();
-                self.add_subjects(
-                    window.to_string(),
-                    subjects
-                        .iter()
-                        .map(|(lang, subject)| (lang.clone(), terminus::clean(subject)))
-                        .collect(),
-                );
+            UIEvent::WindowSwitcherPick(slot) => {
+                *slot = self.selected_key().map(ToOwned::to_owned);
             }
             _ => {}
         }
     }
 
-    fn get_layouts(&self) -> Layouts {
-        Layouts {
-            width: Layout::match_parent(),
-            height: Layout::absolute(1),
+    fn focusable(&self) -> bool {
+        true
+    }
+
+    fn insertable(&self) -> bool {
+        true
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+enum UIEvent {
+    Core(Event),
+    /// Explicit "start editing the selected message" request. Dispatched by
+    /// the top-level `i` key handler only when focus is on the message frame,
+    /// so we don't accidentally start an in-place edit when the user just
+    /// wants to type in the input bar.
+    StartEdit,
+    /// Like StartEdit but positions the Insert cursor one past the current char (vim `a`).
+    AppendEdit,
+    /// Like StartEdit but positions the Insert cursor at end of buffer (vim `A`).
+    AppendEndEdit,
+    /// Discard the in-place edit on the selected message without sending a correction.
+    CancelEdit,
+    /// Clears the input bar (pushes to history then blanks the buffer).
+    /// Fire-and-forget: the caller reads the input via `RequestInputState`
+    /// before dispatching, then dispatches this to let the widget clear itself.
+    ClearInput,
+    /// Answered synchronously by the focused input widget as `InputChanged`.
+    RequestInputState,
+    InputChanged(String, Cursor, bool),
+    /// `InputChanged` completed with the layout's own mode, which the mod's copy lags behind.
+    FocusedInputState(String, Cursor, bool, Mode),
+    AddWindow(
+        String,
+        Option<String>,
+        Option<Box<dyn View<UIEvent, Theme>>>,
+    ),
+    ModeChange(Mode),
+    NormalCommand {
+        cmd: NormalCommand,
+        bubbled: bool,
+    },
+    CommandBufferUpdate(String),
+    /// Enter was consumed by the command bar (command executed or search
+    /// started). Mutated in-event so the mod-level Enter handler can tell,
+    /// even when its own mode state lags behind a fast key burst.
+    CommandExecuted,
+    /// Drop the command-error echo (sent on every keypress).
+    ClearCommandError,
+    SetInput(String),
+    /// Move the cursor in the focused widget by `motion × count`.
+    /// Fire-and-forget: no return value.
+    MoveCursor(Motion, usize),
+    /// Apply a Normal-mode text action to the focused widget.  The operator
+    /// result (yanked or deleted text) is written back into the `Option` field
+    /// by the handler via in-event mutation.
+    ApplyTextAction(Action, Option<RegisterValue>),
+    /// Atomically set the input bar content and cursor (grapheme index).
+    SetInputState(String, usize),
+    /// Insert `text` at the current cursor position in the input bar.
+    Paste(String),
+    ReduceHighlight(String, u64, u64),
+    /// Signals a change in dirty Edit Session presence for a window.
+    /// `true` = a new dirty edit exists; `false` = a dirty edit was committed or cancelled.
+    EditIndicator(String, bool),
+    ShowPopup {
+        title: Option<String>,
+        lines: Vec<String>,
+    },
+    ClosePopup,
+    /// Open the Ctrl+K window-switcher popup.
+    ShowWindowSwitcher(Vec<WinEntry>),
+    /// In-event mutation: the popup layout sends this to the focused WindowSwitcher
+    /// to retrieve the selected window key. The switcher writes back into the Option.
+    WindowSwitcherPick(Option<String>),
+    /// Focus the current window's input bar.
+    /// Chat/Channel window handles it by setting focus to their Input child.
+    /// Console ignores it (no Input child).
+    FocusInputBar,
+}
+
+impl UIEvent {
+    /// Addressed to the focused input widget only; broadcasting would act on every window.
+    /// Edit events are excluded on purpose: they act on the selected message, not the input.
+    fn targets_focused_input_widget(&self) -> bool {
+        matches!(
+            self,
+            UIEvent::ApplyTextAction(..)
+                | UIEvent::MoveCursor(..)
+                | UIEvent::SetInputState(..)
+                | UIEvent::SetInput(..)
+                | UIEvent::Paste(..)
+                | UIEvent::RequestInputState
+                | UIEvent::ClearInput
+        )
+    }
+}
+
+impl FocusRouted for UIEvent {
+    fn is_focus_routed(&self) -> bool {
+        match self {
+            UIEvent::Core(event) => event.is_focus_routed(),
+            _ => false,
+        }
+    }
+}
+
+/// Route a key event to a `MessageView` that is currently being edited in
+/// place (XEP-0308 correction).
+fn dispatch_edit_key(msg: &mut MessageView, key: &KeyEvent) {
+    let Some(editor) = msg.edit.as_mut() else {
+        return;
+    };
+    editor.handle_key_event(key);
+}
+
+fn insert_message(view: &mut ScrollWin<UIEvent, MessageView, Theme>, msg_view: MessageView) {
+    let pred_date = view
+        .predecessor(&msg_view)
+        .map(|p| p.message.timestamp().with_timezone(&LocalTz).date_naive());
+    let msg_date = msg_view
+        .message
+        .timestamp()
+        .with_timezone(&LocalTz)
+        .date_naive();
+    msg_view.set_show_date_sep(pred_date.is_some_and(|d| d != msg_date));
+
+    if let Some(succ) = view.successor(&msg_view) {
+        let succ_date = succ
+            .message
+            .timestamp()
+            .with_timezone(&LocalTz)
+            .date_naive();
+        succ.set_show_date_sep(msg_date != succ_date);
+    }
+
+    view.replace(msg_view);
+}
+
+/// Per-Channel bar at the top of the Channel window showing the channel's
+/// name and XEP-0045 subject (ADR-0008). Chat windows and the console have
+/// no topic bar.
+struct TopicBar {
+    jid: String,
+    name: Option<String>,
+    subjects: HashMap<String, String>,
+    preferred_langs: Vec<String>,
+    dimensions: Option<Dimensions>,
+}
+
+impl TopicBar {
+    fn new(jid: String, name: Option<String>, preferred_langs: Vec<String>) -> Self {
+        Self {
+            jid,
+            name,
+            subjects: HashMap::new(),
+            preferred_langs,
+            dimensions: None,
+        }
+    }
+}
+
+impl View<UIEvent, Theme> for TopicBar {
+    fn focusable(&self) -> bool {
+        false
+    }
+
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        frame.set_background(config.topic_bar.bg);
+        frame.set_foreground(config.topic_bar.fg);
+
+        let label = self.name.as_deref().unwrap_or(self.jid.as_str());
+        let mut title = format!(" {label}").into_charxels();
+        if let Some((_lang, subject)) = i18n::get_best(
+            &self.subjects,
+            self.preferred_langs
+                .iter()
+                .map(std::string::String::as_str)
+                .collect(),
+        ) {
+            if let Some(subject) = subject.lines().next() {
+                title.append(" – ");
+                title.append(subject);
+            }
+        }
+
+        title.truncate(frame.width(), "…");
+        title = title
+            .with_styles(&[Style::Bold])
+            .with_color(&config.topic_bar);
+        frame.write(title);
+    }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        if let UIEvent::Core(Event::Subject(_, jid, subjects)) = event {
+            if jid.to_bare().to_string() == self.jid {
+                self.subjects = subjects
+                    .iter()
+                    .map(|(lang, subject)| (lang.clone(), terminus::clean_str(subject)))
+                    .collect();
+            }
+        }
+    }
+}
+
+/// Bottom bar with aparte state: mode first, then connected account, then
+/// suspended dirty-edit indicators right-aligned (ADR-0008).
+struct StatusLine {
+    mode: Mode,
+    connection: Option<String>,
+    windows: Vec<String>,
+    display_names: HashMap<String, String>,
+    current_window: Option<String>,
+    editing: HashSet<String>,
+    encrypted_jids: HashSet<String>,
+    dimensions: Option<Dimensions>,
+}
+
+impl StatusLine {
+    fn new() -> Self {
+        Self {
+            mode: Mode::Normal,
+            connection: None,
+            windows: Vec::new(),
+            display_names: HashMap::new(),
+            current_window: None,
+            editing: HashSet::new(),
+            encrypted_jids: HashSet::new(),
+            dimensions: None,
+        }
+    }
+}
+
+impl View<UIEvent, Theme> for StatusLine {
+    fn focusable(&self) -> bool {
+        false
+    }
+
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        frame.set_background(config.status_line.bg);
+        frame.set_foreground(config.status_line.fg);
+
+        let mut frame_space = frame.width();
+
+        let mode_label = match self.mode {
+            Mode::Insert => " INSERT ",
+            Mode::Normal => " NORMAL ",
+            Mode::Command => " COMMAND ",
+        };
+        let mode_charxels = mode_label
+            .with_style(Style::Bold)
+            .with_color(&config.status_line_mode);
+        let mode_width = mode_charxels.display_width();
+        if frame.width() >= mode_width {
+            frame.write(&mode_charxels);
+            frame_space -= mode_width;
+        }
+
+        if let Some(connection) = &self.connection {
+            let connection = format!(" {connection}")
+                .into_charxels()
+                .with_color(&config.status_line);
+            let connection_width = connection.display_width();
+            if frame_space > connection_width {
+                frame.write(&connection);
+                frame_space -= connection_width;
+            }
+        }
+
+        // OMEMO indicator for the current conversation.
+        let is_encrypted = self
+            .current_window
+            .as_deref()
+            .is_some_and(|jid| self.encrypted_jids.contains(jid));
+        if is_encrypted {
+            let lock = " 🔒".into_charxels();
+            if frame_space > lock.display_width() {
+                frame.write(&lock);
+            }
+        }
+
+        // Show [e:name1 name2] for non-current windows with suspended dirty edits.
+        if !self.editing.is_empty() {
+            let names: Vec<&str> = self
+                .windows
+                .iter()
+                .filter(|w| {
+                    self.editing.contains(w.as_str())
+                        && self.current_window.as_deref() != Some(w.as_str())
+                })
+                .map(|w| {
+                    self.display_names
+                        .get(w.as_str())
+                        .map(String::as_str)
+                        .unwrap_or(w.as_str())
+                })
+                .collect();
+            if !names.is_empty() {
+                let indicator = format!(" [e:{}]", names.join(" ")).with_style(Style::Bold);
+                let iw = indicator.display_width();
+                if frame.width() >= iw {
+                    frame.write_at((frame.width() - iw, 0u16), &indicator);
+                }
+            }
+        }
+    }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        match event {
+            UIEvent::ModeChange(mode) => {
+                self.mode = *mode;
+            }
+            UIEvent::Core(Event::Connected(account, _)) => {
+                self.connection = Some(terminus::clean_str(&account.to_string()));
+            }
+            UIEvent::Core(Event::ChangeWindow(name)) => {
+                self.current_window = Some(terminus::clean_str(name));
+            }
+            UIEvent::AddWindow(jid, display_name, _) => {
+                if let Some(name) = display_name {
+                    self.display_names.insert(jid.clone(), name.clone());
+                }
+                self.windows.push(terminus::clean_str(jid));
+            }
+            UIEvent::Core(Event::Close(window)) => {
+                self.windows.retain(|win| win != window);
+                self.editing.remove(window.as_str());
+            }
+            UIEvent::EditIndicator(window, dirty) => {
+                if *dirty {
+                    self.editing.insert(window.clone());
+                } else {
+                    self.editing.remove(window.as_str());
+                }
+            }
+            UIEvent::Core(Event::Omemo(OmemoEvent::Enabled { jid, .. })) => {
+                self.encrypted_jids.insert(jid.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Bottom-most line hosting transient meta-input: `:` commands, `/` search
+/// and masked password prompts. Pending normal-mode keys render right-aligned
+/// (ADR-0008).
+struct CommandBar {
+    input: Input<UIEvent>,
+    active: bool,
+    pending_keys: String,
+    error: Option<String>,
+    dimensions: Option<Dimensions>,
+}
+
+impl CommandBar {
+    fn new() -> Self {
+        Self {
+            input: Input::new(),
+            active: false,
+            pending_keys: String::new(),
+            error: None,
+            dimensions: None,
+        }
+    }
+
+    fn input_changed(&self) -> UIEvent {
+        UIEvent::InputChanged(
+            self.input.editor.buf.clone(),
+            self.input.editor.cursor.clone(),
+            self.input.password,
+        )
+    }
+}
+
+impl View<UIEvent, Theme> for CommandBar {
+    fn insertable(&self) -> bool {
+        self.active
+    }
+
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, frame: ScreenFrame, config: &Theme) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        if self.active {
+            self.input.render(frame, config);
+            return;
+        }
+        let mut frame = frame;
+        if let Some(error) = &self.error {
+            let error = error
+                .as_str()
+                .with_foreground(FgColor(Color::Named(NamedColor::Red)));
+            let mut error = error.with_style(Style::Bold);
+            error.truncate(frame.width(), "…");
+            frame.write(error);
+        }
+        if !self.pending_keys.is_empty() {
+            let pending = self.pending_keys.as_str().with_style(Style::Bold);
+            let pending_width = pending.display_width();
+            if frame.width() >= pending_width {
+                frame.write_at((frame.width() - pending_width, 0u16), &pending);
+            }
+        }
+    }
+
+    fn event(&mut self, event: &mut UIEvent) {
+        match event {
+            UIEvent::Core(Event::Key(key)) if self.active => {
+                match key.code {
+                    KeyCode::Up => self.input.previous(),
+                    KeyCode::Down => self.input.next(),
+                    _ => {
+                        self.input.editor.handle_key_event(key);
+                    }
+                }
+                *event = self.input_changed();
+            }
+            UIEvent::SetInput(text) => {
+                self.input.editor.cursor =
+                    Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
+                self.input.editor.buf.clone_from(text);
+                *event = self.input_changed();
+            }
+            UIEvent::RequestInputState if self.active => {
+                *event = self.input_changed();
+            }
+            UIEvent::ClearInput if self.active => {
+                self.input.validate();
+                *event = self.input_changed();
+            }
+            UIEvent::Core(Event::Completed(raw_buf, cursor)) if self.active => {
+                self.input.editor.buf.clone_from(raw_buf);
+                self.input.editor.cursor.clone_from(cursor);
+                *event = self.input_changed();
+            }
+            UIEvent::Core(Event::ReadPassword(_)) => {
+                self.active = true;
+                self.input.password();
+            }
+            UIEvent::ModeChange(Mode::Command) => {
+                self.active = true;
+                self.input.set_cursor_style(CursorStyle::SteadyBar);
+            }
+            UIEvent::ModeChange(Mode::Normal) => {
+                if self.active {
+                    self.active = false;
+                    self.input.clear();
+                }
+            }
+            UIEvent::ModeChange(Mode::Insert) => {
+                // ReadPassword activates after its ModeChange(Insert); a
+                // password prompt must survive being in Insert mode.
+                if self.active && !self.input.password {
+                    self.active = false;
+                    self.input.clear();
+                }
+            }
+            UIEvent::CommandBufferUpdate(buf) => {
+                self.pending_keys.clone_from(buf);
+            }
+            UIEvent::Core(Event::CommandError(text)) => {
+                self.error = Some(text.clone());
+            }
+            UIEvent::ClearCommandError => {
+                self.error = None;
+            }
+            _ => {}
         }
     }
 }
 
 struct WinBar {
-    connection: Option<String>,
     windows: Vec<String>,
+    display_names: HashMap<String, String>,
     current_window: Option<String>,
-    highlighted: Vec<String>,
-    dirty: bool,
+    highlighted: HashMap<String, (u64, u64)>,
+    dimensions: Option<Dimensions>,
 }
 
 impl WinBar {
     pub fn new() -> Self {
         Self {
-            connection: None,
             windows: Vec::new(),
+            display_names: HashMap::new(),
             current_window: None,
-            highlighted: Vec::new(),
-            dirty: true,
+            highlighted: HashMap::new(),
+            dimensions: None,
         }
     }
 
     pub fn add_window(&mut self, window: String) {
         self.windows.push(window);
-        self.dirty = true;
     }
 
     pub fn del_window(&mut self, window: &str) {
         self.windows.retain(|win| win != window);
-        self.highlighted.retain(|win| win != window);
-        self.dirty = true;
+        self.highlighted.remove(window);
     }
 
     pub fn set_current_window(&mut self, window: &str) {
         self.current_window = Some(window.to_string());
-        // could use self.highlighted.drain_filter(|w| w == &window);
-        let mut i = 0;
-        while i != self.highlighted.len() {
-            if self.highlighted[i] == window {
-                self.highlighted.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-        self.dirty = true;
+        self.highlighted.remove(window);
     }
 
-    pub fn highlight_window(&mut self, window: &str) {
-        if self.highlighted.iter().find(|w| w == &window).is_none() {
-            self.highlighted.push(window.to_string());
-            self.dirty = true;
+    pub fn highlight_window(&mut self, window: &str, important: bool) {
+        if self.current_window.as_deref() != Some(window) {
+            let state = self.highlighted.entry(window.to_string()).or_insert((0, 0));
+            state.0 += 1;
+            if important {
+                state.1 += 1;
+            }
+        }
+    }
+
+    pub fn reduce_highlight(&mut self, window: &str, total: u64, important: u64) {
+        if let Some(state) = self.highlighted.get_mut(window) {
+            state.0 = state.0.saturating_sub(total);
+            state.1 = state.1.saturating_sub(important);
+            if state.0 == 0 {
+                self.highlighted.remove(window);
+            }
         }
     }
 }
 
-impl<W> View<UIEvent, W> for WinBar
-where
-    W: Write,
-{
-    fn render(&mut self, dimension: &Dimension, screen: &mut Screen<W>) {
-        save_cursor!(screen);
-
-        let mut written = 0;
-
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
-        vprint!(
-            screen,
-            "{}{}",
-            color::Bg(color::Blue),
-            color::Fg(color::White)
-        );
-
-        for _ in 0..dimension.w.unwrap() {
-            vprint!(screen, " ");
-        }
-
-        vprint!(
-            screen,
-            "{}",
-            termion::cursor::Goto(dimension.x, dimension.y)
-        );
-        if let Some(connection) = &self.connection {
-            vprint!(screen, " {}", connection);
-            written += 1 + connection.len();
-        }
-
-        let mut first = true;
-        let mut remaining = self.highlighted.len();
-
-        for window in &self.highlighted {
-            // Keep space for at least ", +X]"
-            let remaining_len = if remaining > 1 {
-                format!("{}", remaining).len() + 4
-            } else {
-                0
-            };
-
-            if window.len() + written + remaining_len > dimension.w.unwrap() as usize {
-                if !first {
-                    vprint!(screen, ", +{}", remaining);
-                }
-                break;
-            }
-
-            if first {
-                vprint!(screen, " [");
-                written += 3; // Also count the closing bracket
-                first = false;
-            } else {
-                vprint!(screen, ", ");
-                written += 2;
-            }
-            vprint!(
-                screen,
-                "{}{}{}",
-                termion::style::Bold,
-                window,
-                termion::style::NoBold
-            );
-            written += window.len();
-            remaining -= 1;
-        }
-
-        if !first {
-            vprint!(screen, "]");
-        }
-
-        vprint!(
-            screen,
-            "{}{}",
-            color::Bg(color::Reset),
-            color::Fg(color::Reset)
-        );
-
-        restore_cursor!(screen);
-        flush!(screen);
-        self.dirty = false;
+impl View<UIEvent, Theme> for WinBar {
+    fn focusable(&self) -> bool {
+        false
     }
 
-    fn is_dirty(&self) -> bool {
-        self.dirty
+    fn measure(&self, _measure_specs: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            height: RequestedDimension::Absolute(1),
+            width: RequestedDimension::ExpandMax,
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        log::debug!("layout {} {:?}", std::any::type_name::<Self>(), dimensions);
+        self.dimensions.replace(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
+        log::debug!(
+            "rendering {} at {:?}",
+            std::any::type_name::<Self>(),
+            self.dimensions
+        );
+
+        // One tab per open window, in open order (ADR-0008 tab bar).
+        let tabs: Vec<Charxels> = self
+            .windows
+            .iter()
+            .map(|window| {
+                let label = self
+                    .display_names
+                    .get(window.as_str())
+                    .map_or(window.as_str(), String::as_str);
+                if self.current_window.as_deref() == Some(window.as_str()) {
+                    format!("[{label}]").with_style(Style::Bold)
+                } else if let Some((total, important)) = self.highlighted.get(window.as_str()) {
+                    if *important > 0 {
+                        format!("{label} ({important}, {total})").with_style(Style::Bold)
+                    } else {
+                        format!("{label} ({total})").into_charxels()
+                    }
+                } else {
+                    label.into_charxels()
+                }
+            })
+            .collect();
+
+        if !tabs.is_empty() {
+            let width = frame.width();
+            let n = tabs.len();
+            let current = self
+                .current_window
+                .as_deref()
+                .and_then(|c| self.windows.iter().position(|w| w == c))
+                .unwrap_or(0);
+
+            // Width of tabs[lo..=hi] with " | " separators and an ellipsis
+            // marker on each cut side.
+            let total = |lo: usize, hi: usize| -> u16 {
+                let mut w: u16 = 0;
+                for (i, tab) in tabs.iter().enumerate().take(hi + 1).skip(lo) {
+                    if i > lo {
+                        w += 3;
+                    }
+                    w += tab.display_width();
+                }
+                if lo > 0 {
+                    w += 2;
+                }
+                if hi < n - 1 {
+                    w += 2;
+                }
+                w
+            };
+
+            // The current tab is always visible; grow the visible range
+            // around it while it fits, cutting overflow with an ellipsis.
+            let mut lo = current;
+            let mut hi = current;
+            loop {
+                if hi + 1 < n && total(lo, hi + 1) <= width {
+                    hi += 1;
+                } else if lo > 0 && total(lo - 1, hi) <= width {
+                    lo -= 1;
+                } else {
+                    break;
+                }
+            }
+
+            if lo > 0 {
+                frame.write("… ");
+            }
+            for (i, tab) in tabs.iter().enumerate().take(hi + 1).skip(lo) {
+                if i > lo {
+                    frame.write(" | ");
+                }
+                if lo == hi {
+                    let mut only = tab.clone();
+                    only.truncate(width, "…");
+                    frame.write(only);
+                } else {
+                    frame.write(tab);
+                }
+            }
+            if hi < n - 1 {
+                frame.write(" …");
+            }
+        }
+
+        frame.set_background(config.win_bar.bg);
+        frame.set_foreground(config.win_bar.fg);
     }
 
     fn event(&mut self, event: &mut UIEvent) {
         match event {
             UIEvent::Core(Event::ChangeWindow(name)) => {
-                self.set_current_window(&terminus::clean(name));
+                let clean = terminus::clean_str(name);
+                self.set_current_window(&clean);
             }
-            UIEvent::AddWindow(name, _) => {
-                self.add_window(terminus::clean(name));
+            UIEvent::AddWindow(jid, display_name, _) => {
+                if let Some(name) = display_name {
+                    self.display_names.insert(jid.clone(), name.clone());
+                }
+                self.add_window(terminus::clean_str(jid));
             }
             UIEvent::Core(Event::Close(window)) => {
-                self.del_window(&window);
+                self.del_window(window);
             }
-            UIEvent::Core(Event::Connected(account, _)) => {
-                self.connection = Some(terminus::clean(&account.to_string()));
-                self.dirty = true;
+            UIEvent::Core(Event::Notification {
+                conversation,
+                important,
+                ..
+            }) => {
+                self.highlight_window(&conversation.get_jid().to_string(), *important);
             }
-            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
-                let mut highlighted = None;
-                let messaged_window = terminus::clean(&message.from.to_string());
-                for window in &self.windows {
-                    if &messaged_window == window && Some(window) != self.current_window.as_ref() {
-                        highlighted = Some(window.clone());
-                    }
-                }
-                if highlighted.is_some() {
-                    self.highlight_window(&highlighted.unwrap());
-                    self.dirty = true;
-                }
+            UIEvent::ReduceHighlight(window, total, important) => {
+                self.reduce_highlight(window, *total, *important);
             }
             _ => {}
         }
     }
-
-    fn get_layouts(&self) -> Layouts {
-        Layouts {
-            width: Layout::match_parent(),
-            height: Layout::absolute(1),
-        }
-    }
 }
 
-impl fmt::Display for Message {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Message::Log(message) => {
-                let timestamp = Local.from_utc_datetime(&message.timestamp.naive_local());
-                for line in message.body.lines() {
-                    write!(
-                        f,
-                        "{}{} - {}\n",
-                        color::Fg(color::White),
-                        timestamp.format("%T"),
-                        line
-                    )?;
-                }
-
-                Ok(())
-            }
-            Message::Xmpp(message) => {
-                let author = terminus::clean(
-                    &match &message.type_ {
-                        XmppMessageType::Channel => match &message.from_full {
-                            Jid::Full(from) => from.resource.clone(),
-                            Jid::Bare(from) => from.to_string(),
-                        },
-                        XmppMessageType::Chat => message.from.to_string(),
-                    }
-                    .to_string(),
-                );
-
-                let timestamp =
-                    Local.from_utc_datetime(&message.get_original_timestamp().naive_local());
-                let body = message.get_last_body();
-                let me = body.starts_with("/me");
-                let padding_len = match me {
-                    true => format!("{} - {}: ", timestamp.format("%T"), author).len(),
-                    false => format!("{} - * {}", timestamp.format("%T"), author).len(),
-                };
-                let padding = " ".repeat(padding_len);
-
-                let (r, g, b) = id_to_rgb(&author);
-
-                let mut attributes = "".to_string();
-                if message.has_multiple_version() {
-                    attributes.push_str("✎ ");
-                }
-
-                match me {
-                    true => write!(
-                        f,
-                        "{}{} - {}* {}{}{}",
-                        color::Fg(color::White),
-                        timestamp.format("%T"),
-                        attributes,
-                        color::Fg(color::Rgb(r, g, b)),
-                        author,
-                        color::Fg(color::White)
-                    ),
-                    false => write!(
-                        f,
-                        "{}{} - {}{}{}:{} ",
-                        color::Fg(color::White),
-                        timestamp.format("%T"),
-                        attributes,
-                        color::Fg(color::Rgb(r, g, b)),
-                        author,
-                        color::Fg(color::White)
-                    ),
-                }?;
-
-                let mut iter = match me {
-                    true => body.strip_prefix("/me").unwrap().lines(),
-                    false => body.lines(),
-                };
-
-                if let Some(line) = iter.next() {
-                    write!(f, "{}", terminus::clean(line))?;
-                }
-                while let Some(line) = iter.next() {
-                    write!(f, "\n{}{}", padding, terminus::clean(line))?;
-                }
-
-                Ok(())
-            }
-        }
-    }
-}
-
-impl fmt::Display for contact::Group {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}{}{}",
-            color::Fg(color::Yellow),
-            terminus::clean(&self.0),
-            color::Fg(color::White)
-        )
+impl CharxelDisplay<Theme> for contact::Group {
+    fn colored_fmt(&self, config: &Theme) -> Charxels {
+        self.0.clone().with_foreground(config.roster_group_fg)
     }
 }
 
@@ -472,7 +1005,7 @@ impl Hash for RosterItem {
             Self::Contact(contact) => contact.jid.hash(state),
             Self::Bookmark(bookmark) => bookmark.jid.hash(state),
             Self::Window(window) => window.hash(state),
-        };
+        }
     }
 }
 
@@ -489,92 +1022,224 @@ impl PartialEq for RosterItem {
 
 impl Eq for RosterItem {}
 
-impl fmt::Display for RosterItem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl CharxelDisplay<Theme> for RosterItem {
+    fn colored_fmt(&self, config: &Theme) -> Charxels {
         match &self {
             Self::Contact(contact) => {
-                match contact.presence {
+                let fg = match contact.presence {
                     contact::Presence::Available | contact::Presence::Chat => {
-                        write!(f, "{}", color::Fg(color::Green))?
+                        config.roster_available_fg
                     }
                     contact::Presence::Away
                     | contact::Presence::Dnd
                     | contact::Presence::Xa
-                    | contact::Presence::Unavailable => write!(f, "{}", color::Fg(color::White))?,
+                    | contact::Presence::Unavailable => config.roster_unavailable_fg,
                 };
 
                 let disp = match &contact.name {
                     Some(name) => format!(
                         "{} ({})",
-                        terminus::clean(name),
-                        terminus::clean(&contact.jid.to_string()),
+                        terminus::clean_str(name),
+                        terminus::clean_str(&contact.jid.to_string()),
                     ),
-                    None => terminus::clean(&contact.jid.to_string()),
+                    None => terminus::clean_str(&contact.jid.to_string()),
                 };
 
-                write!(f, "{}{}", disp, color::Fg(color::White))
+                disp.with_foreground(fg)
             }
 
-            Self::Bookmark(bookmark) => {
-                let disp = match &bookmark.name {
-                    Some(name) => terminus::clean(name),
-                    None => terminus::clean(&bookmark.jid.to_string()),
-                };
+            Self::Bookmark(bookmark) => match &bookmark.name {
+                Some(name) => name.into_charxels(),
+                None => bookmark.jid.to_string().into_charxels(),
+            },
+            Self::Window(window) => window.into_charxels(),
+        }
+    }
+}
 
-                write!(f, "{}{}", disp, color::Fg(color::White))
+fn roster_item_display_name(item: &RosterItem) -> String {
+    match item {
+        RosterItem::Window(label) => label.clone(),
+        RosterItem::Contact(c) => c.name.clone().unwrap_or_else(|| c.jid.to_string()),
+        RosterItem::Bookmark(b) => b.name.clone().unwrap_or_else(|| b.jid.to_string()),
+    }
+}
+
+/// A single rendered row in the roster `ScrollWin`.
+/// Either a group header or a roster item (contact, bookmark, or window).
+pub struct RosterRow {
+    pub group_index: u8,
+    pub content: RosterRowContent,
+    dimensions: Option<Dimensions>,
+    selection: Cell<Option<BgColor>>,
+}
+
+pub enum RosterRowContent {
+    GroupHeader(String),
+    Item(RosterItem),
+}
+
+impl RosterRow {
+    pub fn header(group_index: u8, name: impl Into<String>) -> Self {
+        Self {
+            group_index,
+            content: RosterRowContent::GroupHeader(name.into()),
+            dimensions: None,
+            selection: Cell::new(None),
+        }
+    }
+
+    pub fn item(group_index: u8, item: RosterItem) -> Self {
+        Self {
+            group_index,
+            content: RosterRowContent::Item(item),
+            dimensions: None,
+            selection: Cell::new(None),
+        }
+    }
+
+    fn display_name(&self) -> String {
+        match &self.content {
+            RosterRowContent::GroupHeader(name) => name.clone(),
+            RosterRowContent::Item(item) => roster_item_display_name(item),
+        }
+    }
+
+    pub fn as_item(&self) -> Option<&RosterItem> {
+        match &self.content {
+            RosterRowContent::Item(item) => Some(item),
+            RosterRowContent::GroupHeader(_) => None,
+        }
+    }
+}
+
+impl Clone for RosterRow {
+    fn clone(&self) -> Self {
+        Self {
+            group_index: self.group_index,
+            content: match &self.content {
+                RosterRowContent::GroupHeader(n) => RosterRowContent::GroupHeader(n.clone()),
+                RosterRowContent::Item(i) => RosterRowContent::Item(i.clone()),
+            },
+            dimensions: self.dimensions.clone(),
+            selection: Cell::new(self.selection.get()),
+        }
+    }
+}
+
+impl PartialEq for RosterRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.group_index == other.group_index
+            && match (&self.content, &other.content) {
+                (RosterRowContent::GroupHeader(_), RosterRowContent::GroupHeader(_)) => true,
+                (RosterRowContent::Item(a), RosterRowContent::Item(b)) => a == b,
+                _ => false,
             }
-            Self::Window(window) => {
-                let disp = terminus::clean(window);
+    }
+}
 
-                write!(f, "{}", disp)
+impl Eq for RosterRow {}
+
+impl Hash for RosterRow {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.group_index.hash(state);
+        match &self.content {
+            RosterRowContent::GroupHeader(_) => 0u8.hash(state),
+            RosterRowContent::Item(item) => {
+                1u8.hash(state);
+                item.hash(state);
             }
         }
     }
 }
 
-impl fmt::Display for conversation::Occupant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (r, g, b) = id_to_rgb(&self.nick);
-        let nick = self.nick.clone();
-
-        write!(
-            f,
-            "{}{}{}",
-            color::Fg(color::Rgb(r, g, b)),
-            terminus::clean(&nick),
-            color::Fg(color::White)
-        )
+impl PartialOrd for RosterRow {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
-impl fmt::Display for conversation::Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Ord for RosterRow {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        fn sort_key(row: &RosterRow) -> (u8, bool, String) {
+            match &row.content {
+                RosterRowContent::GroupHeader(_) => (row.group_index, false, String::new()),
+                RosterRowContent::Item(_) => (row.group_index, true, row.display_name()),
+            }
+        }
+        sort_key(self).cmp(&sort_key(other))
+    }
+}
+
+impl View<UIEvent, Theme> for RosterRow {
+    fn measure(&self, _: &MeasureSpecs) -> RequestedDimensions {
+        RequestedDimensions {
+            width: RequestedDimension::ExpandMax,
+            height: RequestedDimension::Absolute(1),
+        }
+    }
+
+    fn layout(&mut self, dimensions: &Dimensions) {
+        self.dimensions = Some(dimensions.clone());
+    }
+
+    fn render(&self, mut frame: ScreenFrame, config: &Theme) {
+        let text = match &self.content {
+            RosterRowContent::GroupHeader(name) => {
+                name.clone().with_foreground(config.roster_group_fg)
+            }
+            RosterRowContent::Item(item) => {
+                let mut indent = "  ".into_charxels();
+                indent.append(item.colored_fmt(config));
+                indent
+            }
+        };
+        let text = if let Some(bg) = self.selection.get() {
+            frame.set_background(bg);
+            text.with_background(bg)
+        } else {
+            text
+        };
+        frame.write_at((0u16, 0u16), &text);
+    }
+
+    fn event(&mut self, _: &mut UIEvent) {}
+
+    fn select(&self, color: BgColor) {
+        self.selection.set(Some(color));
+    }
+
+    fn deselect(&self) {
+        self.selection.set(None);
+    }
+}
+
+impl Searchable for RosterRow {
+    fn matches(&self, query: &str) -> bool {
+        self.display_name()
+            .to_lowercase()
+            .contains(&query.to_lowercase())
+    }
+}
+
+impl CharxelDisplay<Theme> for conversation::Occupant {
+    fn colored_fmt(&self, _config: &Theme) -> Charxels {
+        self.nick
+            .clone()
+            .with_foreground(terminus::FgColor(id_to_rgb(&self.nick)))
+    }
+}
+
+impl CharxelDisplay<Theme> for conversation::Role {
+    fn colored_fmt(&self, config: &Theme) -> Charxels {
+        let fg = config.roster_role_fg;
         match self {
-            conversation::Role::Moderator => write!(
-                f,
-                "{}Moderators{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
-            ),
-            conversation::Role::Participant => write!(
-                f,
-                "{}Participants{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
-            ),
-            conversation::Role::Visitor => write!(
-                f,
-                "{}Visitors{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
-            ),
-            conversation::Role::None => write!(
-                f,
-                "{}Others{}",
-                color::Fg(color::Yellow),
-                color::Fg(color::Yellow)
-            ),
+            conversation::Role::Moderator => "Moderators",
+            conversation::Role::Participant => "Participants",
+            conversation::Role::Visitor => "Visitors",
+            conversation::Role::None => "Others",
         }
+        .with_foreground(fg)
     }
 }
 
@@ -602,7 +1267,7 @@ impl PanicHandler {
         let panic_for_hook = panic.clone();
         let backtrace_for_hook = backtrace.clone();
         panic::set_hook(Box::new(move |info| {
-            let panic = format!("{}", info);
+            let panic = format!("{info}");
             panic_for_hook
                 .lock()
                 .expect("cannot lock panic")
@@ -621,11 +1286,21 @@ impl PanicHandler {
 
 impl Drop for PanicHandler {
     fn drop(&mut self) {
+        // Reset terminal state before printing so output is visible regardless
+        // of whether this is a clean shutdown or a crash. These are no-ops when
+        // the terminal was never set up (e.g. in tests).
+        let _ = execute!(
+            std::io::stdout(),
+            crossterm::cursor::Show,
+            terminal::LeaveAlternateScreen
+        );
+        let _ = terminal::disable_raw_mode();
+
         if let Some(panic) = self.panic.lock().expect("cannot lock panic").as_ref() {
-            println!("Oops Aparté {}", panic);
-            error!("Oops Aparté {}", panic);
+            println!("Oops Aparté {panic}");
+            log::error!("Oops Aparté {}", panic);
             println!("This isn’t normal behavior. Please report issue.");
-            error!("This isn’t normal behavior. Please report issue.");
+            log::error!("This isn’t normal behavior. Please report issue.");
             if let Some(backtrace) = self
                 .backtrace
                 .lock()
@@ -634,7 +1309,7 @@ impl Drop for PanicHandler {
             {
                 println!("Aparté is gathering more info in logfile…");
                 backtrace.resolve();
-                error!("{:?}", backtrace);
+                log::error!("{:?}", backtrace);
                 println!("All done.");
                 let data_dir = dirs::data_dir().unwrap();
                 let aparte_data = data_dir.join("aparte").join("aparte.log");
@@ -645,128 +1320,85 @@ impl Drop for PanicHandler {
 }
 
 pub struct UIMod {
-    screen: Screen<Stdout>,
+    pub render_buffer: Arc<RwLock<OffscreenRenderBuffer>>,
     windows: Vec<String>,
     current_window: Option<String>,
-    unread_windows: LinkedHashSet<String>,
+    unread_windows: HashMap<String, VecDeque<(DateTime<FixedOffset>, bool)>>,
     conversations: HashMap<String, Conversation>,
-    root: LinearLayout<UIEvent, Stdout>,
-    dimension: Option<Dimension>,
+    jid_to_name: HashMap<BareJid, String>,
+    root: Root<UIEvent, Theme>,
+    dirty: bool,
     password_command: Option<Command>,
+    current_mode: Mode,
+    popup_saved_mode: Option<Mode>,
     outgoing_event_queue: Rc<RefCell<Vec<Event>>>,
-    #[allow(dead_code)]
-    panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
+    _panic_handler: PanicHandler, // Defining panic_handler last guarantee that it will be dropped last (after terminal restoration)
+    dimensions: Dimensions,
+    /// Set after the first Enter press on a /command input. The next Enter send is allowed.
+    slash_warned: bool,
 }
 
 impl UIMod {
-    pub fn new() -> Self {
-        let stdout = std::io::stdout().into_raw_mode().unwrap();
-        let screen = AlternateScreen::from(stdout);
-
-        let panic_handler = PanicHandler::new();
-
-        let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Vertical).with_event(
-            |layout, event| {
-                for child in layout.iter_children_mut() {
-                    child.event(event);
-                }
-            },
-        );
-
-        let title_bar = TitleBar::new();
-        let frame =
-            FrameLayout::<UIEvent, Stdout, String>::new().with_event(|frame, event| match event {
-                UIEvent::Core(Event::ChangeWindow(name)) => {
-                    frame.set_current(name.to_string());
-                }
-                UIEvent::AddWindow(name, view) => {
-                    let view = view.take().unwrap();
-                    frame.insert_boxed(name.to_string(), view);
-
-                    // propagate AddWindow with name only to each subview
-                    // required at least for console view
-                    for child in frame.iter_children_mut() {
-                        child.event(&mut UIEvent::AddWindow(name.to_string(), None));
-                    }
-                }
-                UIEvent::Core(Event::Close(window)) => {
-                    frame.remove(&window);
-
-                    // propagate Close with name only to each subview
-                    // required at least for console view
-                    for child in frame.iter_children_mut() {
-                        child.event(&mut UIEvent::Core(Event::Close(window.clone())));
-                    }
-                }
-                UIEvent::Core(Event::Key(Key::PageUp))
-                | UIEvent::Core(Event::Key(Key::PageDown)) => {
-                    if let Some(current) = frame.get_current_mut() {
-                        current.event(event);
-                    }
-                }
-                _ => {
-                    for child in frame.iter_children_mut() {
-                        child.event(event);
-                    }
-                }
-            });
-        let win_bar = WinBar::new();
-        let input = Input::new().with_event(|input, event| match event {
-            UIEvent::Core(Event::Key(Key::Char(c))) => input.key(*c),
-            UIEvent::Core(Event::Key(Key::Backspace)) => input.backspace(),
-            UIEvent::Core(Event::Key(Key::Delete)) => input.delete(),
-            UIEvent::Core(Event::Key(Key::Home)) => input.home(),
-            UIEvent::Core(Event::Key(Key::End)) => input.end(),
-            UIEvent::Core(Event::Key(Key::Up)) => input.previous(),
-            UIEvent::Core(Event::Key(Key::Down)) => input.next(),
-            UIEvent::Core(Event::Key(Key::Left)) => input.left(),
-            UIEvent::Core(Event::Key(Key::Right)) => input.right(),
-            UIEvent::Core(Event::Key(Key::Ctrl('a'))) => input.home(),
-            UIEvent::Core(Event::Key(Key::Ctrl('b'))) => input.left(),
-            UIEvent::Core(Event::Key(Key::Ctrl('e'))) => input.end(),
-            UIEvent::Core(Event::Key(Key::Ctrl('f'))) => input.right(),
-            UIEvent::Core(Event::Key(Key::Ctrl('h'))) => input.backspace(),
-            UIEvent::Core(Event::Key(Key::Ctrl('w'))) => input.backward_delete_word(),
-            UIEvent::Core(Event::Key(Key::Ctrl('u'))) => input.delete_from_cursor_to_start(),
-            UIEvent::Core(Event::Key(Key::Ctrl('k'))) => input.delete_from_cursor_to_end(),
-            UIEvent::Validate(result) => {
-                let mut result = result.borrow_mut();
-                result.replace(input.validate());
+    // None when focus is outside an input.
+    fn focused_input_state(&mut self) -> Option<(String, Cursor, bool, Mode)> {
+        let mut state = UIEvent::RequestInputState;
+        self.root.event(&mut state);
+        match state {
+            UIEvent::FocusedInputState(buf, cursor, password, mode) => {
+                Some((buf, cursor, password, mode))
             }
-            UIEvent::GetInput(result) => {
-                let mut result = result.borrow_mut();
-                result.replace((input.buf.clone(), input.cursor.clone(), input.password));
-            }
-            UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
-                input.buf = raw_buf.clone();
-                input.cursor = cursor.clone();
-                input.dirty = true;
-            }
-            UIEvent::Core(Event::ReadPassword(_)) => input.password(),
-            _ => {}
-        });
-
-        layout.push(title_bar);
-        layout.push(frame);
-        layout.push(win_bar);
-        layout.push(input);
-
-        Self {
-            screen,
-            root: layout,
-            dimension: None,
-            windows: Vec::new(),
-            unread_windows: LinkedHashSet::new(),
-            current_window: None,
-            conversations: HashMap::new(),
-            password_command: None,
-            outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
-            panic_handler,
+            _ => None,
         }
     }
 
+    fn finish_event(&mut self, aparte: &mut Aparte, before: Instant) {
+        log::trace!("Mod::UI handled event in {:.2?}", before.elapsed());
+
+        // Mark UI as needing a render; actual render happens once per event batch
+        // in the main loop via render_if_dirty().
+        self.dirty = true;
+
+        // Handle queued outgoing event
+        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
+            aparte.schedule(event);
+        }
+    }
+
+    pub fn new(_config: &Config) -> Self {
+        let screen = Arc::new(RwLock::new(OffscreenRenderBuffer::default()));
+        let panic_handler = PanicHandler::new();
+        let (width, height) = crossterm::terminal::size().unwrap();
+        RwLock::write(&screen)
+            .unwrap()
+            .set_size((width, height).into());
+
+        Self {
+            render_buffer: screen,
+            root: Root::new(LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)),
+            windows: Vec::new(),
+            unread_windows: HashMap::new(),
+            current_window: None,
+            conversations: HashMap::new(),
+            jid_to_name: HashMap::new(),
+            password_command: None,
+            current_mode: Mode::Normal,
+            popup_saved_mode: None,
+            outgoing_event_queue: Rc::new(RefCell::new(Vec::new())),
+            _panic_handler: panic_handler,
+            dirty: true,
+            slash_warned: false,
+            dimensions: Dimensions {
+                top: 1,
+                left: 1,
+                height,
+                width,
+            },
+        }
+    }
+
+    #[allow(clippy::unused_self)]
     pub fn event_stream(&self) -> EventStream {
-        EventStream::new()
+        EventStream::default()
     }
 
     fn get_scheduler(&self) -> Scheduler {
@@ -775,54 +1407,533 @@ impl UIMod {
         }
     }
 
-    fn add_conversation(&mut self, _aparte: &mut Aparte, conversation: Conversation) {
+    /// Send a XEP-0308 correction for the message identified by
+    /// `original_id`, with the new body. Applies the correction to the local
+    /// message store immediately and pushes the updated message into the UI
+    /// synchronously, then schedules the outgoing stanza.
+    fn send_correction(&mut self, aparte: &mut Aparte, original_id: &str, new_body: String) {
+        let Some(current_window) = self.current_window.clone() else {
+            return;
+        };
+        let Some(conversation) = self.conversations.get(&current_window).cloned() else {
+            return;
+        };
+
+        let new_id = Uuid::new_v4().to_string();
+        let timestamp: DateTime<FixedOffset> = LocalTz::now().into();
+        let mut bodies = HashMap::new();
+        bodies.insert(String::new(), new_body.clone());
+
+        let (account, mut correction): (Account, Message) = match &conversation {
+            Conversation::Chat(chat) => {
+                let from: Jid = chat.account.clone().into();
+                let to: Jid = chat.contact.clone().into();
+                let msg = Message::outgoing_chat(
+                    new_id.clone(),
+                    timestamp,
+                    &from,
+                    &to,
+                    bodies,
+                    None,
+                    false,
+                );
+                (chat.account.clone(), msg)
+            }
+            Conversation::Channel(channel) => {
+                let Ok(us) = channel.account.to_bare().with_resource_str(&channel.nick) else {
+                    return;
+                };
+                let from: Jid = us.into();
+                let to: Jid = channel.jid.clone().into();
+                let msg = Message::outgoing_channel(
+                    new_id.clone(),
+                    timestamp,
+                    &from,
+                    &to,
+                    bodies,
+                    None,
+                    false,
+                );
+                (channel.account.clone(), msg)
+            }
+        };
+        correction.set_correcting_id(original_id.to_string());
+
+        // Apply correction to the local store and push the updated original
+        // into the UI immediately, so the edited message updates in place.
+        let updated = {
+            let mut msgs = aparte.get_mod_mut::<crate::mods::messages::MessagesMod>();
+            if let Some(original) = msgs.get_mut(&Some(account.clone()), &original_id.to_string()) {
+                original.apply_correction(new_id, new_body, timestamp);
+                Some(original.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(updated_msg) = updated {
+            self.root.event(&mut UIEvent::Core(Event::Message(
+                Some(account.clone()),
+                updated_msg,
+            )));
+        }
+
+        aparte.schedule(Event::SendMessage(account, correction));
+    }
+
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    fn add_conversation(&mut self, aparte: &mut Aparte, conversation: &Conversation) {
         let scheduler = self.get_scheduler();
-        match &conversation {
+        let selection_bg = aparte.config.theme.selected_message;
+        let search_highlight_fg = aparte.config.theme.search_highlight_fg;
+        let search_highlight_bg = aparte.config.theme.search_highlight_bg;
+        match conversation {
             Conversation::Chat(chat) => {
                 let chat_for_event = chat.clone();
-                let chatwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
-                    move |view, event| {
-                        match event {
-                            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
-                                match message.direction {
-                                    // TODO check to == us
-                                    Direction::Incoming => {
-                                        if message.from == chat_for_event.contact {
-                                            view.insert(Message::Xmpp(message.clone()));
+                let chatwin = ScrollWin::<UIEvent, MessageView, Theme>::new()
+                    .with_selection_bg(selection_bg)
+                    .with_event({
+                        let mut aparte = aparte.proxy();
+                        let mut mam_requested = false;
+                        let mut current_mode = Mode::Normal;
+                        let mut follow_bottom = true;
+                        let mut is_current_window = false;
+                        let mut first_visit = true;
+                        move |view, event| {
+                            match event {
+                                UIEvent::Core(Event::Omemo(OmemoEvent::NewDevice {
+                                    jid,
+                                    device_id,
+                                    ..
+                                })) if *jid == chat_for_event.contact => {
+                                    let notice =
+                                        format!("{jid} added a new OMEMO device {device_id}");
+                                    insert_message(
+                                        view,
+                                        MessageView::new(&mut aparte, Message::log(notice)),
+                                    );
+                                }
+                                UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
+                                    match message.direction {
+                                        // TODO check to == us
+                                        Direction::Incoming => {
+                                            if message.from == chat_for_event.contact {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
+                                                    view.select_last_visible();
+                                                }
+                                            }
                                         }
-                                    }
-                                    Direction::Outgoing => {
-                                        // TODO check from == us
-                                        if message.to == chat_for_event.contact {
-                                            view.insert(Message::Xmpp(message.clone()));
+                                        Direction::Outgoing => {
+                                            // TODO check from == us
+                                            if message.to == chat_for_event.contact {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
+                                                    view.select_last_visible();
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => {
-                                if view.page_up() {
-                                    let from = view.first().map(|message| message.timestamp());
-                                    scheduler.schedule(Event::LoadChatHistory {
-                                        account: chat_for_event.account.clone(),
-                                        contact: chat_for_event.contact.clone(),
-                                        from: from.cloned(),
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageUp,
+                                    ..
+                                })) => {
+                                    follow_bottom = false;
+                                    let (at_top, _, _) = view.page_up();
+                                    if at_top && !mam_requested {
+                                        mam_requested = true;
+                                        let from =
+                                            view.first().map(|message| message.message.timestamp());
+                                        scheduler.schedule(Event::LoadChatHistory {
+                                            account: chat_for_event.account.clone(),
+                                            contact: chat_for_event.contact.clone(),
+                                            from: from.copied(),
+                                        });
+                                    }
+                                }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageDown,
+                                    ..
+                                })) => {
+                                    view.page_down();
+                                    mam_requested = false;
+                                }
+                                UIEvent::NormalCommand { bubbled, cmd } => match cmd {
+                                    NormalCommand::SelectPrev(count) => {
+                                        follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        for _ in 0..*count {
+                                            let (old, new, at_top) = view.select_prev();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
+                                            if at_top && !mam_requested {
+                                                mam_requested = true;
+                                                let from = view
+                                                    .first()
+                                                    .map(|message| message.message.timestamp());
+                                                scheduler.schedule(Event::LoadChatHistory {
+                                                    account: chat_for_event.account.clone(),
+                                                    contact: chat_for_event.contact.clone(),
+                                                    from: from.copied(),
+                                                });
+                                                break;
+                                            }
+                                        }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
+                                        }
+                                    }
+                                    NormalCommand::SelectNext(count) => {
+                                        follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        for _ in 0..*count {
+                                            let (old, new) = view.select_next();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
+                                        }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
+                                        }
+                                    }
+                                    NormalCommand::ScrollToTop => {
+                                        follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        view.scroll_to_top();
+                                        if !mam_requested {
+                                            mam_requested = true;
+                                            let from = view
+                                                .first()
+                                                .map(|message| message.message.timestamp());
+                                            scheduler.schedule(Event::LoadChatHistory {
+                                                account: chat_for_event.account.clone(),
+                                                contact: chat_for_event.contact.clone(),
+                                                from: from.copied(),
+                                            });
+                                        }
+                                    }
+                                    NormalCommand::ScrollToBottom => {
+                                        follow_bottom = true;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        view.scroll_to_bottom();
+                                        view.update_selected(MessageView::start_cursor);
+                                        mam_requested = false;
+                                    }
+                                    NormalCommand::SearchFirst(query) => {
+                                        follow_bottom = false;
+                                        view.set_search(query);
+                                        for child in view.children_iter() {
+                                            child.set_highlight(Some((
+                                                query.clone(),
+                                                search_highlight_fg,
+                                                search_highlight_bg,
+                                            )));
+                                        }
+                                    }
+                                    NormalCommand::SearchNext => {
+                                        follow_bottom = false;
+                                        view.search_next();
+                                    }
+                                    NormalCommand::SearchPrev => {
+                                        follow_bottom = false;
+                                        view.search_prev();
+                                    }
+                                    NormalCommand::SearchCancel => {
+                                        view.clear_search();
+                                        for child in view.children_iter() {
+                                            child.set_highlight(None);
+                                        }
+                                    }
+                                    NormalCommand::FocusPaneLeft
+                                    | NormalCommand::FocusPaneRight => {}
+                                },
+                                UIEvent::Core(Event::ChangeWindow(name)) => {
+                                    is_current_window = name == &chat_for_event.contact.to_string();
+                                    if is_current_window && first_visit {
+                                        first_visit = false;
+                                        view.clear_selection();
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Normal) => {
+                                    let was_command = current_mode == Mode::Command;
+                                    current_mode = Mode::Normal;
+                                    if !was_command {
+                                        // Switch edit buffer to Normal mode when leaving Insert.
+                                        // Dirty edits are preserved for later commit or cancel.
+                                        view.update_selected(|msg| {
+                                            if msg.is_insert_editing() {
+                                                msg.set_normal_mode(true);
+                                            }
+                                        });
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Command) => {
+                                    current_mode = Mode::Command;
+                                    // Keep selection alive so the cursor returns to the
+                                    // message after Esc, at the start of message content.
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Insert) => {
+                                    current_mode = Mode::Insert;
+                                    if is_current_window {
+                                        follow_bottom = true;
+                                        let editing =
+                                            view.selected().is_some_and(MessageView::is_editing);
+                                        if !editing {
+                                            view.clear_selection();
+                                        } else {
+                                            view.update_selected(|msg| {
+                                                msg.set_normal_mode(false);
+                                            });
+                                        }
+                                    }
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
+                                }
+                                // Begin an in-place edit on the selected outgoing message.
+                                // 'i' on a message: switch to Insert mode for outgoing
+                                // messages; incoming messages stay in Normal mode (read-only).
+                                UIEvent::StartEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                        }
                                     });
                                 }
+                                UIEvent::AppendEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.right();
+                                            }
+                                        }
+                                    });
+                                }
+                                UIEvent::AppendEndEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.end();
+                                            }
+                                        }
+                                    });
+                                }
+                                UIEvent::MoveCursor(motion, count) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        view.update_selected(|msg| {
+                                            msg.apply_action(&Action {
+                                                count: *count,
+                                                register: None,
+                                                operator: Operator::Move,
+                                                motion: motion.clone(),
+                                            });
+                                        });
+                                    }
+                                }
+                                UIEvent::ApplyTextAction(action, slot) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        let rv =
+                                            view.update_selected(|msg| msg.apply_action(action));
+                                        if let Some(Some(rv)) = rv {
+                                            *slot = Some(rv);
+                                        }
+                                    }
+                                }
+                                // Enter commits a dirty in-place edit from Insert or Normal mode
+                                // by scheduling SendCorrection and mutating the event so the
+                                // outer layout transitions to Normal.
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::Enter,
+                                    ..
+                                })) if matches!(current_mode, Mode::Insert | Mode::Normal) => {
+                                    let pair = view.update_selected(|msg| {
+                                        if !msg.is_dirty_editing() {
+                                            return None;
+                                        }
+                                        let id = match &msg.message {
+                                            Message::Xmpp(m) => Some(m.id.clone()),
+                                            Message::Log(_) => None,
+                                        };
+                                        let body = msg.take_edit();
+                                        id.zip(body)
+                                    });
+                                    if let Some(Some((original_id, new_body))) = pair {
+                                        aparte.schedule(Event::SendCorrection {
+                                            original_id: original_id.clone(),
+                                            new_body: new_body.clone(),
+                                        });
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: chat_for_event.contact.to_string(),
+                                            dirty: false,
+                                        });
+                                        *event = UIEvent::Core(Event::SendCorrection {
+                                            original_id,
+                                            new_body,
+                                        });
+                                    }
+                                }
+                                UIEvent::CancelEdit => {
+                                    let was_dirty = view
+                                        .selected()
+                                        .map(|m| m.is_dirty_editing())
+                                        .unwrap_or(false);
+                                    view.update_selected(|msg| msg.cancel_edit());
+                                    if was_dirty {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: chat_for_event.contact.to_string(),
+                                            dirty: false,
+                                        });
+                                    }
+                                }
+                                // Route INSERT-mode key events to the selected
+                                // message when it's being edited in place.
+                                UIEvent::Core(Event::Key(key))
+                                    if current_mode == Mode::Insert
+                                        && view.selected().is_some_and(MessageView::is_editing) =>
+                                {
+                                    let was_dirty = view
+                                        .selected()
+                                        .and_then(|m| m.edit.as_ref())
+                                        .map(|e| e.dirty)
+                                        .unwrap_or(false);
+                                    view.update_selected(|msg| dispatch_edit_key(msg, key));
+                                    if !was_dirty
+                                        && view
+                                            .selected()
+                                            .and_then(|m| m.edit.as_ref())
+                                            .map(|e| e.dirty)
+                                            .unwrap_or(false)
+                                    {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: chat_for_event.contact.to_string(),
+                                            dirty: true,
+                                        });
+                                    }
+                                }
+                                _ => {}
                             }
-                            UIEvent::Core(Event::Key(Key::PageDown)) => {
-                                view.page_down();
-                            }
-                            _ => {}
                         }
-                    },
-                );
+                    });
 
-                self.add_window(chat.contact.to_string(), Box::new(chatwin));
+                let chat_input = Input::new()
+                    .with_prompt("> ", aparte.config.get_theme().input_prompt)
+                    .with_event(window_input_event_handler);
+
+                let mut chat_window = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)
+                    .with_event(|layout, event| match event {
+                        UIEvent::FocusInputBar => {
+                            // Input is at index 1
+                            layout.set_focus(1);
+                        }
+                        UIEvent::NormalCommand { .. } => {
+                            if let Some(scrollwin) = layout.children.get_mut(0) {
+                                scrollwin.child.view.event(event);
+                            }
+                            if !matches!(event, UIEvent::NormalCommand { bubbled: true, .. }) {
+                                layout.set_focus(0);
+                            }
+                        }
+                        UIEvent::StartEdit | UIEvent::AppendEdit | UIEvent::AppendEndEdit => {
+                            if let Some(scrollwin) = layout.children.get_mut(0) {
+                                scrollwin.child.view.event(event);
+                            }
+                        }
+                        // PageUp/PageDown always scroll the message window, even
+                        // when the input bar (index 1) has focus in Insert mode.
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp | KeyCode::PageDown,
+                            ..
+                        })) => {
+                            if let Some(scrollwin) = layout.children.get_mut(0) {
+                                scrollwin.child.view.event(event);
+                            }
+                        }
+                        UIEvent::Core(Event::Key(_)) => {
+                            layout.route_to_focused(event);
+                        }
+                        _ if event.targets_focused_input_widget() => {
+                            layout.route_to_focused(event);
+                        }
+                        _ => {
+                            for child in layout.iter_children_mut() {
+                                child.event(event);
+                            }
+                        }
+                    });
+                chat_window.push(chatwin, 1);
+                chat_window.push(chat_input, 0);
+                chat_window.set_focus(1); // default focus: Input
+                self.add_window(chat.contact.to_string(), None, Box::new(chat_window));
                 self.conversations
                     .insert(chat.contact.to_string(), conversation.clone());
             }
             Conversation::Channel(channel) => {
-                let mut layout = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal)
+                let mut layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal)
                     .with_event(|layout, event| {
                         for child in layout.iter_children_mut() {
                             child.event(event);
@@ -830,106 +1941,517 @@ impl UIMod {
                     });
 
                 let channel_for_event = channel.clone();
-                let chanwin = BufferedWin::<UIEvent, Stdout, Message>::new().with_event(
-                    move |view, event| {
-                        match event {
-                            UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
-                                match message.direction {
-                                    // TODO check to == us
-                                    Direction::Incoming => {
-                                        if message.from == channel_for_event.jid {
-                                            view.insert(Message::Xmpp(message.clone()));
+                let chanwin = ScrollWin::<UIEvent, MessageView, Theme>::new()
+                    .with_selection_bg(selection_bg)
+                    .with_event({
+                        let mut aparte = aparte.proxy();
+                        let mut mam_requested = false;
+                        let mut current_mode = Mode::Normal;
+                        let mut follow_bottom = true;
+                        let mut is_current_window = false;
+                        let mut first_visit = true;
+                        move |view, event| {
+                            match event {
+                                UIEvent::Core(Event::Message(_, Message::Xmpp(message))) => {
+                                    match message.direction {
+                                        // TODO check to == us
+                                        Direction::Incoming => {
+                                            if message.from == channel_for_event.jid {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
+                                                    view.select_last_visible();
+                                                }
+                                            }
                                         }
-                                    }
-                                    Direction::Outgoing => {
-                                        // TODO check from == us
-                                        if message.to == channel_for_event.jid {
-                                            view.insert(Message::Xmpp(message.clone()));
+                                        Direction::Outgoing => {
+                                            // TODO check from == us
+                                            if message.to == channel_for_event.jid {
+                                                insert_message(
+                                                    view,
+                                                    MessageView::new(
+                                                        &mut aparte,
+                                                        Message::Xmpp(message.clone()),
+                                                    ),
+                                                );
+                                                mam_requested = false;
+                                                if current_mode == Mode::Normal && follow_bottom {
+                                                    view.update_selected(|msg| {
+                                                        if msg.is_editing() {
+                                                            msg.cancel_edit();
+                                                        }
+                                                    });
+                                                    view.select_last_visible();
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            UIEvent::Core(Event::Key(Key::PageUp)) => {
-                                if view.page_up() {
-                                    let from = view.first().map(|message| message.timestamp());
-                                    scheduler.schedule(Event::LoadChannelHistory {
-                                        account: channel_for_event.account.clone(),
-                                        jid: channel_for_event.jid.clone(),
-                                        from: from.cloned(),
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageUp,
+                                    ..
+                                })) => {
+                                    follow_bottom = false;
+                                    let (at_top, _, _) = view.page_up();
+                                    if at_top && !mam_requested {
+                                        mam_requested = true;
+                                        let from =
+                                            view.first().map(|message| message.message.timestamp());
+                                        scheduler.schedule(Event::LoadChannelHistory {
+                                            account: channel_for_event.account.clone(),
+                                            jid: channel_for_event.jid.clone(),
+                                            from: from.copied(),
+                                        });
+                                    }
+                                }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::PageDown,
+                                    ..
+                                })) => {
+                                    view.page_down();
+                                    mam_requested = false;
+                                }
+                                UIEvent::NormalCommand { bubbled, cmd } => match cmd {
+                                    NormalCommand::SelectPrev(count) => {
+                                        follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        for _ in 0..*count {
+                                            let (old, new, at_top) = view.select_prev();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
+                                            if at_top && !mam_requested {
+                                                mam_requested = true;
+                                                let from = view
+                                                    .first()
+                                                    .map(|message| message.message.timestamp());
+                                                scheduler.schedule(Event::LoadChannelHistory {
+                                                    account: channel_for_event.account.clone(),
+                                                    jid: channel_for_event.jid.clone(),
+                                                    from: from.copied(),
+                                                });
+                                                break;
+                                            }
+                                        }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
+                                        }
+                                    }
+                                    NormalCommand::SelectNext(count) => {
+                                        follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        for _ in 0..*count {
+                                            let (old, new) = view.select_next();
+                                            if old.is_some() && old == new {
+                                                *bubbled = true;
+                                                view.clear_selection();
+                                                break;
+                                            }
+                                        }
+                                        if !*bubbled {
+                                            view.update_selected(MessageView::start_cursor);
+                                        }
+                                    }
+                                    NormalCommand::ScrollToTop => {
+                                        follow_bottom = false;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        view.scroll_to_top();
+                                        if !mam_requested {
+                                            mam_requested = true;
+                                            let from = view
+                                                .first()
+                                                .map(|message| message.message.timestamp());
+                                            scheduler.schedule(Event::LoadChannelHistory {
+                                                account: channel_for_event.account.clone(),
+                                                jid: channel_for_event.jid.clone(),
+                                                from: from.copied(),
+                                            });
+                                        }
+                                    }
+                                    NormalCommand::ScrollToBottom => {
+                                        follow_bottom = true;
+                                        view.update_selected(|msg| {
+                                            if msg.is_editing() && !msg.is_dirty_editing() {
+                                                msg.cancel_edit();
+                                            }
+                                        });
+                                        view.scroll_to_bottom();
+                                        view.update_selected(MessageView::start_cursor);
+                                        mam_requested = false;
+                                    }
+                                    NormalCommand::SearchFirst(query) => {
+                                        follow_bottom = false;
+                                        view.set_search(query);
+                                        for child in view.children_iter() {
+                                            child.set_highlight(Some((
+                                                query.clone(),
+                                                search_highlight_fg,
+                                                search_highlight_bg,
+                                            )));
+                                        }
+                                    }
+                                    NormalCommand::SearchNext => {
+                                        follow_bottom = false;
+                                        view.search_next();
+                                    }
+                                    NormalCommand::SearchPrev => {
+                                        follow_bottom = false;
+                                        view.search_prev();
+                                    }
+                                    NormalCommand::SearchCancel => {
+                                        view.clear_search();
+                                        for child in view.children_iter() {
+                                            child.set_highlight(None);
+                                        }
+                                    }
+                                    NormalCommand::FocusPaneLeft
+                                    | NormalCommand::FocusPaneRight => {}
+                                },
+                                UIEvent::Core(Event::ChangeWindow(name)) => {
+                                    is_current_window = name == &channel_for_event.jid.to_string();
+                                    if is_current_window && first_visit {
+                                        first_visit = false;
+                                        view.clear_selection();
+                                    }
+                                    if is_current_window && view.first().is_none() && !mam_requested
+                                    {
+                                        mam_requested = true;
+                                        scheduler.schedule(Event::LoadChannelHistory {
+                                            account: channel_for_event.account.clone(),
+                                            jid: channel_for_event.jid.clone(),
+                                            from: None,
+                                        });
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Normal) => {
+                                    let was_command = current_mode == Mode::Command;
+                                    current_mode = Mode::Normal;
+                                    if !was_command {
+                                        // Switch edit buffer to Normal mode when leaving Insert.
+                                        // Dirty edits are preserved for later commit or cancel.
+                                        view.update_selected(|msg| {
+                                            if msg.is_insert_editing() {
+                                                msg.set_normal_mode(true);
+                                            }
+                                        });
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Command) => {
+                                    current_mode = Mode::Command;
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
+                                }
+                                UIEvent::ModeChange(Mode::Insert) => {
+                                    current_mode = Mode::Insert;
+                                    if is_current_window {
+                                        follow_bottom = true;
+                                        let editing =
+                                            view.selected().is_some_and(MessageView::is_editing);
+                                        if !editing {
+                                            view.clear_selection();
+                                        } else {
+                                            view.update_selected(|msg| {
+                                                msg.set_normal_mode(false);
+                                            });
+                                        }
+                                    }
+                                    for child in view.children_iter() {
+                                        child.set_highlight(None);
+                                    }
+                                }
+                                UIEvent::StartEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                        }
                                     });
                                 }
+                                UIEvent::AppendEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.right();
+                                            }
+                                        }
+                                    });
+                                }
+                                UIEvent::AppendEndEdit => {
+                                    view.update_selected(|msg| {
+                                        let is_outgoing = matches!(&msg.message,
+                                            Message::Xmpp(m) if m.direction == Direction::Outgoing);
+                                        if is_outgoing {
+                                            if !msg.is_editing() {
+                                                msg.start_cursor();
+                                            }
+                                            msg.set_normal_mode(false);
+                                            if let Some(ref mut edit) = msg.edit {
+                                                edit.end();
+                                            }
+                                        }
+                                    });
+                                }
+                                UIEvent::MoveCursor(motion, count) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        view.update_selected(|msg| {
+                                            msg.apply_action(&Action {
+                                                count: *count,
+                                                register: None,
+                                                operator: Operator::Move,
+                                                motion: motion.clone(),
+                                            });
+                                        });
+                                    }
+                                }
+                                UIEvent::ApplyTextAction(action, slot) => {
+                                    if view.selected().is_some_and(MessageView::is_editing) {
+                                        let rv =
+                                            view.update_selected(|msg| msg.apply_action(action));
+                                        if let Some(Some(rv)) = rv {
+                                            *slot = Some(rv);
+                                        }
+                                    }
+                                }
+                                UIEvent::Core(Event::Key(KeyEvent {
+                                    code: KeyCode::Enter,
+                                    ..
+                                })) if matches!(current_mode, Mode::Insert | Mode::Normal) => {
+                                    let pair = view.update_selected(|msg| {
+                                        if !msg.is_dirty_editing() {
+                                            return None;
+                                        }
+                                        let id = match &msg.message {
+                                            Message::Xmpp(m) => Some(m.id.clone()),
+                                            Message::Log(_) => None,
+                                        };
+                                        let body = msg.take_edit();
+                                        id.zip(body)
+                                    });
+                                    if let Some(Some((original_id, new_body))) = pair {
+                                        aparte.schedule(Event::SendCorrection {
+                                            original_id: original_id.clone(),
+                                            new_body: new_body.clone(),
+                                        });
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: channel_for_event.jid.to_string(),
+                                            dirty: false,
+                                        });
+                                        *event = UIEvent::Core(Event::SendCorrection {
+                                            original_id,
+                                            new_body,
+                                        });
+                                    }
+                                }
+                                UIEvent::CancelEdit => {
+                                    let was_dirty = view
+                                        .selected()
+                                        .map(|m| m.is_dirty_editing())
+                                        .unwrap_or(false);
+                                    view.update_selected(|msg| msg.cancel_edit());
+                                    if was_dirty {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: channel_for_event.jid.to_string(),
+                                            dirty: false,
+                                        });
+                                    }
+                                }
+                                UIEvent::Core(Event::Key(key))
+                                    if current_mode == Mode::Insert
+                                        && view.selected().is_some_and(MessageView::is_editing) =>
+                                {
+                                    let was_dirty = view
+                                        .selected()
+                                        .and_then(|m| m.edit.as_ref())
+                                        .map(|e| e.dirty)
+                                        .unwrap_or(false);
+                                    view.update_selected(|msg| dispatch_edit_key(msg, key));
+                                    if !was_dirty
+                                        && view
+                                            .selected()
+                                            .and_then(|m| m.edit.as_ref())
+                                            .map(|e| e.dirty)
+                                            .unwrap_or(false)
+                                    {
+                                        aparte.schedule(Event::EditSessionDirty {
+                                            window: channel_for_event.jid.to_string(),
+                                            dirty: true,
+                                        });
+                                    }
+                                }
+                                _ => {}
                             }
-                            UIEvent::Core(Event::Key(Key::PageDown)) => {
-                                view.page_down();
-                            }
-                            _ => {}
                         }
-                    },
-                );
-                layout.push(chanwin);
+                    });
+                layout.push(chanwin, 7);
 
                 let roster_jid = channel.jid.clone();
                 let roster =
-                    ListView::<UIEvent, Stdout, conversation::Role, conversation::Occupant>::new()
-                        .with_layouts(Layouts {
-                            width: Layout::wrap_content(),
-                            height: Layout::match_parent(),
+                    ListView::<UIEvent, conversation::Role, conversation::Occupant, Theme>::new()
+                        .with_layout(LayoutParams {
+                            width: LayoutParam::WrapContent,
+                            height: LayoutParam::MatchParent,
                         })
                         .with_none_group()
                         .with_unique_item()
                         .with_sort_item()
-                        .with_event(move |view, event| match event {
-                            UIEvent::Core(Event::Occupant {
+                        .with_event(move |view, event| {
+                            if let UIEvent::Core(Event::Occupant {
                                 conversation,
                                 occupant,
                                 ..
-                            }) => {
+                            }) = event
+                            {
                                 if roster_jid == *conversation {
                                     view.insert(occupant.clone(), Some(occupant.role));
                                 }
                             }
-                            _ => {}
                         });
-                layout.push(roster);
+                layout.push(roster, 3);
 
-                self.add_window(channel.get_name(), Box::new(layout));
-                self.conversations
-                    .insert(channel.get_name(), conversation.clone());
+                let jid_str = channel.jid.to_string();
+                if let Some(name) = &channel.name {
+                    self.jid_to_name.insert(channel.jid.clone(), name.clone());
+                }
+                let topic_bar = TopicBar::new(
+                    jid_str.clone(),
+                    channel.name.clone(),
+                    aparte.config.preferred_langs.clone(),
+                );
+                let channel_input = Input::new()
+                    .with_prompt("> ", aparte.config.get_theme().input_prompt)
+                    .with_event(window_input_event_handler);
+
+                let mut window = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical)
+                    .with_event(|win_layout, event| match event {
+                        UIEvent::FocusInputBar => {
+                            // Input is last child; topic_bar(0), h_layout(1), input(2)
+                            win_layout.set_focus(2);
+                        }
+                        UIEvent::NormalCommand { .. } => {
+                            if let Some(h_layout) = win_layout.children.get_mut(1) {
+                                h_layout.child.view.event(event);
+                            }
+                            if !matches!(event, UIEvent::NormalCommand { bubbled: true, .. }) {
+                                win_layout.set_focus(1);
+                            }
+                        }
+                        UIEvent::StartEdit | UIEvent::AppendEdit | UIEvent::AppendEndEdit => {
+                            if let Some(h_layout) = win_layout.children.get_mut(1) {
+                                h_layout.child.view.event(event);
+                            }
+                        }
+                        // PageUp/PageDown always scroll the message window, even
+                        // when the input bar has focus in Insert mode.
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp | KeyCode::PageDown,
+                            ..
+                        })) => {
+                            if let Some(h_layout) = win_layout.children.get_mut(1) {
+                                h_layout.child.view.event(event);
+                            }
+                        }
+                        UIEvent::Core(Event::Key(_)) => {
+                            win_layout.route_to_focused(event);
+                        }
+                        _ if event.targets_focused_input_widget() => {
+                            win_layout.route_to_focused(event);
+                        }
+                        _ => {
+                            for child in win_layout.iter_children_mut() {
+                                child.event(event);
+                            }
+                        }
+                    });
+                window.push(topic_bar, 0);
+                window.push(layout, 1);
+                window.push(channel_input, 0);
+                window.set_focus(2); // default focus: Input
+                self.add_window(jid_str.clone(), channel.name.clone(), Box::new(window));
+                self.conversations.insert(jid_str, conversation.clone());
             }
         }
     }
 
-    fn add_window(&mut self, name: String, window: Box<dyn View<UIEvent, Stdout>>) {
-        self.windows.push(name.clone());
-        self.root.event(&mut UIEvent::AddWindow(name, Some(window)));
+    fn add_window(
+        &mut self,
+        jid: String,
+        display: Option<String>,
+        window: Box<dyn View<UIEvent, Theme>>,
+    ) {
+        self.windows.push(jid.clone());
+        self.root
+            .event(&mut UIEvent::AddWindow(jid, display, Some(window)));
     }
 
     pub fn change_window(&mut self, window: &str) {
+        if self.slash_warned {
+            self.slash_warned = false;
+            self.root.event(&mut UIEvent::ClosePopup);
+            if let Some(saved) = self.popup_saved_mode.take() {
+                self.root.event(&mut UIEvent::ModeChange(saved));
+            }
+        }
         self.root
             .event(&mut UIEvent::Core(Event::ChangeWindow(window.to_string())));
         self.current_window = Some(window.to_string());
     }
 
-    #[allow(unused)] // XXX Should be used when alt+arrow is fixed see https://gitlab.redox-os.org/redox-os/termion/-/issues/183
+    #[allow(unused)] // XXX Should be used when alt+arrow navigation is fixed
     pub fn next_window(&mut self) {
         if let Some(current) = &self.current_window {
             let index = self.windows.iter().position(|e| e == current).unwrap();
             if index < self.windows.len() - 1 {
                 self.change_window(&self.windows[index + 1].clone());
             }
-        } else if self.windows.len() > 0 {
+        } else if !self.windows.is_empty() {
             self.change_window(&self.windows[0].clone());
         }
     }
 
-    #[allow(unused)] // XXX Should be used when alt+arrow is fixed see https://gitlab.redox-os.org/redox-os/termion/-/issues/183
+    #[allow(unused)] // XXX Should be used when alt+arrow navigation is fixed
     pub fn prev_window(&mut self) {
         if let Some(current) = &self.current_window {
             let index = self.windows.iter().position(|e| e == current).unwrap();
             if index > 0 {
                 self.change_window(&self.windows[index - 1].clone());
             }
-        } else if self.windows.len() > 0 {
+        } else if !self.windows.is_empty() {
             self.change_window(&self.windows[0].clone());
         }
     }
@@ -938,74 +2460,1192 @@ impl UIMod {
         self.windows.clone()
     }
 
-    pub fn current_window<'a>(&'a self) -> Option<&'a String> {
+    pub fn get_conversation(&self, window: &str) -> Option<&Conversation> {
+        self.conversations.get(window)
+    }
+
+    pub fn get_display_name(&self, jid: &BareJid) -> Option<&str> {
+        self.jid_to_name.get(jid).map(String::as_str)
+    }
+
+    pub fn current_window(&self) -> Option<&String> {
         self.current_window.as_ref()
+    }
+
+    /// Render the UI if the dirty flag is set. Intended to be called once per
+    /// event batch from the main loop.
+    pub fn render_if_dirty(&mut self, config: &Theme) -> bool {
+        if !self.dirty {
+            return false;
+        }
+        self.dirty = false;
+
+        let before = Instant::now();
+        let (width, height) = crossterm::terminal::size().unwrap();
+        let measure_specs = MeasureSpecs {
+            width: MeasureSpec::AtMost(width),
+            height: MeasureSpec::AtMost(height),
+        };
+        let requested_dimensions = self.root.measure(&measure_specs);
+        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
+        self.root.layout(&self.dimensions);
+
+        let mut render_buffer = self.render_buffer.write().unwrap();
+        render_buffer.set_size((width, height).into());
+        render_buffer.clear();
+        let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions, true);
+        self.root.render(frame, config);
+        log::trace!("Mod::UI rendered in {:.2?}", before.elapsed());
+        true
+    }
+}
+
+// Indices into the root LinearLayout's children (push order in `UIMod::init`).
+// 0: win_bar, 1: frame, 2: status_line, 3: command_bar
+const FRAME_LAYOUT_INDEX: usize = 1;
+const COMMAND_BAR_INDEX: usize = 3;
+
+fn dispatch_nav_command(
+    cmd: NormalCommand,
+    layout: &mut LinearLayout<UIEvent, Theme>,
+    at_nav_bottom: &mut bool,
+    input_bar_focused: &mut bool,
+) {
+    let is_select_next = matches!(cmd, NormalCommand::SelectNext(_));
+    let is_select_prev = matches!(cmd, NormalCommand::SelectPrev(_));
+
+    // 'j' while already at the navigation bottom (input bar, after bubbling
+    // past the last message) is a no-op — nowhere further to go.
+    if is_select_next && *at_nav_bottom {
+        return;
+    }
+    // Any nav command other than a repeated no-op clears the flag.
+    *at_nav_bottom = false;
+
+    let mut event = UIEvent::NormalCommand {
+        cmd,
+        bubbled: false,
+    };
+    if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+        child.child.view.event(&mut event);
+    }
+    let bubbled = matches!(event, UIEvent::NormalCommand { bubbled: true, .. });
+    if bubbled {
+        // Navigation hit the message boundary; return focus to the window's input bar.
+        let mut fib = UIEvent::FocusInputBar;
+        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+            frame.child.view.event(&mut fib);
+        }
+        *input_bar_focused = true;
+        if is_select_next {
+            *at_nav_bottom = true;
+        }
+    } else if is_select_next || is_select_prev {
+        *input_bar_focused = false;
+        layout.set_focus(FRAME_LAYOUT_INDEX);
+    }
+}
+
+fn frame_input_state(layout: &mut LinearLayout<UIEvent, Theme>) -> (String, Cursor, bool) {
+    let mut state = UIEvent::RequestInputState;
+    if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+        frame.child.view.event(&mut state);
+    }
+    match state {
+        UIEvent::InputChanged(buf, cursor, password) => (buf, cursor, password),
+        // Callers run only with the message input focused, so this is never expected.
+        _ => {
+            log::warn!("event=frame_input_state_unanswered fallback=empty");
+            (String::new(), Cursor::new(0), false)
+        }
+    }
+}
+
+fn dispatch_action(
+    action: Action,
+    layout: &mut LinearLayout<UIEvent, Theme>,
+    registers: &mut Registers,
+    mode: &mut Mode,
+    aparte_proxy: &mut AparteAsync,
+    at_nav_bottom: &mut bool,
+    input_bar_focused: &mut bool,
+) {
+    if action.motion.is_navigation() {
+        let cmd = match action.motion {
+            Motion::Down => NormalCommand::SelectNext(action.count),
+            Motion::Up => NormalCommand::SelectPrev(action.count),
+            Motion::FileTop => NormalCommand::ScrollToTop,
+            Motion::FileBottom => NormalCommand::ScrollToBottom,
+            Motion::SearchNext => NormalCommand::SearchNext,
+            Motion::SearchPrev => NormalCommand::SearchPrev,
+            Motion::FocusPaneLeft => NormalCommand::FocusPaneLeft,
+            Motion::FocusPaneRight => NormalCommand::FocusPaneRight,
+            _ => return,
+        };
+        dispatch_nav_command(cmd, layout, at_nav_bottom, input_bar_focused);
+    } else if matches!(action.motion, Motion::PasteAfter | Motion::PasteBefore) {
+        let reg_name = action.register.unwrap_or(Registers::UNNAMED);
+        if let Some(rv) = registers.get(reg_name) {
+            let text = rv.text.clone();
+            if matches!(action.motion, Motion::PasteAfter) {
+                let mut mv_evt = UIEvent::MoveCursor(Motion::Right, 1);
+                for child in layout.iter_children_mut() {
+                    child.event(&mut mv_evt);
+                }
+            }
+            let mut paste_event = UIEvent::Paste(text.clone());
+            for child in layout.iter_children_mut() {
+                child.event(&mut paste_event);
+            }
+        }
+    } else {
+        let mut evt = UIEvent::ApplyTextAction(action.clone(), None);
+        if let Some(child) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+            child.child.view.event(&mut evt);
+        }
+        if let UIEvent::ApplyTextAction(_, Some(ref rv)) = evt {
+            registers.yank(action.register, rv.clone());
+        }
+        if matches!(action.operator, Operator::Change) {
+            *mode = Mode::Insert;
+            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+            for child in layout.iter_children_mut() {
+                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+            }
+        }
+    }
+}
+
+fn window_input_event_handler(input: &mut Input<UIEvent>, event: &mut UIEvent) {
+    match event {
+        UIEvent::Core(Event::Key(key)) => {
+            match key.code {
+                KeyCode::Up => input.previous(),
+                KeyCode::Down => input.next(),
+                _ => {
+                    input.editor.handle_key_event(key);
+                }
+            }
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::RequestInputState => {
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::ClearInput => {
+            input.validate();
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::Core(Event::Completed(raw_buf, cursor)) => {
+            input.editor.buf.clone_from(raw_buf);
+            input.editor.cursor.clone_from(cursor);
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::SetInput(text) => {
+            input.editor.cursor =
+                Cursor::from_index(text, text.len()).unwrap_or_else(|_| Cursor::new(0));
+            input.editor.buf.clone_from(text);
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::MoveCursor(motion, count) => {
+            input.editor.apply_action(&Action {
+                count: *count,
+                register: None,
+                operator: Operator::Move,
+                motion: motion.clone(),
+            });
+        }
+        UIEvent::ApplyTextAction(action, slot) => {
+            if let Some(rv) = input.editor.apply_action(action) {
+                *slot = Some(rv);
+            }
+            if matches!(action.operator, Operator::Move) {
+                *event = UIEvent::InputChanged(
+                    input.editor.buf.clone(),
+                    input.editor.cursor.clone(),
+                    input.password,
+                );
+            }
+        }
+        UIEvent::SetInputState(content, cursor_pos) => {
+            input.editor.buf = content.clone();
+            input.editor.cursor = Cursor::new(*cursor_pos);
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::Paste(text) => {
+            for c in text.chars() {
+                input.key(c);
+            }
+            *event = UIEvent::InputChanged(
+                input.editor.buf.clone(),
+                input.editor.cursor.clone(),
+                input.password,
+            );
+        }
+        UIEvent::ModeChange(Mode::Normal) => {
+            input.set_cursor_style(CursorStyle::SteadyBlock);
+        }
+        UIEvent::ModeChange(Mode::Command | Mode::Insert) => {
+            input.set_cursor_style(CursorStyle::SteadyBar);
+        }
+        _ => {}
     }
 }
 
 impl ModTrait for UIMod {
-    fn init(&mut self, _aparte: &mut Aparte) -> Result<(), ()> {
-        vprint!(&mut self.screen, "{}", termion::clear::All);
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
+        let (width, height) = crossterm::terminal::size().unwrap();
+        log::debug!("Init UI on screen ({width}×{height})");
 
-        let (width, height) = termion::terminal_size().unwrap();
-        let mut dimension = Dimension::new();
-        self.root.measure(&mut dimension, Some(width), Some(height));
-        self.root.layout(&mut dimension, 1, 1);
-        self.root.render(&dimension, &mut self.screen);
-        self.dimension = Some(dimension);
+        let layout;
+        {
+            let mut mode = Mode::Normal;
+            let mut timeout_generation: u64 = 0;
+            let mut action_parser = ActionParser::new();
+            let mut registers = Registers::new();
+            let mut aparte_proxy = aparte.proxy();
+            let mut current_window = String::new();
+            let render_buffer_for_ctrl_l = std::sync::Arc::clone(&self.render_buffer);
+            let mut at_nav_bottom = false;
+            let mut message_cursor_active = false;
+            let mut input_bar_focused = true;
+            let mut pre_command_input_bar_focused = true;
+            // Command-bar buffer state, tracked separately from the message
+            // input so a draft survives command/search entry (ADR-0008).
+            let mut current_cmd: (String, Cursor, bool) = (String::new(), Cursor::new(0), false);
+            layout = LinearLayout::<UIEvent, Theme>::new(Orientation::Vertical).with_event(
+                move |layout, event| match event {
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Insert && message_cursor_active => {
+                        // Esc from message Insert mode: switch to Normal mode only.
+                        // Dirty edit is preserved (suspended) — message_cursor_active stays true.
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) if message_cursor_active => {
+                        // Ctrl+C cancels the edit from either Insert or Normal mode.
+                        layout.route_to_focused(&mut UIEvent::CancelEdit);
+                        mode = Mode::Normal;
+                        message_cursor_active = false;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                    }
+                    // Esc with focus on the command bar in Insert mode cancels
+                    // a password prompt: hand focus back to the input bar and
+                    // resync, exactly like leaving Command mode (the plain
+                    // Insert-Esc arm below would leave focus stranded on the
+                    // deactivated command bar).
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Insert
+                        && layout.focused_child_index == Some(COMMAND_BAR_INDEX) =>
+                    {
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        input_bar_focused = true;
+                        let mut fib = UIEvent::FocusInputBar;
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut fib);
+                        }
+                        current_cmd = (String::new(), Cursor::new(0), false);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Insert => {
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        if input_bar_focused {
+                            // Vim: when leaving Insert on the input bar, cursor moves back one
+                            let (buf, cursor, _) = frame_input_state(layout);
+                            let len = buf.graphemes(true).count();
+                            if cursor.get() == len && len > 0 {
+                                let new_pos = len - 1;
+                                let mut sis_event = UIEvent::SetInputState(buf, new_pos);
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut sis_event);
+                                }
+                            }
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        }
+                    }
+                    // Esc in Normal mode: if focus is on the message frame,
+                    // fire ModeChange(Normal) so the scroll win can cancel the edit.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Normal => {
+                        let focus_on_frame = layout.focused_child_index == Some(FRAME_LAYOUT_INDEX);
+                        if focus_on_frame {
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('i'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        let focused_is_insertable = layout
+                            .focused_child()
+                            .map(|c| c.insertable())
+                            .unwrap_or(false);
+                        if focused_is_insertable {
+                            // Only request an in-place edit when not on the input bar.
+                            // Otherwise, `i` just enters INSERT for typing.
+                            if !input_bar_focused {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::StartEdit);
+                                }
+                                message_cursor_active = true;
+                            }
+                            action_parser.reset();
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
+                        }
+                        // If focused component is not insertable, deny INSERT mode silently.
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('a'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        let focused_is_insertable = layout
+                            .focused_child()
+                            .map(|c| c.insertable())
+                            .unwrap_or(false);
+                        if focused_is_insertable {
+                            if !input_bar_focused {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::AppendEdit);
+                                }
+                                message_cursor_active = true;
+                            } else {
+                                let (buf, cursor, _) = frame_input_state(layout);
+                                let len = buf.graphemes(true).count();
+                                let new_pos = (cursor.get() + 1).min(len);
+                                let mut sis_event = UIEvent::SetInputState(buf, new_pos);
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut sis_event);
+                                }
+                            }
+                            action_parser.reset();
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('A'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        let focused_is_insertable = layout
+                            .focused_child()
+                            .map(|c| c.insertable())
+                            .unwrap_or(false);
+                        if focused_is_insertable {
+                            if !input_bar_focused {
+                                if let Some(focused) = layout.focused_child_mut() {
+                                    focused.event(&mut UIEvent::AppendEndEdit);
+                                }
+                                message_cursor_active = true;
+                            } else {
+                                let (buf, _, _) = frame_input_state(layout);
+                                let len = buf.graphemes(true).count();
+                                let mut sis_event = UIEvent::SetInputState(buf, len);
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut sis_event);
+                                }
+                            }
+                            action_parser.reset();
+                            mode = Mode::Insert;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('o'),
+                        ..
+                    })) if mode == Mode::Normal && !action_parser.is_pending() => {
+                        action_parser.reset();
+                        input_bar_focused = true;
+                        let mut fib = UIEvent::FocusInputBar;
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut fib);
+                        }
+                        mode = Mode::Insert;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char(prefix @ (':' | '/')),
+                        ..
+                    })) if mode == Mode::Normal => {
+                        let prefix = *prefix;
+                        mode = Mode::Command;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Command));
+                        action_parser.reset();
+                        pre_command_input_bar_focused = input_bar_focused;
+                        layout.set_focus(COMMAND_BAR_INDEX);
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Command));
+                        }
+                        let mut si_event = UIEvent::SetInput(prefix.to_string());
+                        if let Some(cmd_bar) = layout.children.get_mut(COMMAND_BAR_INDEX) {
+                            cmd_bar.child.view.event(&mut si_event);
+                        }
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = si_event {
+                            current_cmd = (buf.clone(), cursor.clone(), password);
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Esc, ..
+                    })) if mode == Mode::Command => {
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        action_parser.reset();
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        input_bar_focused = pre_command_input_bar_focused;
+                        // SearchCancel first, then FocusInputBar — so the input bar
+                        // focus is not overwritten by the NormalCommand handler calling
+                        // set_focus(0) when pre_command_input_bar_focused is true.
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut UIEvent::NormalCommand {
+                                cmd: NormalCommand::SearchCancel,
+                                bubbled: false,
+                            });
+                        }
+                        if pre_command_input_bar_focused {
+                            let mut fib = UIEvent::FocusInputBar;
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(&mut fib);
+                            }
+                        }
+                        // ModeChange(Normal) deactivates and clears the command bar.
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                        current_cmd = (String::new(), Cursor::new(0), false);
+                    }
+                    // Enter in Command mode executes the typed command.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    })) if mode == Mode::Command => {
+                        let cmd = current_cmd.0.clone();
 
-        let mut console = LinearLayout::<UIEvent, Stdout>::new(Orientation::Horizontal).with_event(
-            |layout, event| {
-                for (_, child_view) in layout.children.iter_mut() {
-                    child_view.event(event);
+                        mode = Mode::Normal;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                        layout.set_focus(FRAME_LAYOUT_INDEX);
+                        input_bar_focused = pre_command_input_bar_focused;
+                        if pre_command_input_bar_focused {
+                            let mut fib = UIEvent::FocusInputBar;
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(&mut fib);
+                            }
+                        }
+                        // Push the command to the command bar's own history
+                        // while it is still active, then deactivate it.
+                        if let Some(cmd_bar) = layout.children.get_mut(COMMAND_BAR_INDEX) {
+                            cmd_bar.child.view.event(&mut UIEvent::ClearInput);
+                        }
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                        }
+                        current_cmd = (String::new(), Cursor::new(0), false);
+                        if let Some(query) = cmd.strip_prefix('/') {
+                            let query = query.to_string();
+                            if !query.is_empty() {
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut UIEvent::NormalCommand {
+                                        cmd: NormalCommand::SearchFirst(query),
+                                        bubbled: false,
+                                    });
+                                }
+                            }
+                        } else if cmd.starts_with(':') {
+                            aparte_proxy.schedule(Event::RawCommand(
+                                aparte_proxy.current_account(),
+                                current_window.clone(),
+                                cmd,
+                            ));
+                        }
+                        *event = UIEvent::CommandExecuted;
+                    }
+                    // All other keys in COMMAND mode go to the command bar,
+                    // reusing its editing logic (Ctrl+A/B/E/F/H/W/U/K, arrows, Home/End,
+                    // Delete, history).
+                    UIEvent::Core(Event::Key(_)) if mode == Mode::Command => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                            current_cmd = (buf.clone(), cursor.clone(), password);
+                        }
+                    }
+                    // Ctrl+W is the leader key for split navigation (^Wh / ^Wl).
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('w'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) if mode == Mode::Normal => {
+                        match action_parser
+                            .feed(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL))
+                        {
+                            ParseResult::Pending => {
+                                timeout_generation += 1;
+                                let gen = timeout_generation;
+                                let mut aparte_for_task = aparte_proxy.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    aparte_for_task.schedule(Event::CommandTimeout(gen));
+                                });
+                                let buf = action_parser.pending().to_string();
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(buf.clone()));
+                                }
+                            }
+                            ParseResult::Complete(action) => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
+                                dispatch_action(
+                                    action,
+                                    layout,
+                                    &mut registers,
+                                    &mut mode,
+                                    &mut aparte_proxy,
+                                    &mut at_nav_bottom,
+                                    &mut input_bar_focused,
+                                );
+                            }
+                            ParseResult::Invalid => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                        ..
+                    })) if mode == Mode::Normal => {
+                        match action_parser
+                            .feed(KeyEvent::new(KeyCode::Char(*c), KeyModifiers::NONE))
+                        {
+                            ParseResult::Pending => {
+                                // Show partial sequence; schedule a 1s timeout.
+                                timeout_generation += 1;
+                                let gen = timeout_generation;
+                                let mut aparte_for_task = aparte_proxy.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    aparte_for_task.schedule(Event::CommandTimeout(gen));
+                                });
+                                let buf = action_parser.pending().to_string();
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(buf.clone()));
+                                }
+                            }
+                            ParseResult::Complete(action) => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
+                                dispatch_action(
+                                    action,
+                                    layout,
+                                    &mut registers,
+                                    &mut mode,
+                                    &mut aparte_proxy,
+                                    &mut at_nav_bottom,
+                                    &mut input_bar_focused,
+                                );
+                            }
+                            ParseResult::Invalid => {
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                }
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Up, ..
+                    })) if mode == Mode::Normal => {
+                        dispatch_nav_command(
+                            NormalCommand::SelectPrev(1),
+                            layout,
+                            &mut at_nav_bottom,
+                            &mut input_bar_focused,
+                        );
+                    }
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Down,
+                        ..
+                    })) if mode == Mode::Normal => {
+                        dispatch_nav_command(
+                            NormalCommand::SelectNext(1),
+                            layout,
+                            &mut at_nav_bottom,
+                            &mut input_bar_focused,
+                        );
+                    }
+                    UIEvent::Core(Event::CommandTimeout(gen)) => {
+                        if *gen == timeout_generation && action_parser.is_pending() {
+                            action_parser.reset();
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            }
+                        }
+                    }
+                    // Ctrl+K opens the window-switcher popup in any mode.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('k'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) => {
+                        aparte_proxy.schedule(Event::OpenWindowSwitcher);
+                    }
+                    // Ctrl+L forces a full clean repaint in any mode.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Char('l'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    })) => {
+                        render_buffer_for_ctrl_l
+                            .read()
+                            .unwrap()
+                            .request_full_render();
+                    }
+                    // Scroll keys reach the message window in any mode.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::PageUp | KeyCode::PageDown,
+                        ..
+                    })) if mode == Mode::Insert => {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    }
+                    // Enter with an active message cursor commits the in-place edit
+                    // from Insert or Normal mode. The ScrollWin handles the commit
+                    // and mutates the event to SendCorrection.
+                    UIEvent::Core(Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    })) if message_cursor_active && matches!(mode, Mode::Insert | Mode::Normal) => {
+                        layout.route_to_focused(event);
+                        if matches!(*event, UIEvent::Core(Event::SendCorrection { .. })) {
+                            mode = Mode::Normal;
+                            message_cursor_active = false;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                            action_parser.reset();
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                            }
+                        }
+                    }
+                    // All other keys in INSERT mode go only to the focused input.
+                    // Focus may be on the command bar during a password prompt.
+                    UIEvent::Core(Event::Key(_)) if mode == Mode::Insert => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                            if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                            }
+                        }
+                    }
+                    UIEvent::Core(Event::ChangeWindow(name)) => {
+                        let clean = terminus::clean_str(name);
+                        current_window = clean;
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                        // Each window owns its Input; always reset to input bar focus on window change.
+                        input_bar_focused = true;
+                        at_nav_bottom = false;
+                        let mut fib = UIEvent::FocusInputBar;
+                        if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                            frame.child.view.event(&mut fib);
+                        }
+                    }
+                    UIEvent::RequestInputState => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(buf, cursor, password) = event {
+                            *event = UIEvent::FocusedInputState(
+                                buf.clone(),
+                                cursor.clone(),
+                                *password,
+                                mode,
+                            );
+                        }
+                    }
+                    // ClearInput targets whichever input widget is focused so
+                    // clearing the command bar cannot wipe a message draft.
+                    UIEvent::ClearInput => {
+                        layout.route_to_focused(event);
+                        if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                            if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                            }
+                        }
+                    }
+                    // Completion results apply to the widget being edited only.
+                    UIEvent::Core(Event::Completed(_, _)) => {
+                        if mode == Mode::Command {
+                            if let Some(child) = layout.children.get_mut(COMMAND_BAR_INDEX) {
+                                child.child.view.event(event);
+                            }
+                            if let UIEvent::InputChanged(ref buf, ref cursor, password) = *event {
+                                current_cmd = (buf.clone(), cursor.clone(), password);
+                            }
+                        } else {
+                            // Route completion to the frame so the focused window's Input handles it.
+                            if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                frame.child.view.event(event);
+                            }
+                        }
+                    }
+                    // Password prompts happen in the command bar (ADR-0008).
+                    // Focus must be set to COMMAND_BAR before broadcasting so the
+                    // command bar is insertable when ModeChange(Insert) fires.
+                    UIEvent::Core(Event::ReadPassword(_)) => {
+                        layout.set_focus(COMMAND_BAR_INDEX);
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                        // The command bar is now active (insertable); enter Insert mode.
+                        mode = Mode::Insert;
+                        aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                        for child in layout.iter_children_mut() {
+                            child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                        }
+                    }
+                    UIEvent::ModeChange(new_mode) => match *new_mode {
+                        Mode::Normal => {
+                            mode = Mode::Normal;
+                            message_cursor_active = false;
+                            aparte_proxy.schedule(Event::UIMode(Mode::Normal));
+                            action_parser.reset();
+                            if layout.focused_child_index == Some(COMMAND_BAR_INDEX) {
+                                // Leaving a command-bar interaction (e.g. a
+                                // password prompt): hand focus back to the frame
+                                // and resync the mod-level state.
+                                layout.set_focus(FRAME_LAYOUT_INDEX);
+                                input_bar_focused = true;
+                                let mut fib = UIEvent::FocusInputBar;
+                                if let Some(frame) = layout.children.get_mut(FRAME_LAYOUT_INDEX) {
+                                    frame.child.view.event(&mut fib);
+                                }
+                                current_cmd = (String::new(), Cursor::new(0), false);
+                            }
+                            for child in layout.iter_children_mut() {
+                                child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                child.event(&mut UIEvent::ModeChange(Mode::Normal));
+                            }
+                        }
+                        Mode::Insert => {
+                            let focused_is_insertable = layout
+                                .focused_child()
+                                .map(|c| c.insertable())
+                                .unwrap_or(false);
+                            if focused_is_insertable {
+                                mode = Mode::Insert;
+                                aparte_proxy.schedule(Event::UIMode(Mode::Insert));
+                                for child in layout.iter_children_mut() {
+                                    child.event(&mut UIEvent::CommandBufferUpdate(String::new()));
+                                    child.event(&mut UIEvent::ModeChange(Mode::Insert));
+                                }
+                            }
+                        }
+                        Mode::Command => {
+                            for child in layout.iter_children_mut() {
+                                child.event(event);
+                            }
+                        }
+                    },
+                    _ => {
+                        for child in layout.iter_children_mut() {
+                            child.event(event);
+                        }
+                    }
+                },
+            );
+        }
+
+        let win_bar = WinBar::new();
+        let frame =
+            FrameLayout::<UIEvent, String, Theme>::new().with_event(|frame, event| match event {
+                UIEvent::Core(Event::ChangeWindow(name)) => {
+                    frame.set_current(name.clone());
+                    for child in frame.iter_children_mut() {
+                        child.event(event);
+                    }
+                }
+                UIEvent::AddWindow(jid, display_name, view) => {
+                    let view = view.take().unwrap();
+                    frame.insert_boxed(jid.clone(), view);
+
+                    // propagate AddWindow with jid only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::AddWindow(
+                            jid.clone(),
+                            display_name.clone(),
+                            None,
+                        ));
+                    }
+                }
+                UIEvent::Core(Event::Close(window)) => {
+                    frame.remove(window);
+
+                    // propagate Close with name only to each subview
+                    // required at least for console view
+                    for child in frame.iter_children_mut() {
+                        child.event(&mut UIEvent::Core(Event::Close(window.clone())));
+                    }
+                }
+                // Interaction events → current window only
+                UIEvent::Core(
+                    Event::Key(_)
+                    | Event::Completed(_, _)
+                    | Event::ResetCompletion
+                    | Event::ReadPassword(_),
+                )
+                // NormalCommand must go to the current window only: all windows
+                // get ModeChange(Normal) and call select_last_visible(), so any
+                // non-current window that is already at its last selection would
+                // set `bubbled = true` on the shared event, making the outer
+                // layout think navigation failed when it actually succeeded.
+                | UIEvent::NormalCommand { .. }
+                | UIEvent::FocusInputBar
+                | UIEvent::StartEdit
+                | UIEvent::AppendEdit
+                | UIEvent::AppendEndEdit
+                => frame.route_to_focused(event),
+                _ if event.targets_focused_input_widget() => frame.route_to_focused(event),
+                // Global events (Message, Notification, Subject, etc.) → all windows
+                _ => {
+                    for child in frame.iter_children_mut() {
+                        child.event(event);
+                    }
+                }
+            });
+        let status_line = StatusLine::new();
+        let command_bar = CommandBar::new();
+
+        let mut layout = layout;
+        layout.push(win_bar, 0);
+        layout.push(frame, 1);
+        layout.push(status_line, 0);
+        layout.push(command_bar, 0);
+        layout.set_focus(FRAME_LAYOUT_INDEX);
+
+        self.root = Root::new(layout).with_event(|root, event| match event {
+            UIEvent::ShowPopup { title, lines } => {
+                let mut scroll_win = ScrollWin::<UIEvent, PopupLine, Theme>::new()
+                    .with_layout(LayoutParams {
+                        width: LayoutParam::WrapContent,
+                        height: LayoutParam::WrapContent,
+                    })
+                    .with_event(|view, event| match event {
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp,
+                            ..
+                        })) => {
+                            view.page_up();
+                        }
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageDown,
+                            ..
+                        })) => {
+                            view.page_down();
+                        }
+                        _ => {}
+                    });
+                for (i, line) in lines.iter().enumerate() {
+                    scroll_win.insert(PopupLine {
+                        index: i,
+                        text: line.clone(),
+                    });
+                }
+                // Start at the top: reset to index 0, then clear auto-selection.
+                scroll_win.scroll_to_top();
+                scroll_win.clear_selection();
+                root.show(Box::new(scroll_win), title.clone());
+            }
+            UIEvent::ShowWindowSwitcher(entries) => {
+                let switcher = WindowSwitcher::new(std::mem::take(entries));
+                root.show(Box::new(switcher), None);
+            }
+            UIEvent::ClosePopup => {
+                root.hide();
+            }
+            // Key events: when popup visible, Enter on window switcher confirms.
+            // Mutate *event to Win(key) so on_event can call change_window properly.
+            UIEvent::Core(Event::Key(KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            })) if root.is_visible() => {
+                let mut pick = UIEvent::WindowSwitcherPick(None);
+                root.route_to_focused(&mut pick);
+                if let UIEvent::WindowSwitcherPick(Some(key)) = pick {
+                    root.hide();
+                    *event = UIEvent::Core(Event::Win(key));
+                }
+            }
+            // All other key events route to popup (when visible) or background.
+            UIEvent::Core(Event::Key(_)) => root.route_to_focused(event),
+            // All other events always go to the background.
+            _ => root.background_mut().event(event),
+        });
+
+        let mut console = LinearLayout::<UIEvent, Theme>::new(Orientation::Horizontal).with_event(
+            move |layout, event| match event {
+                UIEvent::NormalCommand {
+                    cmd: NormalCommand::FocusPaneLeft,
+                    ..
+                } => {
+                    let old = layout.focused_child_index.unwrap_or(1);
+                    let new_idx = old.saturating_sub(1);
+                    if new_idx != old {
+                        if let Some(lc) = layout.children.get_mut(old) {
+                            lc.child.view.on_focus_change(false);
+                        }
+                        layout.focused_child_index = Some(new_idx);
+                        if let Some(lc) = layout.children.get_mut(new_idx) {
+                            lc.child.view.on_focus_change(true);
+                        }
+                    }
+                }
+                UIEvent::NormalCommand {
+                    cmd: NormalCommand::FocusPaneRight,
+                    ..
+                } => {
+                    let old = layout.focused_child_index.unwrap_or(0);
+                    let n = layout.children.len();
+                    let new_idx = (old + 1).min(n.saturating_sub(1));
+                    if new_idx != old {
+                        if let Some(lc) = layout.children.get_mut(old) {
+                            lc.child.view.on_focus_change(false);
+                        }
+                        layout.focused_child_index = Some(new_idx);
+                        if let Some(lc) = layout.children.get_mut(new_idx) {
+                            lc.child.view.on_focus_change(true);
+                        }
+                    }
+                }
+                UIEvent::NormalCommand { .. } => {
+                    layout.route_to_focused(event);
+                }
+                _ => {
+                    for LayoutChild { child, .. } in &mut layout.children {
+                        child.view.event(event);
+                    }
                 }
             },
         );
+        let console_selection_bg = aparte.config.theme.selected_message;
+        let console_search_highlight_fg = aparte.config.theme.search_highlight_fg;
+        let console_search_highlight_bg = aparte.config.theme.search_highlight_bg;
         console.push(
-            BufferedWin::<UIEvent, Stdout, Message>::new().with_event(|view, event| match event {
-                UIEvent::Core(Event::Message(_, Message::Log(message))) => {
-                    view.insert(Message::Log(message.clone()));
-                }
-                UIEvent::Core(Event::Key(Key::PageUp)) => {
-                    view.page_up();
-                }
-                UIEvent::Core(Event::Key(Key::PageDown)) => {
-                    view.page_down();
-                }
-                _ => {}
-            }),
-        );
-        let roster = ListView::<UIEvent, Stdout, contact::Group, RosterItem>::new()
-            .with_layouts(Layouts {
-                width: Layout::wrap_content().with_relative_max(0.3),
-                height: Layout::match_parent(),
-            })
-            .with_none_group()
-            .with_sort_item()
-            .with_event(|view, event| match event {
-                UIEvent::Core(Event::Connected(_, _)) => {
-                    view.add_group(contact::Group(String::from("Windows")));
-                    view.add_group(contact::Group(String::from("Contacts")));
-                    view.add_group(contact::Group(String::from("Bookmarks")));
-                }
-                UIEvent::Core(Event::Contact(_, contact))
-                | UIEvent::Core(Event::ContactUpdate(_, contact)) => {
-                    if contact.groups.len() > 0 {
-                        for group in &contact.groups {
-                            view.insert(RosterItem::Contact(contact.clone()), Some(group.clone()));
-                        }
-                    } else {
-                        let group = contact::Group(String::from("Contacts"));
-                        view.insert(RosterItem::Contact(contact.clone()), Some(group));
+            ScrollWin::<UIEvent, MessageView, Theme>::new()
+                .with_layout(LayoutParams {
+                    width: LayoutParam::MatchParent,
+                    height: LayoutParam::MatchParent,
+                })
+                .with_selection_bg(console_selection_bg)
+                .with_position_memory()
+                .with_focus_change(|view, focused| {
+                    if !focused {
+                        view.clear_selection();
                     }
+                })
+                .with_event({
+                    let mut aparte = aparte.proxy();
+                    let search_highlight_fg = console_search_highlight_fg;
+                    let search_highlight_bg = console_search_highlight_bg;
+                    let mut is_current_window = false;
+                    move |view, event| match event {
+                        UIEvent::Core(Event::Message(_, Message::Log(message))) => {
+                            insert_message(
+                                view,
+                                MessageView::new(&mut aparte, Message::Log(message.clone())),
+                            );
+                        }
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageUp,
+                            ..
+                        })) => {
+                            view.page_up();
+                        }
+                        UIEvent::Core(Event::Key(KeyEvent {
+                            code: KeyCode::PageDown,
+                            ..
+                        })) => {
+                            view.page_down();
+                        }
+                        UIEvent::NormalCommand { bubbled, cmd } => match cmd {
+                            NormalCommand::SelectPrev(count) => {
+                                for _ in 0..*count {
+                                    let (old, new, _) = view.select_prev();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        view.clear_selection();
+                                        break;
+                                    }
+                                }
+                            }
+                            NormalCommand::SelectNext(count) => {
+                                for _ in 0..*count {
+                                    let (old, new) = view.select_next();
+                                    if old.is_some() && old == new {
+                                        *bubbled = true;
+                                        view.clear_selection();
+                                        break;
+                                    }
+                                }
+                            }
+                            NormalCommand::ScrollToTop => {
+                                view.scroll_to_top();
+                            }
+                            NormalCommand::ScrollToBottom => {
+                                view.scroll_to_bottom();
+                            }
+                            NormalCommand::SearchFirst(query) => {
+                                view.set_search(query);
+                                for child in view.children_iter() {
+                                    child.set_highlight(Some((
+                                        query.clone(),
+                                        search_highlight_fg,
+                                        search_highlight_bg,
+                                    )));
+                                }
+                            }
+                            NormalCommand::SearchNext => {
+                                view.search_next();
+                            }
+                            NormalCommand::SearchPrev => {
+                                view.search_prev();
+                            }
+                            NormalCommand::SearchCancel => {
+                                view.clear_search();
+                                for child in view.children_iter() {
+                                    child.set_highlight(None);
+                                }
+                            }
+                            NormalCommand::FocusPaneLeft | NormalCommand::FocusPaneRight => {}
+                        },
+                        UIEvent::Core(Event::ChangeWindow(name)) => {
+                            is_current_window = name == "console";
+                        }
+                        UIEvent::ModeChange(Mode::Insert | Mode::Command) => {
+                            if is_current_window {
+                                view.clear_selection();
+                            }
+                            for child in view.children_iter() {
+                                child.set_highlight(None);
+                            }
+                        }
+                        _ => {}
+                    }
+                }),
+            7,
+        );
+        let mut window_display: HashMap<String, String> = HashMap::new();
+        let mut scheduler = aparte.proxy();
+        let roster_selection_bg = aparte.config.theme.selected_message;
+        // Group indices: 0=Windows, 1=Contacts, 2=Bookmarks
+        const WINDOWS_GROUP: u8 = 0;
+        const CONTACTS_GROUP: u8 = 1;
+        const BOOKMARKS_GROUP: u8 = 2;
+        let roster = ScrollWin::<UIEvent, RosterRow, Theme>::new()
+            .with_layout(LayoutParams {
+                width: LayoutParam::MatchParent,
+                height: LayoutParam::MatchParent,
+            })
+            .with_selection_bg(roster_selection_bg)
+            .with_position_memory()
+            .with_focus_change(|view, focused| {
+                if !focused {
+                    view.clear_selection();
                 }
-                UIEvent::Core(Event::Bookmark(bookmark)) => {
-                    let group = contact::Group(String::from("Bookmarks"));
-                    view.insert(RosterItem::Bookmark(bookmark.clone()), Some(group));
+            })
+            .with_event(move |view, event| match event {
+                UIEvent::Core(Event::Connected(_, _)) => {
+                    view.insert(RosterRow::header(WINDOWS_GROUP, "Windows"));
+                    view.insert(RosterRow::header(CONTACTS_GROUP, "Contacts"));
+                    view.insert(RosterRow::header(BOOKMARKS_GROUP, "Bookmarks"));
+                }
+                UIEvent::Core(Event::Contact(_, contact) | Event::ContactUpdate(_, contact)) => {
+                    view.replace(RosterRow::item(
+                        CONTACTS_GROUP,
+                        RosterItem::Contact(contact.clone()),
+                    ));
+                }
+                UIEvent::Core(Event::Bookmark(_, bookmark)) => {
+                    view.replace(RosterRow::item(
+                        BOOKMARKS_GROUP,
+                        RosterItem::Bookmark(bookmark.clone()),
+                    ));
                 }
                 UIEvent::Core(Event::DeletedBookmark(jid)) => {
-                    let group = contact::Group(String::from("Bookmarks"));
-                    let bookmark = contact::Bookmark {
+                    let placeholder = contact::Bookmark {
                         jid: jid.clone(),
                         name: None,
                         nick: None,
@@ -1013,38 +3653,140 @@ impl ModTrait for UIMod {
                         autojoin: false,
                         extensions: None,
                     };
-                    let _ = view.remove(RosterItem::Bookmark(bookmark.clone()), Some(group));
+                    // Remove by constructing a matching key (Eq compares group_index + item).
+                    let key = RosterRow::item(BOOKMARKS_GROUP, RosterItem::Bookmark(placeholder));
+                    view.remove_by_key(&key);
                 }
-                UIEvent::AddWindow(name, _) => {
-                    let group = contact::Group(String::from("Windows"));
-                    view.insert(RosterItem::Window(name.clone()), Some(group));
+                UIEvent::AddWindow(jid, display_name, _) => {
+                    let label = display_name.as_deref().unwrap_or(jid.as_str()).to_string();
+                    window_display.insert(jid.clone(), label.clone());
+                    view.insert(RosterRow::item(WINDOWS_GROUP, RosterItem::Window(label)));
                 }
                 UIEvent::Core(Event::Close(window)) => {
-                    let group = contact::Group(String::from("Windows"));
-                    let _ = view.remove(RosterItem::Window(window.clone()), Some(group));
+                    let label = window_display
+                        .remove(window.as_str())
+                        .unwrap_or_else(|| window.clone());
+                    let key = RosterRow::item(WINDOWS_GROUP, RosterItem::Window(label));
+                    view.remove_by_key(&key);
+                }
+                UIEvent::NormalCommand { cmd, .. } => match cmd {
+                    NormalCommand::SelectPrev(count) => {
+                        for _ in 0..*count {
+                            view.select_prev();
+                        }
+                    }
+                    NormalCommand::SelectNext(count) => {
+                        for _ in 0..*count {
+                            view.select_next();
+                        }
+                    }
+                    NormalCommand::ScrollToTop => {
+                        view.scroll_to_top();
+                    }
+                    NormalCommand::ScrollToBottom => {
+                        view.scroll_to_bottom();
+                    }
+                    NormalCommand::SearchFirst(query) => {
+                        view.set_search(query);
+                    }
+                    NormalCommand::SearchNext => {
+                        view.search_next();
+                    }
+                    NormalCommand::SearchPrev => {
+                        view.search_prev();
+                    }
+                    NormalCommand::SearchCancel => {
+                        view.clear_search();
+                    }
+                    NormalCommand::FocusPaneLeft | NormalCommand::FocusPaneRight => {}
+                },
+                UIEvent::Core(Event::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    ..
+                })) => {
+                    if let Some(row) = view.selected() {
+                        if let Some(item) = row.as_item() {
+                            match item {
+                                RosterItem::Window(label) => {
+                                    scheduler.schedule(Event::Win(label.clone()));
+                                }
+                                RosterItem::Contact(c) => {
+                                    scheduler.schedule(Event::RawCommand(
+                                        None,
+                                        "console".to_string(),
+                                        format!(":msg {}", c.jid),
+                                    ));
+                                }
+                                RosterItem::Bookmark(b) => {
+                                    let channel = b
+                                        .nick
+                                        .as_deref()
+                                        .and_then(|nick| b.jid.with_resource_str(nick).ok())
+                                        .map_or_else(|| b.jid.to_string(), |full| full.to_string());
+                                    scheduler.schedule(Event::RawCommand(
+                                        None,
+                                        "console".to_string(),
+                                        format!(":join {channel}"),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {}
             });
-        console.push(roster);
+        console.push(roster, 3);
+        console.set_focus(0); // message pane has initial focus
 
-        self.add_window("console".to_string(), Box::new(console));
+        self.add_window("console".to_string(), None, Box::new(console));
         self.change_window("console");
+
+        // Broadcast the initial mode so views (cursor style, title bar, etc.) are consistent.
+        self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
+
+        // Measure, layout and render
+        let measure_specs = terminus::MeasureSpecs {
+            width: terminus::MeasureSpec::AtMost(width),
+            height: terminus::MeasureSpec::AtMost(height),
+        };
+        let requested_dimensions = self.root.measure(&measure_specs);
+        self.dimensions = Dimensions::reconcile(&measure_specs, &requested_dimensions, 0, 0);
+        self.root.layout(&self.dimensions);
+
+        {
+            let mut render_buffer = self.render_buffer.write().unwrap();
+            render_buffer.clear();
+            let frame = ScreenFrame::new(&mut render_buffer, &self.dimensions, true);
+            self.root.render(frame, &aparte.config.get_theme());
+        }
 
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
+        let before = Instant::now();
+
         match event {
             Event::ReadPassword(command) => {
                 self.password_command = Some(command.clone());
+                self.root.event(&mut UIEvent::ModeChange(Mode::Insert));
                 self.root
                     .event(&mut UIEvent::Core(Event::ReadPassword(command.clone())));
+            }
+            Event::CommandError(text) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::CommandError(text.clone())));
             }
             Event::Connected(account, jid) => {
                 self.root.event(&mut UIEvent::Core(Event::Connected(
                     account.clone(),
                     jid.clone(),
                 )));
+            }
+            Event::Omemo(event @ OmemoEvent::NewDevice { .. }) => {
+                self.root
+                    .event(&mut UIEvent::Core(Event::Omemo(event.clone())));
             }
             Event::Message(account, message) => {
                 match message {
@@ -1070,40 +3812,25 @@ impl ModTrait for UIMod {
                                     Direction::Incoming => Conversation::Channel(Channel {
                                         account: account.clone().unwrap(),
                                         jid: message.from.clone(),
-                                        nick: account.as_ref().unwrap().resource.clone(),
+                                        nick: account.as_ref().unwrap().resource().to_string(),
                                         name: None,
                                         occupants: HashMap::new(),
                                     }),
                                     Direction::Outgoing => Conversation::Channel(Channel {
                                         account: account.clone().unwrap(),
                                         jid: message.to.clone(),
-                                        nick: account.as_ref().unwrap().resource.clone(),
+                                        nick: account.as_ref().unwrap().resource().to_string(),
                                         name: None,
                                         occupants: HashMap::new(),
                                     }),
                                 },
                             };
 
-                            self.add_conversation(aparte, conversation);
-                        }
-
-                        if message.direction == Direction::Incoming {
-                            let mut unread = None;
-                            for window in &self.windows {
-                                if &message.from.to_string() == window
-                                    && Some(window) != self.current_window.as_ref()
-                                {
-                                    unread = Some(window.clone());
-                                }
-                            }
-                            if unread.is_some() {
-                                self.unread_windows.insert(unread.unwrap());
-                            }
-                            aparte.schedule(Event::Notification(String::from("")));
+                            self.add_conversation(aparte, &conversation);
                         }
                     }
                     Message::Log(_message) => {}
-                };
+                }
 
                 self.root.event(&mut UIEvent::Core(Event::Message(
                     account.clone(),
@@ -1116,7 +3843,7 @@ impl ModTrait for UIMod {
                 if !self.windows.contains(&win_name) {
                     self.add_conversation(
                         aparte,
-                        Conversation::Chat(Chat {
+                        &Conversation::Chat(Chat {
                             account: account.clone(),
                             contact: contact.clone(),
                         }),
@@ -1129,19 +3856,25 @@ impl ModTrait for UIMod {
                 channel,
                 user_request,
             } => {
-                let bare: BareJid = channel.clone().into();
+                let bare: BareJid = channel.to_bare();
+                let name = {
+                    let bookmarks = aparte.get_mod::<BookmarksMod>();
+                    bookmarks
+                        .bookmarks_by_jid
+                        .get(&Jid::from(bare.clone()))
+                        .and_then(|&idx| bookmarks.bookmarks.get(idx))
+                        .and_then(|b| b.name.clone())
+                };
+                let ch = Channel {
+                    account: account.clone(),
+                    jid: bare.clone(),
+                    nick: channel.resource().to_string(),
+                    name,
+                    occupants: HashMap::new(),
+                };
                 let win_name = bare.to_string();
                 if !self.windows.contains(&win_name) {
-                    self.add_conversation(
-                        aparte,
-                        Conversation::Channel(Channel {
-                            account: account.clone(),
-                            jid: channel.clone().into(),
-                            nick: channel.resource.clone(),
-                            name: None, // TODO use name from bookmark
-                            occupants: HashMap::new(),
-                        }),
-                    );
+                    self.add_conversation(aparte, &Conversation::Channel(ch));
                 }
                 if *user_request {
                     self.change_window(&win_name);
@@ -1149,87 +3882,213 @@ impl ModTrait for UIMod {
             }
             Event::Win(window) => {
                 if self.windows.contains(window) {
-                    self.change_window(&window);
+                    self.change_window(window);
                 } else {
-                    aparte.log(format!("Unknown window {}", window));
+                    let jid = self
+                        .jid_to_name
+                        .iter()
+                        .find(|(_, name)| name.as_str() == window.as_str())
+                        .map(|(jid, _)| jid.to_string());
+                    if let Some(jid) = jid {
+                        self.change_window(&jid);
+                    } else {
+                        crate::info!(aparte, "Unknown window {window}");
+                    }
                 }
             }
-            Event::WindowChange => {
-                let (width, height) = termion::terminal_size().unwrap();
-                let mut dimension = Dimension::new();
-                self.root.measure(&mut dimension, Some(width), Some(height));
-                self.root.layout(&mut dimension, 1, 1);
-                self.root.render(&dimension, &mut self.screen);
-                self.dimension = Some(dimension);
-            }
+            Event::WindowChange => {}
             Event::Close(window) => {
                 if window != "console" {
+                    if let Some(Conversation::Channel(channel)) =
+                        self.conversations.get(window.as_str())
+                    {
+                        self.jid_to_name.remove(&channel.jid);
+                    }
                     self.windows.retain(|win| win != window);
                     self.unread_windows.remove(window);
                     if Some(window) == self.current_window.as_ref() {
-                        let current = self.windows.iter().next().cloned();
+                        let current = self.windows.first().cloned();
                         if let Some(current) = current {
                             self.change_window(&current);
                         }
                     }
                     self.root
-                        .event(&mut UIEvent::Core(Event::Close(window.clone())))
+                        .event(&mut UIEvent::Core(Event::Close(window.clone())));
                 }
             }
+            Event::UIMode(mode) => {
+                self.current_mode = *mode;
+            }
+            Event::SendCorrection {
+                original_id,
+                new_body,
+            } => {
+                let oid = original_id.clone();
+                let nb = new_body.clone();
+                self.send_correction(aparte, &oid, nb);
+            }
             Event::Key(key) => {
+                self.root.event(&mut UIEvent::ClearCommandError);
+                if key.code == KeyCode::Esc {
+                    // Esc cancels a pending password prompt; the aborted
+                    // input must never reach the command.
+                    self.password_command = None;
+                }
                 match key {
-                    Key::Char('\t') => {
-                        let result = Rc::new(RefCell::new(None));
-
-                        let (raw_buf, cursor, password) = {
-                            self.root.event(&mut UIEvent::GetInput(Rc::clone(&result)));
-
-                            let result = result.borrow_mut();
-                            result.as_ref().unwrap().clone()
+                    KeyEvent {
+                        code: KeyCode::Tab, ..
+                    } => {
+                        let Some((raw_buf, cursor, password, input_mode)) =
+                            self.focused_input_state()
+                        else {
+                            self.finish_event(aparte, before);
+                            return;
                         };
 
-                        if password {
-                            aparte.schedule(Event::Key(Key::Char('\t')));
-                        } else {
-                            let window = self.current_window.clone().unwrap();
-                            let account = match self.conversations.get(&window) {
-                                Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
-                                Some(Conversation::Channel(channel)) => {
-                                    Some(channel.account.clone())
+                        if !password {
+                            match input_mode {
+                                Mode::Normal => {}
+                                Mode::Insert => {
+                                    // Nick completion only — skip if the buffer looks like a command.
+                                    if !raw_buf.starts_with(':') {
+                                        let window = self.current_window.clone().unwrap();
+                                        let account = match self.conversations.get(&window) {
+                                            Some(Conversation::Chat(chat)) => {
+                                                Some(chat.account.clone())
+                                            }
+                                            Some(Conversation::Channel(channel)) => {
+                                                Some(channel.account.clone())
+                                            }
+                                            _ => None,
+                                        };
+                                        aparte.schedule(Event::AutoComplete {
+                                            account,
+                                            context: window,
+                                            raw_buf,
+                                            cursor,
+                                        });
+                                    }
                                 }
-                                _ => None,
-                            };
-                            aparte.schedule(Event::AutoComplete {
-                                account,
-                                context: window,
-                                raw_buf,
-                                cursor,
-                            });
+                                Mode::Command => {
+                                    let window = self.current_window.clone().unwrap();
+                                    let account = match self.conversations.get(&window) {
+                                        Some(Conversation::Chat(chat)) => {
+                                            Some(chat.account.clone())
+                                        }
+                                        Some(Conversation::Channel(channel)) => {
+                                            Some(channel.account.clone())
+                                        }
+                                        _ => None,
+                                    };
+                                    aparte.schedule(Event::AutoComplete {
+                                        account,
+                                        context: window,
+                                        raw_buf,
+                                        cursor,
+                                    });
+                                }
+                            }
                         }
                     }
-                    Key::Char('\n') => {
-                        let result = Rc::new(RefCell::new(None));
-                        // TODO avoid direct send to root, should go back to main event loop
-                        self.root.event(&mut UIEvent::Validate(Rc::clone(&result)));
+                    KeyEvent {
+                        code: KeyCode::Enter,
+                        ..
+                    } => {
+                        // The slash warning popup forced Normal mode; restore it so the draft is readable.
+                        let confirming_slash_warning = self.slash_warned && self.root.is_visible();
+                        if confirming_slash_warning {
+                            self.root.event(&mut UIEvent::ClosePopup);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
+                        }
 
-                        let result = result.borrow_mut();
-                        let (raw_buf, password) = result.as_ref().unwrap();
-                        let raw_buf = raw_buf.clone();
-                        if *password {
-                            let mut command = self.password_command.take().unwrap();
-                            command.args.push(raw_buf.clone());
-                            aparte.schedule(Event::Command(command));
-                        } else if raw_buf.starts_with("/") {
-                            let window = self.current_window.clone().unwrap();
-                            let account = match self.conversations.get(&window) {
-                                Some(Conversation::Chat(chat)) => Some(chat.account.clone()),
-                                Some(Conversation::Channel(channel)) => {
-                                    Some(channel.account.clone())
-                                }
-                                _ => None,
-                            };
-                            aparte.schedule(Event::RawCommand(account, window, raw_buf.clone()));
-                        } else if raw_buf.len() > 0 {
+                        // Normal mode never exposes an input: Enter there must not read, send or clear the draft.
+                        let input = self.focused_input_state().and_then(
+                            |(buf, _cursor, password, mode)| {
+                                (mode != Mode::Normal).then_some((buf, password))
+                            },
+                        );
+                        if input.is_some() {
+                            // The confirming Enter keeps the warning until the plain-text send clears it.
+                            if !confirming_slash_warning && !self.root.is_visible() {
+                                self.slash_warned = false;
+                            }
+                            aparte.schedule(Event::ResetCompletion);
+                        }
+
+                        // Route Enter into the layout tree as a UIEvent::Core(Key).
+                        // The layout closure handles:
+                        //   - Command mode: runs the command, transitions to Normal.
+                        //   - Insert + message_cursor_active: routes to the frame;
+                        //     the ScrollWin commits the edit and mutates the event
+                        //     to SendCorrection.
+                        let mut enter_evt = UIEvent::Core(Event::Key(*key));
+                        self.root.event(&mut enter_evt);
+
+                        // Command mode: the layout closure handled everything.
+                        // The CommandExecuted check is authoritative: in a fast
+                        // key burst self.current_mode can lag behind the
+                        // layout's own mode (UIMode events are still queued).
+                        if matches!(enter_evt, UIEvent::CommandExecuted) {
+                            return;
+                        }
+
+                        // In-place edit committed: SendCorrection was scheduled
+                        // by the ScrollWin; the layout transitioned to Normal.
+                        if matches!(enter_evt, UIEvent::Core(Event::SendCorrection { .. })) {
+                            return;
+                        }
+
+                        // Window-switcher committed: popup mutated the event to Win(key).
+                        if let UIEvent::Core(Event::Win(window)) = enter_evt {
+                            self.change_window(&window);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
+                            return;
+                        }
+
+                        let Some((raw_buf, password)) = input else {
+                            self.finish_event(aparte, before);
+                            return;
+                        };
+
+                        // Normal Insert mode send path.
+                        let looks_like_cmd = !password
+                            && !raw_buf.is_empty()
+                            && ((raw_buf.starts_with('/') && !raw_buf.starts_with("/me "))
+                                || raw_buf.starts_with(':'));
+
+                        if password {
+                            self.root.event(&mut UIEvent::ClearInput);
+                            // None when the prompt was cancelled but state has
+                            // not resynced yet (fast key burst): drop silently.
+                            if let Some(mut command) = self.password_command.take() {
+                                command.args.push(raw_buf);
+                                aparte.schedule(Event::Command(command));
+                            }
+                            self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
+                        } else if looks_like_cmd && !self.slash_warned {
+                            self.slash_warned = true;
+                            aparte.schedule(Event::ShowPopup {
+                                title: None,
+                                lines: vec![
+                                    format!(
+                                        "\"{}\" looks like a command but is not recognized.",
+                                        raw_buf
+                                    ),
+                                    String::new(),
+                                    "Commands are entered in normal mode (Esc, then :command)."
+                                        .to_string(),
+                                    "Press Enter again to send as plain text, or ESC to edit."
+                                        .to_string(),
+                                ],
+                            });
+                        } else if !raw_buf.is_empty() {
+                            self.slash_warned = false;
+                            aparte.schedule(Event::ClosePopup);
+                            self.root.event(&mut UIEvent::ClearInput);
                             if let Some(current_window) = self.current_window.clone() {
                                 if let Some(conversation) = self.conversations.get(&current_window)
                                 {
@@ -1242,13 +4101,15 @@ impl ModTrait for UIMod {
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let mut bodies = HashMap::new();
-                                            bodies.insert("".to_string(), raw_buf.clone());
+                                            bodies.insert(String::new(), raw_buf);
                                             let message = Message::outgoing_chat(
                                                 id.to_string(),
                                                 timestamp,
                                                 &from,
                                                 &to,
-                                                &bodies,
+                                                bodies,
+                                                None,
+                                                false,
                                             );
                                             aparte.schedule(Event::SendMessage(
                                                 account.clone(),
@@ -1257,20 +4118,24 @@ impl ModTrait for UIMod {
                                         }
                                         Conversation::Channel(channel) => {
                                             let account = &channel.account;
-                                            let mut us = account.clone();
-                                            us.resource = channel.nick.clone();
+                                            let us = account
+                                                .to_bare()
+                                                .with_resource_str(&channel.nick)
+                                                .unwrap(); // TODO avoid unwrap
                                             let from: Jid = us.into();
                                             let to: Jid = channel.jid.clone().into();
                                             let id = Uuid::new_v4();
                                             let timestamp = LocalTz::now().into();
                                             let mut bodies = HashMap::new();
-                                            bodies.insert("".to_string(), raw_buf.clone());
+                                            bodies.insert(String::new(), raw_buf);
                                             let message = Message::outgoing_channel(
                                                 id.to_string(),
                                                 timestamp,
                                                 &from,
                                                 &to,
-                                                &bodies,
+                                                bodies,
+                                                None,
+                                                false,
                                             );
                                             aparte.schedule(Event::SendMessage(
                                                 account.clone(),
@@ -1282,14 +4147,46 @@ impl ModTrait for UIMod {
                             }
                         }
                     }
-                    Key::Alt('a') => {
-                        if let Some(window) = self.unread_windows.pop_front() {
-                            self.change_window(&window);
+                    KeyEvent {
+                        code: KeyCode::Char('a'),
+                        modifiers: KeyModifiers::ALT,
+                        ..
+                    } => {
+                        if !self.unread_windows.is_empty() {
+                            let next = {
+                                let mut sorted = self.unread_windows.iter().collect::<Vec<_>>();
+                                sorted.sort_by_key(|(_, b)| std::cmp::Reverse(b.len()));
+                                sorted[0].0.clone()
+                            };
+
+                            self.unread_windows.remove(&next);
+                            self.change_window(&next);
+                        }
+                    }
+                    KeyEvent {
+                        code: KeyCode::Esc, ..
+                    } if self.root.is_visible() => {
+                        self.root.event(&mut UIEvent::ClosePopup);
+                        if let Some(saved) = self.popup_saved_mode.take() {
+                            self.root.event(&mut UIEvent::ModeChange(saved));
                         }
                     }
                     _ => {
+                        // Reset the slash-command warning only when the popup is closed
+                        // (while the popup is visible, keys are absorbed by its content).
+                        if !self.root.is_visible() {
+                            self.slash_warned = false;
+                        }
                         aparte.schedule(Event::ResetCompletion);
-                        self.root.event(&mut UIEvent::Core(Event::Key(key.clone())));
+                        let mut key_evt = UIEvent::Core(Event::Key(*key));
+                        self.root.event(&mut key_evt);
+                        // Window-switcher Enter mutates the event to Win(key).
+                        if let UIEvent::Core(Event::Win(window)) = key_evt {
+                            self.change_window(&window);
+                            if let Some(saved) = self.popup_saved_mode.take() {
+                                self.root.event(&mut UIEvent::ModeChange(saved));
+                            }
+                        }
                     }
                 }
             }
@@ -1299,31 +4196,114 @@ impl ModTrait for UIMod {
                     cursor.clone(),
                 )));
             }
-            Event::Notification(_) => {
-                vprint!(self.screen, "\x07");
-                flush!(self.screen);
+            Event::EditSessionDirty { window, dirty } => {
+                self.root
+                    .event(&mut UIEvent::EditIndicator(window.clone(), *dirty));
+            }
+            Event::OpenWindowSwitcher => {
+                let entries: Vec<WinEntry> = self
+                    .windows
+                    .iter()
+                    .map(|key| {
+                        let unread = self
+                            .unread_windows
+                            .get(key)
+                            .map(|q| q.len() as u64)
+                            .unwrap_or(0);
+                        let label = BareJid::from_str(key)
+                            .ok()
+                            .and_then(|jid| self.jid_to_name.get(&jid).cloned())
+                            .unwrap_or_else(|| key.clone());
+                        WinEntry {
+                            key: key.clone(),
+                            label,
+                            unread,
+                        }
+                    })
+                    .collect();
+                self.popup_saved_mode = Some(self.current_mode);
+                self.root.event(&mut UIEvent::ShowWindowSwitcher(entries));
+            }
+            Event::Notification {
+                conversation,
+                important,
+                timestamp,
+            } => {
+                let win = conversation.get_jid().to_string();
+                if Some(&win) != self.current_window.as_ref() && self.windows.contains(&win) {
+                    self.unread_windows
+                        .entry(win)
+                        .or_default()
+                        .push_back((*timestamp, *important));
+                }
+                if *important && aparte.config.bell {
+                    self.render_buffer.read().unwrap().bell();
+                }
+                self.root.event(&mut UIEvent::Core(Event::Notification {
+                    conversation: conversation.clone(),
+                    important: *important,
+                    timestamp: *timestamp,
+                }));
+            }
+            Event::DisplayedMarker { account, jid, id } => {
+                let win = jid.to_string();
+                let cut_ts = {
+                    let msgs = aparte.get_mod::<MessagesMod>();
+                    let acct_key = Some(account.clone());
+                    msgs.get_by_stanza_id(&acct_key, id)
+                        .or_else(|| msgs.get(&acct_key, id))
+                        .and_then(|m| {
+                            if let Message::Xmpp(x) = m {
+                                x.history.iter().max().map(|v| v.timestamp)
+                            } else {
+                                None
+                            }
+                        })
+                };
+                if let Some(cut_ts) = cut_ts {
+                    if let Some(deque) = self.unread_windows.get_mut(&win) {
+                        let n_important = deque
+                            .iter()
+                            .take_while(|(ts, _)| *ts <= cut_ts)
+                            .filter(|(_, imp)| *imp)
+                            .count() as u64;
+                        let before = deque.len();
+                        deque.retain(|(ts, _)| *ts > cut_ts);
+                        let n_drained = (before - deque.len()) as u64;
+                        if n_drained > 0 {
+                            self.root.event(&mut UIEvent::ReduceHighlight(
+                                win.clone(),
+                                n_drained,
+                                n_important,
+                            ));
+                        }
+                        if deque.is_empty() {
+                            self.unread_windows.remove(&win);
+                        }
+                    }
+                }
+            }
+            Event::UIRender(_) => {
+                log::debug!("Force render");
+            }
+            Event::ShowPopup { title, lines } => {
+                self.popup_saved_mode = Some(self.current_mode);
+                self.root.event(&mut UIEvent::ShowPopup {
+                    title: title.clone(),
+                    lines: lines.clone(),
+                });
+                self.root.event(&mut UIEvent::ModeChange(Mode::Normal));
+            }
+            Event::ClosePopup => {
+                self.root.event(&mut UIEvent::ClosePopup);
+                if let Some(saved) = self.popup_saved_mode.take() {
+                    self.root.event(&mut UIEvent::ModeChange(saved));
+                }
             }
             // Forward all unknown events
             event => self.root.event(&mut UIEvent::Core(event.clone())),
         }
-
-        // Update rendering
-        if self.root.is_layout_dirty() {
-            let (width, height) = termion::terminal_size().unwrap();
-            let mut dimension = Dimension::new();
-            self.root.measure(&mut dimension, Some(width), Some(height));
-            self.root.layout(&mut dimension, 1, 1);
-            self.root.render(&dimension, &mut self.screen);
-            self.dimension = Some(dimension);
-        } else if self.root.is_dirty() {
-            let dimension: &Dimension = self.dimension.as_ref().unwrap();
-            self.root.render(dimension, &mut self.screen);
-        }
-
-        // Handle queued outgoing event
-        for event in self.outgoing_event_queue.borrow_mut().drain(..) {
-            aparte.schedule(event);
-        }
+        self.finish_event(aparte, before);
     }
 }
 
@@ -1333,102 +4313,84 @@ impl fmt::Display for UIMod {
     }
 }
 
-struct TermionEventStream {
-    channel: mpsc::Receiver<Result<u8, IoError>>,
-    waker: Arc<AtomicWaker>,
-}
-
-impl TermionEventStream {
-    pub fn new() -> Self {
-        let (send, recv) = mpsc::channel();
-        let waker = Arc::new(AtomicWaker::new());
-
-        let waker_for_tty = waker.clone();
-        thread::spawn(move || {
-            let mut input = get_tty().expect("cannot get tty for stdin reading");
-            let mut buf = [0u8; 256];
-            loop {
-                match input.read(&mut buf[..]) {
-                    Ok(n) => {
-                        for byte in buf[..n].iter() {
-                            if send.send(Ok(*byte)).is_err() {
-                                // channel has been closed, get out
-                                return;
-                            }
-                        }
-                        waker_for_tty.wake();
-                    }
-                    Err(err) => match err.kind() {
-                        IoErrorKind::Interrupted => continue,
-                        _ => {
-                            error!("Cannot read input pipe: {}", err);
-                            break;
-                        }
-                    },
-                }
-            }
-        });
-
-        Self {
-            channel: recv,
-            waker,
-        }
-    }
-}
-
-struct IterWrapper<'a, T> {
-    inner: &'a mut mpsc::Receiver<T>,
-}
-
-impl<'a, T> IterWrapper<'a, T> {
-    fn new(inner: &'a mut mpsc::Receiver<T>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<'a, T> Iterator for IterWrapper<'a, T> {
-    type Item = T;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.inner.try_recv() {
-            Ok(e) => Some(e),
-            Err(_) => None,
-        }
-    }
-}
-
-impl Stream for TermionEventStream {
-    type Item = TermionEvent;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let byte = match self.channel.try_recv() {
-            Ok(Ok(byte)) => byte,
-            Ok(Err(_)) => return Poll::Ready(None),
-            Err(mpsc::TryRecvError::Empty) => {
-                self.waker.register(cx.waker());
-                return Poll::Pending;
-            }
-            Err(mpsc::TryRecvError::Disconnected) => return Poll::Ready(None),
-        };
-
-        let mut iter = IterWrapper::new(&mut self.channel);
-        if let Ok(event) = termion_parse_event(byte, &mut iter) {
-            Poll::Ready(Some(event))
-        } else {
-            self.waker.register(cx.waker());
-            Poll::Pending
-        }
-    }
-}
-
 pub struct EventStream {
-    inner: TermionEventStream,
+    inner: CrosstermEventStream,
 }
 
 impl EventStream {
     pub fn new() -> Self {
         Self {
-            inner: TermionEventStream::new(),
+            inner: CrosstermEventStream::new(),
         }
+    }
+}
+
+impl Default for EventStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminus::rendering::OffscreenRenderBuffer;
+    use terminus::scroll_win::Searchable;
+
+    #[test]
+    fn roster_row_window_matches_its_label() {
+        let row = RosterRow::item(0, RosterItem::Window("console".to_string()));
+        assert!(row.matches("console"));
+        assert!(!row.matches("foo"));
+    }
+
+    #[test]
+    fn roster_row_selected_background_covers_text() {
+        let row = RosterRow::item(0, RosterItem::Window("console".to_string()));
+        let selection_bg = BgColor(Color::Rgb(100, 200, 50));
+        row.select(selection_bg);
+
+        let mut buf = OffscreenRenderBuffer::default();
+        buf.set_size((20u16, 1u16).into());
+        let dims = Dimensions {
+            top: 0,
+            left: 0,
+            width: 20,
+            height: 1,
+        };
+        let frame = ScreenFrame::new(&mut buf, &dims, false);
+        row.render(frame, &Theme::default());
+
+        // col 0-1: indent spaces; col 2: first char of "console" — must carry selection bg
+        assert_eq!(buf[0u16][2u16].background, selection_bg);
+    }
+
+    #[test]
+    fn pane_clears_selection_when_focus_lost() {
+        let mut pane: ScrollWin<UIEvent, RosterRow, Theme> = ScrollWin::new()
+            .with_selection_bg(BgColor(Color::Rgb(100, 200, 50)))
+            .with_focus_change(|view, focused| {
+                if !focused {
+                    view.clear_selection();
+                }
+            });
+
+        pane.insert(RosterRow::item(
+            0,
+            RosterItem::Window("console".to_string()),
+        ));
+        pane.insert(RosterRow::item(0, RosterItem::Window("chat".to_string())));
+        pane.select_next();
+        assert!(
+            pane.has_selection(),
+            "item should be selected after select_next"
+        );
+
+        pane.on_focus_change(false);
+        assert!(
+            !pane.has_selection(),
+            "selection must clear when pane loses focus"
+        );
     }
 }
 
@@ -1437,55 +4399,13 @@ impl Stream for EventStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(TermionEvent::Key(key))) => {
-                match key {
-                    //Key::Alt('\x1b') => {
-                    //    match Pin::new(&mut self.inner).poll_next(cx) {
-                    //        Poll::Ready(Some(TermionEvent::Key(Key::Char('[')))) => {
-                    //            match Pin::new(&mut self.inner).poll_next(cx) {
-                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('C')))) => Poll::Pending,
-                    //                Poll::Ready(Some(TermionEvent::Key(Key::Char('D')))) => Poll::Pending,
-                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
-                    //                Poll::Ready(Some(TermionEvent::Key(_))) => Poll::Pending,
-                    //                Poll::Ready(None) => Poll::Pending,
-                    //                Poll::Pending => Poll::Pending,
-                    //            }
-                    //        },
-                    //        _ => Poll::Pending,
-                    //    };
-                    //},
-                    Key::Char(c) => Poll::Ready(Some(Event::Key(Key::Char(c)))),
-                    Key::Backspace => Poll::Ready(Some(Event::Key(Key::Backspace))),
-                    Key::Delete => Poll::Ready(Some(Event::Key(Key::Delete))),
-                    Key::Home => Poll::Ready(Some(Event::Key(Key::Home))),
-                    Key::End => Poll::Ready(Some(Event::Key(Key::End))),
-                    Key::Up => Poll::Ready(Some(Event::Key(Key::Up))),
-                    Key::Down => Poll::Ready(Some(Event::Key(Key::Down))),
-                    Key::Left => Poll::Ready(Some(Event::Key(Key::Left))),
-                    Key::Right => Poll::Ready(Some(Event::Key(Key::Right))),
-                    Key::Ctrl(c) => Poll::Ready(Some(Event::Key(Key::Ctrl(c)))),
-                    Key::Alt(c) => Poll::Ready(Some(Event::Key(Key::Alt(c)))),
-                    Key::PageUp => Poll::Ready(Some(Event::Key(Key::PageUp))),
-                    Key::PageDown => Poll::Ready(Some(Event::Key(Key::PageDown))),
-                    _ => {
-                        self.inner.waker.register(cx.waker());
-                        Poll::Pending
-                    }
-                }
-            }
-            Poll::Ready(Some(TermionEvent::Mouse(_))) => {
-                self.inner.waker.register(cx.waker());
+            Poll::Ready(Some(Ok(CrosstermEvent::Key(key)))) => Poll::Ready(Some(Event::Key(key))),
+            Poll::Ready(Some(Ok(_))) => {
+                cx.waker().wake_by_ref();
                 Poll::Pending
             }
-            Poll::Ready(Some(TermionEvent::Unsupported(_))) => {
-                self.inner.waker.register(cx.waker());
-                Poll::Pending
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => {
-                self.inner.waker.register(cx.waker());
-                Poll::Pending
-            }
+            Poll::Ready(Some(Err(_)) | None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

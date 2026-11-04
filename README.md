@@ -1,95 +1,192 @@
-Aparté [![Build Status](https://www.travis-ci.com/paulfariello/aparte.svg?branch=master)](https://www.travis-ci.com/paulfariello/aparte)
+Aparté [![Build Status](https://circleci.com/gh/paulfariello/aparte.svg?style=svg)](https://app.circleci.com/pipelines/github/paulfariello/aparte)
 ======
 
-Simple XMPP console client written in Rust and inspired by [Profanity](http://profanity-im.github.io/).
-
-Demo
-====
+A terminal XMPP client written in Rust. Keyboard-driven with a vim-style modal interface, inspired by [Profanity](http://profanity-im.github.io/).
 
 [![asciicast](https://asciinema.org/a/389329.png)](https://asciinema.org/a/389329)
 
 Features
-========
+--------
 
-  - [x] Channel
-  - [x] Roster
-  - [x] Auto completion
-  - [x] Bookmarks
-  - [x] Consistent color generation
-  - [x] MAM
-  - [ ] Omemo
+**Messaging**
+- Multi-user chat (MUC) and direct messages
+- Message Archive Management (MAM) with lazy history fetch
+- XEP-0333 displayed markers — track read state in MUC
+- XEP-0184 / XEP-0333 delivery status — outgoing 1-on-1 messages show `✓` (delivered) and `✓✓` (read)
+- XEP-0444 message reactions — emoji reactions displayed below messages
+- XEP-0393 inline message styling — bold, italic, strikethrough
+- Inline image display via Sixel
 
-Install
-=======
+**Privacy**
+- OMEMO end-to-end encryption, including MUC
+- Decrypted messages are persisted locally so they remain readable after restarts, even though the OMEMO ratchet prevents re-decryption
 
-From sources
-------------
+**Interface**
+- Vim-style modal editing — Normal, Insert, and Command modes
+- Message search with `/`
+- Tab completion for commands, JIDs, and nicks
+- Consistent per-contact color generation
+- Built-in color themes: `profanity`, `catppuccin-mocha`, `catppuccin-latte`, `catppuccin-frappe`
+- Roster and bookmark management
+
+Getting started
+---------------
+
+Aparté starts in **Insert mode** — type and press Enter to send. Press `Escape` to enter **Normal mode** for navigation, or `:` to enter **Command mode**.
+
+Connect to your account:
 
 ```
+:connect me@example.org
+```
+
+Join a room:
+
+```
+:join room@conference.example.org
+```
+
+Switch windows with `Alt+[1-9]` or `:win <name>`.
+
+### Screen layout
+
+The top row is a **tab bar** listing every open window in open order: the
+current window is shown emphasized in brackets, and windows with unread
+activity carry their notification count. When the tabs overflow, the
+current window always stays visible and the cut sides show an ellipsis.
+
+Channel (MUC) windows carry a **topic bar** as their first row showing the
+room name and subject; 1-on-1 chat windows have none. The status line shows
+`🔒` when the current conversation is OMEMO-encrypted.
+
+The bottom of the screen is a vim-style stack: the **status line** (mode,
+connected account, suspended edit indicators) and the **command bar** at the
+very bottom. Each chat and channel window has its own **input bar** at the
+bottom of the window frame, identified by a `> ` prompt. The console window
+has no input bar — it is read-only. `:` commands, `/` searches and password
+prompts are typed in the command bar, so a half-typed message never mixes
+with a command — the draft stays visible in the input bar and is untouched
+when the command runs or is cancelled. Because each window owns its input,
+drafts also survive switching to another window and back.
+Pending Normal-mode keys (e.g. `2j`) show at the right of the command bar.
+The input bar and the command bar each keep their own history (`↑`/`↓`).
+Failed commands echo their error on the command bar until the next
+keypress (and are also logged to the console window).
+
+### Modal interface
+
+| From    | Key        | To / Action                       |
+|---------|------------|-----------------------------------|
+| Insert  | `Escape`   | Normal mode                       |
+| Normal  | `i`        | Insert mode (edit selected message if on frame) |
+| Normal  | `o`        | Insert mode on input bar          |
+| Normal  | `:`        | Command mode                      |
+| Normal  | `/`        | Search mode                       |
+| Normal  | `j` / `↓`  | Select next message               |
+| Normal  | `k` / `↑`  | Select previous message           |
+| Normal  | `gg`       | Scroll to top                     |
+| Normal  | `G`        | Scroll to bottom                  |
+| Normal  | `n` / `N`  | Next / previous search match      |
+| Command | `Escape`   | Normal mode                       |
+| Insert  | `Tab`      | Auto-complete                     |
+| Any     | `Ctrl+L`   | Force full screen repaint         |
+
+Commands accept unique prefixes: `:conn` resolves to `:connect` when unambiguous.
+
+### Vim motions in the input bar
+
+Normal mode supports vim-style text motions on the input bar. A motion can be
+prefixed with a count (`3w`) and an operator (`d`, `c`, `y`). Text deleted or
+yanked is stored in a register and can be pasted with `p` / `P`.
+
+| Key       | Motion                          |
+|-----------|---------------------------------|
+| `h` / `l` | Left / right one character      |
+| `w` / `W` | Forward to next word / WORD     |
+| `b` / `B` | Backward to start of word / WORD|
+| `e` / `E` | Forward to end of word / WORD   |
+| `0`       | Start of line                   |
+| `^`       | First non-blank character       |
+| `$`       | End of line                     |
+
+| Key       | Operator                        |
+|-----------|---------------------------------|
+| `d{mot}`  | Delete over motion              |
+| `c{mot}`  | Change (delete + enter Insert)  |
+| `y{mot}`  | Yank (copy) over motion         |
+| `dd`      | Delete whole input              |
+| `cc`      | Clear input and enter Insert    |
+| `yy`      | Yank whole input                |
+| `x` / `X` | Delete char under / before cursor |
+| `p` / `P` | Paste after / before cursor     |
+
+Registers: prefix any operator with `"a` (e.g. `"adw`) to use a named register.
+Uppercase letters append to the named register (`"Adw`).
+
+### Correcting a sent message
+
+In Normal mode, navigate with `k`/`j` to one of your own sent messages and
+press `i`. The cursor moves onto the message itself (steady bar), pre-filled
+with the current body. Edit the text and press `Enter` to send the correction
+(XEP-0308): the message updates in place and is marked with a `✎` icon. Press
+`Esc` to cancel the edit and revert. Incoming messages are not editable.
+
+Once a message is selected, vim text motions (`h`, `l`, `w`, `b`, `e`, `0`,
+`$`, count prefixes, etc.) apply to the message body immediately — no extra
+keypress needed. Press `i` to enter Insert mode on the message (cursor becomes
+a bar, free typing). Press `Esc` to return to Normal mode on the message
+(motions apply again). Press `Esc` once more to cancel the edit.
+
+Install
+-------
+
+### Cargo
+
+```sh
 cargo install aparte
 ```
 
-Package for Archlinux
----------------------
+### Arch Linux (AUR)
 
-AUR package is available: `aparte-git`.
-
-```
-git clone https://aur.archlinux.org/aparte-git.git
-cd aparte-git
-makepkg -si
+```sh
+paru -S aparte-git
+# or manually:
+git clone https://aur.archlinux.org/aparte-git.git && cd aparte-git && makepkg -si
 ```
 
-Or with your favorite aur-helper:
+### Guix
 
-```
-paru aparte-git
-```
+```sh
+# From the GuixRUs channel (https://git.sr.ht/~whereiseveryone/guixrus):
+guix pull && guix install aparte
 
-Windows with WSL
-----------------
-
-Aparté should be available inside the Windows subsystem for Linux.
-The following instruction are made for a Debian based subsystem (debian or ubuntu for example).
-
-First enter the WSL:
-
-```
-PS C:\> debian
+# Or build from source:
+git clone https://github.com/paulfariello/aparte --branch develop
+cd aparte && guix package -f guix.scm
 ```
 
-Then ensure the required dependencies are installed.
+### Windows (WSL)
 
-```
-sudo apt update
-sudo apt install libssl-dev pkg-config curl
-```
+Inside a Debian-based WSL environment:
 
-Rust can be installed with rustup.
-
-```
+```sh
+sudo apt update && sudo apt install libssl-dev pkg-config curl
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
-```
-
-Finally install Aparté.
-
-```
 cargo install --git https://github.com/paulfariello/aparte --branch develop
 ```
 
 Configuration
-=============
+-------------
 
-Aparté can be configured with a configuration file.
-The configuration file should be placed in
-`$XDG_CONFIG_HOME/aparte/config.toml`. If `$XDG_CONFIG_HOME` is not set,
-Aparte will fallback to `$HOME/.config/aparte/config.toml`.
+Config file location: `$XDG_CONFIG_HOME/aparte/config.toml` (falls back to `~/.config/aparte/config.toml`).
 
-The configuration file should look like the following:
+```toml
+# Audio bell on mention
+bell = true
 
-```
-[accounts]
+# Built-in themes: profanity, catppuccin-mocha, catppuccin-latte, catppuccin-frappe
+theme_name = "catppuccin-mocha"
 
 [accounts.example]
 jid = "me@example.org/aparte"

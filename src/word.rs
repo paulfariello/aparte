@@ -18,7 +18,7 @@ pub struct Words<'a> {
     /// Current parsing state
     state: ParserState,
     /// Current codepoint index in self.buf
-    /// must be converted to byte index with byte_index()
+    /// must be converted to byte index with `byte_index()`
     index: usize,
     /// Current word start
     /// This is required because chars iterator always have one char in advance
@@ -93,17 +93,16 @@ impl<'a> Iterator for Words<'a> {
                 self.word_start = self.index;
                 self.index += 1;
                 return word;
-            } else {
-                self.index += 1;
             }
+            self.index += 1;
         }
 
-        if self.word_start != self.index {
+        if self.word_start == self.index {
+            None
+        } else {
             word = Some(self.word_at(self.word_start..self.index));
             self.word_start = self.index;
             word
-        } else {
-            None
         }
     }
 }

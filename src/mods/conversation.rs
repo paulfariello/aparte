@@ -4,30 +4,30 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use xmpp_parsers::{muc, BareJid, Jid};
+
+use unicode_segmentation::UnicodeSegmentation as _;
+
+use xmpp_parsers::jid::{BareJid, Jid};
+use xmpp_parsers::muc;
 
 use crate::account::Account;
 use crate::conversation;
 use crate::core::{Aparte, Event, ModTrait};
+use crate::message;
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 struct ConversationIndex {
     account: Account,
     jid: BareJid,
 }
 
+#[derive(Default)]
 pub struct ConversationMod {
     /// Collections of currently opened conversations.
     conversations: HashMap<ConversationIndex, conversation::Conversation>,
 }
 
 impl ConversationMod {
-    pub fn new() -> Self {
-        Self {
-            conversations: HashMap::new(),
-        }
-    }
-
     pub fn get<'a>(
         &'a self,
         account: &Account,
@@ -69,6 +69,7 @@ impl ModTrait for ConversationMod {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Chat { account, contact } => {
@@ -83,14 +84,68 @@ impl ModTrait for ConversationMod {
                 };
                 self.conversations.insert(index, conversation);
             }
+            Event::Message(account, message::Message::Xmpp(message)) => {
+                let account = account.as_ref().unwrap();
+                let index = ConversationIndex {
+                    account: account.clone(),
+                    jid: message.from.clone(),
+                };
+
+                // Create a conversation for incomming chat messages
+                if message.type_ == message::XmppMessageType::Chat
+                    && message.direction == message::Direction::Incoming
+                    && !self.conversations.contains_key(&index)
+                {
+                    let conversation = conversation::Conversation::Chat(conversation::Chat {
+                        account: account.clone(),
+                        contact: message.from.clone(),
+                    });
+                    self.conversations.insert(index.clone(), conversation);
+                }
+
+                // Schedule a notification — skip historical (archived or delayed) messages
+                if !message.archive
+                    && !message.delayed
+                    && message.direction == message::Direction::Incoming
+                {
+                    let conversation = self.conversations.get(&index);
+                    if let Some(conversation) = conversation {
+                        let important = match &conversation {
+                            conversation::Conversation::Chat(_) => true,
+                            conversation::Conversation::Channel(channel) => {
+                                // Look for mentions
+                                let mut mention = false;
+                                let body =
+                                    message.get_last_body(aparte.config.preferred_langs_strs());
+                                for word in body.split_word_bounds() {
+                                    if channel.nick == word {
+                                        mention = true;
+                                    }
+                                }
+                                mention
+                            }
+                        };
+                        let timestamp = message
+                            .history
+                            .iter()
+                            .max()
+                            .map_or_else(|| chrono::Local::now().into(), |v| v.timestamp);
+                        aparte.schedule(Event::Notification {
+                            conversation: conversation.clone(),
+                            important,
+                            timestamp,
+                        });
+                    }
+                }
+            }
             Event::Joined {
                 account, channel, ..
             } => {
-                let channel_jid: BareJid = channel.clone().into();
+                let channel_jid: BareJid = channel.to_bare();
                 let conversation = conversation::Conversation::Channel(conversation::Channel {
                     account: account.clone(),
                     jid: channel_jid.clone(),
-                    nick: channel.resource.clone(),
+                    nick: channel.resource().to_string(),
                     name: None,
                     occupants: HashMap::new(),
                 });
@@ -102,23 +157,20 @@ impl ModTrait for ConversationMod {
                 self.conversations.insert(index, conversation);
             }
             Event::Presence(account, presence) => {
-                if let Some(Jid::Full(from)) = &presence.from {
+                if let Some(Ok(from)) = &presence.from.clone().map(Jid::try_into_full) {
                     let index = ConversationIndex {
                         account: account.clone(),
-                        jid: from.clone().into(),
+                        jid: from.to_bare(),
                     };
                     if let Some(conversation::Conversation::Channel(channel)) =
                         self.conversations.get_mut(&index)
                     {
                         for payload in presence.clone().payloads {
-                            if let Some(muc_user) = muc::user::MucUser::try_from(payload).ok() {
+                            if let Ok(muc_user) = muc::user::MucUser::try_from(payload) {
                                 for item in muc_user.items {
-                                    let occupant_jid = match item.jid {
-                                        Some(full) => Some(full.into()),
-                                        None => None,
-                                    };
+                                    let occupant_jid = item.jid.map(|full| full.to_bare());
                                     let occupant = conversation::Occupant {
-                                        nick: from.resource.clone(),
+                                        nick: from.resource().to_string(),
                                         jid: occupant_jid,
                                         affiliation: item.affiliation.into(),
                                         role: item.role.into(),
@@ -143,27 +195,27 @@ impl ModTrait for ConversationMod {
     }
 }
 
-impl Into<ConversationIndex> for conversation::Channel {
-    fn into(self) -> ConversationIndex {
+impl From<conversation::Channel> for ConversationIndex {
+    fn from(val: conversation::Channel) -> Self {
         ConversationIndex {
-            account: self.account,
-            jid: self.jid,
+            account: val.account,
+            jid: val.jid,
         }
     }
 }
 
-impl Into<ConversationIndex> for conversation::Chat {
-    fn into(self) -> ConversationIndex {
+impl From<conversation::Chat> for ConversationIndex {
+    fn from(val: conversation::Chat) -> Self {
         ConversationIndex {
-            account: self.account,
-            jid: self.contact,
+            account: val.account,
+            jid: val.contact,
         }
     }
 }
 
-impl Into<ConversationIndex> for conversation::Conversation {
-    fn into(self) -> ConversationIndex {
-        match self {
+impl From<conversation::Conversation> for ConversationIndex {
+    fn from(val: conversation::Conversation) -> Self {
+        match val {
             conversation::Conversation::Channel(channel) => channel.into(),
             conversation::Conversation::Chat(chat) => chat.into(),
         }

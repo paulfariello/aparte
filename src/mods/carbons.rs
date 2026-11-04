@@ -1,45 +1,58 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
+
 use uuid::Uuid;
 use xmpp_parsers::carbons;
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::forwarding::Forwarded;
 use xmpp_parsers::iq::Iq;
-use xmpp_parsers::message::Message as XmppParsersMessage;
+use xmpp_parsers::message::{Message as XmppParsersMessage, MessageType};
+use xmpp_parsers::minidom::Element;
 use xmpp_parsers::ns;
-use xmpp_parsers::Element;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
 use crate::mods::disco;
 
-pub struct CarbonsMod {}
+#[derive(Default)]
+pub struct CarbonsMod {
+    sent_ids: HashSet<String>,
+}
 
 impl CarbonsMod {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    fn enable(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
+    fn enable() -> Element {
+        let id = Uuid::new_v4().hyphenated().to_string();
         let iq = Iq::from_set(id, carbons::Enable);
         iq.into()
     }
 
-    fn handle_carbon(&mut self, aparte: &mut Aparte, account: &Account, forwarded: Forwarded) {
-        if let Some(message) = forwarded.stanza {
-            aparte.schedule(Event::RawMessage(account.clone(), message, forwarded.delay));
-        }
+    #[allow(clippy::unused_self)]
+    fn handle_carbon(
+        &mut self,
+        aparte: &mut Aparte,
+        account: &Account,
+        forwarded: Forwarded,
+        archive: bool,
+    ) {
+        aparte.schedule(Event::RawMessage {
+            account: account.clone(),
+            message: forwarded.message,
+            delay: forwarded.delay,
+            archive,
+        });
     }
 }
 
 impl ModTrait for CarbonsMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
-        disco.add_feature(ns::CARBONS)
+        disco.add_feature(ns::CARBONS);
+
+        Ok(())
     }
 
     fn can_handle_xmpp_message(
@@ -49,14 +62,14 @@ impl ModTrait for CarbonsMod {
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
     ) -> f64 {
-        for payload in message.payloads.iter().cloned() {
-            if carbons::Received::try_from(payload.clone()).is_ok() {
-                return 1f64;
-            } else if carbons::Sent::try_from(payload.clone()).is_ok() {
+        for payload in &message.payloads {
+            if carbons::Received::try_from(payload.clone()).is_ok()
+                || carbons::Sent::try_from(payload.clone()).is_ok()
+            {
                 return 1f64;
             }
         }
-        return 0f64;
+        0f64
     }
 
     fn handle_xmpp_message(
@@ -65,19 +78,40 @@ impl ModTrait for CarbonsMod {
         account: &Account,
         message: &XmppParsersMessage,
         _delay: &Option<Delay>,
+        archive: bool,
     ) {
-        for payload in message.payloads.iter().cloned() {
+        for payload in &message.payloads {
             if let Ok(received) = carbons::Received::try_from(payload.clone()) {
-                self.handle_carbon(aparte, account, received.forwarded);
+                // XEP-0280: clients SHOULD ignore carbon copies of groupchat messages
+                if received.forwarded.message.type_ != MessageType::Groupchat {
+                    self.handle_carbon(aparte, account, received.forwarded, archive);
+                }
             } else if let Ok(sent) = carbons::Sent::try_from(payload.clone()) {
-                self.handle_carbon(aparte, account, sent.forwarded);
+                // XEP-0280: clients SHOULD ignore carbon copies of groupchat messages
+                if sent.forwarded.message.type_ == MessageType::Groupchat {
+                    continue;
+                }
+                let already_sent = sent
+                    .forwarded
+                    .message
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| self.sent_ids.contains(&id.0));
+                if !already_sent {
+                    self.handle_carbon(aparte, account, sent.forwarded, archive);
+                }
             }
         }
     }
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(account, _jid) => aparte.send(account, self.enable()),
+            Event::Connected(account, _jid) => {
+                aparte.send(account, Self::enable());
+            }
+            Event::SendMessage(_, message) => {
+                self.sent_ids.insert(message.id().to_string());
+            }
             _ => {}
         }
     }

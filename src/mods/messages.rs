@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use xmpp_parsers::delay::Delay;
@@ -10,20 +10,18 @@ use xmpp_parsers::ns;
 
 use crate::account::Account;
 use crate::core::{Aparte, Event, ModTrait};
-use crate::message::Message;
+use crate::message::{Message, XmppMessageType};
 use crate::mods::disco;
 
+#[derive(Default)]
 pub struct MessagesMod {
     messages: HashMap<Option<Account>, HashMap<String, Message>>,
+    stanza_id_index: HashMap<Option<Account>, HashMap<String, String>>,
+    sent_muc_ids: HashSet<String>,
 }
 
+#[allow(clippy::ref_option)]
 impl MessagesMod {
-    pub fn new() -> Self {
-        Self {
-            messages: HashMap::new(),
-        }
-    }
-
     pub fn get<'a>(&'a self, account: &Option<Account>, id: &String) -> Option<&'a Message> {
         self.messages.get(account)?.get(id)
     }
@@ -36,14 +34,38 @@ impl MessagesMod {
         self.messages.get_mut(account)?.get_mut(id)
     }
 
-    pub fn handle_message(&mut self, account: &Option<Account>, message: &Message) {
-        let messages = self
-            .messages
-            .entry(account.clone())
-            .or_insert(HashMap::new());
-        messages.insert(message.id().to_string(), message.clone());
+    pub fn get_by_stanza_id<'a>(
+        &'a self,
+        account: &Option<Account>,
+        stanza_id: &str,
+    ) -> Option<&'a Message> {
+        let msg_id = self.stanza_id_index.get(account)?.get(stanza_id)?;
+        self.get(account, msg_id)
     }
 
+    pub fn get_by_stanza_id_mut<'a>(
+        &'a mut self,
+        account: &Option<Account>,
+        stanza_id: &str,
+    ) -> Option<&'a mut Message> {
+        let msg_id = self.stanza_id_index.get(account)?.get(stanza_id)?.clone();
+        self.get_mut(account, &msg_id)
+    }
+
+    pub fn handle_message(&mut self, account: &Option<Account>, message: &Message) {
+        let messages = self.messages.entry(account.clone()).or_default();
+        messages.insert(message.id().to_string(), message.clone());
+        if let Message::Xmpp(xmpp) = message {
+            if let Some(sid) = &xmpp.stanza_id {
+                self.stanza_id_index
+                    .entry(account.clone())
+                    .or_default()
+                    .insert(sid.clone(), xmpp.id.clone());
+            }
+        }
+    }
+
+    #[allow(clippy::unused_self)]
     fn handle_headline_message(
         &mut self,
         aparte: &mut Aparte,
@@ -52,9 +74,13 @@ impl MessagesMod {
         _delay: &Option<Delay>,
     ) {
         for payload in message.payloads.iter().cloned() {
-            if let Ok(pubsub_event) = xmpp_parsers::pubsub::event::PubSubEvent::try_from(payload) {
+            if let Ok(pubsub_event) = xmpp_parsers::pubsub::event::Event::try_from(payload) {
                 // TODO move to pubsub mod
-                aparte.schedule(Event::PubSub(account.clone(), pubsub_event));
+                aparte.schedule(Event::PubSub {
+                    account: account.clone(),
+                    from: message.from.clone(),
+                    event: pubsub_event.payload,
+                });
             }
         }
     }
@@ -63,7 +89,9 @@ impl MessagesMod {
 impl ModTrait for MessagesMod {
     fn init(&mut self, aparte: &mut Aparte) -> Result<(), ()> {
         let mut disco = aparte.get_mod_mut::<disco::DiscoMod>();
-        disco.add_feature(ns::MESSAGE_CORRECT)
+        disco.add_feature(ns::MESSAGE_CORRECT);
+
+        Ok(())
     }
 
     fn can_handle_xmpp_message(
@@ -88,16 +116,13 @@ impl ModTrait for MessagesMod {
                     0.01f64
                 }
             }
-            XmppParsersMessageType::Headline => {
+            XmppParsersMessageType::Headline
                 if message
                     .payloads
                     .iter()
-                    .any(|p| p.is("event", ns::PUBSUB_EVENT))
-                {
-                    0.01f64
-                } else {
-                    0f64
-                }
+                    .any(|p| p.is("event", ns::PUBSUB_EVENT)) =>
+            {
+                0.01f64
             }
             _ => 0f64,
         }
@@ -109,23 +134,31 @@ impl ModTrait for MessagesMod {
         account: &Account,
         message: &XmppParsersMessage,
         delay: &Option<Delay>,
+        archive: bool,
     ) {
         match message.type_ {
             XmppParsersMessageType::Chat => {
-                if let Ok(message) = Message::from_xmpp(account, message, delay) {
+                if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
                     aparte.schedule(Event::Message(Some(account.clone()), message));
                 }
             }
             XmppParsersMessageType::Groupchat => {
                 if !message.bodies.is_empty() {
-                    if let Ok(message) = Message::from_xmpp(account, message, delay) {
-                        aparte.schedule(Event::Message(Some(account.clone()), message));
+                    let is_own_echo = !archive
+                        && message
+                            .id
+                            .as_ref()
+                            .is_some_and(|id| self.sent_muc_ids.contains(&id.0));
+                    if !is_own_echo {
+                        if let Ok(message) = Message::from_xmpp(account, message, delay, archive) {
+                            aparte.schedule(Event::Message(Some(account.clone()), message));
+                        }
                     }
                 }
 
-                if !message.subjects.is_empty() {
+                if !archive && !message.subjects.is_empty() {
                     if let Ok(destination) =
-                        Message::get_local_destination_from_xmpp(account, &message)
+                        Message::get_local_destination_from_xmpp(account, message)
                     {
                         aparte.schedule(Event::Subject(
                             account.clone(),
@@ -133,23 +166,29 @@ impl ModTrait for MessagesMod {
                             message
                                 .subjects
                                 .iter()
-                                .map(|(lang, subject)| (lang.clone(), subject.0.clone()))
+                                .map(|(lang, subject)| (lang.0.clone(), subject.clone()))
                                 .collect(),
                         ));
                     }
                 }
             }
             XmppParsersMessageType::Headline => {
-                self.handle_headline_message(aparte, account, message, delay)
+                self.handle_headline_message(aparte, account, message, delay);
             }
-            XmppParsersMessageType::Error => {}
-            XmppParsersMessageType::Normal => {}
-        };
+            XmppParsersMessageType::Error | XmppParsersMessageType::Normal => {}
+        }
     }
 
     fn on_event(&mut self, _aparte: &mut Aparte, event: &Event) {
         match event {
             Event::Message(account, message) => self.handle_message(account, message),
+            Event::SendMessage(_, message) => {
+                if let Message::Xmpp(xmpp) = message {
+                    if xmpp.type_ == XmppMessageType::Channel {
+                        self.sent_muc_ids.insert(message.id().to_string());
+                    }
+                }
+            }
             _ => {}
         }
     }

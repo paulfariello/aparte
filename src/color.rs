@@ -1,22 +1,28 @@
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use hsluv::hsluv_to_rgb;
+use sha1::{Digest, Sha1};
 use std::convert::TryInto;
-use termion::color;
+use terminus::{
+    charxel::{Charxel, Charxels},
+    Color, FgColor,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
-pub fn id_to_rgb(identifier: &str) -> (u8, u8, u8) {
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn id_to_rgb(identifier: &str) -> Color {
     // Follow xep 0392 for color generation
     let mut hasher = Sha1::new();
-    hasher.input_str(identifier);
-    let mut hash = [0; 20];
-    hasher.result(&mut hash);
+    hasher.update(identifier);
+    let hash = hasher.finalize();
 
     let a = u16::from_le_bytes(hash[..2].try_into().unwrap());
     let hue_angle = f64::from(a) / 65536f64 * 360f64;
     let hue = (hue_angle, 100.0, 75.0);
     let (r, g, b) = hsluv_to_rgb(hue);
     let (r, g, b) = (r * 255.0, g * 255.0, b * 255.0);
-    (r as u8, g as u8, b as u8)
+    Color::Rgb(r as u8, g as u8, b as u8)
 }
 
 struct Rainbow {
@@ -36,6 +42,7 @@ impl Rainbow {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn get_color(&mut self) -> (u8, u8, u8) {
         let i = self.frequency * self.shift / self.spread;
         let red = i.sin() * 127.00 + 128.00;
@@ -53,19 +60,23 @@ impl Rainbow {
     }
 }
 
-pub fn rainbow(input: &str) -> String {
-    let mut output = String::new();
+pub fn rainbow(input: &str) -> Charxels {
+    let mut output = Charxels::default();
     let mut rainbow = Rainbow::new(rand::random::<f64>() * 10e9);
 
-    for c in input.chars() {
+    for c in input.graphemes(true) {
         match c {
-            '\n' => rainbow.new_line(),
-            _ => {
+            "\n" => {
+                rainbow.new_line();
+                output.push(Charxel::new(c.into()));
+            }
+            c => {
                 let (r, g, b) = rainbow.get_color();
-                output.push_str(&format!("{}", color::Fg(color::Rgb(r, g, b))));
+                let mut charxel = Charxel::new(c.into());
+                charxel.set_foreground(FgColor(Color::Rgb(r, g, b)));
+                output.push(charxel);
             }
         }
-        output.push(c);
     }
 
     output

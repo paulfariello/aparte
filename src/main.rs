@@ -1,71 +1,95 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-#![deny(warnings)]
 #![cfg_attr(feature = "strict", deny(warnings))]
 #![allow(incomplete_features)]
-#[macro_use]
-extern crate log;
-extern crate derive_error;
-extern crate dirs;
-extern crate flexi_logger;
-extern crate futures;
-extern crate rpassword;
-extern crate tokio;
-extern crate tokio_xmpp;
-extern crate xmpp_parsers;
 
-#[macro_use]
-mod terminus;
+use anyhow::Result;
+use clap::Parser;
+
 mod account;
+mod async_iq;
 mod config;
 mod contact;
 mod conversation;
 mod core;
 mod message;
+mod tee_writer;
 #[macro_use]
 mod command;
 mod color;
-mod cursor;
+mod crypto;
 mod i18n;
+#[cfg(feature = "image")]
+mod image;
 mod mods;
+mod storage;
 mod word;
 
 use crate::core::Aparte;
 
-fn main() {
-    let data_dir = dirs::data_dir().unwrap();
-    let aparte_data = data_dir.join("aparte");
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the config file
+    #[arg(short, long)]
+    config: Option<std::path::PathBuf>,
+    /// Path to the shared dir
+    #[arg(short, long)]
+    shared: Option<std::path::PathBuf>,
+    /// Record terminal output to this file for rendering debug (creates <file>.events sidecar)
+    #[arg(long)]
+    record: Option<std::path::PathBuf>,
+}
 
-    if let Err(e) = std::fs::create_dir_all(&aparte_data) {
-        panic!("Cannot create aparte data dir: {}", e);
-    }
+fn main() -> Result<()> {
+    let args = Args::parse();
 
-    let file_writer = flexi_logger::writers::FileLogWriter::builder()
-        .directory(aparte_data)
-        .suppress_timestamp()
-        .try_build()
-        .unwrap();
-    let log_target = flexi_logger::LogTarget::Writer(Box::new(file_writer));
-    let logger = flexi_logger::Logger::with_env_or_str("info").log_target(log_target);
+    let aparte_data = if let Some(shared) = args.shared {
+        shared
+    } else {
+        let data_dir = dirs::data_dir().unwrap();
+        let aparte_data = data_dir.join("aparte");
+
+        if let Err(e) = std::fs::create_dir_all(&aparte_data) {
+            panic!("Cannot create aparte data dir: {}", e);
+        }
+
+        aparte_data
+    };
+
+    let logger = flexi_logger::Logger::try_with_env_or_str("info")?.log_to_file(
+        flexi_logger::FileSpec::default()
+            .directory(&aparte_data)
+            .suppress_timestamp(),
+    );
     if let Err(e) = logger.start() {
         panic!("Cannot start logger: {}", e);
     }
 
-    let conf_dir = dirs::config_dir().unwrap();
-    let aparte_conf = conf_dir.join("aparte");
+    let config = if let Some(config) = args.config {
+        config
+    } else {
+        let conf_dir = dirs::config_dir().unwrap();
+        let aparte_conf = conf_dir.join("aparte");
 
-    if let Err(e) = std::fs::create_dir_all(&aparte_conf) {
-        panic!("Cannot create aparte data dir: {}", e);
-    }
+        if let Err(e) = std::fs::create_dir_all(&aparte_conf) {
+            panic!("Cannot create aparte data dir: {}", e);
+        }
 
-    let config = aparte_conf.join("config.toml");
+        aparte_conf.join("config.toml")
+    };
 
-    info!("Starting aparté");
+    // TODO
+    let storage = aparte_data.join("storage.sqlite");
 
-    let mut aparte = Aparte::new(config);
+    log::info!("Starting aparté");
+
+    let mut aparte = Aparte::new(config, storage, args.record)?;
 
     aparte.init().unwrap();
 
     aparte.run();
+
+    Ok(())
 }

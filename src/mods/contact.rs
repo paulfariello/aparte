@@ -4,13 +4,16 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use uuid::Uuid;
-use xmpp_parsers::iq::{Iq, IqType};
-use xmpp_parsers::{ns, presence, roster, BareJid, Element, Jid};
+
+use anyhow::Result;
+use tokio_xmpp::IqResponse;
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::jid::BareJid;
+use xmpp_parsers::{ns, presence, roster};
 
 use crate::account::Account;
 use crate::contact;
-use crate::core::{Aparte, Event, ModTrait};
+use crate::core::{Aparte, AparteAsync, Event, ModTrait};
 
 impl From<roster::Group> for contact::Group {
     fn from(item: roster::Group) -> Self {
@@ -28,9 +31,9 @@ impl From<roster::Item> for contact::Contact {
         Self {
             jid: item.jid.clone(),
             name: item.name.clone(),
-            subscription: item.subscription.clone(),
+            subscription: item.subscription,
             presence: contact::Presence::Unavailable,
-            groups: groups,
+            groups,
         }
     }
 }
@@ -41,27 +44,45 @@ pub struct ContactIndex {
     jid: BareJid,
 }
 
+#[derive(Default)]
 pub struct ContactMod {
     pub contacts: HashMap<ContactIndex, contact::Contact>,
 }
 
 impl ContactMod {
-    pub fn new() -> Self {
-        Self {
-            contacts: HashMap::new(),
+    async fn get_roster(aparte: &mut AparteAsync, account: &Account) -> Result<()> {
+        match aparte.iq(account, Self::get_roster_iq()).await {
+            Ok(IqResponse::Result(Some(payload))) => {
+                if !payload.is("query", ns::ROSTER) {
+                    log::warn!("Roster IQ result has unexpected payload: {:?}", payload);
+                    return Ok(());
+                }
+                match roster::Roster::try_from(payload) {
+                    Ok(roster) => {
+                        log::info!("Got roster with {} contacts", roster.items.len());
+                        for item in roster.items {
+                            aparte.schedule(Event::Contact(account.clone(), item.into()));
+                        }
+                    }
+                    Err(err) => log::warn!("Failed to parse roster: {}", err),
+                }
+            }
+            Ok(IqResponse::Result(None)) => log::warn!("Roster IQ returned empty result"),
+            Ok(IqResponse::Error(err)) => log::warn!("Roster IQ returned error: {:?}", err),
+            Err(err) => log::warn!("Roster IQ request failed: {}", err),
         }
+
+        Ok(())
     }
 
-    fn request(&self) -> Element {
-        let id = Uuid::new_v4().to_hyphenated().to_string();
-        let iq = Iq::from_get(
-            id,
+    fn get_roster_iq() -> Iq {
+        Iq::from_get(
+            "",
             roster::Roster {
                 ver: None,
                 items: Vec::new(),
             },
-        );
-        iq.into()
+        )
     }
 }
 
@@ -72,30 +93,28 @@ impl ModTrait for ContactMod {
 
     fn on_event(&mut self, aparte: &mut Aparte, event: &Event) {
         match event {
-            Event::Connected(account, _jid) => aparte.send(account, self.request()),
-            Event::Iq(account, iq) => {
-                if let IqType::Result(Some(payload)) = iq.payload.clone() {
-                    if payload.is("query", ns::ROSTER) {
-                        if let Ok(roster) = roster::Roster::try_from(payload.clone()) {
-                            for item in roster.items {
-                                let contact: contact::Contact = item.clone().into();
-                                let index = ContactIndex {
-                                    account: account.clone(),
-                                    jid: contact.jid.clone(),
-                                };
-                                self.contacts.insert(index, contact.clone());
-                                aparte.schedule(Event::Contact(account.clone(), contact.clone()));
-                            }
+            Event::Connected(account, _jid) => {
+                log::info!("Requesting roster");
+                Aparte::spawn({
+                    let mut aparte = aparte.proxy();
+                    let account = account.clone();
+                    async move {
+                        if let Err(err) = Self::get_roster(&mut aparte, &account).await {
+                            crate::error!(aparte, err, "Cannot sync OMEMO bundle");
                         }
                     }
-                }
+                });
+            }
+            Event::Contact(account, contact) => {
+                let index = ContactIndex {
+                    account: account.clone(),
+                    jid: contact.jid.clone(),
+                };
+                self.contacts.insert(index, contact.clone());
             }
             Event::Presence(account, presence) => {
                 if let Some(from) = &presence.from {
-                    let jid = match from {
-                        Jid::Bare(jid) => jid.clone(),
-                        Jid::Full(jid) => jid.clone().into(),
-                    };
+                    let jid = from.clone().into_bare();
                     let index = ContactIndex {
                         account: account.clone(),
                         jid,

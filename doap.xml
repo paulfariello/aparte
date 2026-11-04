@@ -1,0 +1,106 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+	xmlns:xmpp='https://linkmauve.fr/ns/xmpp-doap#'
+	xmlns:schema='https://schema.org/'
+	xmlns='http://usefulinc.com/ns/doap#'>
+	<Project xml:lang='en'>
+		<name>Aparté</name>
+		<homepage rdf:resource='https://github.com/paulfariello/aparte/' />
+
+		<os>Linux</os>
+		<os>MacOS</os>
+		<os>FreeBSD</os>
+		<os>OpenBSD</os>
+
+		<shortdesc xml:lang='en'>Free console XMPP client</shortdesc>
+		<shortdesc xml:lang='fr'>Client XMPP libre en console</shortdesc>
+
+		<description xml:lang='en'>Free and modern console XMPP client written in Rust</description>
+		<description xml:lang='fr'>Client console XMPP libre et moderne, écrit en Rust</description>
+
+		<schema:logo rdf:resource='https://raw.githubusercontent.com/paulfariello/aparte/develop/aparte.svg'/>
+		<schema:screenshot rdf:resource='https://camo.githubusercontent.com/cb7360923ab5582ac799ba7ce243ed92a7b7a22752d32363a686d17a2664e0fb/68747470733a2f2f61736369696e656d612e6f72672f612f3338393332392e706e67'/>
+
+
+		<category rdf:resource='https://linkmauve.fr/ns/xmpp-doap#category-client' />
+
+		<repository>
+			<GitRepository>
+				<browse rdf:resource='https://github.com/paulfariello/aparte' />
+				<location rdf:resource='https://github.com/paulfariello/aparte.git' />
+			</GitRepository>
+		</repository>
+
+
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc6120.html' />
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc6121.html' />
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc6122.html' />
+		<implements rdf:resource='https://xmpp.org/rfcs/rfc7590.html' />
+
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0045.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.34.5</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0048.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.2</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0392.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>0.8.0</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0308.html' />
+				<xmpp:status>partial</xmpp:status>
+				<xmpp:version>1.2.1</xmpp:version>
+				<xmpp:note xml:lang='en'>Doesn't support edition of own message yet</xmpp:note>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0313.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.1.1</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0384.html' />
+				<xmpp:status>partial</xmpp:status>
+				<xmpp:version>0.3.0</xmpp:version>
+				<xmpp:note xml:lang='en'>Doesn't support OMEMO in MUC yet</xmpp:note>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0245.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.0</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0280.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.0.1</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+		<implements>
+			<xmpp:SupportedXep>
+				<xmpp:xep rdf:resource='https://xmpp.org/extensions/xep-0402.html' />
+				<xmpp:status>complete</xmpp:status>
+				<xmpp:version>1.1.4</xmpp:version>
+			</xmpp:SupportedXep>
+		</implements>
+	</Project>
+</rdf:RDF>

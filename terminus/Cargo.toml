@@ -1,0 +1,30 @@
+[package]
+name = "terminus"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = []
+image = ["dep:sixel-image"]
+# Verify wide-character cursor advance after each rendered line by querying
+# the terminal's actual cursor position via DSR (CSI 6 n). Off by default —
+# the query is racy and slow whenever another thread also reads /dev/tty
+# (e.g. aparte's key-reader), and is intended only for interactive
+# diagnosis of widechar mis-renders.
+
+[dependencies]
+linked-hash-map = "^0.5"
+log = "^0.4"
+crossterm = "0.28"
+unicode-segmentation = "^1.6"
+anyhow = "^1.0"
+itertools = "^0.13"
+serde = { version = "^1.0", features = ["derive"] }
+sixel-image = { git = "https://github.com/paulfariello/sixel-image.git", branch = "patch-1", optional = true }
+unicode-display-width = "0.3.0"
+
+[dev-dependencies]
+mockall = "^0.9"
+test-log = "*"
+vt100 = "0.16"
