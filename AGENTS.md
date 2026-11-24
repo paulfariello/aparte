@@ -160,6 +160,7 @@ Bad `/loop` targets: anything where "done" is subjective at the spec level (styl
 - Small, focused, atomic, tested. Each commit must be `git bisect`-safe.
 - Always on a dedicated branch and in a dedicated worktree.
 - Semi-linear commit history. Always rebase a branch before merging it. Aways merge with --no-ff to keep branch history.
+- Merging into main needs the owner: only after a manual review by them and their explicit, formal approval, and then with `--no-ff`. Without it, leave the branch unmerged and say so. Approval covers one branch, not the next.
 - Clean history: atomic, bisectable and readable by a human. A commit that fixes review feedback, or a mistake in an earlier commit of the same branch, is folded into that commit (`git commit --fixup`, then `GIT_SEQUENCE_EDITOR=true git rebase --autosquash <base>`) before the branch merges, never left as a follow-up. A message written by an agent or a subagent is reread and reworded: imperative subject, body wrapped and saying why. One branch per subject, with as many commits as the subject has logical changes (a feature and its docs share a branch). Rewrite only work that is unmerged and unpushed.
 
 ---
